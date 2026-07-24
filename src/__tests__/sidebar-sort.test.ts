@@ -1,23 +1,34 @@
 import { test, expect, describe } from "bun:test";
 import {
+  GROUP_MODES,
   SORT_MODES,
   FILTER_MODES,
+  cycleGroup,
   cycleSort,
   cycleFilter,
   matchesFilter,
   sortIndices,
+  statusRank,
+  statusGroupLabel,
+  groupModeLabel,
   sortModeLabel,
   filterModeLabel,
+  migrateLegacySort,
   type SessionSortInfo,
 } from "../sidebar-sort";
 
 describe("cycle", () => {
+  test("group wraps around the mode list", () => {
+    expect(cycleGroup("none")).toBe("project");
+    expect(cycleGroup("project")).toBe("status");
+    expect(cycleGroup("status")).toBe("none"); // wraps
+    for (const m of GROUP_MODES) expect(GROUP_MODES).toContain(cycleGroup(m));
+  });
+
   test("sort wraps around the mode list", () => {
-    expect(cycleSort("project")).toBe("status");
-    expect(cycleSort("status")).toBe("activity");
-    expect(cycleSort("activity")).toBe("name");
-    expect(cycleSort("name")).toBe("project"); // wraps
-    // every mode has a defined successor
+    expect(cycleSort("name")).toBe("activity");
+    expect(cycleSort("activity")).toBe("status");
+    expect(cycleSort("status")).toBe("name"); // wraps
     for (const m of SORT_MODES) expect(SORT_MODES).toContain(cycleSort(m));
   });
 
@@ -29,10 +40,41 @@ describe("cycle", () => {
   });
 
   test("labels are human-readable and distinct", () => {
-    const labels = SORT_MODES.map(sortModeLabel);
-    expect(new Set(labels).size).toBe(labels.length);
-    expect(sortModeLabel("status")).toBe("by status");
+    const groupLabels = GROUP_MODES.map(groupModeLabel);
+    expect(new Set(groupLabels).size).toBe(groupLabels.length);
+    const sortLabels = SORT_MODES.map(sortModeLabel);
+    expect(new Set(sortLabels).size).toBe(sortLabels.length);
+    expect(groupModeLabel("status")).toBe("by status");
+    expect(sortModeLabel("name")).toBe("by name");
     expect(filterModeLabel("attention")).toBe("needs you");
+  });
+});
+
+describe("status ordering", () => {
+  test("rank runs needs-you first, idle last", () => {
+    expect(statusRank("waiting")).toBeLessThan(statusRank("running"));
+    expect(statusRank("running")).toBeLessThan(statusRank("activity"));
+    expect(statusRank("activity")).toBeLessThan(statusRank("complete"));
+    expect(statusRank("complete")).toBeLessThan(statusRank("idle"));
+  });
+
+  test("group headers reuse the row/rollup vocabulary and are distinct", () => {
+    expect(statusGroupLabel("waiting")).toBe("Needs you");
+    expect(statusGroupLabel("running")).toBe("Running");
+    expect(statusGroupLabel("activity")).toBe("Active");
+    expect(statusGroupLabel("complete")).toBe("Done");
+    expect(statusGroupLabel("idle")).toBe("Idle");
+    const all = (["waiting", "running", "activity", "complete", "idle"] as const).map(statusGroupLabel);
+    expect(new Set(all).size).toBe(all.length);
+  });
+});
+
+describe("migrateLegacySort", () => {
+  test("maps each pre-split value onto the two axes without loss", () => {
+    expect(migrateLegacySort("project")).toEqual({ groupBy: "project", sortBy: "name" });
+    expect(migrateLegacySort("status")).toEqual({ groupBy: "none", sortBy: "status" });
+    expect(migrateLegacySort("activity")).toEqual({ groupBy: "none", sortBy: "activity" });
+    expect(migrateLegacySort("name")).toEqual({ groupBy: "none", sortBy: "name" });
   });
 });
 

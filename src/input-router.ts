@@ -48,6 +48,7 @@ export interface InputRouterOptions {
   onNewSession?: () => void;
   onSettings?: () => void;
   onSettingsScreen?: () => void;  // Ctrl-a I (uppercase) — full settings screen
+  onGroupCycle?: () => void;      // Ctrl-a G — cycle sidebar group mode
   onSortCycle?: () => void;       // Ctrl-a s — cycle sidebar sort mode
   onFilterCycle?: () => void;     // Ctrl-a f — cycle sidebar filter mode
   onSessionPrev?: () => void;
@@ -219,6 +220,7 @@ export class InputRouter {
           if (data === "n") { this.opts.onNewSession?.(); return; }
           if (data === "i") { this.opts.onSettings?.(); return; }
           if (data === "I") { this.opts.onSettingsScreen?.(); return; }
+          if (data === "G") { this.opts.onGroupCycle?.(); return; }
           if (data === "s") { this.opts.onSortCycle?.(); return; }
           if (data === "f") { this.opts.onFilterCycle?.(); return; }
           // Not a jmux chord — flush the buffered prefix, then the key, to the tile.
@@ -242,6 +244,10 @@ export class InputRouter {
         }
         if (data === "I") {
           this.opts.onSettingsScreen?.();
+          return;
+        }
+        if (data === "G") {
+          this.opts.onGroupCycle?.();
           return;
         }
         if (data === "s") {

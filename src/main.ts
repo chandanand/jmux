@@ -5,8 +5,9 @@ import { Renderer, getToolbarButtonRanges, getToolbarTabRanges, getModalPosition
 import { InputRouter } from "./input-router";
 import { Sidebar, rebuildSidebarColors, type PinnedPaneEntry } from "./sidebar";
 import {
-  SORT_MODES, FILTER_MODES, sortModeLabel, filterModeLabel,
-  type SortMode, type FilterMode,
+  GROUP_MODES, SORT_MODES, FILTER_MODES,
+  groupModeLabel, sortModeLabel, filterModeLabel, migrateLegacySort,
+  type GroupMode, type SortMode, type FilterMode, type LegacySortMode,
 } from "./sidebar-sort";
 import { buildFooter, layoutFooter, type FooterModel } from "./footer";
 import { CommandPalette } from "./command-palette";
@@ -779,19 +780,42 @@ const bridge = new ScreenBridge(mainCols, layout.ptyRows);
 const renderer = new Renderer();
 const sidebar = new Sidebar(sidebarWidth, sidebarBottomRow(layout));
 sidebar.setStateColors(resolveStateColors(configStore.config.stateColors));
-// Restore the persisted sort mode (filter is deliberately ephemeral — a
-// persisted filter that hides sessions is the "where did they go?" trap).
+// Restore the persisted group + sort modes (filter is deliberately ephemeral — a
+// persisted filter that hides sessions is the "where did they go?" trap). Prefer
+// the split axes; if only the pre-split `sidebarSort` is present, migrate it.
 {
-  const saved = configStore.config.sidebarSort;
-  if (saved && (SORT_MODES as readonly string[]).includes(saved)) {
-    sidebar.setSortMode(saved);
+  const savedGroup = configStore.config.sidebarGroupBy;
+  const savedSort = configStore.config.sidebarSortBy;
+  const hasSplit =
+    (savedGroup && (GROUP_MODES as readonly string[]).includes(savedGroup)) ||
+    (savedSort && (SORT_MODES as readonly string[]).includes(savedSort));
+  if (hasSplit) {
+    if (savedGroup && (GROUP_MODES as readonly string[]).includes(savedGroup)) {
+      sidebar.setGroupMode(savedGroup);
+    }
+    if (savedSort && (SORT_MODES as readonly string[]).includes(savedSort)) {
+      sidebar.setSortMode(savedSort);
+    }
+  } else {
+    const legacy = configStore.config.sidebarSort;
+    const LEGACY: readonly string[] = ["project", "status", "activity", "name"];
+    if (legacy && LEGACY.includes(legacy)) {
+      const { groupBy, sortBy } = migrateLegacySort(legacy as LegacySortMode);
+      sidebar.setGroupMode(groupBy);
+      sidebar.setSortMode(sortBy);
+    }
   }
 }
 
-/** Set the sidebar sort mode and persist it, so it survives restart. */
+/** Set the sidebar group mode and persist it, so it survives restart. */
+function applySidebarGroup(mode: GroupMode): void {
+  sidebar.setGroupMode(mode);
+  configStore.set("sidebarGroupBy", mode);
+}
+/** Set the sidebar member-sort mode and persist it, so it survives restart. */
 function applySidebarSort(mode: SortMode): void {
   sidebar.setSortMode(mode);
-  configStore.set("sidebarSort", mode);
+  configStore.set("sidebarSortBy", mode);
 }
 const agentStateTracker = new AgentStateTracker();
 agentStateTracker.onChange((sessionId) => {
@@ -1635,6 +1659,11 @@ const inputRouter = new InputRouter(
       clearSessionIndicators();
     },
     onSidebarClick: (row, col) => {
+      if (sidebar.headerGroupToggleHit(row, col)) {
+        applySidebarGroup(sidebar.cycleGroupMode());
+        scheduleRender();
+        return;
+      }
       if (sidebar.headerSortToggleHit(row, col)) {
         applySidebarSort(sidebar.cycleSortMode());
         scheduleRender();
@@ -1644,9 +1673,9 @@ const inputRouter = new InputRouter(
         void showVersionInfo();
         return;
       }
-      const groupLabel = sidebar.getGroupByRow(row);
-      if (groupLabel) {
-        sidebar.toggleGroup(groupLabel);
+      const groupKey = sidebar.getGroupKeyByRow(row);
+      if (groupKey) {
+        sidebar.toggleGroup(groupKey);
         scheduleRender();
         return;
       }
@@ -1747,6 +1776,7 @@ const inputRouter = new InputRouter(
     onNewSession: () => handlePaletteAction({ commandId: "new-session" }),
     onSettings: () => handleToolbarAction("settings"),
     onSettingsScreen: () => toggleSettingsScreen(),
+    onGroupCycle: () => { applySidebarGroup(sidebar.cycleGroupMode()); scheduleRender(); },
     onSortCycle: () => { applySidebarSort(sidebar.cycleSortMode()); scheduleRender(); },
     onFilterCycle: () => { sidebar.cycleFilterMode(); scheduleRender(); },
     onModalInput: (data) => {
@@ -2393,10 +2423,11 @@ function buildPaletteCommands(): PaletteCommand[] {
     });
   }
 
-  // Dynamic: collapse/expand groups
+  // Dynamic: collapse/expand groups. The command id carries the axis-namespaced
+  // collapse key; the human label uses the group's display name.
   for (const group of sidebar.getGroups()) {
     commands.push({
-      id: `toggle-group:${group.label}`,
+      id: `toggle-group:${group.key}`,
       label: group.collapsed ? `Expand: ${group.label}` : `Collapse: ${group.label}`,
       category: "session",
     });
@@ -2581,9 +2612,14 @@ function buildPaletteCommands(): PaletteCommand[] {
     );
   }
 
-  // Sidebar sort / filter — submenus mirroring the Ctrl-a s / Ctrl-a f cycles.
+  // Sidebar group / sort / filter — submenus mirroring the Ctrl-a G / s / f cycles.
+  const activeGroup = sidebar.getGroupMode();
   const activeSort = sidebar.getSortMode();
   const activeFilter = sidebar.getFilterMode();
+  commands.push({
+    id: "sidebar-group", label: "Group sessions…", category: "session",
+    sublist: GROUP_MODES.map((m) => ({ id: m, label: groupModeLabel(m), current: m === activeGroup })),
+  });
   commands.push({
     id: "sidebar-sort", label: "Sort sessions…", category: "session",
     sublist: SORT_MODES.map((m) => ({ id: m, label: sortModeLabel(m), current: m === activeSort })),
@@ -3060,10 +3096,10 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
     return;
   }
 
-  // Dynamic: toggle sidebar group
+  // Dynamic: toggle sidebar group (the suffix is the axis-namespaced collapse key)
   if (commandId.startsWith("toggle-group:")) {
-    const label = commandId.slice("toggle-group:".length);
-    sidebar.toggleGroup(label);
+    const key = commandId.slice("toggle-group:".length);
+    sidebar.toggleGroup(key);
     scheduleRender();
     return;
   }
@@ -3115,6 +3151,11 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
     return;
   }
 
+  if (commandId === "sidebar-group" && sublistOptionId) {
+    applySidebarGroup(sublistOptionId as GroupMode);
+    scheduleRender();
+    return;
+  }
   if (commandId === "sidebar-sort" && sublistOptionId) {
     applySidebarSort(sublistOptionId as SortMode);
     scheduleRender();

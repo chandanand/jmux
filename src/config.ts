@@ -56,7 +56,12 @@ export interface JmuxConfig {
   snapshot?: SnapshotConfig;
   /** Per-state indicator colors (ANSI color names). */
   stateColors?: StateColorConfig;
-  /** Sidebar sort mode. Persists across restarts (filter deliberately does not). */
+  /** Sidebar grouping axis. Persists across restarts (filter deliberately does not). */
+  sidebarGroupBy?: "none" | "project" | "status";
+  /** Sidebar member-sort axis. Persists across restarts. */
+  sidebarSortBy?: "name" | "activity" | "status";
+  /** @deprecated Pre-split single sort axis; read once to migrate onto
+   * sidebarGroupBy + sidebarSortBy, then never written again. */
   sidebarSort?: "project" | "status" | "activity" | "name";
   /** Ordered Command Center tab registry; index 0 is the protected default. */
   commandCenterTabs?: TabEntry[];

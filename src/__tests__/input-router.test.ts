@@ -469,6 +469,24 @@ describe("diff panel routing", () => {
     expect(toggleCalled).toBe(true);
   });
 
+  test("Ctrl-a G cycles the sidebar group mode, case-distinct from Ctrl-a g diff toggle", () => {
+    let groupCycled = false;
+    let diffToggled = false;
+    const router = new InputRouter(
+      {
+        onPtyData: () => {},
+        onSidebarClick: () => {},
+        onGroupCycle: () => { groupCycled = true; },
+        onDiffToggle: () => { diffToggled = true; },
+      },
+      baseLayout(4),
+    );
+    router.handleInput("\x01");
+    router.handleInput("G");
+    expect(groupCycled).toBe(true);
+    expect(diffToggled).toBe(false); // uppercase G must not fall through to lowercase g
+  });
+
   test("prefix+d detaches jmux when the Command Center is active", () => {
     let detachCalled = false;
     let ptyData = "";

@@ -9,10 +9,15 @@ import { stateAttrs, type StateColor } from "./state-colors";
 import {
   matchesFilter,
   sortIndices,
+  cycleGroup,
   cycleSort,
   cycleFilter,
+  statusRank,
+  statusGroupLabel,
+  groupModeShort,
   sortModeShort,
   filterModeShort,
+  type GroupMode,
   type SortMode,
   type FilterMode,
   type SessionStatus,
@@ -243,11 +248,6 @@ function cacheTimerAttrs(
 
 // --- Grouping logic ---
 
-interface SessionGroup {
-  label: string;
-  sessionIndices: number[];
-}
-
 function getGroupLabel(dir: string): string | null {
   const segments = dir.split("/").filter((s) => s.length > 0);
   // For ~/X/Y/... paths, group by X/Y (fixed depth)
@@ -277,12 +277,34 @@ function getSubdirectory(dir: string, groupLabel: string): string | null {
 }
 
 type RenderItem =
-  | { type: "group-header"; label: string; collapsed: boolean; sessionCount: number }
+  // `key` is the axis-namespaced collapse identity ("pinned", "project:<label>",
+  // "status:<status>"); `label` is what the header renders. They differ so a
+  // project literally named "Running" can't share collapse state with the
+  // status group, and collapse memory is kept per axis across mode switches.
+  | { type: "group-header"; key: string; label: string; collapsed: boolean; sessionCount: number }
   | { type: "session"; sessionIndex: number; grouped: boolean; groupLabel?: string; pinnedCount?: number }
   | { type: "spacer" }
   | { type: "overview"; paneCount: number };
 
+const PINNED_GROUP_KEY = "pinned";
 const PINNED_GROUP_LABEL = "Pinned";
+
+// The project bucket a session belongs to: its wtm project name (preferred) or
+// a directory-derived label, else null (ungrouped).
+function projectLabelOf(session: SessionInfo): string | null {
+  if (session.project) return session.project;
+  const dir = session.directory;
+  return dir ? getGroupLabel(dir) : null;
+}
+
+// A group awaiting emission. `rank` orders status groups (needs-you first);
+// project groups ignore it and order alphabetically by label.
+interface GroupBucket {
+  key: string;
+  label: string;
+  rank: number;
+  indices: number[];
+}
 
 function buildRenderPlan(
   sessions: SessionInfo[],
@@ -290,6 +312,7 @@ function buildRenderPlan(
   pinnedNames: Set<string>,
   pinnedPanes: PinnedPaneEntry[],
   sortInfos: SessionSortInfo[],
+  groupMode: GroupMode,
   sortMode: SortMode,
   filterMode: FilterMode,
 ): {
@@ -297,7 +320,7 @@ function buildRenderPlan(
   displayOrder: number[];
 } {
   const pinnedIndices: number[] = [];
-  const groupMap = new Map<string, number[]>();
+  const bucketMap = new Map<string, GroupBucket>();
   const ungrouped: number[] = [];
 
   // Build a map of homeSessionName → count for pinned panes
@@ -309,47 +332,58 @@ function buildRenderPlan(
     );
   }
 
+  const bucket = (key: string, label: string, rank: number, i: number): void => {
+    const existing = bucketMap.get(key);
+    if (existing) existing.indices.push(i);
+    else bucketMap.set(key, { key, label, rank, indices: [i] });
+  };
+
   for (let i = 0; i < sessions.length; i++) {
     // Filter first — a filtered-out session never buckets, so empty groups and
     // the Pinned group simply don't emit.
     if (!matchesFilter(sortInfos[i]!.status, filterMode)) continue;
 
-    // In a flat sort mode, pins do not float (a pinned running session must not
-    // sit above a waiting one), so the Pinned group is skipped and pinned
-    // sessions fall through to the flat list like any other.
-    if (sortMode === "project" && pinnedNames.has(sessions[i].name)) {
+    // Pins always float into the Pinned group, in every mode — pinning is an
+    // explicit "keep this up top" signal. Members are ordered by sortMode below,
+    // so under sort=status a waiting pin still rises within the group.
+    if (pinnedNames.has(sessions[i].name)) {
       pinnedIndices.push(i);
       continue;
     }
-    // Prefer project name (wtm) over directory-based grouping
-    const label = sessions[i].project ?? (() => {
-      const dir = sessions[i].directory;
-      return dir ? getGroupLabel(dir) : null;
-    })();
-    if (!label) {
+
+    if (groupMode === "none") {
       ungrouped.push(i);
       continue;
     }
-    const existing = groupMap.get(label);
-    if (existing) {
-      existing.push(i);
-    } else {
-      groupMap.set(label, [i]);
+    if (groupMode === "project") {
+      const label = projectLabelOf(sessions[i]);
+      if (!label) {
+        ungrouped.push(i);
+        continue;
+      }
+      bucket(`project:${label}`, label, 0, i);
+      continue;
     }
+    // groupMode === "status" — every session has a status, so none are ungrouped.
+    const st = sortInfos[i]!.status;
+    bucket(`status:${st}`, statusGroupLabel(st), statusRank(st), i);
   }
 
-  pinnedIndices.sort((a, b) => sessions[a].name.localeCompare(sessions[b].name));
+  const info = (i: number) => sortInfos[i]!;
 
-  const sortedGroups: SessionGroup[] = [...groupMap.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([label, indices]) => ({
-      label,
-      sessionIndices: indices.sort((a, b) =>
-        sessions[a].name.localeCompare(sessions[b].name),
-      ),
-    }));
+  // Member order within every bucket + Pinned + the flat list obeys sortMode.
+  const sortedPinned = sortIndices(pinnedIndices, info, sortMode);
+  const sortedUngrouped = sortIndices(ungrouped, info, sortMode);
 
-  ungrouped.sort((a, b) => sessions[a].name.localeCompare(sessions[b].name));
+  // Group-header order is fixed by axis, NOT by sortMode: project → alphabetical,
+  // status → status rank (needs-you group on top).
+  const buckets = [...bucketMap.values()];
+  buckets.sort(
+    groupMode === "status"
+      ? (a, b) => a.rank - b.rank
+      : (a, b) => a.label.localeCompare(b.label),
+  );
+  for (const b of buckets) b.indices = sortIndices(b.indices, info, sortMode);
 
   const items: RenderItem[] = [];
   const displayOrder: number[] = [];
@@ -358,83 +392,47 @@ function buildRenderPlan(
   items.push({ type: "overview", paneCount: pinnedPanes.length });
   items.push({ type: "spacer" });
 
-  // Flat sort modes (status / activity / name) dissolve project grouping: one
-  // ordered list of every (filtered) session, no group headers, no Pinned
-  // group — so a waiting agent rises to the very top regardless of project.
-  if (sortMode !== "project") {
-    const all = [...pinnedIndices, ...[...groupMap.values()].flat(), ...ungrouped];
-    const ordered = sortIndices(all, (i) => sortInfos[i]!, sortMode);
-    for (const idx of ordered) {
+  const emitGroup = (key: string, label: string, indices: number[]): void => {
+    const isCollapsed = collapsedGroups.has(key);
+    items.push({
+      type: "group-header",
+      key,
+      label,
+      collapsed: isCollapsed,
+      sessionCount: indices.length,
+    });
+    items.push({ type: "spacer" });
+    if (isCollapsed) return;
+    for (const idx of indices) {
       items.push({
         type: "session",
         sessionIndex: idx,
-        grouped: false,
+        grouped: true,
+        groupLabel: label,
         pinnedCount: pinnedPaneCountBySession.get(sessions[idx].name),
       });
       displayOrder.push(idx);
       items.push({ type: "spacer" });
     }
-    return { items, displayOrder };
+  };
+
+  // Pinned group, always the top group when any pins exist.
+  if (sortedPinned.length > 0) {
+    emitGroup(PINNED_GROUP_KEY, PINNED_GROUP_LABEL, sortedPinned);
   }
 
-  // Pinned sessions group
-  if (pinnedIndices.length > 0) {
-    const isCollapsed = collapsedGroups.has(PINNED_GROUP_LABEL);
-    items.push({
-      type: "group-header",
-      label: PINNED_GROUP_LABEL,
-      collapsed: isCollapsed,
-      sessionCount: pinnedIndices.length,
-    });
-    items.push({ type: "spacer" });
-    if (!isCollapsed) {
-      for (const idx of pinnedIndices) {
-        const pc = pinnedPaneCountBySession.get(sessions[idx].name);
-        items.push({
-          type: "session",
-          sessionIndex: idx,
-          grouped: true,
-          groupLabel: PINNED_GROUP_LABEL,
-          pinnedCount: pc,
-        });
-        displayOrder.push(idx);
-        items.push({ type: "spacer" });
-      }
-    }
+  // Grouped buckets (none in group=none).
+  for (const b of buckets) {
+    emitGroup(b.key, b.label, b.indices);
   }
 
-  for (const group of sortedGroups) {
-    const isCollapsed = collapsedGroups.has(group.label);
-    items.push({
-      type: "group-header",
-      label: group.label,
-      collapsed: isCollapsed,
-      sessionCount: group.sessionIndices.length,
-    });
-    items.push({ type: "spacer" });
-    if (!isCollapsed) {
-      for (const idx of group.sessionIndices) {
-        const pc = pinnedPaneCountBySession.get(sessions[idx].name);
-        items.push({
-          type: "session",
-          sessionIndex: idx,
-          grouped: true,
-          groupLabel: group.label,
-          pinnedCount: pc,
-        });
-        displayOrder.push(idx);
-        items.push({ type: "spacer" });
-      }
-    }
-  }
-
-  for (const idx of ungrouped) {
-    const pc = pinnedPaneCountBySession.get(sessions[idx].name);
+  // Flat list: group=none, or the project-less remainder in group=project.
+  for (const idx of sortedUngrouped) {
     items.push({
       type: "session",
       sessionIndex: idx,
       grouped: false,
-      pinnedCount: pc,
+      pinnedCount: pinnedPaneCountBySession.get(sessions[idx].name),
     });
     displayOrder.push(idx);
     items.push({ type: "spacer" });
@@ -484,7 +482,7 @@ export class Sidebar {
   private items: RenderItem[] = [];
   private displayOrder: number[] = [];
   private rowToSessionIndex = new Map<number, number>();
-  private rowToGroupLabel = new Map<number, string>();
+  private rowToGroupKey = new Map<number, string>();
   private activitySet = new Set<string>();
   private scrollOffset = 0;
   private hoveredRow: number | null = null;
@@ -552,7 +550,8 @@ export class Sidebar {
     this.rebuildPlan();
   }
 
-  private sortMode: SortMode = "project";
+  private groupMode: GroupMode = "project";
+  private sortMode: SortMode = "name";
   private filterMode: FilterMode = "all";
 
   /** A session's status for ordering/filtering — the same distinction the row
@@ -585,9 +584,17 @@ export class Sidebar {
     }));
   }
 
+  getGroupMode(): GroupMode { return this.groupMode; }
   getSortMode(): SortMode { return this.sortMode; }
   getFilterMode(): FilterMode { return this.filterMode; }
 
+  setGroupMode(mode: GroupMode): void {
+    if (mode === this.groupMode) return; // no-op — avoids a redundant rebuild
+    this.groupMode = mode;
+    // Show the TOP of the re-grouped list — regrouping changes what's on top.
+    this.scrollOffset = 0;
+    this.rebuildPlan();
+  }
   setSortMode(mode: SortMode): void {
     if (mode === this.sortMode) return; // no-op — avoids a redundant rebuild
     this.sortMode = mode;
@@ -603,7 +610,11 @@ export class Sidebar {
     this.rebuildPlan();
   }
 
-  /** Cycle sort/filter and return the new mode (so the caller can persist/report it). */
+  /** Cycle group/sort/filter and return the new mode (so the caller can persist/report it). */
+  cycleGroupMode(): GroupMode {
+    this.setGroupMode(cycleGroup(this.groupMode));
+    return this.groupMode;
+  }
   cycleSortMode(): SortMode {
     this.setSortMode(cycleSort(this.sortMode));
     return this.sortMode;
@@ -620,6 +631,7 @@ export class Sidebar {
       this.pinnedSessions,
       this.pinnedPanes,
       this.buildSortInfos(),
+      this.groupMode,
       this.sortMode,
       this.filterMode,
     );
@@ -717,21 +729,22 @@ export class Sidebar {
     return this.sessions[sessionIdx] ?? null;
   }
 
-  getGroupByRow(row: number): string | null {
-    return this.rowToGroupLabel.get(row) ?? null;
+  /** The axis-namespaced collapse key of the group header on `row`, for toggling. */
+  getGroupKeyByRow(row: number): string | null {
+    return this.rowToGroupKey.get(row) ?? null;
   }
 
   getSelectionByRow(row: number): SidebarSelection | null {
     return this.rowToSelection.get(row) ?? null;
   }
 
-  getGroups(): { label: string; collapsed: boolean }[] {
-    const groups: { label: string; collapsed: boolean }[] = [];
+  getGroups(): { key: string; label: string; collapsed: boolean }[] {
+    const groups: { key: string; label: string; collapsed: boolean }[] = [];
     const seen = new Set<string>();
     for (const item of this.items) {
-      if (item.type === "group-header" && !seen.has(item.label)) {
-        seen.add(item.label);
-        groups.push({ label: item.label, collapsed: item.collapsed });
+      if (item.type === "group-header" && !seen.has(item.key)) {
+        seen.add(item.key);
+        groups.push({ key: item.key, label: item.label, collapsed: item.collapsed });
       }
     }
     return groups;
@@ -779,33 +792,41 @@ export class Sidebar {
     }
   }
 
-  /** Column range (inclusive, 0-indexed) of the clickable "⇅ <Sort>" control on
-   * the header row, recomputed each render; [-1,-1] when it isn't drawn. */
+  /** Column ranges (inclusive, 0-indexed) of the clickable "⊞ <Group>" and
+   * "⇅ <Sort>" chips on the header row, recomputed each render; [-1,-1] when a
+   * chip isn't drawn. */
+  private groupToggleStart = -1;
+  private groupToggleEnd = -1;
   private sortToggleStart = -1;
   private sortToggleEnd = -1;
 
   /**
-   * Header row: a static `Sessions` label, then a clickable `⇅ <Sort>` control
-   * naming the current sort mode, then (when filtered) a dim `· <Filter>`
-   * suffix, then the right-aligned state rollup. The control cycles the sort
-   * mode on click (headerSortToggleHit); the ⇅ glyph and the accent-muted mode
-   * name are its affordance.
+   * Header row: two clickable chips — `⊞ <Group>` then `⇅ <Sort>` — naming the
+   * current grouping and member-sort, then (when filtered) a dim `· <Filter>`
+   * suffix, then the right-aligned state rollup. The "Sessions" word is dropped:
+   * the sidebar is unambiguously the session list and the chips need the room.
+   * Clicking a chip cycles that axis (headerGroupToggleHit / headerSortToggleHit);
+   * the glyph plus the accent-muted mode name are the affordance.
    */
   private renderHeader(grid: CellGrid): void {
-    const label = "Sessions";
-    writeString(grid, 0, 1, label, { ...ACCENT_ATTRS, bold: true });
-
-    const control = `⇅ ${sortModeShort(this.sortMode)}`;
-    const controlCol = 1 + textCols(label) + 2; // gap after the label
-    // The control is the sort-cycle click target — icon + mode name.
-    this.sortToggleStart = controlCol;
-    this.sortToggleEnd = controlCol + textCols(control) - 1;
-    writeString(grid, 0, controlCol, control, {
+    const chipAttrs: CellAttrs = {
       fg: tokens.accentMuted.fg,
       fgMode: tokens.accentMuted.fgMode,
-    });
+    };
 
-    let after = controlCol + textCols(control);
+    const groupChip = `⊞ ${groupModeShort(this.groupMode)}`;
+    const groupCol = 1;
+    this.groupToggleStart = groupCol;
+    this.groupToggleEnd = groupCol + textCols(groupChip) - 1;
+    writeString(grid, 0, groupCol, groupChip, chipAttrs);
+
+    const sortChip = `⇅ ${sortModeShort(this.sortMode)}`;
+    const sortCol = groupCol + textCols(groupChip) + 2; // 2-col gap between chips
+    this.sortToggleStart = sortCol;
+    this.sortToggleEnd = sortCol + textCols(sortChip) - 1;
+    writeString(grid, 0, sortCol, sortChip, chipAttrs);
+
+    let after = sortCol + textCols(sortChip);
     if (this.filterMode !== "all") {
       const suffix = ` · ${filterModeShort(this.filterMode)}`;
       if (after + textCols(suffix) < this.width - 1) {
@@ -817,7 +838,12 @@ export class Sidebar {
     this.renderHeaderRollup(grid, after);
   }
 
-  /** True when a click at (row, col) lands on the header sort-toggle control. */
+  /** True when a click at (row, col) lands on the header group-toggle chip. */
+  headerGroupToggleHit(row: number, col: number): boolean {
+    return row === 0 && col >= this.groupToggleStart && col <= this.groupToggleEnd;
+  }
+
+  /** True when a click at (row, col) lands on the header sort-toggle chip. */
   headerSortToggleHit(row: number, col: number): boolean {
     return row === 0 && col >= this.sortToggleStart && col <= this.sortToggleEnd;
   }
@@ -893,7 +919,7 @@ export class Sidebar {
   getGrid(): CellGrid {
     const grid = createGrid(this.width, this.height);
     this.rowToSessionIndex.clear();
-    this.rowToGroupLabel.clear();
+    this.rowToGroupKey.clear();
     this.rowToSelection.clear();
 
     // Header \u2014 a title on the left, a live agent-state rollup on the right so
@@ -1013,7 +1039,7 @@ export class Sidebar {
             writeString(grid, screenRow, countCol, countSuffix, countAttrs);
           }
         }
-        this.rowToGroupLabel.set(screenRow, item.label);
+        this.rowToGroupKey.set(screenRow, item.key);
       } else if (item.type === "spacer") {
         // nothing to render
       } else {

@@ -26,15 +26,15 @@ function makeSessions(
 }
 
 describe("Sidebar", () => {
-  test("renders header row", () => {
+  test("renders header row with the group + sort chips", () => {
     const sidebar = new Sidebar(SIDEBAR_WIDTH, 30);
     sidebar.updateSessions(makeSessions([{ name: "main" }]));
     const grid = sidebar.getGrid();
-    const headerText = Array.from(
-      { length: 8 },
-      (_, i) => grid.cells[0][1 + i].char,
-    ).join("");
-    expect(headerText).toBe("Sessions");
+    const header = Array.from({ length: SIDEBAR_WIDTH }, (_, i) => grid.cells[0][i].char).join("");
+    // Defaults: group by project, sort by name — chips lead the header, no "Sessions" word.
+    expect(header).toContain("⊞ Project");
+    expect(header).toContain("⇅ Name");
+    expect(header).not.toContain("Sessions");
   });
 
   test("header shows a right-aligned agent-state rollup", () => {
@@ -54,16 +54,16 @@ describe("Sidebar", () => {
     expect(header).toContain("2⏵");
     expect(header).toContain("1!");
     expect(header).toContain("1✓");
-    // The label is untouched on the left.
-    expect(header).toContain("Sessions");
+    // The control chips are untouched on the left.
+    expect(header).toContain("⊞ Project");
   });
 
   test("header rollup omits states with no sessions, and vanishes when none are promoted", () => {
     const sidebar = new Sidebar(SIDEBAR_WIDTH, 30);
     sidebar.updateSessions(makeSessions([{ name: "a" }, { name: "b" }]));
-    // Nothing promoted → no rollup; header is the label plus the ⇅ sort icon.
+    // Nothing promoted → no rollup; header is just the group + sort chips.
     let header = Array.from({ length: SIDEBAR_WIDTH }, (_, i) => sidebar.getGrid().cells[0][i].char).join("");
-    expect(header).toContain("Sessions");
+    expect(header).toContain("⊞");
     expect(header).toContain("⇅");
     expect(header).not.toContain("⏵"); // no rollup counts
     expect(header).not.toContain("✓");
@@ -585,7 +585,7 @@ describe("Sidebar", () => {
         { name: "solo", directory: "~" },
       ]),
     );
-    sidebar.toggleGroup("Code/work");
+    sidebar.toggleGroup("project:Code/work");
     const grid = sidebar.getGrid();
     let foundApi = false;
     let foundWeb = false;
@@ -619,7 +619,7 @@ describe("Sidebar", () => {
         { name: "solo", directory: "~" },
       ]),
     );
-    sidebar.toggleGroup("Code/work");
+    sidebar.toggleGroup("project:Code/work");
     const ids = sidebar.getDisplayOrderIds();
     expect(ids).toEqual(["$2"]);
   });
@@ -632,8 +632,8 @@ describe("Sidebar", () => {
         { name: "web", directory: "~/Code/work/web" },
       ]),
     );
-    sidebar.toggleGroup("Code/work"); // collapse
-    sidebar.toggleGroup("Code/work"); // expand
+    sidebar.toggleGroup("project:Code/work"); // collapse
+    sidebar.toggleGroup("project:Code/work"); // expand
     const ids = sidebar.getDisplayOrderIds();
     expect(ids).toEqual(["$0", "$1"]);
   });
@@ -671,7 +671,7 @@ describe("Sidebar", () => {
         { name: "web", directory: "~/Code/work/web" },
       ]),
     );
-    sidebar.toggleGroup("Code/work");
+    sidebar.toggleGroup("project:Code/work");
     const grid = sidebar.getGrid();
     // Row 2: overview, Row 3: spacer, Row 4: group header
     const row = grid.cells[4];
@@ -687,7 +687,7 @@ describe("Sidebar", () => {
     expect(headerText).toContain(frame.ruleLight);
   });
 
-  test("getGroupByRow returns group label for header rows", () => {
+  test("getGroupKeyByRow returns the axis-namespaced collapse key for header rows", () => {
     const sidebar = new Sidebar(SIDEBAR_WIDTH, 30);
     sidebar.updateSessions(
       makeSessions([
@@ -697,9 +697,9 @@ describe("Sidebar", () => {
     );
     sidebar.getGrid(); // populate row maps
     // Row 4 is the group header (rows 2,3 are overview+spacer)
-    expect(sidebar.getGroupByRow(4)).toBe("Code/work");
+    expect(sidebar.getGroupKeyByRow(4)).toBe("project:Code/work");
     // Row 6 is a session, not a group header
-    expect(sidebar.getGroupByRow(6)).toBeNull();
+    expect(sidebar.getGroupKeyByRow(6)).toBeNull();
   });
 
   test("group header row shows hover highlight", () => {
@@ -950,7 +950,7 @@ describe("Sidebar", () => {
         { name: "beta" },
       ]),
     );
-    sidebar.toggleGroup("Pinned");
+    sidebar.toggleGroup("pinned");
     const grid = sidebar.getGrid();
     let foundAlpha = false;
     for (let r = 0; r < 30; r++) {
@@ -1719,13 +1719,14 @@ describe("Sidebar — sort & filter", () => {
     return row;
   };
 
-  test("status sort pulls waiting to the top across projects, dropping group headers", () => {
+  test("group=none + sort=status pulls waiting to the top across projects, no headers", () => {
     const sb = seeded();
+    sb.setGroupMode("none");
     sb.setSortMode("status");
     const g = sb.getGrid();
     const all = Array.from({ length: g.rows }, (_, r) =>
       Array.from({ length: WIDTH }, (_, i) => g.cells[r][i].char).join("")).join("\n");
-    // No project group headers in a flat mode.
+    // No project group headers in a flat (group=none) list.
     expect(all).not.toContain("proj-a");
     expect(all).not.toContain("proj-b");
     // Both waiting sessions appear above both non-waiting ones.
@@ -1734,6 +1735,53 @@ describe("Sidebar — sort & filter", () => {
     const alpha = linesWith(sb, "alpha");   // running
     const charlie = linesWith(sb, "charlie"); // idle
     expect(Math.max(bravo, delta)).toBeLessThan(Math.min(alpha, charlie));
+  });
+
+  test("group=status emits ranked headers: Needs you above Running above Idle", () => {
+    const sb = seeded();
+    sb.setGroupMode("status");
+    const needsYou = linesWith(sb, "Needs you");
+    const running = linesWith(sb, "Running");
+    const idle = linesWith(sb, "Idle");
+    // Every populated status heads its own group, ordered by rank.
+    expect(needsYou).toBeGreaterThan(-1);
+    expect(running).toBeGreaterThan(-1);
+    expect(idle).toBeGreaterThan(-1);
+    expect(needsYou).toBeLessThan(running);
+    expect(running).toBeLessThan(idle);
+    // Waiting sessions sit under the "Needs you" header, above the running one.
+    const bravo = linesWith(sb, "bravo");   // waiting
+    const alpha = linesWith(sb, "alpha");   // running
+    expect(needsYou).toBeLessThan(bravo);
+    expect(bravo).toBeLessThan(running);
+    expect(running).toBeLessThan(alpha);
+  });
+
+  test("group=project + sort=status keeps project headers, ranks members within", () => {
+    const sb = seeded();
+    // Default group=project; sort members by status so waiting rises inside a group.
+    sb.setSortMode("status");
+    const g = sb.getGrid();
+    const all = Array.from({ length: g.rows }, (_, r) =>
+      Array.from({ length: WIDTH }, (_, i) => g.cells[r][i].char).join("")).join("\n");
+    // Project headers still present — grouping is not dissolved.
+    expect(all).toContain("proj-a");
+    expect(all).toContain("proj-b");
+    // Within proj-a, waiting "bravo" rises above running "alpha".
+    expect(linesWith(sb, "bravo")).toBeLessThan(linesWith(sb, "alpha"));
+  });
+
+  test("pins float into a Pinned group in every mode, including group=none", () => {
+    const sb = seeded();
+    sb.setPinnedSessions(new Set(["charlie"])); // idle, would otherwise sink
+    sb.setGroupMode("none");
+    sb.setSortMode("status");
+    const pinned = linesWith(sb, "Pinned");
+    expect(pinned).toBeGreaterThan(-1);
+    // The pinned (idle) session sits in the Pinned group above every other row,
+    // even a waiting one — pinning outranks status ordering.
+    expect(pinned).toBeLessThan(linesWith(sb, "charlie"));
+    expect(linesWith(sb, "charlie")).toBeLessThan(linesWith(sb, "bravo"));
   });
 
   test("attention filter hides non-waiting sessions; Command Center stays", () => {
@@ -1770,46 +1818,56 @@ describe("Sidebar — sort & filter", () => {
     expect(all).not.toContain("solo");
   });
 
-  test("header names the active sort and filter", () => {
-    const sb = new Sidebar(40, 40); // wide enough for label + control + filter
+  test("header names the active group, sort, and filter", () => {
+    const sb = new Sidebar(40, 40); // wide enough for both chips + filter
     sb.updateSessions(makeSessions([{ name: "alpha" }]));
     sb.setAgentStateRecord("$0", { state: "waiting", since: Date.now() });
     const header = () => Array.from({ length: 40 }, (_, i) => sb.getGrid().cells[0][i].char).join("");
-    expect(header()).toContain("Sessions");
-    expect(header()).toContain("⇅ Project");
-    sb.setSortMode("status");
-    expect(header()).toContain("⇅ Status");
+    // Defaults: group by project, sort by name — no "Sessions" word.
+    expect(header()).not.toContain("Sessions");
+    expect(header()).toContain("⊞ Project");
+    expect(header()).toContain("⇅ Name");
+    sb.setGroupMode("status");
+    expect(header()).toContain("⊞ Status");
+    sb.setSortMode("activity");
+    expect(header()).toContain("⇅ Activity");
     sb.setFilterMode("attention");
     expect(header()).toContain("· Needs you");
   });
 
-  test("cycle helpers return and apply the next mode", () => {
+  test("cycle helpers return and apply the next mode on each axis", () => {
     const sb = seeded();
-    expect(sb.getSortMode()).toBe("project");
-    expect(sb.cycleSortMode()).toBe("status");
-    expect(sb.getSortMode()).toBe("status");
+    // Group axis: project → status → none → project.
+    expect(sb.getGroupMode()).toBe("project");
+    expect(sb.cycleGroupMode()).toBe("status");
+    expect(sb.getGroupMode()).toBe("status");
+    // Sort axis: name → activity → status → name.
+    expect(sb.getSortMode()).toBe("name");
+    expect(sb.cycleSortMode()).toBe("activity");
+    expect(sb.getSortMode()).toBe("activity");
     expect(sb.cycleFilterMode()).toBe("attention");
     expect(sb.getFilterMode()).toBe("attention");
   });
 
-  test("header shows Sessions + a clickable ⇅ sort control naming the mode", () => {
+  test("header shows clickable group + sort chips, each its own hit target", () => {
     const sb = seeded();
     const header = () => Array.from({ length: WIDTH }, (_, i) => sb.getGrid().cells[0][i].char).join("");
-    sb.getGrid();
-    expect(header()).toContain("Sessions");
-    expect(header()).toContain("⇅ Project"); // icon + current mode name
-    sb.setSortMode("status");
-    expect(header()).toContain("⇅ Status");
-
-    // The control's own columns are the click target; the label and separator
-    // rows are not. Find the ⇅ column and assert the hit-test brackets it.
     const row0 = header();
-    const iconCol = [...row0].findIndex((c) => c === "⇅");
-    expect(sb.headerSortToggleHit(0, iconCol)).toBe(true);         // the icon
-    expect(sb.headerSortToggleHit(0, iconCol + 2)).toBe(true);     // the mode name
-    expect(sb.headerSortToggleHit(0, 1)).toBe(false);              // "Sessions" label
-    expect(sb.headerSortToggleHit(1, iconCol)).toBe(false);        // separator row
-    expect(sb.headerSortToggleHit(4, iconCol)).toBe(false);        // a session row
+    expect(row0).toContain("⊞ Project"); // group chip + current mode name
+    expect(row0).toContain("⇅ Name");    // sort chip + current mode name
+
+    // Each glyph plus its trailing mode name is that axis's click target; the
+    // other chip and non-header rows are not.
+    const groupCol = [...row0].findIndex((c) => c === "⊞");
+    const sortCol = [...row0].findIndex((c) => c === "⇅");
+    expect(sb.headerGroupToggleHit(0, groupCol)).toBe(true);      // group glyph
+    expect(sb.headerGroupToggleHit(0, groupCol + 2)).toBe(true);  // group mode name
+    expect(sb.headerGroupToggleHit(0, sortCol)).toBe(false);      // that's the sort chip
+    expect(sb.headerSortToggleHit(0, sortCol)).toBe(true);        // sort glyph
+    expect(sb.headerSortToggleHit(0, sortCol + 2)).toBe(true);    // sort mode name
+    expect(sb.headerSortToggleHit(0, groupCol)).toBe(false);      // that's the group chip
+    expect(sb.headerGroupToggleHit(1, groupCol)).toBe(false);     // separator row
+    expect(sb.headerSortToggleHit(4, sortCol)).toBe(false);       // a session row
   });
 
   test("switching sort resets the scroll to the top (no bleed into the header)", () => {
