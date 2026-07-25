@@ -4,13 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>jmux — Orchestrate agents without replacing your tools</title>
-  <meta name="description" content="Orchestrate Claude Code, Codex, aider, or any terminal agent — with your diff viewer, your worktree manager, your terminal. No bundled IDE. No lock-in.">
+  <meta name="description" content="Run Claude Code, Codex, Pi, Hermes — or any terminal agent — in parallel. Real tmux underneath, with agent state, context cost, and issue-to-PR review layered on top. No bundled IDE. No new multiplexer.">
   <link rel="canonical" href="https://jmux.build">
   <meta name="theme-color" content="#f6f2ea" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#17130e" media="(prefers-color-scheme: dark)">
   <!-- Open Graph -->
   <meta property="og:title" content="jmux — Orchestrate agents without replacing your tools">
-  <meta property="og:description" content="Orchestrate Claude Code, Codex, aider, or any terminal agent — with your diff viewer, your worktree manager, your terminal. No bundled IDE. No lock-in.">
+  <meta property="og:description" content="Run Claude Code, Codex, Pi, Hermes — or any terminal agent — in parallel. Real tmux underneath, with agent state, context cost, and issue-to-PR review layered on top. No bundled IDE. No new multiplexer.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://jmux.build">
   <meta property="og:site_name" content="jmux">
@@ -26,7 +26,7 @@
   <meta name="twitter:site" content="@jarredkenny">
   <meta name="twitter:creator" content="@jarredkenny">
   <meta name="twitter:title" content="jmux — Orchestrate agents without replacing your tools">
-  <meta name="twitter:description" content="Orchestrate Claude Code, Codex, aider, or any terminal agent — with your diff viewer, your worktree manager, your terminal. No bundled IDE. No lock-in.">
+  <meta name="twitter:description" content="Run Claude Code, Codex, Pi, Hermes — or any terminal agent — in parallel. Real tmux underneath, with agent state, context cost, and issue-to-PR review layered on top. No bundled IDE. No new multiplexer.">
   <meta name="twitter:image" content="https://jmux.build/assets/og-command-center.jpg">
   <meta name="twitter:image:alt" content="jmux Command Center — parallel coding agents composited in one terminal">
   <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96">
@@ -42,11 +42,11 @@
     "@type": "SoftwareApplication",
     "name": "jmux",
     "url": "https://jmux.build",
-    "description": "Orchestrate Claude Code, Codex, aider, or any terminal agent — with your diff viewer, your worktree manager, your terminal. No bundled IDE. No lock-in.",
+    "description": "Run Claude Code, Codex, Pi, Hermes — or any terminal agent — in parallel. Real tmux underneath, with agent state, context cost, and issue-to-PR review layered on top. No bundled IDE. No new multiplexer.",
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "macOS, Linux",
     "softwareRequirements": "Bun 1.3.8+, tmux 3.2+",
-    "license": "https://opensource.org/licenses/MIT",
+    "license": "https://www.gnu.org/licenses/agpl-3.0.html",
     "image": "https://jmux.build/assets/og-command-center.jpg",
     "downloadUrl": "https://www.npmjs.com/package/@jx0/jmux",
     "softwareHelp": "https://github.com/jarredkenny/jmux#readme",
@@ -319,10 +319,13 @@
   /* ============ COMPARISON ============ */
   .cmp{ padding:104px 0; }
   .ctable{ max-width:900px; margin:50px auto 0; border:1px solid var(--bd); border-radius:16px; overflow:hidden; background:var(--card); box-shadow:var(--shadow-sm); }
-  .ctable table{ width:100%; border-collapse:collapse; font-size:14px; }
-  .ctable th,.ctable td{ padding:15px 18px; text-align:center; border-bottom:1px solid var(--bd); }
+  .ctable{ overflow-x:auto; }
+  .ctable table{ width:100%; min-width:660px; border-collapse:collapse; font-size:13.5px; }
+  .ctable th,.ctable td{ padding:14px 12px; text-align:center; border-bottom:1px solid var(--bd); line-height:1.35; }
   .ctable tr:last-child td{ border-bottom:0; }
-  .ctable th:first-child,.ctable td:first-child{ text-align:left; color:var(--ink2); width:40%; }
+  .ctable th:first-child,.ctable td:first-child{ text-align:left; color:var(--ink2); width:34%; padding-left:18px; }
+  .ctable td:last-child{ padding-right:18px; }
+  .ctable .txt{ font-size:12.5px; }
   .ctable thead th{ color:var(--ink3); font-weight:500; font-family:'JetBrains Mono'; font-size:12px; letter-spacing:.04em; text-transform:uppercase; }
   .ctable .jcol{ background:var(--tint); color:var(--ink); font-weight:600; }
   .ctable thead .jcol{ color:var(--ink); font-weight:700; }
@@ -410,7 +413,7 @@
 
 <!-- NAV -->
 <nav><div class="wrap row">
-  <a href="#top" class="brand"><img src="assets/logo.svg" alt="" width="30" height="30"> jmux <span class="v">v0.21.0</span></a>
+  <a href="#top" class="brand"><img src="assets/logo.svg" alt="" width="30" height="30"> jmux <span class="v">v0.23.0</span></a>
   <div class="navlinks">
     <a href="#features" class="hide-sm">Features</a>
     <a href="#ecosystem" class="hide-sm">Ecosystem</a>
@@ -431,7 +434,7 @@
       <a href="#command-center" class="badge">▦&nbsp;New · The Command Center&nbsp;→</a>
       <div class="eyebrow">Terminal Agent Orchestrator</div>
       <h1>Replace nothing.<span class="m serif"><em>Orchestrate</em> everything.</span></h1>
-      <p class="lead">Agent IDEs ship their own terminal, diff viewer, and worktree manager — then lock you in. jmux conducts the tools you already run.</p>
+      <p class="lead">Agent IDEs want your terminal. New multiplexers want your tmux. jmux takes neither — it drives the real tmux you already run, and layers on agent state, context cost, and diff review.</p>
       <div class="cta-row">
         <div class="pill"><span class="d">$</span> bun install -g @jx0/jmux
           <button class="cp" title="Copy" onclick="copyCmd(this,'bun install -g @jx0/jmux')">
@@ -441,12 +444,12 @@
         <a href="#features" class="link-u">See what it does →</a>
       </div>
       <div class="proof">
-        <span class="stars">★★★★★</span><span>loved by terminal-native devs</span>
+        <span>Keep your <span class="mono" style="color:var(--ink)">.tmux.conf</span>, your plugins, your prefix, your bindings. Quit jmux and <span class="mono" style="color:var(--ink)">tmux attach</span> still works.</span>
       </div>
       <div class="chips">
-        <span class="chip">MIT licensed</span>
+        <span class="chip">Open source · AGPL-3.0</span>
         <span class="chip">~0.3 MB</span>
-        <span class="chip">tmux underneath</span>
+        <span class="chip">real tmux underneath</span>
       </div>
     </div>
     <div class="heroshot">
@@ -492,7 +495,7 @@
       <div class="tile wide animate-in">
         <div class="ico" aria-hidden="true">◷</div>
         <h3>Context &amp; cache visibility</h3>
-        <p>Live context-token occupancy per session (<span class="mono" style="color:var(--ink)">42k</span>, <span class="mono" style="color:var(--ink)">1.5M</span>) plus a cache-warm countdown — read straight from Claude Code's OpenTelemetry. Send while warm, save up to 90% on input tokens. No setup.</p>
+        <p>No other multiplexer or agent IDE shows you this. Live context-window occupancy per session (<span class="mono" style="color:var(--ink)">42k</span>, <span class="mono" style="color:var(--ink)">1.5M</span>) plus a cache-warm countdown, read straight from Claude Code's OpenTelemetry. Know which agent is about to run out of room, and which one is still cheap to talk to — send while warm and save up to 90% on input tokens. No setup.</p>
       </div>
       <div class="tile animate-in">
         <div class="ico" aria-hidden="true">⌘</div>
@@ -502,7 +505,7 @@
       <div class="tile wide animate-in">
         <div class="ico" aria-hidden="true">▦</div>
         <h3>Command Center</h3>
-        <p>Pin the agent pane from every session and drive them all at once in one live grid, organized into named tabs. Tile borders glow by state — type into any tile to steer that agent. Pin by hand or auto-pin every Claude &amp; Codex pane. Fully non-destructive: panes never leave their session.</p>
+        <p>Pin the agent pane from every session and drive them all at once in one live grid, organized into named tabs. Tile borders glow by state — type into any tile to steer that agent. Pin by hand, or auto-pin every agent pane — Claude, Codex, or any command you name. Fully non-destructive: panes never leave their session.</p>
       </div>
       <div class="tile animate-in">
         <div class="ico" aria-hidden="true">⚑</div>
@@ -522,7 +525,7 @@
       <p class="lead">Pin the Claude or Codex pane from every session and drive your whole fleet from one live grid — type into any tile to steer that agent for real.</p>
       <ul class="points">
         <li><strong>Borders glow by state</strong> — see who's <span style="color:var(--green)">running</span>, <span style="color:var(--amber)">waiting</span>, or <span style="color:var(--blue)">complete</span> at a glance.</li>
-        <li><strong>Pin by hand or auto-pin</strong> every Claude &amp; Codex pane — fully non-destructive, panes never leave their session.</li>
+        <li><strong>Pin by hand or auto-pin</strong> every agent pane — Claude, Codex, or any command you name — fully non-destructive, panes never leave their session.</li>
         <li><strong>Group into named tabs</strong> and flip between them with <span class="kbd">Ctrl-a [</span> / <span class="kbd">]</span> or a number.</li>
       </ul>
     </div>
@@ -585,10 +588,11 @@
 <section class="sec showcase">
   <div class="wrap showrow flip">
     <div class="txt animate-in">
-      <div class="eyebrow">Make it yours</div>
-      <h2>Themes &amp; chrome<br><em>that match your terminal.</em></h2>
-      <p class="lead">jmux paints its own sidebar, toolbar, and rounded window chrome — and it <strong>fully adapts to your terminal's color scheme</strong>. Every glyph and surface is drawn from your terminal's own palette, so jmux inherits whatever theme you already run and looks native in <strong>light or dark</strong>, without a line of config. Change your terminal colors and the whole chrome follows.</p>
-      <p class="lead">Tune the details from the settings modal (<span class="kbd">Ctrl-a i</span>): pick the <span style="color:var(--green)">running</span>, <span style="color:var(--amber)">waiting</span>, and <span style="color:var(--blue)">complete</span> state colors, set your code host and issue tracker, and dial in the sidebar and panel widths — no config file to hand-edit.</p>
+      <div class="eyebrow">No migration</div>
+      <h2>It's real tmux.<br><em>Bring everything.</em></h2>
+      <p class="lead">The other agent multiplexers are <strong>replacements</strong> — a new server, a new config, a new keymap, and your tmux plugins left behind. jmux drives the tmux binary you already have. Your <span class="mono" style="color:var(--ink)">~/.tmux.conf</span>, prefix key, plugins, theme, and bindings all carry over; jmux enforces only the handful of settings it needs to draw its own chrome.</p>
+      <p class="lead">Which means the exit is free too. Your sessions are ordinary tmux sessions — <strong>quit jmux and <span class="mono" style="color:var(--ink)">tmux attach</span> still lands you exactly where you were</strong>. No export, no lock-in, nothing to migrate in either direction.</p>
+      <p class="lead">The chrome follows suit: every glyph and surface is drawn from <strong>your terminal's own palette</strong>, so jmux looks native in light or dark without a line of config. Tune the rest from the settings modal (<span class="kbd">Ctrl-a i</span>) — <span style="color:var(--green)">running</span> / <span style="color:var(--amber)">waiting</span> / <span style="color:var(--blue)">complete</span> colors, code host, issue tracker, panel widths.</p>
     </div>
     <div class="stackpair">
       <figure class="back"><img src="assets/command-center.webp" alt="jmux chrome peeking behind the theme stack"></figure>
@@ -651,25 +655,26 @@
 <section class="sec cmp center">
   <div class="wrap">
     <div class="animate-in"><div class="eyebrow">How it compares</div>
-    <h2>What you give up with a <em>bundled</em> agent IDE.</h2></div>
+    <h2>Three ways to run a fleet.<br><em>Only one</em> asks nothing of you.</h2></div>
     <div class="ctable">
       <table>
-        <thead><tr><th></th><th class="jcol">jmux</th><th>Bundled IDEs</th><th>Raw tmux</th></tr></thead>
+        <thead><tr><th></th><th class="jcol">jmux</th><th>Agent IDEs</th><th>New muxes</th><th>Raw tmux</th></tr></thead>
         <tbody>
-          <tr><td>Parallel agent orchestration</td><td class="jcol yes">✓</td><td class="yes">✓</td><td class="meh">Manual</td></tr>
-          <tr><td>Agent run states (running / waiting / complete)</td><td class="jcol yes">✓</td><td class="yes">✓</td><td class="no">✗</td></tr>
-          <tr><td>Scriptable JSON control surface</td><td class="jcol yes">✓</td><td class="no">✗</td><td class="meh">Manual</td></tr>
-          <tr><td>Integrated diff review</td><td class="jcol yes">✓</td><td class="yes">✓</td><td class="no">✗</td></tr>
-          <tr><td>Issue &amp; PR/MR tracking</td><td class="jcol yes">✓</td><td class="meh">Extension</td><td class="no">✗</td></tr>
-          <tr><td>Context &amp; cache visibility</td><td class="jcol yes">✓</td><td class="no">✗</td><td class="no">✗</td></tr>
-          <tr><td>Runs over SSH / headless</td><td class="jcol yes">✓</td><td class="no">✗</td><td class="yes">✓</td></tr>
-          <tr><td>Use any editor or tool</td><td class="jcol yes">✓</td><td class="meh">Bundled</td><td class="yes">✓</td></tr>
-          <tr><td>Sessions outlive the orchestrator</td><td class="jcol yes">✓</td><td class="no">✗</td><td class="yes">✓</td></tr>
-          <tr><td>Install size</td><td class="jcol mono" style="font-size:12.5px">~0.3 MB</td><td class="no mono" style="font-size:12.5px">~200+ MB</td><td class="meh">—</td></tr>
+          <tr><td>Runs in the terminal you already use</td><td class="jcol yes">✓</td><td class="no">✗</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Keeps your tmux config, plugins &amp; bindings</td><td class="jcol yes">✓</td><td class="no">✗</td><td class="no txt">Replaces tmux</td><td class="yes">✓</td></tr>
+          <tr><td>Sessions reachable from a plain <span class="mono">tmux attach</span></td><td class="jcol yes">✓</td><td class="no">✗</td><td class="no">✗</td><td class="yes">✓</td></tr>
+          <tr><td>Agent run states (running / waiting / complete)</td><td class="jcol yes txt">Hooks + telemetry</td><td class="yes">✓</td><td class="meh txt">Screen heuristics</td><td class="no">✗</td></tr>
+          <tr><td>Context window &amp; cache-warm visibility</td><td class="jcol yes">✓</td><td class="no">✗</td><td class="no">✗</td><td class="no">✗</td></tr>
+          <tr><td>Integrated diff review</td><td class="jcol yes">✓</td><td class="yes">✓</td><td class="no">✗</td><td class="no">✗</td></tr>
+          <tr><td>Issue &amp; PR/MR tracking, incl. self-hosted GitLab</td><td class="jcol yes">✓</td><td class="meh">Partial</td><td class="no">✗</td><td class="no">✗</td></tr>
+          <tr><td>Start work straight from a ticket</td><td class="jcol yes">✓</td><td class="meh">Partial</td><td class="no">✗</td><td class="no">✗</td></tr>
+          <tr><td>Scriptable JSON control surface</td><td class="jcol yes">✓</td><td class="meh">Partial</td><td class="yes">✓</td><td class="meh">Manual</td></tr>
+          <tr><td>Runs over SSH / headless</td><td class="jcol yes">✓</td><td class="no">✗</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Install size</td><td class="jcol mono" style="font-size:12.5px">~0.3 MB</td><td class="no mono" style="font-size:12.5px">200+ MB</td><td class="meh mono" style="font-size:12.5px">~10 MB</td><td class="meh">—</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="foot">Bundled agent IDEs — Orca, Cursor, Windsurf, Conductor — ship their own terminal, editor, and runtime in a desktop app.</p>
+    <p class="foot"><b>Agent IDEs</b> — Orca, Cursor, Windsurf, Conductor — ship their own terminal, editor, and runtime in a desktop app.<br><b>New muxes</b> — herdr and friends — are agent-aware multiplexers that stand in for tmux rather than building on it.</p>
   </div>
 </section>
 
@@ -678,7 +683,7 @@
   <div class="wrap">
     <div class="animate-in"><div class="eyebrow">Agent orchestration <span class="new">NEW</span></div>
     <h2>Agents that <em>orchestrate</em> agents.</h2>
-    <p class="lead" style="margin-top:18px">A structured JSON control surface for agents and scripts. Read every session's live state, start work from an issue, stream lifecycle events, and flag what needs a human — <strong style="color:var(--ink)">without scraping a single pane</strong>. Context auto-resolves from <span class="kbd">$TMUX</span>, so it works headless too.</p></div>
+    <p class="lead" style="margin-top:18px">Other control surfaces stop at panes and processes. jmux's understands <strong style="color:var(--ink)">tickets, branches, and run state</strong> — so an agent can pick up <span class="mono" style="color:var(--ink)">TRA-933</span>, get its own worktree and session, work, and raise a flag when it needs a human. State comes from hooks and telemetry, <strong style="color:var(--ink)">not from scraping a screen buffer</strong>, so it's authoritative rather than a guess. Context auto-resolves from <span class="kbd">$TMUX</span>, so it works headless too.</p></div>
     <div class="term">
       <div class="bar"><span class="d" style="background:#ff5f56"></span><span class="d" style="background:#ffbd2e"></span><span class="d" style="background:#27c93f"></span><small>work-radar</small></div>
       <div class="body">
@@ -707,11 +712,11 @@
     <div class="ecogrid">
       <div class="ecocard animate-in"><div class="nm"><a href="https://github.com/modem-dev/hunk" target="_blank" rel="noopener">hunk</a></div><div class="tg">Best terminal diff viewer</div><p>Powers the integrated diff panel — word-level, split &amp; full-screen.</p></div>
       <div class="ecocard animate-in"><div class="nm"><a href="https://github.com/jarredkenny/worktree-manager" target="_blank" rel="noopener">wtm</a></div><div class="tg">Git worktree manager</div><p>One worktree per agent, one session per branch.</p></div>
-      <div class="ecocard animate-in"><div class="nm">Claude Code</div><div class="tg">Leading AI coding agent</div><p>Ships a jmux-control skill + telemetry for state &amp; tokens.</p></div>
+      <div class="ecocard animate-in"><div class="nm">Claude Code</div><div class="tg">Deepest integration</div><p>Hook-driven run state, live context &amp; cache from telemetry, plus a jmux-control skill.</p></div>
       <div class="ecocard animate-in"><div class="nm"><a href="https://linear.app" target="_blank" rel="noopener">Linear</a></div><div class="tg">Modern issue tracking</div><p>Assigned issues in the info panel; create sessions from issues.</p></div>
       <div class="ecocard animate-in"><div class="nm"><a href="https://github.com" target="_blank" rel="noopener">GitHub</a><span class="new">NEW</span></div><div class="tg">Pull requests &amp; checks</div><p>PR detection, CI glyphs, approve &amp; mark-ready from the panel.</p></div>
       <div class="ecocard animate-in"><div class="nm"><a href="https://about.gitlab.com" target="_blank" rel="noopener">GitLab</a></div><div class="tg">MRs, pipelines, approvals</div><p>Pipeline glyphs in the sidebar. Self-hosted supported.</p></div>
-      <div class="ecocard animate-in"><div class="nm">lazygit</div><div class="tg">Terminal Git UI</div><p>Run it in a pane beside your agent.</p></div>
+      <div class="ecocard animate-in"><div class="nm">Codex · Pi · Hermes</div><div class="tg">Any terminal agent</div><p>Run them in panes, pin them to the Command Center, drive them side by side.</p></div>
       <div class="ecocard dashed animate-in"><div class="nm">yours</div><div class="tg">Whatever you use</div><p>vim, emacs, your scripts. It's tmux underneath.</p></div>
     </div>
   </div>
@@ -739,7 +744,7 @@
 
 <!-- FOOTER -->
 <footer><div class="wrap row">
-  <a href="#top" class="brand"><img src="assets/logo.svg" alt="" width="24" height="24"> jmux <span style="color:var(--ink3);font-size:12px;font-weight:400;font-family:'Inter'">MIT License</span></a>
+  <a href="#top" class="brand"><img src="assets/logo.svg" alt="" width="24" height="24"> jmux <span style="color:var(--ink3);font-size:12px;font-weight:400;font-family:'Inter'">AGPL-3.0</span></a>
   <div class="links"><a href="https://github.com/jarredkenny/jmux" target="_blank" rel="noopener">GitHub</a><a href="https://www.npmjs.com/package/@jx0/jmux" target="_blank" rel="noopener">npm</a><a href="https://github.com/jarredkenny/jmux#readme" target="_blank" rel="noopener">Docs</a></div>
 </div></footer>
 
