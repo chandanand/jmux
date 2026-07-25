@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { translateMouse, parseSgrMouse, InputRouter, type InputRouterOptions } from "../input-router";
+import { translateMouse, parseSgrMouseChunk, InputRouter, type InputRouterOptions } from "../input-router";
 import { computeFrameLayout, SIDEBAR_MIN_TERM_COLS, type FrameLayout } from "../frame-layout";
 
 // Shared FrameLayout fixtures. Tests build real layouts via computeFrameLayout
@@ -67,9 +67,14 @@ function chromeLayout(sidebarWidth: number, diffState: "off" | "split" | "full" 
   });
 }
 
-describe("parseSgrMouse", () => {
+describe("parseSgrMouse (single report, via parseSgrMouseChunk)", () => {
+  const one = (seq: string) => {
+    const parsed = parseSgrMouseChunk(seq);
+    return parsed === null ? null : parsed[0]!;
+  };
+
   test("parses SGR mouse button press", () => {
-    const result = parseSgrMouse("\x1b[<0;30;5M");
+    const result = one("\x1b[<0;30;5M");
     expect(result).not.toBeNull();
     expect(result!.button).toBe(0);
     expect(result!.x).toBe(30);
@@ -78,21 +83,20 @@ describe("parseSgrMouse", () => {
   });
 
   test("parses SGR mouse button release", () => {
-    const result = parseSgrMouse("\x1b[<0;30;5m");
+    const result = one("\x1b[<0;30;5m");
     expect(result).not.toBeNull();
     expect(result!.release).toBe(true);
   });
 
   test("parses wheel up event", () => {
-    const result = parseSgrMouse("\x1b[<64;10;5M");
+    const result = one("\x1b[<64;10;5M");
     expect(result).not.toBeNull();
     expect(result!.button).toBe(64);
     expect(result!.x).toBe(10);
   });
 
   test("returns null for non-mouse sequence", () => {
-    const result = parseSgrMouse("\x1b[A");
-    expect(result).toBeNull();
+    expect(one("\x1b[A")).toBeNull();
   });
 });
 
@@ -365,7 +369,12 @@ describe("diff panel routing", () => {
     expect(diffData).toBe("\x1b[<0;2;2M");
   });
 
-  test("divider click toggles focus", () => {
+  // The divider is also a resize handle, so a press there is ambiguous until
+  // the next event: the focus toggle fires on release-without-motion, not on
+  // press. These two tests are a pair — together they pin the click-vs-drag
+  // split in place, so a future edit can't quietly move the toggle back to
+  // press and break dragging.
+  test("divider click toggles focus on release", () => {
     let focusToggled = false;
     const layout = diffPanelLayout(4, 20, 10);
     const router = new InputRouter(
@@ -379,7 +388,23 @@ describe("diff panel routing", () => {
     // Divider click is 1-indexed mouse.x = divider (0-indexed) + 1.
     const mouseX = layout.divider! + 1;
     router.handleInput(`\x1b[<0;${mouseX};3M`);
+    router.handleInput(`\x1b[<0;${mouseX};3m`);
     expect(focusToggled).toBe(true);
+  });
+
+  test("divider press alone does not toggle focus", () => {
+    let focusToggled = false;
+    const layout = diffPanelLayout(4, 20, 10);
+    const router = new InputRouter(
+      {
+        onPtyData: () => {},
+        onSidebarClick: () => {},
+        onDiffPanelFocusToggle: () => { focusToggled = true; },
+      },
+      layout,
+    );
+    router.handleInput(`\x1b[<0;${layout.divider! + 1};3M`);
+    expect(focusToggled).toBe(false);
   });
 
   test("keyboard routes to onDiffPanelData when diff panel is focused", () => {
@@ -666,7 +691,9 @@ describe("toolbar column routing", () => {
   });
 
   test("onHover reports the same column for a motion event in the toolbar row", () => {
-    const hovers: Array<{ area: "sidebar"; row: number } | { area: "toolbar"; col: number } | null> = [];
+    // Derived from the option rather than restated, so adding a hover target
+    // (drag handles) doesn't require editing this test.
+    const hovers: Array<Parameters<NonNullable<InputRouterOptions["onHover"]>>[0]> = [];
     const layout = baseLayout(24);
     const router = new InputRouter(
       {
@@ -1353,5 +1380,411 @@ describe("setLayout — sidebar/main boundary follows layout, not stale geometry
     router.handleInput("\x1b[<0;42;3M");
     expect(clickedRow).toBe(-1);
     expect(ptyData.length).toBeGreaterThan(0);
+  });
+});
+
+// --- Drag handles (sidebar edge, panel divider) ---
+//
+// SGR button codes used below: 0 = bare left press/release, 32 = motion with
+// left held (a drag), 35 = bare motion (hover), 64 = wheel up.
+
+describe("drag handles", () => {
+  type DragCalls = {
+    moves: Array<{ handle: string; col: number }>;
+    commits: Array<{ handle: string; col: number }>;
+    cancels: string[];
+    focusToggles: number;
+    sidebarClicks: number;
+    ptyData: string;
+    hovers: unknown[];
+  };
+
+  function dragRouter(layout: FrameLayout): { router: InputRouter; calls: DragCalls } {
+    const calls: DragCalls = {
+      moves: [], commits: [], cancels: [], focusToggles: 0,
+      sidebarClicks: 0, ptyData: "", hovers: [],
+    };
+    const router = new InputRouter(
+      {
+        onPtyData: (d) => { calls.ptyData += d; },
+        onSidebarClick: () => { calls.sidebarClicks++; },
+        onDiffPanelFocusToggle: () => { calls.focusToggles++; },
+        onDragMove: (handle, col) => { calls.moves.push({ handle, col }); },
+        onDragCommit: (handle, col) => { calls.commits.push({ handle, col }); },
+        onDragCancel: (handle) => { calls.cancels.push(handle); },
+        onHover: (t) => { calls.hovers.push(t); },
+      },
+      layout,
+    );
+    return { router, calls };
+  }
+
+  // 1-indexed mouse coords from a 0-indexed grid column.
+  const press = (x: number, y = 10) => `\x1b[<0;${x + 1};${y}M`;
+  const release = (x: number, y = 10) => `\x1b[<0;${x + 1};${y}m`;
+  const dragTo = (x: number, y = 10) => `\x1b[<32;${x + 1};${y}M`;
+  const hoverAt = (x: number, y = 10) => `\x1b[<35;${x + 1};${y}M`;
+  const wheelAt = (x: number, y = 10) => `\x1b[<64;${x + 1};${y}M`;
+
+  test("dragging the sidebar border tracks movement then commits", () => {
+    const layout = baseLayout(26);
+    const { router, calls } = dragRouter(layout);
+    router.handleInput(press(layout.borderCol!));
+    expect(calls.moves).toHaveLength(0); // a press commits nothing
+    router.handleInput(dragTo(40));
+    expect(calls.moves).toEqual([{ handle: "sidebar-edge", col: 40 }]);
+    router.handleInput(release(40));
+    expect(calls.commits).toEqual([{ handle: "sidebar-edge", col: 40 }]);
+  });
+
+  test("a drag clamps to the legal sidebar range", () => {
+    const layout = baseLayout(26);
+    const { router, calls } = dragRouter(layout);
+    router.handleInput(press(layout.borderCol!));
+    router.handleInput(dragTo(2));   // below the 10-col minimum
+    router.handleInput(release(2));
+    expect(calls.commits).toEqual([{ handle: "sidebar-edge", col: 10 }]);
+  });
+
+  test("press and release on the border with no motion commits nothing", () => {
+    const layout = baseLayout(26);
+    const { router, calls } = dragRouter(layout);
+    router.handleInput(press(layout.borderCol!));
+    router.handleInput(release(layout.borderCol!));
+    expect(calls.moves).toHaveLength(0);
+    expect(calls.commits).toHaveLength(0);
+  });
+
+  test("the divider still toggles focus on a click — but on release, not press", () => {
+    const layout = diffPanelLayout(26, 40, 30);
+    const { router, calls } = dragRouter(layout);
+    router.handleInput(press(layout.divider!));
+    // The press alone must NOT toggle: it is still ambiguous between a click
+    // and the start of a drag.
+    expect(calls.focusToggles).toBe(0);
+    router.handleInput(release(layout.divider!));
+    expect(calls.focusToggles).toBe(1);
+    expect(calls.commits).toHaveLength(0);
+  });
+
+  test("dragging the divider resizes the panel instead of toggling focus", () => {
+    const layout = diffPanelLayout(26, 40, 30);
+    const { router, calls } = dragRouter(layout);
+    router.handleInput(press(layout.divider!));
+    router.handleInput(dragTo(layout.divider! - 10));
+    router.handleInput(release(layout.divider! - 10));
+    expect(calls.commits).toEqual([
+      { handle: "panel-divider", col: layout.divider! - 10 },
+    ]);
+    expect(calls.focusToggles).toBe(0);
+  });
+
+  test("a live drag over the sidebar does not click sessions", () => {
+    const layout = baseLayout(26);
+    const { router, calls } = dragRouter(layout);
+    router.handleInput(press(layout.borderCol!));
+    router.handleInput(dragTo(15));
+    router.handleInput(dragTo(12));
+    router.handleInput(release(12));
+    expect(calls.sidebarClicks).toBe(0);
+    expect(calls.commits).toEqual([{ handle: "sidebar-edge", col: 12 }]);
+  });
+
+  test("a live drag over the main area does not reach the pty", () => {
+    const layout = baseLayout(26);
+    const { router, calls } = dragRouter(layout);
+    router.handleInput(press(layout.borderCol!));
+    router.handleInput(dragTo(55));
+    router.handleInput(release(55));
+    expect(calls.ptyData).toBe("");
+  });
+
+  test("a wheel mid-drag cancels it", () => {
+    const layout = baseLayout(26);
+    const { router, calls } = dragRouter(layout);
+    router.handleInput(press(layout.borderCol!));
+    router.handleInput(dragTo(40));
+    router.handleInput(wheelAt(40));
+    expect(calls.cancels).toEqual(["sidebar-edge"]);
+    expect(calls.commits).toHaveLength(0);
+    // And the drag is over: a later release commits nothing.
+    router.handleInput(release(40));
+    expect(calls.commits).toHaveLength(0);
+  });
+
+  test("a keystroke mid-drag cancels it and still reaches the pty", () => {
+    const layout = baseLayout(26);
+    const { router, calls } = dragRouter(layout);
+    router.handleInput(press(layout.borderCol!));
+    router.handleInput(dragTo(40));
+    router.handleInput("x");
+    expect(calls.cancels).toEqual(["sidebar-edge"]);
+    expect(calls.ptyData).toBe("x");
+  });
+
+  // A cancel has to say which handle it owned. main.ts persists the width the
+  // live resize already applied, and it must not have to infer the handle
+  // from hover state — a drag whose pointer was never hovered (or whose hover
+  // moved on) still owns a width that needs writing.
+  test("a cancel reports the handle it owned, even with no prior hover", () => {
+    const layout = diffPanelLayout(26, 40, 30);
+    const { router, calls } = dragRouter(layout);
+    router.handleInput(press(layout.divider!));
+    router.handleInput(dragTo(layout.divider! - 10));
+    router.handleInput("q");
+    expect(calls.cancels).toEqual(["panel-divider"]);
+  });
+
+  test("hovering a handle reports it, and leaving clears it", () => {
+    const layout = baseLayout(26);
+    const { router, calls } = dragRouter(layout);
+    router.handleInput(hoverAt(layout.borderCol!));
+    expect(calls.hovers.at(-1)).toEqual({ area: "handle", handle: "sidebar-edge" });
+    router.handleInput(hoverAt(50));
+    expect(calls.hovers.at(-1)).not.toEqual({ area: "handle", handle: "sidebar-edge" });
+  });
+
+  test("a press on a handle is ignored while a modal is open", () => {
+    const layout = baseLayout(26);
+    const { router, calls } = dragRouter(layout);
+    router.setModalOpen(true);
+    router.handleInput(press(layout.borderCol!));
+    router.handleInput(dragTo(40));
+    expect(calls.moves).toHaveLength(0);
+  });
+
+  test("full mode has no divider handle to press", () => {
+    const layout = baseLayout(26, "full", 90);
+    expect(layout.divider).toBeNull();
+    const { router, calls } = dragRouter(layout);
+    // The column that would be a divider in split mode is just panel content here.
+    router.handleInput(press(layout.main.x + 40));
+    router.handleInput(dragTo(layout.main.x + 30));
+    expect(calls.moves).toHaveLength(0);
+    expect(calls.commits).toHaveLength(0);
+  });
+
+  // A fast drag makes jmux slow enough (a tmux resize per tracked movement)
+  // that the kernel merges several mouse reports into one read. Before this
+  // was handled, a merged chunk read as a keystroke: it cancelled the drag
+  // mid-gesture and leaked raw escape bytes into the shell.
+  test("a merged chunk of motion reports keeps the drag alive", () => {
+    const layout = baseLayout(26);
+    const { router, calls } = dragRouter(layout);
+    router.handleInput(press(layout.borderCol!));
+    router.handleInput(dragTo(35) + dragTo(40) + dragTo(45));
+    expect(calls.cancels).toEqual([]);
+    expect(calls.ptyData).toBe("");
+    // Every position in the chunk is tracked, in order — the last one wins.
+    expect(calls.moves.map((m) => m.col)).toEqual([35, 40, 45]);
+  });
+
+  test("a merged chunk ending in a release commits", () => {
+    const layout = baseLayout(26);
+    const { router, calls } = dragRouter(layout);
+    router.handleInput(press(layout.borderCol!));
+    router.handleInput(dragTo(35) + release(38));
+    expect(calls.commits).toEqual([{ handle: "sidebar-edge", col: 38 }]);
+    expect(calls.cancels).toEqual([]);
+  });
+
+  test("an entire gesture merged into one chunk still works, press included", () => {
+    // The extreme case: press, every movement and the release all arrive in a
+    // single read. Splitting happens before the press is even hit-tested, so
+    // the drag starts, tracks and commits normally.
+    const layout = baseLayout(26);
+    const { router, calls } = dragRouter(layout);
+    router.handleInput(
+      press(layout.borderCol!) + dragTo(30) + dragTo(35) + dragTo(41) + release(41),
+    );
+    expect(calls.commits).toEqual([{ handle: "sidebar-edge", col: 41 }]);
+    expect(calls.cancels).toEqual([]);
+    expect(calls.ptyData).toBe("");
+  });
+
+  test("a chunk mixing a mouse report with real keys still cancels", () => {
+    const layout = baseLayout(26);
+    const { router, calls } = dragRouter(layout);
+    router.handleInput(press(layout.borderCol!));
+    router.handleInput(dragTo(35));
+    router.handleInput(dragTo(40) + "q");
+    expect(calls.cancels).toEqual(["sidebar-edge"]);
+    // The whole chunk takes its normal path once the drag is gone.
+    expect(calls.ptyData).toBe(dragTo(40) + "q");
+  });
+
+  test("dragging right and back to the origin still commits the origin width", () => {
+    const layout = baseLayout(26);
+    const { router, calls } = dragRouter(layout);
+    router.handleInput(press(layout.borderCol!));
+    router.handleInput(dragTo(45));
+    router.handleInput(dragTo(26));
+    router.handleInput(release(26));
+    expect(calls.commits).toEqual([{ handle: "sidebar-edge", col: 26 }]);
+  });
+});
+
+describe("parseSgrMouseChunk", () => {
+  test("parses a single report", () => {
+    expect(parseSgrMouseChunk("\x1b[<0;30;5M")).toEqual([
+      { button: 0, x: 30, y: 5, release: false },
+    ]);
+  });
+
+  test("parses several merged reports in order", () => {
+    const events = parseSgrMouseChunk("\x1b[<32;10;5M\x1b[<32;11;5M\x1b[<0;12;5m");
+    expect(events).toEqual([
+      { button: 32, x: 10, y: 5, release: false },
+      { button: 32, x: 11, y: 5, release: false },
+      { button: 0, x: 12, y: 5, release: true },
+    ]);
+  });
+
+  test("returns null when anything else is mixed in", () => {
+    expect(parseSgrMouseChunk("\x1b[<0;30;5Mq")).toBeNull();
+    expect(parseSgrMouseChunk("q\x1b[<0;30;5M")).toBeNull();
+    expect(parseSgrMouseChunk("\x1b[<0;30;5M\x1b[A\x1b[<0;31;5M")).toBeNull();
+  });
+
+  test("returns null for input with no reports at all", () => {
+    expect(parseSgrMouseChunk("")).toBeNull();
+    expect(parseSgrMouseChunk("hello")).toBeNull();
+  });
+});
+
+// The info panel's list/detail separator is the one horizontal handle: it
+// hit-tests on the row and travels vertically. main.ts supplies its geometry
+// (the panel owns its own internal row layout; FrameLayout only knows the
+// panel's columns), the same way glassStripRows is supplied.
+describe("panel split handle", () => {
+  const SPLIT = { row: 12, minRow: 6, maxRow: 20 };
+
+  function splitRouter(layout: FrameLayout, split: typeof SPLIT | null = SPLIT) {
+    const calls = {
+      moves: [] as Array<{ handle: string; pos: number }>,
+      commits: [] as Array<{ handle: string; pos: number }>,
+      hovers: [] as unknown[],
+      itemClicks: [] as number[],
+      focusToggles: 0,
+    };
+    const router = new InputRouter(
+      {
+        onPtyData: () => {},
+        onSidebarClick: () => {},
+        panelSplit: () => split,
+        onDragMove: (handle, pos) => { calls.moves.push({ handle, pos }); },
+        onDragCommit: (handle, pos) => { calls.commits.push({ handle, pos }); },
+        onHover: (t) => { calls.hovers.push(t); },
+        onPanelItemClick: (row) => { calls.itemClicks.push(row); },
+        onDiffPanelFocusToggle: () => { calls.focusToggles++; },
+      },
+      layout,
+    );
+    router.setPanelTabsActive(true);
+    return { router, calls };
+  }
+
+  // 1-indexed mouse coords from 0-indexed grid coords.
+  const pressAt = (x: number, y: number) => `\x1b[<0;${x + 1};${y + 1}M`;
+  const releaseAt = (x: number, y: number) => `\x1b[<0;${x + 1};${y + 1}m`;
+  const dragToRow = (x: number, y: number) => `\x1b[<32;${x + 1};${y + 1}M`;
+  const hoverAt = (x: number, y: number) => `\x1b[<35;${x + 1};${y + 1}M`;
+
+  test("dragging the separator tracks the row, not the column", () => {
+    const layout = diffPanelLayout(26, 40, 30);
+    const x = layout.panel!.x + 5;
+    const { router, calls } = splitRouter(layout);
+    router.handleInput(pressAt(x, SPLIT.row));
+    // Move sideways as well as down — only the row should be reported.
+    router.handleInput(dragToRow(x + 9, 16));
+    expect(calls.moves).toEqual([{ handle: "panel-split", pos: 16 }]);
+    router.handleInput(releaseAt(x + 9, 16));
+    expect(calls.commits).toEqual([{ handle: "panel-split", pos: 16 }]);
+  });
+
+  test("horizontal-only movement is not a drag — it is still a click", () => {
+    const layout = diffPanelLayout(26, 40, 30);
+    const x = layout.panel!.x + 5;
+    const { router, calls } = splitRouter(layout);
+    router.handleInput(pressAt(x, SPLIT.row));
+    router.handleInput(dragToRow(x + 12, SPLIT.row)); // same row
+    expect(calls.moves).toEqual([]);
+  });
+
+  test("the drag clamps to the separator's legal row range", () => {
+    const layout = diffPanelLayout(26, 40, 30);
+    const x = layout.panel!.x + 5;
+    const { router, calls } = splitRouter(layout);
+    router.handleInput(pressAt(x, SPLIT.row));
+    router.handleInput(dragToRow(x, 0));
+    router.handleInput(releaseAt(x, 0));
+    expect(calls.commits).toEqual([{ handle: "panel-split", pos: SPLIT.minRow }]);
+
+    const second = splitRouter(layout);
+    second.router.handleInput(pressAt(x, SPLIT.row));
+    second.router.handleInput(dragToRow(x, 999));
+    second.router.handleInput(releaseAt(x, 999));
+    expect(second.calls.commits).toEqual([{ handle: "panel-split", pos: SPLIT.maxRow }]);
+  });
+
+  test("hovering the separator reports it as a handle", () => {
+    const layout = diffPanelLayout(26, 40, 30);
+    const { router, calls } = splitRouter(layout);
+    router.handleInput(hoverAt(layout.panel!.x + 5, SPLIT.row));
+    expect(calls.hovers.at(-1)).toEqual({ area: "handle", handle: "panel-split" });
+  });
+
+  test("the same row outside the panel's columns is not the handle", () => {
+    const layout = diffPanelLayout(26, 40, 30);
+    const { router, calls } = splitRouter(layout);
+    // Over the terminal area, on the separator's row.
+    router.handleInput(hoverAt(layout.main.x + 2, SPLIT.row));
+    expect(calls.hovers.at(-1)).not.toEqual({ area: "handle", handle: "panel-split" });
+    router.handleInput(pressAt(layout.main.x + 2, SPLIT.row));
+    router.handleInput(dragToRow(layout.main.x + 2, 18));
+    expect(calls.moves).toEqual([]);
+  });
+
+  test("no separator (diff tab, or a panel too short) means no handle", () => {
+    const layout = diffPanelLayout(26, 40, 30);
+    const x = layout.panel!.x + 5;
+    const { router, calls } = splitRouter(layout, null);
+    router.handleInput(hoverAt(x, 12));
+    expect(calls.hovers.at(-1)).not.toEqual({ area: "handle", handle: "panel-split" });
+    router.handleInput(pressAt(x, 12));
+    router.handleInput(dragToRow(x, 16));
+    expect(calls.moves).toEqual([]);
+    // Falls through to the panel's normal click handling instead.
+    expect(calls.itemClicks.length).toBeGreaterThan(0);
+  });
+
+  test("clicking the separator focuses the panel, exactly as any other panel press does", () => {
+    const layout = diffPanelLayout(26, 40, 30);
+    const x = layout.panel!.x + 5;
+    const { router, calls } = splitRouter(layout);
+    router.handleInput(pressAt(x, SPLIT.row));
+    router.handleInput(releaseAt(x, SPLIT.row));
+    expect(calls.focusToggles).toBe(1);
+    expect(calls.commits).toEqual([]);
+  });
+
+  test("clicking the separator when the panel is already focused does not unfocus it", () => {
+    // onDiffPanelFocusToggle *toggles*, so the split click has to check first
+    // — unlike the divider, this handle only ever acquires focus.
+    const layout = diffPanelLayout(26, 40, 30);
+    const x = layout.panel!.x + 5;
+    const { router, calls } = splitRouter(layout);
+    router.setPanelFocused(true);
+    router.handleInput(pressAt(x, SPLIT.row));
+    router.handleInput(releaseAt(x, SPLIT.row));
+    expect(calls.focusToggles).toBe(0);
+  });
+
+  test("a press elsewhere in the panel still selects an item", () => {
+    const layout = diffPanelLayout(26, 40, 30);
+    const { router, calls } = splitRouter(layout);
+    router.handleInput(pressAt(layout.panel!.x + 3, SPLIT.row + 4));
+    expect(calls.moves).toEqual([]);
+    expect(calls.itemClicks.length).toBeGreaterThan(0);
   });
 });

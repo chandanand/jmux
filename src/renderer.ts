@@ -5,6 +5,7 @@ import { packChips, type PlacedChip } from "./band-layout";
 import { theme, neutralFg } from "./theme";
 import type { FrameLayout } from "./frame-layout";
 import { tokens, frame, space } from "./chrome-tokens";
+import type { DragHandle } from "./drag";
 
 export const BORDER_CHAR = "\u2502"; // │
 
@@ -376,6 +377,18 @@ function paintFooterRuleRow(
   paintRuleRow(grid, row, layout, borderCol, frame.crossUp);
 }
 
+/**
+ * Drag-handle chrome state. `hoveredHandle` accents the handle under the
+ * pointer — with one-column handles, that highlight is the whole discovery
+ * mechanism, since a terminal can't change the cursor shape over a region.
+ * It stays set for the duration of a drag, so the handle being dragged
+ * remains lit. There is no separate preview position: a drag resizes the
+ * frame live, so the handle itself is the feedback.
+ */
+export interface DragState {
+  hoveredHandle: DragHandle | null;
+}
+
 export function compositeGrids(
   layout: FrameLayout,
   main: CellGrid,
@@ -389,6 +402,7 @@ export function compositeGrids(
     tabBar?: CellGrid;
   },
   footer?: StyledSegment[] | null,
+  drag?: DragState | null,
 ): CellGrid {
   if (!sidebar) return main;
 
@@ -417,13 +431,11 @@ export function compositeGrids(
   for (let y = 0; y < totalRows; y++) {
     // Copy sidebar cells
     blit(grid, sidebar, { destX: 0, destY: y, srcX: 0, srcY: y, w: sidebar.cols, h: 1 });
-    // Border column
-    grid.cells[y][borderCol] = {
-      ...DEFAULT_CELL,
-      char: BORDER_CHAR,
-      fg: 8,
-      fgMode: ColorMode.Palette,
-    };
+    // Border column — accented while it's hovered as a drag handle, so the
+    // resize affordance is visible before the user commits to a press.
+    grid.cells[y][borderCol] = drag?.hoveredHandle === "sidebar-edge"
+      ? { ...DEFAULT_CELL, char: BORDER_CHAR, ...tokens.accent }
+      : { ...DEFAULT_CELL, char: BORDER_CHAR, fg: 8, fgMode: ColorMode.Palette };
 
     if (toolbar && y < toolbarRows) {
       if (y === 1 && toolbarRows >= 2) {
@@ -521,7 +533,13 @@ export function compositeGrids(
             // The focus cue moved to the rule row's panel-underline (see
             // paintTopRuleRow) so focus is never left without a cue.
             const dividerCol = layout.divider!;
-            writeCell(grid, y, dividerCol, frame.divider, tokens.ruleFrame);
+            writeCell(
+              grid,
+              y,
+              dividerCol,
+              frame.divider,
+              drag?.hoveredHandle === "panel-divider" ? tokens.accent : tokens.ruleFrame,
+            );
           }
           const panelCol = layout.panel!.x;
           if (mainY < diffPanel.grid.rows) {
@@ -658,8 +676,9 @@ export class Renderer {
       tabBar?: CellGrid;
     },
     footer?: StyledSegment[] | null,
+    drag?: DragState | null,
   ): void {
-    const grid = compositeGrids(layout, main, sidebar, toolbar, modalOverlay, diffPanel, footer);
+    const grid = compositeGrids(layout, main, sidebar, toolbar, modalOverlay, diffPanel, footer, drag);
     const cursorOffset = layout.main.x;
     const buf: string[] = [];
 

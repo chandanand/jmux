@@ -6,6 +6,9 @@ import {
   renderView,
   createViewState,
   pickSessionIndicator,
+  computeViewLayout,
+  splitRatioForSepRow,
+  DEFAULT_PANEL_SPLIT_RATIO,
 } from "../panel-view-renderer";
 import type { PanelView } from "../panel-view";
 import type { Issue, MergeRequest } from "../adapters/types";
@@ -211,5 +214,119 @@ describe("renderView", () => {
     const text = extractText(grid);
     expect(text).toContain("Platform");
     expect(text).toContain("Frontend");
+  });
+});
+
+describe("computeViewLayout", () => {
+  // The bands are [filter bar] | list | separator | detail | action bar. These
+  // numbers used to be derived twice — here for painting and again in main.ts
+  // for hit-testing — with formulas that disagreed once a filter was active.
+  test("the bands tile the panel exactly, with no gaps or overlap", () => {
+    for (const rows of [15, 20, 33, 50]) {
+      for (const filtering of [false, true]) {
+        const l = computeViewLayout(rows, filtering);
+        expect(l.showDetail).toBe(true);
+        expect(l.listStartRow).toBe(l.filterBarRows);
+        expect(l.sepRow).toBe(l.listStartRow + l.listRows);
+        expect(l.detailStart).toBe(l.sepRow + 1);
+        expect(l.detailStart + l.detailRows).toBe(l.actionBarStart);
+        expect(l.actionBarStart).toBe(rows - 2);
+        expect(l.detailRows).toBeGreaterThanOrEqual(4);
+      }
+    }
+  });
+
+  test("a filter bar consumes a row from the list, not from the detail", () => {
+    // main.ts's old duplicate formula ignored the filter bar entirely, so with
+    // a filter active its idea of where the list ended disagreed with the
+    // paint and clicks near the boundary mis-routed.
+    const plain = computeViewLayout(40, false);
+    const filtered = computeViewLayout(40, true);
+    expect(filtered.listStartRow).toBe(plain.listStartRow + 1);
+    expect(filtered.listRows).toBeLessThanOrEqual(plain.listRows);
+    expect(filtered.detailRows).toBe(plain.detailRows);
+  });
+
+  test("a short panel collapses to list-only", () => {
+    const l = computeViewLayout(14, false);
+    expect(l.showDetail).toBe(false);
+    expect(l.listRows).toBe(14);
+    expect(l.detailRows).toBe(0);
+  });
+
+  test("the split ratio moves the separator", () => {
+    const small = computeViewLayout(40, false, 0.25);
+    const half = computeViewLayout(40, false, DEFAULT_PANEL_SPLIT_RATIO);
+    const big = computeViewLayout(40, false, 0.9);
+    expect(small.sepRow).toBeLessThan(half.sepRow);
+    expect(big.sepRow).toBeGreaterThan(half.sepRow);
+  });
+
+  test("extreme ratios still leave both panes usable", () => {
+    for (const ratio of [0, 0.01, 0.99, 1]) {
+      const l = computeViewLayout(40, false, ratio);
+      expect(l.listRows).toBeGreaterThanOrEqual(3);
+      expect(l.detailRows).toBeGreaterThanOrEqual(4);
+    }
+  });
+
+  test("the drag range never inverts, even on the shortest panel with detail", () => {
+    for (let rows = 15; rows <= 40; rows++) {
+      const l = computeViewLayout(rows, false);
+      expect(l.minSepRow).toBeLessThanOrEqual(l.maxSepRow);
+    }
+  });
+});
+
+describe("computeViewLayout robustness", () => {
+  // The ratio arrives from a hand-editable config file. A non-numeric value
+  // used to make listRows NaN, which reached grid.cells[NaN] and threw a
+  // TypeError straight out of the render loop.
+  test("a malformed ratio falls back to the default instead of producing NaN", () => {
+    const good = computeViewLayout(48, false, DEFAULT_PANEL_SPLIT_RATIO);
+    for (const bad of [NaN, Infinity, -Infinity, "0.7", null, undefined, {}]) {
+      const l = computeViewLayout(48, false, bad as unknown as number);
+      expect(Number.isInteger(l.listRows)).toBe(true);
+      expect(Number.isInteger(l.sepRow)).toBe(true);
+      // undefined takes the parameter default, which is the same value.
+      if (bad !== undefined) expect(l.listRows).toBe(good.listRows);
+    }
+  });
+
+  test("rendering never throws on a malformed ratio", () => {
+    for (const bad of [NaN, "abc", null, -3, 5]) {
+      expect(() =>
+        renderView([], 60, 48, createViewState(), { splitRatio: bad as unknown as number }),
+      ).not.toThrow();
+    }
+  });
+
+  test("out-of-range ratios clamp rather than escaping the legal range", () => {
+    for (const ratio of [-5, 0, 1, 9]) {
+      const l = computeViewLayout(48, false, ratio);
+      expect(l.sepRow).toBeGreaterThanOrEqual(l.minSepRow);
+      expect(l.sepRow).toBeLessThanOrEqual(l.maxSepRow);
+    }
+  });
+});
+
+describe("splitRatioForSepRow", () => {
+  // The drag reports a row; the paint consumes a ratio. If the round trip
+  // isn't exact the separator drifts away from the pointer as you drag.
+  test("round-trips every legal separator row", () => {
+    for (const rows of [20, 33, 50]) {
+      for (const filtering of [false, true]) {
+        const bounds = computeViewLayout(rows, filtering);
+        for (let sep = bounds.minSepRow; sep <= bounds.maxSepRow; sep++) {
+          const ratio = splitRatioForSepRow(rows, filtering, sep);
+          expect(computeViewLayout(rows, filtering, ratio).sepRow).toBe(sep);
+        }
+      }
+    }
+  });
+
+  test("stays within 0..1 for out-of-range rows", () => {
+    expect(splitRatioForSepRow(40, false, -50)).toBe(0);
+    expect(splitRatioForSepRow(40, false, 999)).toBe(1);
   });
 });

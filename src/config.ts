@@ -36,6 +36,8 @@ export interface StateColorConfig {
 export interface JmuxConfig {
   sidebarWidth?: number;
   infoPanelWidth?: number;
+  /** Info panel list/detail split, as a fraction of the splittable rows. */
+  infoPanelSplitRatio?: number;
   claudeCommand?: string;
   cacheTimers?: boolean;
   windowBranches?: boolean;

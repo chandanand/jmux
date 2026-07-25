@@ -3,6 +3,7 @@ import { TmuxPty } from "./tmux-pty";
 import { ScreenBridge } from "./screen-bridge";
 import { Renderer, getToolbarButtonRanges, getToolbarTabRanges, getModalPosition, buildToolbarButtons, type ToolbarConfig } from "./renderer";
 import { InputRouter } from "./input-router";
+import { sidebarWidthForCol, panelWidthForCol, type DragHandle } from "./drag";
 import { Sidebar, rebuildSidebarColors, type PinnedPaneEntry } from "./sidebar";
 import {
   GROUP_MODES, SORT_MODES, FILTER_MODES,
@@ -42,7 +43,7 @@ import { TmuxControl, type ControlEvent } from "./tmux-control";
 import { DiffPanel } from "./diff-panel";
 import { InfoPanel, rebuildInfoPanelColors } from "./info-panel";
 import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, type PanelView } from "./panel-view";
-import { transformIssues, transformMrs, buildViewNodes, renderView, createViewState, filterItems, rebuildPanelViewColors, type ViewState, type ViewNode, type IssueSessionInfo } from "./panel-view-renderer";
+import { transformIssues, transformMrs, buildViewNodes, renderView, createViewState, filterItems, rebuildPanelViewColors, computeViewLayout, splitRatioForSepRow, DEFAULT_PANEL_SPLIT_RATIO, type ViewState, type ViewNode, type IssueSessionInfo } from "./panel-view-renderer";
 import { createAdapters } from "./adapters/registry";
 import { PollCoordinator } from "./adapters/poll-coordinator";
 import { SessionState } from "./session-state";
@@ -268,6 +269,27 @@ if (demoMode) {
 const configStore = new ConfigStore(demoCtx?.configPath);
 let sidebarWidth = configStore.config.sidebarWidth || 26;
 const BORDER_WIDTH = 1;
+// Drag-handle chrome + live-resize state. `hoveredHandle` drives the accent
+// that makes the one-column handles findable at all, and stays lit for the
+// duration of a drag. `pendingDragResize` holds the most recent tracked
+// handle position; applyPendingDragResize() turns it into a real relayout,
+// throttled to DRAG_RESIZE_INTERVAL_MS so a fast drag can't fire a tmux
+// resize + xterm reflow per pointer event.
+let hoveredHandle: DragHandle | null = null;
+let pendingDragResize: { handle: DragHandle; col: number } | null = null;
+let dragResizeTimer: ReturnType<typeof setTimeout> | null = null;
+let lastDragResizeAt = 0;
+// Whether the in-flight drag has actually changed a width yet. A cancel only
+// persists if it has — otherwise a stray press-then-keystroke would rewrite
+// config for a drag that never moved.
+let dragDidResize = false;
+// Where the info panel's list/detail split sits, as a fraction of the
+// splittable rows. Unlike the two width drags this needs no relayout — the
+// panel grid is rebuilt every frame — so it applies straight through with no
+// throttle.
+let infoPanelSplitRatio =
+  configStore.config.infoPanelSplitRatio ?? DEFAULT_PANEL_SPLIT_RATIO;
+const DRAG_RESIZE_INTERVAL_MS = 33; // ~30fps, matching RENDER_INTERVAL_ACTIVE
 const toolbarEnabled = true;
 // Opt-in second toolbar row showing each window's git branch. Read once at
 // startup; changing it requires a restart (toolbarHeight feeds PTY sizing).
@@ -1146,6 +1168,130 @@ async function spawnHunk(cols: number, rows: number): Promise<void> {
  * mutate exactly the input that changed (`diffPanel.toggle()`/`toggleZoom()`,
  * `sidebarWidth`, or nothing for a pure terminal resize) and then call this.
  */
+/**
+ * The drag-handle chrome the renderer should composite this frame. Bundled
+ * into one accessor so all three render paths (normal frame, settings screen,
+ * Command Center) show the same affordance — the sidebar edge is draggable
+ * wherever the sidebar is drawn, so its highlight must be too.
+ */
+function dragChrome(): { hoveredHandle: DragHandle | null } {
+  return { hoveredHandle };
+}
+
+/**
+ * The active panel view's row layout. Every consumer — the paint, the
+ * wheel/click hit-testing, and the split drag — goes through here so they
+ * can't disagree about where the list ends and the detail begins.
+ */
+function panelViewLayout(rows: number, viewState: ViewState) {
+  return computeViewLayout(rows, viewState.filterQuery !== null, infoPanelSplitRatio);
+}
+
+/**
+ * The active view state, but only when a panel view (not the diff tab) is
+ * actually showing — the split handle exists only there.
+ */
+function activePanelViewState(): ViewState | null {
+  if (!diffPanel.isActive() || infoPanel.activeTab === "diff") return null;
+  const view = panelViews.find((v) => v.id === infoPanel.activeTab);
+  if (!view) return null;
+  return viewStates.get(view.id) ?? null;
+}
+
+/**
+ * Applies the most recent tracked drag position as a real resize. Returns
+ * whether anything changed — a drag that hasn't crossed a column boundary,
+ * or one already clamped at its limit, resolves to the same width and must
+ * not relayout, or a drag held against the edge would resize on every event.
+ */
+function applyPendingDragResize(): boolean {
+  const pending = pendingDragResize;
+  if (pending === null) return false;
+  pendingDragResize = null;
+  lastDragResizeAt = Date.now();
+
+  if (pending.handle === "sidebar-edge") {
+    const width = sidebarWidthForCol(layout, pending.col);
+    if (width === sidebarWidth) return false;
+    sidebarWidth = width;
+    dragDidResize = true;
+  } else {
+    const width = panelWidthForCol(layout, pending.col, BORDER_WIDTH);
+    if (width === infoPanelWidth) return false;
+    infoPanelWidth = width;
+    dragDidResize = true;
+  }
+  relayout();
+  return true;
+}
+
+/**
+ * Throttles live drag resizes: apply immediately when the last one is far
+ * enough behind (so the first movement of a drag is instant), otherwise let
+ * a trailing timer flush the newest position. Leading + trailing, so the
+ * drag both feels responsive and never ends on a dropped final position.
+ *
+ * Deliberately not folded into scheduleRender()'s tick: renderFrame() bails
+ * early while `writesPending > 0`, and a live resize makes tmux chatty, so
+ * hanging the resize off the render tick would starve it exactly when the
+ * user is dragging fastest.
+ */
+function scheduleDragResize(): void {
+  const since = Date.now() - lastDragResizeAt;
+  if (since >= DRAG_RESIZE_INTERVAL_MS) {
+    applyPendingDragResize();
+    return;
+  }
+  if (dragResizeTimer !== null) return;
+  dragResizeTimer = setTimeout(() => {
+    dragResizeTimer = null;
+    applyPendingDragResize();
+  }, DRAG_RESIZE_INTERVAL_MS - since);
+}
+
+/** Drops any queued live resize — the drag that owned it is over. */
+function clearPendingDragResize(): void {
+  pendingDragResize = null;
+  if (dragResizeTimer !== null) {
+    clearTimeout(dragResizeTimer);
+    dragResizeTimer = null;
+  }
+}
+
+/**
+ * Writes the size a finished drag left behind. Reads the module state rather
+ * than a position, so it works for a cancel — where there is no final
+ * position, only whatever the live resize last applied — as well as a commit.
+ */
+function persistDragWidth(handle: DragHandle): void {
+  if (handle === "sidebar-edge") {
+    configStore.set("sidebarWidth", sidebarWidth);
+  } else if (handle === "panel-divider" && infoPanelWidth !== null) {
+    configStore.set("infoPanelWidth", infoPanelWidth);
+  } else if (handle === "panel-split") {
+    configStore.set("infoPanelSplitRatio", infoPanelSplitRatio);
+  }
+}
+
+/**
+ * Moves the info panel's list/detail split so its separator lands on the
+ * absolute grid row `pos`. Stored as a ratio rather than a row count so the
+ * proportions survive a terminal or panel resize.
+ */
+function applyPanelSplit(pos: number): void {
+  const viewState = activePanelViewState();
+  if (!viewState) return;
+  const ratio = splitRatioForSepRow(
+    layout.ptyRows,
+    viewState.filterQuery !== null,
+    pos - layout.contentTop,
+  );
+  if (ratio === infoPanelSplitRatio) return;
+  infoPanelSplitRatio = ratio;
+  dragDidResize = true;
+  scheduleRender();
+}
+
 function relayout(): void {
   const termCols = process.stdout.columns || 80;
   const termRows = process.stdout.rows || 24;
@@ -1240,6 +1386,11 @@ function activeChromeLayout(): FrameLayout {
  */
 function applyChromeLayout(): void {
   const active = activeChromeLayout();
+  // NOTE: this must NOT cancel an in-flight drag. A live drag calls
+  // relayout() on every tracked movement, which lands here — cancelling
+  // would abort the drag on its own first motion. SIGWINCH cancels instead
+  // (see the resize handler); mode changes can't strand a drag because
+  // reaching them requires a keystroke, which already aborts.
   inputRouter.setLayout(active);
   sidebar.resize(sidebarWidth, sidebarBottomRow(active));
 }
@@ -1450,6 +1601,7 @@ function renderFrame(): void {
       null, // no modal cursor
       undefined, // no diff panel
       undefined, // no footer — frameless full-screen view
+      dragChrome(),
     );
     return;
   }
@@ -1485,7 +1637,7 @@ function renderFrame(): void {
       currentStripChips = [];
     }
 
-    renderer.render(fullScreenLayout, content, cursor, sidebarGrid, null, overlay?.grid ?? null, overlay?.cursor ?? null, undefined, undefined);
+    renderer.render(fullScreenLayout, content, cursor, sidebarGrid, null, overlay?.grid ?? null, overlay?.cursor ?? null, undefined, undefined, dragChrome());
     return;
   }
 
@@ -1540,7 +1692,10 @@ function renderFrame(): void {
           ? { ...view, groupBy: "none" as const }
           : view;
         const nodes = buildViewNodes(rawItems, effectiveView, viewState.collapsedGroups);
-        contentGrid = renderView(nodes, dpCols, dpRows, viewState);
+        contentGrid = renderView(nodes, dpCols, dpRows, viewState, {
+          splitRatio: infoPanelSplitRatio,
+          splitHovered: hoveredHandle === "panel-split",
+        });
       } else {
         contentGrid = createGrid(dpCols, dpRows);
       }
@@ -1563,6 +1718,7 @@ function renderFrame(): void {
     modalCursorPos,
     diffPanelArg,
     footerCells,
+    dragChrome(),
   );
 }
 
@@ -1765,11 +1921,20 @@ const inputRouter = new InputRouter(
           sidebar.setHoveredRow(target.row);
           changed = true;
         }
+      } else if (target?.area === "handle") {
+        if (hoveredToolbarButton !== null) { hoveredToolbarButton = null; changed = true; }
+        if (hoveredTabId !== null) { hoveredTabId = null; changed = true; }
+        if (sidebar.getHoveredRow() !== null) { sidebar.setHoveredRow(null); changed = true; }
       } else {
         if (hoveredToolbarButton !== null) { hoveredToolbarButton = null; changed = true; }
         if (hoveredTabId !== null) { hoveredTabId = null; changed = true; }
         if (sidebar.getHoveredRow() !== null) { sidebar.setHoveredRow(null); changed = true; }
       }
+      // Handle hover is set/cleared on every hover dispatch, not just when a
+      // handle is under the pointer — otherwise the accent would stick after
+      // the pointer moved off.
+      const nextHandle = target?.area === "handle" ? target.handle : null;
+      if (nextHandle !== hoveredHandle) { hoveredHandle = nextHandle; changed = true; }
       if (changed) scheduleRender();
     },
     onModalToggle: () => togglePalette(),
@@ -1801,6 +1966,62 @@ const inputRouter = new InputRouter(
           break;
         }
       }
+    },
+    // The panel split costs nothing but a repaint (the panel grid is rebuilt
+    // each frame), so it applies immediately instead of going through the
+    // resize throttle the two width handles need.
+    panelSplit: () => {
+      const viewState = activePanelViewState();
+      if (!viewState) return null;
+      const view = panelViewLayout(layout.ptyRows, viewState);
+      if (!view.showDetail) return null;
+      // Panel-internal rows -> absolute grid rows.
+      return {
+        row: layout.contentTop + view.sepRow,
+        minRow: layout.contentTop + view.minSepRow,
+        maxRow: layout.contentTop + view.maxSepRow,
+      };
+    },
+    onDragMove: (handle, pos) => {
+      if (handle === "panel-split") {
+        applyPanelSplit(pos);
+        return;
+      }
+      pendingDragResize = { handle, col: pos };
+      scheduleDragResize();
+    },
+    // A cancel (keystroke or wheel mid-drag) stops tracking but keeps the
+    // width the drag already applied — with a live resize the new size is
+    // what's on screen, and snapping back would be the surprising outcome.
+    // So it persists, exactly like a commit; only the source of the final
+    // position differs. The handle comes from the cancelled drag itself, not
+    // from hover state: a drag that was never hovered (or whose hover moved
+    // on) still has to know which width it owns.
+    onDragCancel: (handle) => {
+      clearPendingDragResize();
+      if (dragDidResize) persistDragWidth(handle);
+      dragDidResize = false;
+    },
+    // Commit order matters: assign the module-level width *before* writing
+    // config. configStore.set fires the file watcher, which relayouts only
+    // when the persisted value differs from the module state — assigning
+    // first makes that check false, so the watcher doesn't fire a second,
+    // visible resize on top of the one relayout() just did.
+    onDragCommit: (handle, pos) => {
+      if (handle === "panel-split") {
+        applyPanelSplit(pos);
+        persistDragWidth(handle);
+        dragDidResize = false;
+        return;
+      }
+      // Flush the final position synchronously: the last move may still be
+      // sitting behind the throttle, and releasing must land exactly where
+      // the pointer did.
+      clearPendingDragResize();
+      pendingDragResize = { handle, col: pos };
+      applyPendingDragResize();
+      persistDragWidth(handle);
+      dragDidResize = false;
     },
     onSessionPrev: () => switchByOffset(-1),
     onSessionNext: () => switchByOffset(1),
@@ -1898,7 +2119,7 @@ const inputRouter = new InputRouter(
         viewState.detailScrollOffset = 0; // reset detail scroll on item change
         // Scroll list if selection goes below visible area
         const dpRows = layout.ptyRows;
-        const listRows = Math.max(3, Math.floor((dpRows - 2 - 1) * 0.5));
+        const { listRows } = panelViewLayout(dpRows, viewState);
         if (viewState.selectedIndex >= viewState.scrollOffset + listRows) {
           viewState.scrollOffset = viewState.selectedIndex - listRows + 1;
         }
@@ -2211,7 +2432,7 @@ const inputRouter = new InputRouter(
 
       // Determine if scroll is in list area or detail area
       const dpRows = layout.ptyRows;
-      const listRows = Math.max(3, Math.floor((dpRows - 2 - 1) * 0.5));
+      const { listRows } = panelViewLayout(dpRows, viewState);
 
       if (row < listRows) {
         // Scroll list
@@ -2242,7 +2463,7 @@ const inputRouter = new InputRouter(
       if (!viewState) return;
       // Only handle clicks in the list area (top half)
       const dpRows = layout.ptyRows;
-      const listRows = Math.max(3, Math.floor((dpRows - 2 - 1) * 0.5));
+      const { listRows } = panelViewLayout(dpRows, viewState);
       if (row >= listRows) return; // click was in detail area — ignore
       // row is relative to panel content (after toolbar row)
       const nodeIndex = row + viewState.scrollOffset;
@@ -2944,7 +3165,7 @@ function focusPanelOnSessionIssue(sessionName: string): void {
         viewState.detailScrollOffset = 0;
         // Ensure visible
         const dpRows = layout.ptyRows;
-        const listRows = Math.max(3, Math.floor((dpRows - 2 - 1) * 0.5));
+        const { listRows } = panelViewLayout(dpRows, viewState);
         if (i >= viewState.scrollOffset + listRows) {
           viewState.scrollOffset = i - listRows + 1;
         } else if (i < viewState.scrollOffset) {
@@ -3766,6 +3987,11 @@ process.on("SIGWINCH", () => {
   if (activeModal) {
     closeModal();
   }
+  // A terminal resize invalidates the geometry the drag was hit-tested
+  // against — the handle may not exist at the new size — so drop the drag
+  // and any live resize it had queued.
+  clearPendingDragResize();
+  inputRouter.cancelDrag();
   relayout();
   if (inGlass) resizeGlass();
 });
@@ -3827,6 +4053,8 @@ try {
       sidebarWidth = newWidth;
       relayout();
     }
+
+    infoPanelSplitRatio = updated.infoPanelSplitRatio ?? DEFAULT_PANEL_SPLIT_RATIO;
 
     // Hot-apply diff panel config changes
     const prevPanelWidth = infoPanelWidth;

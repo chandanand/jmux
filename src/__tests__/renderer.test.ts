@@ -1341,3 +1341,98 @@ describe("toolbar tab separator is blank space, not a │ glyph (Task 7)", () =>
     expect(gapEnd - gapStart).toBe(2);
   });
 });
+
+describe("drag handle chrome", () => {
+  // A frame with a split panel, the top rule on, and enough rows that the
+  // content band is unambiguous.
+  const dragLayout = () =>
+    makeLayout({
+      sidebarCols: 4,
+      mainCols: 6,
+      toolbarRows: 1,
+      panel: { cols: 5, mode: "split" },
+      termRows: 8,
+      frameRulesEnabled: true,
+    });
+
+  const grids = (layout: FrameLayout) => ({
+    sidebar: createGrid(layout.sidebar!.w, layout.termRows),
+    main: createGrid(layout.main.w, layout.contentRows),
+    panel: createGrid(layout.panel!.w, layout.contentRows),
+  });
+
+  function composite(layout: FrameLayout, drag: Parameters<typeof compositeGrids>[7]) {
+    const g = grids(layout);
+    return compositeGrids(
+      layout,
+      g.main,
+      g.sidebar,
+      null,
+      null,
+      { grid: g.panel, mode: "split", focused: false },
+      null,
+      drag,
+    );
+  }
+
+  test("with no drag state the border keeps its neutral palette colour", () => {
+    const layout = dragLayout();
+    const plain = composite(layout, null);
+    const border = plain.cells[layout.contentTop][layout.borderCol!];
+    expect(border.char).toBe(BORDER_CHAR);
+    expect(border.fg).toBe(8);
+    expect(border.fgMode).toBe(ColorMode.Palette);
+  });
+
+  test("omitting the drag argument entirely is identical to passing null", () => {
+    const layout = dragLayout();
+    const g = grids(layout);
+    const withArg = compositeGrids(layout, g.main, g.sidebar, null, null,
+      { grid: grids(layout).panel, mode: "split", focused: false }, null, null);
+    const withoutArg = compositeGrids(layout, g.main, g.sidebar, null, null,
+      { grid: grids(layout).panel, mode: "split", focused: false }, null);
+    expect(withoutArg.cells).toEqual(withArg.cells);
+  });
+
+  test("hovering the sidebar edge accents the border column only", () => {
+    const layout = dragLayout();
+    const hovered = composite(layout, { hoveredHandle: "sidebar-edge" });
+    const border = hovered.cells[layout.contentTop][layout.borderCol!];
+    expect(border.char).toBe(BORDER_CHAR);
+    expect(border.fg).toBe(tokens.accent.fg!);
+    // The divider is untouched by a sidebar-edge hover.
+    const divider = hovered.cells[layout.contentTop][layout.divider!];
+    expect(divider.fg).toBe(tokens.ruleFrame.fg!);
+  });
+
+  test("hovering the divider accents the divider column only", () => {
+    const layout = dragLayout();
+    const hovered = composite(layout, { hoveredHandle: "panel-divider" });
+    const divider = hovered.cells[layout.contentTop][layout.divider!];
+    expect(divider.char).toBe(frame.divider);
+    expect(divider.fg).toBe(tokens.accent.fg!);
+    // The sidebar border stays neutral.
+    expect(hovered.cells[layout.contentTop][layout.borderCol!].fg).toBe(8);
+  });
+
+  test("the accent runs the full height of the handle, including the toolbar row", () => {
+    // A drag resizes the frame live, so the lit handle is the only feedback
+    // the user gets — it has to read as one continuous line, not a fragment.
+    const layout = dragLayout();
+    const hovered = composite(layout, { hoveredHandle: "sidebar-edge" });
+    for (let y = 0; y < layout.termRows; y++) {
+      const cell = hovered.cells[y][layout.borderCol!];
+      // Rule rows overwrite the border with a junction glyph; every other
+      // row is the accented border itself.
+      if (y === layout.topRuleRow) continue;
+      expect(cell.fg).toBe(tokens.accent.fg!);
+    }
+  });
+
+  test("a null hovered handle leaves both handles neutral", () => {
+    const layout = dragLayout();
+    const none = composite(layout, { hoveredHandle: null });
+    expect(none.cells[layout.contentTop][layout.borderCol!].fg).toBe(8);
+    expect(none.cells[layout.contentTop][layout.divider!].fg).toBe(tokens.ruleFrame.fg!);
+  });
+});

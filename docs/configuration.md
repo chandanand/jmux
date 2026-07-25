@@ -119,6 +119,8 @@ jmux's own settings (not tmux settings) live in `~/.config/jmux/config.json`. Ed
 ```json
 {
   "sidebarWidth": 26,
+  "infoPanelWidth": 80,
+  "infoPanelSplitRatio": 0.5,
   "claudeCommand": "claude",
   "cacheTimers": true,
   "stateColors": {
@@ -150,6 +152,40 @@ jmux's own settings (not tmux settings) live in `~/.config/jmux/config.json`. Ed
   "panelViews": []
 }
 ```
+
+### Resizing the sidebar and the info panel with the mouse
+
+`sidebarWidth`, `infoPanelWidth` and `infoPanelSplitRatio` can all be set by
+dragging, as well as from the settings screen or by editing the file. Each
+handle is the separator line you would expect:
+
+- **The sidebar border** — the line between the sidebar and the terminal.
+  Drag left/right.
+- **The panel divider** — the line between the terminal and the diff/info
+  panel, when the panel is docked in split mode (`Ctrl-a g`). Drag left/right.
+  In full-width mode there is no divider, so there is nothing to drag.
+- **The panel's list/detail split** — the horizontal line between the item
+  list and the detail pane in the Issues / MRs / Review views. Drag up/down.
+  The diff tab has no such split, and neither does a panel too short to show
+  a detail pane at all.
+
+Hover a handle and it highlights in the accent color; drag it and the frame
+resizes live, following the pointer. Releasing writes the new width to
+`~/.config/jmux/config.json`, so it survives a restart.
+
+Sizes are clamped to what the frame can actually accommodate: the sidebar to
+10–60 columns (and never so wide that the terminal area drops below 40), the
+panel to at least 20 columns with at least 20 left for the terminal, and the
+list/detail split to at least 3 list rows and 4 detail rows. A drag held past
+a limit simply stops there.
+
+The list/detail split is stored as a ratio rather than a row count, so the
+proportions you pick survive resizing the terminal or the panel.
+
+A single click on the divider — press and release without moving — still
+toggles keyboard focus between the terminal and the panel, exactly as before.
+Pressing a key or scrolling during a drag ends it and keeps the size the drag
+had reached, rather than snapping back.
 
 ### Agent-state colors
 

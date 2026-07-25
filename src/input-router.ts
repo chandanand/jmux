@@ -1,4 +1,13 @@
 import type { FrameLayout } from "./frame-layout";
+import {
+  DragController,
+  borderWidthOf,
+  clampDragCol,
+  handleAxis,
+  hitHandle,
+  type DragHandle,
+  type DragIntent,
+} from "./drag";
 
 export interface SgrMouseEvent {
   button: number;
@@ -9,15 +18,39 @@ export interface SgrMouseEvent {
 
 const SGR_MOUSE_RE = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/;
 
-export function parseSgrMouse(seq: string): SgrMouseEvent | null {
-  const match = seq.match(SGR_MOUSE_RE);
-  if (!match) return null;
-  return {
-    button: parseInt(match[1], 10),
-    x: parseInt(match[2], 10),
-    y: parseInt(match[3], 10),
-    release: match[4] === "m",
-  };
+/**
+ * Parses a chunk that is *entirely* SGR mouse reports, or returns null if it
+ * contains anything else.
+ *
+ * A terminal writes one report per movement, but the kernel merges pending
+ * writes when the reader falls behind — and a live drag resize is exactly
+ * when jmux falls behind, since each tracked movement costs a tmux resize.
+ * `translateMouse` matches a single anchored report, as did the per-event
+ * parsing this replaced, so a merged chunk read as "not a mouse event": it
+ * was handled as keystrokes, leaking raw escape bytes into the pty (and,
+ * once drag landed, cancelling the drag mid-gesture).
+ *
+ * handleInput uses this to split a merged chunk and re-enter once per report,
+ * so every mouse path downstream — drag, sidebar, toolbar, glass, panel, and
+ * tmux forwarding — keeps seeing exactly one event at a time.
+ */
+export function parseSgrMouseChunk(chunk: string): SgrMouseEvent[] | null {
+  const re = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
+  const events: SgrMouseEvent[] = [];
+  let pos = 0;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(chunk)) !== null) {
+    if (match.index !== pos) return null; // a gap means non-mouse bytes
+    events.push({
+      button: parseInt(match[1], 10),
+      x: parseInt(match[2], 10),
+      y: parseInt(match[3], 10),
+      release: match[4] === "m",
+    });
+    pos = re.lastIndex;
+  }
+  if (events.length === 0 || pos !== chunk.length) return null;
+  return events;
 }
 
 export function translateMouse(
@@ -42,7 +75,26 @@ export interface InputRouterOptions {
   // column (the footer band spans the full terminal width, joining the
   // sidebar divider, so it is not relative to layout.main.x).
   onFooterClick?: (col: number) => void;
-  onHover?: (target: { area: "sidebar"; row: number } | { area: "toolbar"; col: number } | null) => void;
+  onHover?: (target: { area: "sidebar"; row: number } | { area: "toolbar"; col: number } | { area: "handle"; handle: DragHandle } | null) => void;
+  // Drag handles — the sidebar border, the split panel divider, and the info
+  // panel's list/detail separator. `pos` is the already-clamped 0-indexed
+  // grid position on that handle's own axis (a column for the two vertical
+  // edges, a row for the horizontal split — see handleAxis), so a drag can
+  // never report a position the commit would refuse. onDragMove fires per
+  // tracked pointer movement; throttling whatever it triggers is the
+  // consumer's business, not the router's.
+  onDragMove?: (handle: DragHandle, pos: number) => void;
+  onDragCommit?: (handle: DragHandle, pos: number) => void;
+  onDragCancel?: (handle: DragHandle) => void;
+  /**
+   * Geometry of the info panel's list/detail separator, in *absolute* grid
+   * rows, or null when there isn't one (diff tab, panel closed, or a panel
+   * too short for a detail pane). The panel owns its own internal row layout
+   * — FrameLayout only knows the panel's column span — so the router is told
+   * where the separator is rather than deriving it. Same shape of dependency
+   * as glassStripRows.
+   */
+  panelSplit?: () => { row: number; minRow: number; maxRow: number } | null;
   onModalInput?: (data: string) => void;
   onModalToggle?: () => void;
   onNewSession?: () => void;
@@ -109,9 +161,89 @@ export class InputRouter {
   private diffPanelFocused = false;
   private panelTabsActive = false;
   private panelFilterActive = false;
+  private drag = new DragController();
   constructor(opts: InputRouterOptions, layout: FrameLayout) {
     this.opts = opts;
     this.layout = layout;
+  }
+
+  /**
+   * Turns a DragController intent into callbacks. `click` is where a handle's
+   * non-drag behaviour lives, now that a press on a handle is ambiguous until
+   * the next event: the divider's focus toggle fires here, on
+   * release-without-motion, rather than on press. The sidebar edge has no
+   * click behaviour, so a bare click there is deliberately inert — same as
+   * before this feature, when border-column clicks were swallowed by
+   * translateMouse returning null.
+   */
+  private dispatchDrag(intent: DragIntent): void {
+    switch (intent.type) {
+      case "none":
+        return;
+      case "click":
+        // The divider toggles focus; the split only ever *acquires* it, which
+        // is what a press anywhere else in the panel does (see the focus
+        // acquisition below). Without this, clicking the separator — a press
+        // the drag handler consumes before that code runs — would silently
+        // stop focusing the panel.
+        if (intent.handle === "panel-divider") this.opts.onDiffPanelFocusToggle?.();
+        else if (intent.handle === "panel-split" && !this.diffPanelFocused) {
+          this.opts.onDiffPanelFocusToggle?.();
+        }
+        return;
+      case "move":
+        this.opts.onDragMove?.(intent.handle, intent.pos);
+        return;
+      case "commit":
+        this.opts.onDragCommit?.(intent.handle, intent.pos);
+        return;
+      case "cancel":
+        this.opts.onDragCancel?.(intent.handle);
+        return;
+    }
+  }
+
+  /**
+   * The info panel's list/detail separator, when the pointer is on it. Unlike
+   * the two frame edges this is a *horizontal* handle, so it hit-tests on the
+   * row — but it still has to be inside the panel's columns, or the same row
+   * over the terminal or the sidebar would grab it.
+   */
+  private hitPanelSplit(gridX: number, gridY: number): DragHandle | null {
+    const panel = this.layout.panel;
+    if (panel === null || gridX < panel.x) return null;
+    const split = this.opts.panelSplit?.();
+    if (split == null || gridY !== split.row) return null;
+    return "panel-split";
+  }
+
+  /**
+   * The nearest legal position for `handle`, on that handle's own axis (see
+   * handleAxis). Clamping here rather than in main.ts keeps a drag from ever
+   * reporting a position the frame would refuse — the handle tracks the
+   * pointer right up to its limit and then simply stops.
+   */
+  private clampDragPos(handle: DragHandle, gridX: number, gridY: number): number {
+    if (handleAxis(handle) === "x") {
+      return clampDragCol(this.layout, handle, gridX, borderWidthOf(this.layout));
+    }
+    const split = this.opts.panelSplit?.();
+    if (split == null) return gridY;
+    return Math.max(split.minRow, Math.min(split.maxRow, gridY));
+  }
+
+  /**
+   * Ends any in-flight drag. Called by main.ts from the SIGWINCH handler: a
+   * terminal resize invalidates the geometry the drag was hit-tested against,
+   * and the handle the user grabbed may not exist at the new size.
+   *
+   * Deliberately NOT called from every relayout — a live drag relayouts on
+   * each tracked movement, and cancelling there would abort the drag on its
+   * own first motion. Mode changes (settings, Command Center) can't strand a
+   * drag either: reaching them requires a keystroke, which already aborts.
+   */
+  cancelDrag(): void {
+    this.dispatchDrag(this.drag.abort());
   }
 
   /**
@@ -163,6 +295,56 @@ export class InputRouter {
   }
 
   handleInput(data: string): void {
+    // A terminal writes one mouse report per event, but the kernel merges
+    // pending writes whenever the reader falls behind — and a live drag
+    // resize, which costs a tmux resize per tracked movement, is exactly when
+    // jmux falls behind. Every mouse path below (and translateMouse) matches a
+    // single anchored report, so a merged chunk would otherwise parse as "not
+    // a mouse event" and be handled as keystrokes: raw escape bytes into the
+    // pty, and a cancelled drag. Split it and handle each report on its own.
+    const reports = parseSgrMouseChunk(data);
+    if (reports !== null && reports.length > 1) {
+      for (const report of reports) {
+        this.handleInput(
+          `\x1b[<${report.button};${report.x};${report.y}${report.release ? "m" : "M"}`,
+        );
+      }
+      return;
+    }
+
+    // Parsed once, up front: whether this is a mouse sequence decides drag
+    // ownership below, and every hit-test further down reuses the result.
+    const mouse = reports !== null ? reports[0]! : null;
+
+    // Non-null exactly while a drag is armed or in flight.
+    const dragHandle = this.drag.activeHandle();
+
+    // Drags leak — if the terminal loses focus or the pointer leaves the
+    // window, the release never arrives. Any keystroke proves the drag is
+    // over, so end it and let the key do its normal job.
+    if (dragHandle !== null && mouse === null) {
+      this.dispatchDrag(this.drag.abort());
+    }
+
+    // A live drag owns every mouse event, wherever the pointer has travelled:
+    // one drag routinely crosses the sidebar, the main pane and the panel, and
+    // ownership was settled by the press. Checked before row classification
+    // and before any column routing, so a drag can't be misread as a sidebar
+    // click, a hover, or pty input. A wheel is not part of a drag gesture, so
+    // it aborts rather than being swallowed.
+    if (mouse !== null && dragHandle !== null) {
+      const isMotion = (mouse.button & 32) !== 0;
+      const isWheel = (mouse.button & 64) !== 0;
+      if (isWheel) {
+        this.dispatchDrag(this.drag.abort());
+        return;
+      }
+      const pos = this.clampDragPos(dragHandle, mouse.x - 1, mouse.y - 1);
+      if (mouse.release) this.dispatchDrag(this.drag.release(pos));
+      else if (isMotion) this.dispatchDrag(this.drag.motion(pos));
+      return;
+    }
+
     // Always-active hotkeys: Ctrl-Shift-Up/Down for session switching
     if (data === "\x1b[1;6A") {
       this.opts.onSessionPrev?.();
@@ -296,7 +478,6 @@ export class InputRouter {
     // that used to be `sidebarVisible`: it's null exactly when the terminal
     // is too narrow for jmux's chrome, in which case mouse sequences fall
     // through to the default PTY passthrough below, same as before.
-    const mouse = parseSgrMouse(data);
     const layout = this.layout;
     if (mouse && layout.sidebar) {
       const sidebar = layout.sidebar;
@@ -324,9 +505,17 @@ export class InputRouter {
         return;
       }
 
-      // Dispatch hover on any motion event
+      // Dispatch hover on any motion event. Drag handles are checked first:
+      // they're one column wide, so a hover highlight is the entire
+      // discovery mechanism (a terminal can't change the cursor shape over a
+      // region the way a GUI would).
       if (isMotion && this.opts.onHover) {
-        if (gridX < sidebar.w) {
+        const hoverHandle = this.modalOpen
+          ? null
+          : hitHandle(layout, gridX) ?? this.hitPanelSplit(gridX, gridY);
+        if (hoverHandle) {
+          this.opts.onHover({ area: "handle", handle: hoverHandle });
+        } else if (gridX < sidebar.w) {
           this.opts.onHover({ area: "sidebar", row: gridY });
         } else if (!this.modalOpen) {
           if (gridY < layout.toolbarRows) {
@@ -357,6 +546,26 @@ export class InputRouter {
         const url = this.opts.getLinkAt?.(gridX, gridY);
         if (url) {
           if (!mouse.release) this.opts.onOpenLink?.(url);
+          return;
+        }
+      }
+
+      // Drag handles: a bare left press on the sidebar border column or the
+      // split panel divider arms a drag. It commits nothing — whether this is
+      // a click or a drag isn't knowable until the next event (see src/drag.ts).
+      // Checked before the sidebar/toolbar/panel routing below so the handle
+      // columns belong to the drag; both sit outside the sidebar's own column
+      // range, so no session row loses a click to this.
+      if (
+        !this.modalOpen &&
+        !isMotion &&
+        !isWheel &&
+        !mouse.release &&
+        (mouse.button & 0x03) === 0
+      ) {
+        const handle = hitHandle(layout, gridX) ?? this.hitPanelSplit(gridX, gridY);
+        if (handle) {
+          this.drag.press(handle, this.clampDragPos(handle, gridX, gridY));
           return;
         }
       }
@@ -425,11 +634,11 @@ export class InputRouter {
       // `gridX >= layout.panel.x` test below unifies both modes — a
       // content-area click in full mode routes to the panel, not to main.
       if (layout.panel) {
-        // Divider click — toggle focus (split mode only; full mode has no divider)
-        if (layout.divider !== null && gridX === layout.divider && !mouse.release && !isMotion && !isWheel) {
-          this.opts.onDiffPanelFocusToggle?.();
-          return;
-        }
+        // The divider's focus toggle used to fire here, on press. It now fires
+        // on release-without-motion, via the drag controller's `click` intent
+        // (see dispatchDrag) — a press on the divider is ambiguous between a
+        // click and the start of a resize drag, so it can't commit anything.
+        // The press itself is consumed by the handle check above.
 
         if (gridX >= layout.panel.x) {
           const panelCol = gridX - layout.panel.x; // 0-indexed in panel

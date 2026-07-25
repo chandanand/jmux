@@ -281,6 +281,9 @@ const DETAIL_LABEL: CellAttrs = { fg: 8, fgMode: ColorMode.Palette, dim: true };
 const DETAIL_VALUE: CellAttrs = { fg: 7, fgMode: ColorMode.Palette };
 const DETAIL_KEY: CellAttrs = { fg: 2, fgMode: ColorMode.Palette };
 const SEPARATOR_ATTRS: CellAttrs = { fg: 8, fgMode: ColorMode.Palette, dim: true };
+// Accent for the split separator while it's hovered as a drag handle. Filled
+// in by rebuildPanelViewColors so it tracks the terminal theme.
+const SEPARATOR_HOVER_ATTRS: CellAttrs = { fg: 8, fgMode: ColorMode.Palette };
 const HINT_ATTRS: CellAttrs = { fg: 8, fgMode: ColorMode.Palette, dim: true };
 const URL_ATTRS: CellAttrs = { fg: tokens.link.fg, fgMode: tokens.link.fgMode, underline: true };
 
@@ -295,6 +298,8 @@ export function rebuildPanelViewColors(): void {
   PRIORITY_ATTRS[2]!.fgMode = tokens.textPrimary.fgMode;
   URL_ATTRS.fg = tokens.link.fg;
   URL_ATTRS.fgMode = tokens.link.fgMode;
+  SEPARATOR_HOVER_ATTRS.fg = tokens.accent.fg;
+  SEPARATOR_HOVER_ATTRS.fgMode = tokens.accent.fgMode;
   const n = neutralFg(7);
   for (const a of [TITLE_ATTRS, DETAIL_VALUE]) { a.fg = n.fg; a.fgMode = n.fgMode; }
 }
@@ -302,29 +307,120 @@ rebuildPanelViewColors();
 
 const ACTION_BAR_ROWS = 2;
 const MIN_ROWS_FOR_DETAIL = 15;
+const MIN_LIST_ROWS = 3;
+const MIN_DETAIL_ROWS = 4;
+
+/** Where the split sits when the user hasn't dragged it. */
+export const DEFAULT_PANEL_SPLIT_RATIO = 0.5;
+
+/**
+ * Row geometry of a panel view: `[filter bar] | list | separator | detail |
+ * action bar`, all 0-indexed rows within the panel's own grid.
+ *
+ * This is the single source of truth for that layout. It exists because the
+ * numbers were previously derived twice — once here for painting, and again
+ * in main.ts for hit-testing wheel/click positions — using two *different*
+ * formulas: main.ts's omitted both the filter-bar row and the max-list clamp,
+ * so with a filter active its idea of where the list ended was a row off from
+ * what was actually drawn, and clicks near the boundary mis-routed.
+ */
+export interface PanelViewLayout {
+  /** False on a short panel: no separator, no detail, no action bar. */
+  showDetail: boolean;
+  filterBarRows: number;
+  listStartRow: number;
+  listRows: number;
+  /** Row the `─` separator is drawn on; `rows` (off-grid) when !showDetail. */
+  sepRow: number;
+  detailStart: number;
+  detailRows: number;
+  actionBarStart: number;
+  /** Legal range for `sepRow`, i.e. how far a split drag may travel. */
+  minSepRow: number;
+  maxSepRow: number;
+}
+
+export function computeViewLayout(
+  rows: number,
+  filterBarActive: boolean,
+  splitRatio: number = DEFAULT_PANEL_SPLIT_RATIO,
+): PanelViewLayout {
+  // Total for any input. The ratio reaches here from a hand-editable config
+  // file, and a non-numeric one used to propagate NaN through listRows into
+  // `grid.cells[NaN]` — a thrown TypeError out of the render loop. Clamping
+  // out-of-range values is free once we're checking anyway.
+  const ratio = Number.isFinite(splitRatio)
+    ? Math.max(0, Math.min(1, splitRatio))
+    : DEFAULT_PANEL_SPLIT_RATIO;
+  const showDetail = rows >= MIN_ROWS_FOR_DETAIL;
+  const filterBarRows = filterBarActive ? 1 : 0;
+  const listStartRow = filterBarRows;
+  const actionBarStart = showDetail ? rows - ACTION_BAR_ROWS : rows;
+
+  // The pool the list and detail share — everything except the filter bar,
+  // the separator row itself, and the action bar.
+  const splittable = rows - ACTION_BAR_ROWS - 1 - filterBarRows;
+  const maxListRows = showDetail
+    ? rows - MIN_DETAIL_ROWS - 1 - ACTION_BAR_ROWS - filterBarRows
+    : rows - filterBarRows;
+
+  // Round, not floor: splitRatioForSepRow is the exact inverse of this, and
+  // floor loses the round trip to float error (splittable * (n/splittable)
+  // can land a hair under n), which would make a dragged separator settle one
+  // row above the pointer.
+  const listRows = showDetail
+    ? Math.min(maxListRows, Math.max(MIN_LIST_ROWS, Math.round(splittable * ratio)))
+    : rows - filterBarRows;
+
+  const sepRow = showDetail ? listStartRow + listRows : rows;
+  const detailStart = sepRow + 1;
+  const detailRows = showDetail ? actionBarStart - detailStart : 0;
+
+  return {
+    showDetail,
+    filterBarRows,
+    listStartRow,
+    listRows,
+    sepRow,
+    detailStart,
+    detailRows,
+    actionBarStart,
+    // Math.min guards a panel just tall enough for a detail pane, where
+    // maxListRows can fall below MIN_LIST_ROWS — the range must never invert.
+    minSepRow: listStartRow + Math.min(MIN_LIST_ROWS, maxListRows),
+    maxSepRow: listStartRow + maxListRows,
+  };
+}
+
+/**
+ * The split ratio that puts the separator on `sepRow` — the inverse of the
+ * `listRows` calculation above, so a drag and the paint that follows it agree.
+ * Callers clamp `sepRow` to [minSepRow, maxSepRow] first.
+ */
+export function splitRatioForSepRow(rows: number, filterBarActive: boolean, sepRow: number): number {
+  const filterBarRows = filterBarActive ? 1 : 0;
+  const splittable = rows - ACTION_BAR_ROWS - 1 - filterBarRows;
+  if (splittable <= 0) return DEFAULT_PANEL_SPLIT_RATIO;
+  return Math.max(0, Math.min(1, (sepRow - filterBarRows) / splittable));
+}
 
 export function renderView(
   nodes: ViewNode[],
   cols: number,
   rows: number,
   state: ViewState,
+  opts: { splitRatio?: number; splitHovered?: boolean } = {},
 ): CellGrid {
   const grid = createGrid(cols, rows);
-  const showDetail = rows >= MIN_ROWS_FOR_DETAIL;
 
   // Filter bar: null = off, "" = bar visible but empty, "abc" = filtering
   const filterBarActive = state.filterQuery !== null;
-  const filterBarRows = filterBarActive ? 1 : 0;
 
   // Layout: [filter bar] | list | separator | detail content | action bar
-  const actionBarStart = showDetail ? rows - ACTION_BAR_ROWS : rows;
-  const minDetailRows = 4;
-  const maxListRows = showDetail ? rows - minDetailRows - 1 - ACTION_BAR_ROWS - filterBarRows : rows - filterBarRows;
-  const listRows = showDetail ? Math.min(maxListRows, Math.max(3, Math.floor((rows - ACTION_BAR_ROWS - 1 - filterBarRows) * 0.5))) : rows - filterBarRows;
-  const listStartRow = filterBarRows;
-  const sepRow = showDetail ? listStartRow + listRows : rows;
-  const detailStart = sepRow + 1;
-  const detailRows = showDetail ? actionBarStart - detailStart : 0;
+  const {
+    showDetail, listStartRow, listRows,
+    sepRow, detailStart, detailRows, actionBarStart,
+  } = computeViewLayout(rows, filterBarActive, opts.splitRatio);
 
   // Render filter bar
   if (filterBarActive) {
@@ -360,8 +456,12 @@ export function renderView(
 
   // Render detail pane
   if (showDetail) {
-    // Separator
-    writeString(grid, sepRow, 0, "─".repeat(cols), SEPARATOR_ATTRS);
+    // Separator — doubles as the drag handle that moves the split, so it
+    // accents on hover the same way the sidebar/panel edges do.
+    writeString(
+      grid, sepRow, 0, "─".repeat(cols),
+      opts.splitHovered ? SEPARATOR_HOVER_ATTRS : SEPARATOR_ATTRS,
+    );
 
     // Detail content (scrollable)
     const selectedNode = nodes[state.selectedIndex];
