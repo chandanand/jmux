@@ -1132,45 +1132,70 @@ describe("compositeGrids — sidebar sizing must respect the footer bands", () =
   });
 });
 
-// Task 7: corrected toolbar glyphs, a tighter cluster, and the snapshot
-// status chip's relocation to the footer.
-describe("buildToolbarButtons (Task 7 glyph set)", () => {
-  test("returns the six action buttons in order with the corrected glyphs", () => {
+// The toolbar carries only the four actions that target the surface it sits
+// on: add a window, split the pane two ways, toggle the docked panel.
+// Launching Claude and opening settings moved out entirely — they live in the
+// palette and the settings screen.
+describe("buildToolbarButtons", () => {
+  test("returns exactly the four action buttons, in escalating-scope order", () => {
     const buttons = buildToolbarButtons({ panelActive: false });
-    expect(buttons.map((b) => b.label)).toEqual(["◧", "+", "◫", "▤", "λ", "⚙"]);
     expect(buttons.map((b) => b.id)).toEqual([
-      "panel", "new-window", "split-v", "split-h", "claude", "settings",
+      "new-window", "split-h", "split-v", "panel",
     ]);
-    // The fullwidth ＋ (2 display columns) is gone — the metric fix this task
-    // pins is a 1-column "+".
-    expect(textCols(buttons[1].label)).toBe(1);
+    expect(buttons.map((b) => b.label)).toEqual(["+", "⊟", "◫", "◨"]);
+  });
+
+  test("the split glyphs are a matched single-stroke pair, not the fill-lines family", () => {
+    const byId = new Map(buildToolbarButtons({ panelActive: false }).map((b) => [b.id, b.label]));
+    // ⊟ (horizontal stroke) / ◫ (vertical stroke) — same weight, mirrored axis.
+    expect(byId.get("split-h")).toBe("⊟");
+    expect(byId.get("split-v")).toBe("◫");
+    // ▤▥▦ render denser and smaller than their neighbours; keep them out.
+    for (const label of byId.values()) {
+      expect(["▤", "▥", "▦"]).not.toContain(label);
+    }
+  });
+
+  test("drops the claude and settings buttons — those actions are keyboard/palette-only now", () => {
+    const ids = buildToolbarButtons({ panelActive: false }).map((b) => b.id);
+    expect(ids).not.toContain("claude");
+    expect(ids).not.toContain("settings");
+  });
+
+  test("every glyph occupies exactly one display column", () => {
+    // Column bookkeeping (layoutToolbar's packing and the mouse hit boxes
+    // derived from it) assumes 1-column glyphs; a 2-column glyph like the
+    // fullwidth ＋ would shift every button range to its left.
+    for (const btn of buildToolbarButtons({ panelActive: true })) {
+      expect(textCols(btn.label)).toBe(1);
+      expect(btn.label.length).toBe(1); // no trailing U+FE0E/U+FE0F selector
+    }
   });
 
   test("the panel button carries no accent colour when the diff panel is inactive", () => {
-    const [panelBtn] = buildToolbarButtons({ panelActive: false });
+    const panelBtn = buildToolbarButtons({ panelActive: false }).find((b) => b.id === "panel")!;
     expect(panelBtn.fg).toBeUndefined();
     expect(panelBtn.fgMode).toBeUndefined();
   });
 
   test("the panel button uses tokens.accent when the diff panel is active", () => {
-    const [panelBtn] = buildToolbarButtons({ panelActive: true });
+    const panelBtn = buildToolbarButtons({ panelActive: true }).find((b) => b.id === "panel")!;
     expect(panelBtn.fg).toBe(tokens.accent.fg!);
     expect(panelBtn.fgMode).toBe(tokens.accent.fgMode!);
   });
 
-  test("the claude button always uses tokens.accent (the hand-written pink is retired)", () => {
+  test("the panel toggle is the rightmost button, on the side the panel docks", () => {
     const buttons = buildToolbarButtons({ panelActive: false });
-    const claudeBtn = buttons.find((b) => b.id === "claude")!;
-    expect(claudeBtn.fg).toBe(tokens.accent.fg!);
-    expect(claudeBtn.fgMode).toBe(tokens.accent.fgMode!);
+    expect(buttons[buttons.length - 1].id).toBe("panel");
   });
 
-  test("settings stays a plain ⚙ with no VS15 variation selector", () => {
-    const buttons = buildToolbarButtons({ panelActive: false });
-    const settingsBtn = buttons.find((b) => b.id === "settings")!;
-    expect(settingsBtn.label).toBe("⚙");
-    expect(settingsBtn.label.length).toBe(1); // no trailing U+FE0E/U+FE0F
-    expect(textCols(settingsBtn.label)).toBe(1);
+  test("no button other than the panel toggle carries live state", () => {
+    const off = buildToolbarButtons({ panelActive: false });
+    const on = buildToolbarButtons({ panelActive: true });
+    for (let i = 0; i < off.length; i++) {
+      if (off[i].id === "panel") continue;
+      expect(on[i]).toEqual(off[i]);
+    }
   });
 });
 
@@ -1184,15 +1209,13 @@ describe("toolbar action buttons pack with a one-column inter-glyph gutter (Task
     const toolbar = { buttons: buildToolbarButtons({ panelActive: false }), mainCols: 40, tabs: [] };
     const ranges = getToolbarButtonRanges(toolbar);
     expect(ranges.map((r) => r.id)).toEqual([
-      "panel", "new-window", "split-v", "split-h", "claude", "settings",
+      "new-window", "split-h", "split-v", "panel",
     ]);
     expect(ranges).toEqual([
-      { id: "panel", startCol: 28, endCol: 29 },
-      { id: "new-window", startCol: 30, endCol: 31 },
-      { id: "split-v", startCol: 32, endCol: 33 },
+      { id: "new-window", startCol: 32, endCol: 33 },
       { id: "split-h", startCol: 34, endCol: 35 },
-      { id: "claude", startCol: 36, endCol: 37 },
-      { id: "settings", startCol: 38, endCol: 39 },
+      { id: "split-v", startCol: 36, endCol: 37 },
+      { id: "panel", startCol: 38, endCol: 39 },
     ]);
   });
 
@@ -1226,19 +1249,19 @@ describe("toolbar action buttons pack with a one-column inter-glyph gutter (Task
       buttons: buildToolbarButtons({ panelActive: false }),
       mainCols: 40,
       tabs: [],
-      hoveredButton: "claude",
+      hoveredButton: "panel",
     };
     const layout = makeLayout({ sidebarCols: 6, mainCols: 40, toolbarRows: 1, termRows: 4 });
     const result = compositeGrids(layout, main, sidebar, toolbar);
     const borderCol = layout.borderCol!;
     const ranges = getToolbarButtonRanges(toolbar);
-    const claudeRange = ranges.find((r) => r.id === "claude")!;
-    const neighborRange = ranges.find((r) => r.id === "split-h")!; // immediate left neighbor
+    const hoveredRange = ranges.find((r) => r.id === "panel")!;
+    const neighborRange = ranges.find((r) => r.id === "split-v")!; // immediate left neighbor
 
     for (let col = 0; col <= 39; col++) {
       const cell = result.cells[0][borderCol + 1 + col];
-      const inClaudeRange = col >= claudeRange.startCol && col <= claudeRange.endCol;
-      if (inClaudeRange) {
+      const inHoveredRange = col >= hoveredRange.startCol && col <= hoveredRange.endCol;
+      if (inHoveredRange) {
         expect(cell.bgMode).toBe(ColorMode.RGB);
       } else if (col >= neighborRange.startCol && col <= neighborRange.endCol) {
         // The neighboring button's own box must not pick up the hover bg.

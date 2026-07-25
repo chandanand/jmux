@@ -94,7 +94,7 @@ These are intercepted by jmux's input router before reaching tmux. They cannot b
 | `Ctrl-Shift-Down` | Switch to next session |
 | Mouse clicks in sidebar | Switch to that session |
 | Mouse clicks on toolbar tabs | Switch to that window |
-| Mouse clicks on toolbar buttons | New window, split, Claude, settings |
+| Mouse clicks on toolbar buttons | New window, split horizontal, split vertical, toggle panel |
 | Mouse hover (sidebar/toolbar) | Visual highlight |
 
 Everything else passes through to tmux normally.

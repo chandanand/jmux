@@ -32,22 +32,42 @@ export interface ToolbarConfig {
 // through here rather than building the array inline, so the glyph order
 // has a test seam independent of main.ts's un-importable top-level side
 // effects (main.ts spawns tmux at import time, so it can't be imported by a
-// unit test). Colours route through chrome-tokens' `tokens.accent` — the
-// panel-active and claude buttons no longer carry their own hand-written
-// RGB literals.
+// unit test). Colours route through chrome-tokens' `tokens.accent`.
+//
+// The set is deliberately small: only the four actions whose target is the
+// surface the toolbar sits on — the window strip and the pane grid beneath
+// it. Everything else lives in the palette (`^a p`) or the settings screen
+// (`^a i`); a glyph here has to earn its column by being something you reach
+// for mid-flow, not merely something jmux can do. Launching Claude and
+// opening settings are both once-per-session actions with keyboard homes, so
+// they no longer occupy toolbar columns.
+//
+// Order runs left to right in escalating scope — add a window, then subdivide
+// the one you're in, then the panel toggle last. Buttons pack right-aligned
+// (see layoutToolbar), so the panel button lands flush against the terminal's
+// right edge, the side the diff panel itself docks on (frame-layout.ts places
+// `panel` after the divider); `◨`'s filled right half points at where the
+// panel will appear.
+//
+// The two split glyphs are a deliberate stroke pair: `⊟` is a square with one
+// horizontal stroke (panes stacked — tmux `split-window -v`), `◫` the same
+// square with one vertical stroke (panes side by side — `split-window -h`).
+// Both must stay single-stroke outlines of the same weight; the earlier `▤`
+// came from the fill-lines family (▤▥▦) and read as a denser, smaller glyph
+// than its neighbours. Every label here must also be exactly one display
+// column — `layoutToolbar` packs on `textCols` and the mouse hit boxes derive
+// from that packing, so a 2-column glyph would shift every button to its left.
 export function buildToolbarButtons(opts: { panelActive: boolean }): ToolbarButton[] {
   return [
+    { label: "+", id: "new-window" },
+    { label: "⊟", id: "split-h" },
+    { label: "◫", id: "split-v" },
     {
-      label: "◧",
+      label: "◨",
       id: "panel",
       fg: opts.panelActive ? tokens.accent.fg : undefined,
       fgMode: opts.panelActive ? tokens.accent.fgMode : undefined,
     },
-    { label: "+", id: "new-window" },
-    { label: "◫", id: "split-v" },
-    { label: "▤", id: "split-h" },
-    { label: "λ", id: "claude", fg: tokens.accent.fg, fgMode: tokens.accent.fgMode },
-    { label: "⚙", id: "settings" },
   ];
 }
 
