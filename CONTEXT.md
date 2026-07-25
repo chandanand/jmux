@@ -174,3 +174,47 @@ by **parking**: while the glass is up the real (main) client is parked on a
 hidden `__jmux_park` session, so the tile clients' window sizes don't constrain
 the real sessions. On exit the main client is restored. There is no state in
 which both views are live.
+
+### Repo settings
+
+The small set of workflow settings that describe **how work is spun up and run
+in a given repo**, rather than how the jmux UI looks. A repo's settings are
+resolved through three tiers, each overriding the one above:
+
+```
+hardcoded default  →  repo defaults (global)  →  repo override (this repo)
+```
+
+The overridable settings are: **default base branch**, **wtm integration**,
+**auto-launch agent**, **session name template**, and **claude command**. The
+global tier (`repoDefaults`) is what applies to every repo that has no explicit
+override; the per-repo tier (`repos`) holds overrides for one specific repo.
+
+A repo is identified by the **canonical path of its main worktree root** — every
+worktree of a repo resolves to the *same* key, so an override set on a repo
+applies no matter which worktree session you're in. The wtm **project** name
+(bare-repo basename) is only a display label, never the key. **Nothing is stored
+in the repo itself** — all repo settings live in jmux's own config file, exactly
+like every other setting.
+
+Settings that are about the jmux **UI/chrome** (sidebar width, colors, tabs,
+panels, …) and the cross-repo **routing/discovery** index (`projectDirs`,
+`teamRepoMap`) are *not* repo-overridable — a per-repo override of "where do I
+scan for repos" or "which team maps to which repo" is a contradiction. The code
+host / issue tracker **adapters** are also global: they are constructed and
+authenticated once at startup and drive a single cross-repo issue/MR panel that
+has no "current repo".
+
+### wtm integration (per-repo)
+
+Whether a repo is a **wtm-managed bare repo with worktrees**. This is a property
+of the repo, not a global preference, so it is a repo setting. It governs *how* a
+new worktree is created for that repo:
+
+- **on** — `wtm create <session> --from <baseBranch>` (wtm manages the bare repo
+  and its worktrees).
+- **off** — `git worktree add` against the repo directly (isolated worktrees,
+  without wtm's bare-repo management).
+
+Every session/issue always gets its **own worktree** — wtm integration selects
+the creation mechanism, never whether a worktree exists.
