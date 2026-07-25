@@ -48,6 +48,20 @@ import { createAdapters } from "./adapters/registry";
 import { PollCoordinator } from "./adapters/poll-coordinator";
 import { SessionState } from "./session-state";
 import type { SessionContext, WorkflowState } from "./adapters/types";
+import { stageForIssue, STAGE_ORDER, STAGE_LABELS } from "./work-stage";
+import {
+  isParked,
+  clearStaleOverride,
+  captureBaseline,
+  detectSignals,
+  DEFAULT_PARKING,
+  UNPARK_TRIGGERS,
+  UNPARK_TRIGGER_LABELS,
+  type ParkingConfig,
+  type ParkBaseline,
+  type ParkContext,
+  type UnparkTrigger,
+} from "./parking";
 import type { DemoContext } from "./demo/setup";
 import type { SessionInfo, WindowTab, PaletteCommand, PaletteResult, AgentState } from "./types";
 import { loadProjectDirsCache, saveProjectDirsCache } from "./project-dirs-cache";
@@ -58,6 +72,7 @@ import {
   buildWorktreeCommand,
   REPO_SETTING_DEFAULTS,
   type RepoSettings,
+  type WorkStage,
   type ResolvedRepoSettings,
 } from "./repo-settings";
 import {
@@ -879,6 +894,9 @@ const agentStateTracker = new AgentStateTracker();
 agentStateTracker.onChange((sessionId) => {
   const record = agentStateTracker.getRecord(sessionId);
   sidebar.setAgentStateRecord(sessionId, record);
+  // "Agent needs attention" is an unpark trigger, so a state change can pull a
+  // session back out of the band.
+  recomputeParking();
 
   // Mirror to snapshot if snapshotter is up.
   const sessionName = currentSessions.find((s) => s.id === sessionId)?.name;
@@ -998,6 +1016,9 @@ const pollCoordinator = new PollCoordinator({
   issueTracker: adapters.issueTracker,
   onUpdate: (sessionName) => {
     sidebar.setSessionContexts(pollCoordinator.getAllContexts());
+    // A poll is the main way a stage changes (and the only way an unpark
+    // signal arrives), so parking is re-derived on every one.
+    recomputeParking();
     if (sessionName === "__global__") refreshTeams();
     scheduleRender();
   },
@@ -1046,6 +1067,107 @@ let cachedWorkflowStates: WorkflowState[] = [];
 
 function workflowStateOptions(): Array<{ id: string; label: string }> {
   return cachedWorkflowStates.map((s) => ({ id: s.name, label: s.name }));
+}
+
+// --- Parking ---
+//
+// Baselines are in-memory only. On restart a parked session simply re-parks
+// and captures a fresh baseline, so signals raised while jmux was down are not
+// replayed. The main path survives that: a QA-Failed issue changes *stage*, and
+// stage is re-derived from the tracker on every poll.
+const parkBaselines = new Map<string, ParkBaseline>();
+
+function parkingConfig(): ParkingConfig {
+  const p = configStore.config.pipeline;
+  return {
+    parkStages: p?.parkStages ?? DEFAULT_PARKING.parkStages,
+    unparkOn: p?.unparkOn ?? DEFAULT_PARKING.unparkOn,
+    autoParkIdleDays: p?.autoParkIdleDays ?? DEFAULT_PARKING.autoParkIdleDays,
+  };
+}
+
+/** Stage of a session's linked issue, or null when it has none. */
+function stageOfSession(name: string): WorkStage | null {
+  const issue = pollCoordinator.getContext(name)?.issues[0];
+  if (!issue) return null;
+  return stageForIssue(issue, configStore.config, (d) => repoFacts.get(d), homedir());
+}
+
+/**
+ * Recompute which sessions belong in the Parked band. Cheap and idempotent, so
+ * it can run on any signal that might change the answer (session list changes,
+ * poll updates, agent-state changes, config edits).
+ */
+function recomputeParking(): void {
+  const config = parkingConfig();
+  const now = Date.now();
+  const parked = new Set<string>();
+  const live = new Set(currentSessions.map((s) => s.name));
+
+  for (const session of currentSessions) {
+    const name = session.name;
+    const stage = stageOfSession(name);
+
+    // An override answers "for this situation"; once the stage moves on it no
+    // longer applies, or one manual unpark would suppress parking forever.
+    const stored = sessionState.getParkOverride(name);
+    const fresh = clearStaleOverride(stored, stage);
+    if (stored && !fresh) sessionState.setParkOverride(name, null);
+
+    const ctx = pollCoordinator.getContext(name);
+    const baseline = parkBaselines.get(name);
+    const parkCtx: ParkContext = {
+      stage,
+      issues: ctx?.issues ?? [],
+      mrs: ctx?.mrs ?? [],
+    };
+    const signals = baseline ? detectSignals(baseline, parkCtx) : new Set<UnparkTrigger>();
+    const info = sidebar.getSortInfo(name);
+
+    const shouldPark = isParked(
+      {
+        name,
+        stage,
+        manual: fresh?.manual ?? null,
+        attention: info?.status === "waiting",
+        signals,
+        lastActivity: info?.lastActivity ?? now,
+      },
+      config,
+      now,
+    );
+
+    if (shouldPark) {
+      parked.add(name);
+      // Capture the baseline on the parking edge, so "changed since parked"
+      // has something to compare against.
+      if (!baseline) parkBaselines.set(name, captureBaseline(parkCtx));
+    } else {
+      parkBaselines.delete(name);
+    }
+  }
+
+  for (const name of parkBaselines.keys()) {
+    if (!live.has(name)) parkBaselines.delete(name);
+  }
+
+  sidebar.setParkedSessions(parked);
+}
+
+/** Toggle an explicit park decision for a session and re-derive the band. */
+function toggleParked(name: string): void {
+  const stage = stageOfSession(name);
+  const current = clearStaleOverride(sessionState.getParkOverride(name), stage);
+  const nowParked = sidebar.isParked(name);
+  // Record the opposite of what is on screen, so the key always does the thing
+  // its label promises regardless of whether the current state was derived.
+  if (current?.manual === (nowParked ? "park" : "unpark")) {
+    sessionState.setParkOverride(name, null);
+  } else {
+    sessionState.setParkOverride(name, { manual: nowParked ? "unpark" : "park", atStage: stage });
+  }
+  recomputeParking();
+  scheduleRender();
 }
 
 function setDiffFocus(focused: boolean): void {
@@ -1524,6 +1646,7 @@ async function fetchSessions(): Promise<void> {
       if (!knownSessions.has(name)) pollCoordinator.removeSession(name);
     }
     sidebar.setSessionContexts(pollCoordinator.getAllContexts());
+    recomputeParking();
 
     // Prune state for dead sessions
     const liveNames = sessions.map((s) => s.name);
@@ -2713,6 +2836,13 @@ function buildPaletteCommands(): PaletteCommand[] {
           category: "session",
         });
       }
+      commands.push({
+        id: "toggle-park-session",
+        label: sidebar.isParked(currentName)
+          ? `Unpark session: ${currentName}`
+          : `Park session: ${currentName}`,
+        category: "session",
+      });
     }
   }
 
@@ -3189,6 +3319,56 @@ function buildSettingsCategories(): SettingsCategory[] {
       ],
     },
     {
+      label: "Pipeline",
+      collapsed: false,
+      settings: [
+        {
+          id: "park-stages", label: "Park stages", type: "multiselect" as const,
+          getValue: () => {
+            const v = configStore.config.pipeline?.parkStages ?? DEFAULT_PARKING.parkStages;
+            return v.length ? v.map((s) => STAGE_LABELS[s]).join(", ") : "none";
+          },
+          getOptions: () => STAGE_ORDER.map((s) => ({ id: s, label: STAGE_LABELS[s] })),
+          getSelected: () => configStore.config.pipeline?.parkStages ?? DEFAULT_PARKING.parkStages,
+          onToggleOption: (id) => {
+            const cur = (configStore.config.pipeline?.parkStages ?? DEFAULT_PARKING.parkStages).slice();
+            const at = cur.indexOf(id as WorkStage);
+            if (at >= 0) cur.splice(at, 1); else cur.push(id as WorkStage);
+            configStore.setPipeline("parkStages", cur);
+            recomputeParking();
+          },
+        },
+        {
+          id: "unpark-on", label: "Unpark on", type: "multiselect" as const,
+          getValue: () => {
+            const v = configStore.config.pipeline?.unparkOn ?? DEFAULT_PARKING.unparkOn;
+            return v.length ? `${v.length} selected` : "never";
+          },
+          getOptions: () => UNPARK_TRIGGERS.map((t) => ({ id: t, label: UNPARK_TRIGGER_LABELS[t] })),
+          getSelected: () => configStore.config.pipeline?.unparkOn ?? DEFAULT_PARKING.unparkOn,
+          onToggleOption: (id) => {
+            const cur = (configStore.config.pipeline?.unparkOn ?? DEFAULT_PARKING.unparkOn).slice();
+            const at = cur.indexOf(id as UnparkTrigger);
+            if (at >= 0) cur.splice(at, 1); else cur.push(id as UnparkTrigger);
+            configStore.setPipeline("unparkOn", cur);
+            recomputeParking();
+          },
+        },
+        {
+          id: "auto-park-idle", label: "Auto-park idle sessions (days)", type: "text" as const,
+          getValue: () => {
+            const d = configStore.config.pipeline?.autoParkIdleDays ?? null;
+            return d === null ? "off" : String(d);
+          },
+          onTextCommit: (v) => {
+            const n = parseInt(v, 10);
+            configStore.setPipeline("autoParkIdleDays", isNaN(n) || n <= 0 ? null : n);
+            recomputeParking();
+          },
+        },
+      ],
+    },
+    {
       label: "Stages",
       collapsed: false,
       settings: [
@@ -3521,6 +3701,12 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       configStore.set("pinnedSessions", [...pinnedSessions]);
       scheduleRender();
     }
+    return;
+  }
+
+  if (commandId === "toggle-park-session") {
+    const currentName = currentSessions.find(s => s.id === currentSessionId)?.name;
+    if (currentName) toggleParked(currentName);
     return;
   }
 

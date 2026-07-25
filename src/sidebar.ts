@@ -289,6 +289,12 @@ type RenderItem =
 const PINNED_GROUP_KEY = "pinned";
 const PINNED_GROUP_LABEL = "Pinned";
 
+// The mirror of Pinned: pins float to the top, parked sinks to the bottom.
+// Collapsed by default — the whole point is to shrink handed-off work to one
+// row without killing the session behind it.
+const PARKED_GROUP_KEY = "parked";
+const PARKED_GROUP_LABEL = "Parked";
+
 // The project bucket a session belongs to: its wtm project name (preferred) or
 // a directory-derived label, else null (ungrouped).
 function projectLabelOf(session: SessionInfo): string | null {
@@ -315,11 +321,13 @@ function buildRenderPlan(
   groupMode: GroupMode,
   sortMode: SortMode,
   filterMode: FilterMode,
+  parkedNames: Set<string> = new Set(),
 ): {
   items: RenderItem[];
   displayOrder: number[];
 } {
   const pinnedIndices: number[] = [];
+  const parkedIndices: number[] = [];
   const bucketMap = new Map<string, GroupBucket>();
   const ungrouped: number[] = [];
 
@@ -351,6 +359,14 @@ function buildRenderPlan(
       continue;
     }
 
+    // Checked after pinning so an explicit "keep this up top" always wins over
+    // a derived "this is handed off" — the two signals can legitimately both
+    // be true, and the user's explicit one should be the visible one.
+    if (parkedNames.has(sessions[i].name)) {
+      parkedIndices.push(i);
+      continue;
+    }
+
     if (groupMode === "none") {
       ungrouped.push(i);
       continue;
@@ -373,6 +389,7 @@ function buildRenderPlan(
 
   // Member order within every bucket + Pinned + the flat list obeys sortMode.
   const sortedPinned = sortIndices(pinnedIndices, info, sortMode);
+  const sortedParked = sortIndices(parkedIndices, info, sortMode);
   const sortedUngrouped = sortIndices(ungrouped, info, sortMode);
 
   // Group-header order is fixed by axis, NOT by sortMode: project → alphabetical,
@@ -392,8 +409,13 @@ function buildRenderPlan(
   items.push({ type: "overview", paneCount: pinnedPanes.length });
   items.push({ type: "spacer" });
 
-  const emitGroup = (key: string, label: string, indices: number[]): void => {
-    const isCollapsed = collapsedGroups.has(key);
+  const emitGroup = (key: string, label: string, indices: number[], collapsedByDefault = false): void => {
+    // Parked inverts the collapse default: the band exists to hide rows, so an
+    // absent entry in `collapsedGroups` means collapsed, and toggling records
+    // the expanded state instead.
+    const isCollapsed = collapsedByDefault
+      ? !collapsedGroups.has(key)
+      : collapsedGroups.has(key);
     items.push({
       type: "group-header",
       key,
@@ -436,6 +458,11 @@ function buildRenderPlan(
     });
     displayOrder.push(idx);
     items.push({ type: "spacer" });
+  }
+
+  // Parked band last, below everything — the back burner, not a headline.
+  if (sortedParked.length > 0) {
+    emitGroup(PARKED_GROUP_KEY, PARKED_GROUP_LABEL, sortedParked, true);
   }
 
   return { items, displayOrder };
@@ -488,6 +515,7 @@ export class Sidebar {
   private hoveredRow: number | null = null;
   private collapsedGroups = new Set<string>();
   private pinnedSessions = new Set<string>();
+  private parkedSessions = new Set<string>();
   private pinnedPanes: PinnedPaneEntry[] = [];
   private rowToSelection = new Map<number, SidebarSelection>();
   private currentVersion: string = "";
@@ -543,6 +571,27 @@ export class Sidebar {
   setPinnedSessions(names: Set<string>): void {
     this.pinnedSessions = new Set(names);
     this.rebuildPlan();
+  }
+
+  /** Sessions handed off and collapsed into the bottom Parked band. */
+  setParkedSessions(names: Set<string>): void {
+    this.parkedSessions = new Set(names);
+    this.rebuildPlan();
+  }
+
+  isParked(sessionName: string): boolean {
+    return this.parkedSessions.has(sessionName);
+  }
+
+  /**
+   * Derived status + last-activity for one session. Exposed so parking policy
+   * can reuse the sidebar's single definition of "waiting" and "last signal of
+   * life" rather than growing a second, drifting copy elsewhere.
+   */
+  getSortInfo(sessionName: string): SessionSortInfo | null {
+    const s = this.sessions.find((x) => x.name === sessionName);
+    if (!s) return null;
+    return { name: s.name, status: this.statusOf(s), lastActivity: this.lastActivityOf(s) };
   }
 
   setPinnedPanes(panes: PinnedPaneEntry[]): void {
@@ -634,6 +683,7 @@ export class Sidebar {
       this.groupMode,
       this.sortMode,
       this.filterMode,
+      this.parkedSessions,
     );
     this.items = items;
     this.displayOrder = displayOrder;

@@ -4,7 +4,8 @@ import { homedir } from "os";
 import type { AdapterConfig } from "./adapters/types";
 import type { PanelView } from "./panel-view";
 import type { TabEntry } from "./glass/tabs";
-import type { RepoSettings } from "./repo-settings";
+import type { RepoSettings, WorkStage } from "./repo-settings";
+import type { UnparkTrigger } from "./parking";
 import { migrateLegacyConfig } from "./repo-settings";
 import { logError } from "./log";
 
@@ -17,6 +18,22 @@ import { logError } from "./log";
  */
 export interface IssueWorkflowConfig {
   teamRepoMap?: Record<string, string>;  // Linear team name → repo directory
+}
+
+/**
+ * Global pipeline behaviour. Deliberately NOT per-repo: which stages park and
+ * what unparks them are properties of how the user works, and mixing "parked
+ * in repo A but not repo B" produces an incoherent single sidebar. What a
+ * *state* means per repo lives in RepoSettings instead.
+ */
+export interface PipelineConfig {
+  parkStages?: WorkStage[];
+  unparkOn?: UnparkTrigger[];
+  autoParkIdleDays?: number | null;
+  /** Confirmation policy for writes back to the issue tracker. */
+  transitionConfirm?: "always" | "undo-toast" | "never";
+  /** Ordered panel-view ids the "Up next" row pulls from. */
+  upNext?: string[];
 }
 
 export interface SnapshotConfig {
@@ -74,6 +91,8 @@ export interface JmuxConfig {
   repoDefaults?: RepoSettings;
   /** Per-repo overrides, keyed by canonical repo root (git common dir). */
   repos?: Record<string, RepoSettings>;
+  /** Global pipeline behaviour (parking, transition confirmation, queues). */
+  pipeline?: PipelineConfig;
 }
 
 /**
@@ -231,6 +250,13 @@ export class ConfigStore {
   setWorkflow<K extends keyof IssueWorkflowConfig>(key: K, value: IssueWorkflowConfig[K]): void {
     if (!this.data.issueWorkflow) this.data.issueWorkflow = {};
     this.data.issueWorkflow[key] = value;
+    this.persist();
+  }
+
+  /** Set a global pipeline setting and persist. */
+  setPipeline<K extends keyof PipelineConfig>(key: K, value: PipelineConfig[K]): void {
+    if (!this.data.pipeline) this.data.pipeline = {};
+    this.data.pipeline[key] = value;
     this.persist();
   }
 
