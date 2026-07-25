@@ -212,3 +212,35 @@ describe("resolveForRepo", () => {
     expect(r.defaultBaseBranch).toBe("develop");
   });
 });
+
+describe("resolveRepoSettings null handling", () => {
+  test("an explicit null override wins over a non-null default", () => {
+    // `null` on a transition field means "never write". If it fell through to
+    // the default tier, turning a write off per-repo would be impossible.
+    const r = resolveRepoSettings(
+      { onMrMergedState: "QA" },
+      { onMrMergedState: null },
+    );
+    expect(r.onMrMergedState).toBeNull();
+  });
+
+  test("undefined is the only value that falls through", () => {
+    const r = resolveRepoSettings({ onMrMergedState: "QA" }, { onMrOpenState: "In Review" });
+    expect(r.onMrMergedState).toBe("QA");
+    expect(r.onMrOpenState).toBe("In Review");
+  });
+
+  test("array fields replace wholesale rather than merging", () => {
+    const r = resolveRepoSettings(
+      { parkedStates: ["In Review", "QA"] },
+      { parkedStates: ["Staging"] },
+    );
+    expect(r.parkedStates).toEqual(["Staging"]);
+  });
+
+  test("stage lists default to empty, so nothing parks until configured", () => {
+    const r = resolveRepoSettings(undefined, undefined);
+    expect(r.parkedStates).toEqual([]);
+    expect(r.onSessionStartState).toBeNull();
+  });
+});

@@ -12,7 +12,21 @@
 import { homedir } from "os";
 import { realpathSync } from "fs";
 
-/** Workflow settings that can be set globally (repoDefaults) or per-repo (repos[key]). */
+/**
+ * Which lifecycle stage a tracker state means. Behaviour keys off the stage;
+ * the raw state name is only ever used for display. See src/work-stage.ts.
+ */
+export type WorkStage = "idea" | "active" | "parked" | "done";
+
+/**
+ * Workflow settings that can be set globally (repoDefaults) or per-repo (repos[key]).
+ *
+ * Every field is scalar or an array — deliberately never a nested object. The
+ * resolver merges per *field*, so an object-valued field would have a repo
+ * override silently replace the whole map rather than merging entries. Keying
+ * the stage lists by stage (rather than a `Record<stateName, stage>`) keeps
+ * "replace wholesale" the semantics a reader actually expects.
+ */
 export interface RepoSettings {
   defaultBaseBranch?: string;
   /** true → `wtm create`; false → `git worktree add`. */
@@ -20,6 +34,19 @@ export interface RepoSettings {
   autoLaunchAgent?: boolean;
   sessionNameTemplate?: string;
   claudeCommand?: string;
+
+  // Stage projection: raw tracker state names, matched case-insensitively.
+  // States left unlisted fall back to the tracker's own stateType category.
+  ideaStates?: string[];
+  activeStates?: string[];
+  parkedStates?: string[];
+  doneStates?: string[];
+
+  // Status writes. null means "never write on this event" — the default, so
+  // jmux touches nobody's tracker until explicitly told to.
+  onSessionStartState?: string | null;
+  onMrOpenState?: string | null;
+  onMrMergedState?: string | null;
 }
 
 /** Fully-resolved settings — every field present. */
@@ -29,6 +56,13 @@ export interface ResolvedRepoSettings {
   autoLaunchAgent: boolean;
   sessionNameTemplate: string;
   claudeCommand: string;
+  ideaStates: string[];
+  activeStates: string[];
+  parkedStates: string[];
+  doneStates: string[];
+  onSessionStartState: string | null;
+  onMrOpenState: string | null;
+  onMrMergedState: string | null;
 }
 
 export const REPO_SETTING_DEFAULTS: ResolvedRepoSettings = {
@@ -37,11 +71,26 @@ export const REPO_SETTING_DEFAULTS: ResolvedRepoSettings = {
   autoLaunchAgent: true,
   sessionNameTemplate: "{identifier}",
   claudeCommand: "claude",
+  ideaStates: [],
+  activeStates: [],
+  parkedStates: [],
+  doneStates: [],
+  onSessionStartState: null,
+  onMrOpenState: null,
+  onMrMergedState: null,
 };
 
 /**
- * Three-tier resolution: per-repo override ?? global default ?? base default.
- * `??` (not `||`) so explicit `false` / `""` overrides win.
+ * Three-tier resolution: per-repo override, else global default, else base.
+ *
+ * Only `undefined` counts as "not set". `null`, `false` and `""` are real
+ * values that win — `null` in particular is load-bearing for the transition
+ * fields, where it means "never write" and must not fall through to a lower
+ * tier that says otherwise.
+ *
+ * Fields are enumerated from `base`, so adding one to RepoSettings needs no
+ * change here — only an entry in REPO_SETTING_DEFAULTS.
+ *
  * `base` lets the caller swap the hardcoded base for a per-repo seed
  * (e.g. wtmIntegration seeded from runtime bare-repo detection).
  */
@@ -50,15 +99,15 @@ export function resolveRepoSettings(
   override: RepoSettings | undefined,
   base: ResolvedRepoSettings = REPO_SETTING_DEFAULTS,
 ): ResolvedRepoSettings {
-  const pick = <K extends keyof ResolvedRepoSettings>(k: K): ResolvedRepoSettings[K] =>
-    (override?.[k] ?? repoDefaults?.[k] ?? base[k]) as ResolvedRepoSettings[K];
-  return {
-    defaultBaseBranch: pick("defaultBaseBranch"),
-    wtmIntegration: pick("wtmIntegration"),
-    autoLaunchAgent: pick("autoLaunchAgent"),
-    sessionNameTemplate: pick("sessionNameTemplate"),
-    claudeCommand: pick("claudeCommand"),
-  };
+  const out = {} as Record<string, unknown>;
+  for (const key of Object.keys(base)) {
+    const o = (override as Record<string, unknown> | undefined)?.[key];
+    if (o !== undefined) { out[key] = o; continue; }
+    const d = (repoDefaults as Record<string, unknown> | undefined)?.[key];
+    if (d !== undefined) { out[key] = d; continue; }
+    out[key] = (base as unknown as Record<string, unknown>)[key];
+  }
+  return out as unknown as ResolvedRepoSettings;
 }
 
 export type GitRun = (args: string[]) => string | null;
