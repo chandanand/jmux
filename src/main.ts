@@ -1197,7 +1197,7 @@ function transitionConfirmMode(): "always" | "undo-toast" | "never" {
 function undoChipLabel(): string | null {
   if (!pendingUndo) return null;
   if (Date.now() > pendingUndo.expiresAt) { pendingUndo = null; return null; }
-  return `${pendingUndo.identifier} → ${pendingUndo.to}  ^a z undo`;
+  return `${pendingUndo.identifier} → ${pendingUndo.to}  ^a Z undo`;
 }
 
 async function applyTransition(

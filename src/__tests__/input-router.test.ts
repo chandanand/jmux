@@ -1788,3 +1788,58 @@ describe("panel split handle", () => {
     expect(calls.itemClicks.length).toBeGreaterThan(0);
   });
 });
+
+// --- Work-pipeline prefix chords ---
+//
+// The soft prefix intercept swallows whatever byte follows Ctrl-a, so every
+// chord added here is a key taken away from tmux. These tests pin both halves:
+// the chords jmux claims, and — more importantly — the high-traffic tmux keys
+// it must NOT claim. `c` is tmux's new-window and `z` is pane zoom; an earlier
+// draft of this feature bound both and silently broke them.
+
+function pipelineRouter(sink: { calls: string[]; pty: string[] }): InputRouter {
+  return new InputRouter(
+    {
+      onPtyData: (d) => { sink.pty.push(d); },
+      onSidebarClick: () => {},
+      onCaptureIssue: () => { sink.calls.push("capture"); },
+      onStartUpNext: () => { sink.calls.push("upnext"); },
+      onUndoTransition: () => { sink.calls.push("undo"); },
+    },
+    baseLayout(24),
+  );
+}
+
+describe("work-pipeline prefix chords", () => {
+  const chord = (key: string) => {
+    const sink = { calls: [] as string[], pty: [] as string[] };
+    const router = pipelineRouter(sink);
+    router.handleInput("\x01");
+    router.handleInput(key);
+    return sink;
+  };
+
+  test("Ctrl-a a opens the capture composer", () => {
+    expect(chord("a").calls).toEqual(["capture"]);
+  });
+
+  test("Ctrl-a u starts the next queued issue", () => {
+    expect(chord("u").calls).toEqual(["upnext"]);
+  });
+
+  test("Ctrl-a Z undoes the last status write", () => {
+    expect(chord("Z").calls).toEqual(["undo"]);
+  });
+
+  test("Ctrl-a c is left to tmux (new window), not stolen for capture", () => {
+    const sink = chord("c");
+    expect(sink.calls).toEqual([]);
+    expect(sink.pty.join("")).toContain("c");
+  });
+
+  test("Ctrl-a z is left to tmux (pane zoom), not stolen for undo", () => {
+    const sink = chord("z");
+    expect(sink.calls).toEqual([]);
+    expect(sink.pty.join("")).toContain("z");
+  });
+});

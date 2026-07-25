@@ -404,9 +404,9 @@ export class InputRouter {
           if (data === "p") { this.opts.onModalToggle?.(); return; }
           if (data === "n") { this.opts.onNewSession?.(); return; }
           if (data === "i") { this.opts.onSettings?.(); return; }
-          if (data === "c") { this.opts.onCaptureIssue?.(); return; }
+          if (data === "a") { this.opts.onCaptureIssue?.(); return; }
           if (data === "u") { this.opts.onStartUpNext?.(); return; }
-          if (data === "z") { this.opts.onUndoTransition?.(); return; }
+          if (data === "Z") { this.opts.onUndoTransition?.(); return; }
           if (data === "I") { this.opts.onSettingsScreen?.(); return; }
           if (data === "G") { this.opts.onGroupCycle?.(); return; }
           if (data === "s") { this.opts.onSortCycle?.(); return; }
@@ -431,7 +431,9 @@ export class InputRouter {
           return;
         }
         // Capture: file an issue from wherever you are, without losing your place.
-        if (data === "c") {
+        // `a` not `c`: `c` is tmux's new-window and stealing it would be a
+        // regression. Same reason undo is `Z` — `z` is pane/panel zoom.
+        if (data === "a") {
           this.opts.onCaptureIssue?.();
           return;
         }
@@ -441,7 +443,7 @@ export class InputRouter {
           return;
         }
         // Take back the last status write, while the undo window is open.
-        if (data === "z") {
+        if (data === "Z") {
           this.opts.onUndoTransition?.();
           return;
         }

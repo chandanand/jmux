@@ -32,6 +32,11 @@ The sidebar shows all sessions with:
 | `Ctrl-a r` | Rename current session |
 | `Ctrl-a m` | Move current window to another session |
 
+Park a handed-off session (or bring one back) from the palette: **Park session**
+/ **Unpark session**. Parked sessions collapse into a single row at the bottom of
+the sidebar and pop back out automatically when their issue, MR or agent needs
+you — see [Issue Tracking](issue-tracking.md#parking-the-back-burner).
+
 ---
 
 ## Windows
@@ -140,6 +145,16 @@ See [issue-tracking.md](issue-tracking.md) for setup and configuration.
 | `Ctrl-a k` | Clear pane content + scrollback |
 | `Ctrl-a y` | Copy entire pane content to clipboard |
 | `Ctrl-a i` | Settings |
+
+---
+
+## Work Pipeline
+
+| Key | Action |
+|-----|--------|
+| `Ctrl-a a` | Capture a new issue (`Enter` files it, `Ctrl-S` files it and starts work) |
+| `Ctrl-a u` | Start the next issue from your queue rotation |
+| `Ctrl-a Z` | Undo the last status write to your tracker |
 
 ---
 

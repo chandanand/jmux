@@ -376,7 +376,7 @@ issue moves on, so it can't silently suppress parking forever.
 Sessions with no linked issue can auto-park on idleness instead
 (`pipeline.autoParkIdleDays`).
 
-### Capture (`Ctrl-a c`)
+### Capture (`Ctrl-a a`)
 
 One composer, two commit keys:
 
@@ -439,11 +439,11 @@ so attaching to an old session cannot replay history into your tracker.
 
 | Mode | Behaviour |
 |------|-----------|
-| `undo-toast` (default) | Writes, then shows `TRA-123 → QA  ^a z undo` in the toolbar for 20s |
+| `undo-toast` (default) | Writes, then shows `TRA-123 → QA  ^a Z undo` in the toolbar for 20s |
 | `always` | Asks before every write |
 | `never` | Writes silently |
 
-`Ctrl-a z` takes the last write back while the toast is up.
+`Ctrl-a Z` takes the last write back while the toast is up.
 
 ---
 
