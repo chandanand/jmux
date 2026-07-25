@@ -58,7 +58,7 @@ describe("Restorer.run sequence", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async (p: string) => p === "/repos/foo",
     });
     await r.run(snapshot());
@@ -94,7 +94,7 @@ describe("Restorer.run sequence", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async (p: string) => p === "/repos/foo",
     });
     await r.run(snapshot());
@@ -121,7 +121,7 @@ describe("Restorer.run sequence", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async (p: string) => p === "/repos/foo",
     });
     await r.run(snapshot());
@@ -173,7 +173,7 @@ describe("Restorer base-index bootstrap", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async () => true,
     });
     await r.run(snapshotWithBaseIndex(1));
@@ -201,7 +201,7 @@ describe("Restorer base-index bootstrap", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async () => true,
     });
     await r.run(snapshotWithBaseIndex(0));
@@ -230,7 +230,7 @@ describe("Restorer base-index bootstrap", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async () => true,
     });
     await r.run(snap);
@@ -251,7 +251,7 @@ describe("Restorer base-index bootstrap", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async () => false,
     });
     await r.run(snapshotWithBaseIndex(1));
@@ -271,7 +271,7 @@ describe("Restorer base-index bootstrap", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       configFile: "/path/to/jmux/config/tmux.conf",
       cwdExists: async () => true,
     });

@@ -90,7 +90,7 @@ describe("Restorer links upsert", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async () => true,
       sessionLinksSink: (name, links) => calls.push({ name, links }),
     });
@@ -112,7 +112,7 @@ describe("Restorer links upsert", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async () => false,
       sessionLinksSink: (name) => calls.push({ name }),
     });
@@ -131,7 +131,7 @@ describe("Restorer — every sink dispatches", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async () => true,
       sessionLinksSink: () => events.push("links"),
       permissionModeSink: () => events.push("permissionMode"),
@@ -152,7 +152,7 @@ describe("Restorer — every sink dispatches", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async () => false,
       sessionLinksSink: () => events.push("links"),
       permissionModeSink: () => events.push("permissionMode"),
@@ -231,7 +231,7 @@ describe("Restorer agentStateSink", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async () => true,
       agentStateSink: (name, state) => calls.push({ name, state }),
     });
@@ -251,7 +251,7 @@ describe("Restorer agentStateSink", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async () => false,
       agentStateSink: (name) => calls.push({ name }),
     });

@@ -9,6 +9,7 @@ import {
   loadUserConfig,
   type JmuxConfig,
 } from "../config";
+import { RepoFactsCache, resolveForRepo } from "../repo-settings";
 import { INTERNAL_SESSION_FILTER } from "../glass/internal-sessions";
 import { LinearAdapter } from "../adapters/linear";
 import { buildLinearPrompt } from "../adapters/linear-prompt";
@@ -354,10 +355,12 @@ async function issueStart(
 
   const branchName = computeBranchName(issueId, issue);
   const sessionName = sanitizeTmuxSessionName(branchName);
+  // Settings resolve against the repo this issue routes to, not the CLI's cwd.
+  const repoSettings = resolveForRepo(config, new RepoFactsCache().get(repo));
   const baseBranch =
     typeof flags["base-branch"] === "string"
       ? flags["base-branch"]
-      : config.issueWorkflow?.defaultBaseBranch ?? "main";
+      : repoSettings.defaultBaseBranch;
   const worktreePath = computeWorktreePath(repo, branchName);
 
   createWorktree(repo, worktreePath, branchName, baseBranch);
@@ -366,7 +369,7 @@ async function issueStart(
   const launchAgent = !flags["no-launch-agent"];
   let launchCmd: string | null = null;
   if (launchAgent) {
-    const claudeCmd = config.claudeCommand ?? "claude";
+    const claudeCmd = repoSettings.claudeCommand;
     const shell = process.env.SHELL ?? "/bin/sh";
     let promptFile: string | null = null;
     if (issue) {

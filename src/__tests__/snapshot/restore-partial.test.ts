@@ -115,7 +115,7 @@ describe("Restorer zero-pane window handling", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async () => true,
     });
     await r.run(snapshot);
@@ -157,7 +157,7 @@ describe("Restorer zero-pane window handling", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async () => true,
     });
     await r.run(snapshot);
@@ -195,7 +195,7 @@ describe("Restorer partial failure", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async () => true,
     });
     await r.run(twoSessions());
@@ -225,7 +225,7 @@ describe("Restorer partial failure", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async () => true,
     });
     await r.run(twoSessions());

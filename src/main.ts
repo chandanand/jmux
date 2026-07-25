@@ -53,6 +53,14 @@ import type { SessionInfo, WindowTab, PaletteCommand, PaletteResult, AgentState 
 import { loadProjectDirsCache, saveProjectDirsCache } from "./project-dirs-cache";
 import { ConfigStore, sanitizeTmuxSessionName } from "./config";
 import {
+  RepoFactsCache,
+  resolveForRepo,
+  buildWorktreeCommand,
+  REPO_SETTING_DEFAULTS,
+  type RepoSettings,
+  type ResolvedRepoSettings,
+} from "./repo-settings";
+import {
   resolveStateColors,
   STATE_COLOR_NAMES,
   DEFAULT_STATE_COLORS,
@@ -295,7 +303,35 @@ const toolbarEnabled = true;
 // startup; changing it requires a restart (toolbarHeight feeds PTY sizing).
 const windowBranchesEnabled = configStore.config.windowBranches === true;
 const toolbarHeight = toolbarEnabled ? (windowBranchesEnabled ? 2 : 1) : 0;
-let claudeCommand = configStore.config.claudeCommand || "claude";
+// Per-repo workflow settings. Only the git facts are cached (see RepoFactsCache);
+// the config half is read fresh on every resolution so a settings edit applies
+// without an invalidation step. There is deliberately no module-level
+// `claudeCommand` any more — the answer depends on which repo you are asking about.
+const repoFacts = new RepoFactsCache();
+
+/** Effective workflow settings for a directory. A null dir yields global defaults. */
+function repoSettingsFor(dir: string | null | undefined): ResolvedRepoSettings {
+  if (!dir) return resolveForRepo(configStore.config, { key: null, bare: false });
+  return resolveForRepo(configStore.config, repoFacts.get(dir));
+}
+
+/** The directory a live session is rooted in, or null if we don't know it yet. */
+function sessionDir(name: string): string | null {
+  const session = currentSessions.find((s) => s.name === name);
+  return session ? (sessionDetailsCache.get(session.id)?.directory ?? null) : null;
+}
+
+/** Effective settings for the session the user is currently attached to. */
+function currentRepoSettings(): ResolvedRepoSettings {
+  const name = currentSessions.find((s) => s.id === currentSessionId)?.name;
+  return repoSettingsFor(name ? sessionDir(name) : null);
+}
+
+/** The global-default tier alone, with built-in defaults filled in. */
+function repoDefaultsView(): ResolvedRepoSettings {
+  return resolveForRepo({ repoDefaults: configStore.config.repoDefaults }, { key: null, bare: false });
+}
+
 let cacheTimersEnabled = configStore.config.cacheTimers !== false;
 let autoPinAgentPanes = configStore.config.autoPinAgentPanes === true;
 let agentPaneRegex = configStore.config.agentPaneCommandRegex ?? "codex";
@@ -602,7 +638,7 @@ async function performBoot(opts: {
     clock,
     jmuxVersion: process.env.JMUX_VERSION ?? "dev",
     userShell: process.env.SHELL ?? "/bin/sh",
-    claudeCommand: opts.config.claudeCommand ?? "claude",
+    resolveClaudeCommand: (cwd) => repoSettingsFor(cwd).claudeCommand,
     configFile: opts.configFile,
     // If our held lock is reclaimed while running, tell the Snapshotter so it
     // stops capturing and surfaces `error` instead of silently double-writing.
@@ -2220,7 +2256,10 @@ const inputRouter = new InputRouter(
         if (!session) return;
 
         const expandedDir = repoDir.replace("~", homedir());
-        const baseBranch = workflow?.defaultBaseBranch ?? "main";
+        // Settings resolve against the *issue's* repo, not the session the user
+        // happens to be sitting in — the issue panel is a cross-repo union.
+        const settings = repoSettingsFor(expandedDir);
+        const baseBranch = settings.defaultBaseBranch;
 
         try {
           // Seed the first user message for Claude by writing the issue prompt
@@ -2228,7 +2267,7 @@ const inputRouter = new InputRouter(
           // takes its content as a positional argument (the documented
           // interactive-seed form). Without this the pane falls back to
           // `exec $SHELL` so the session is usable even if the agent is off.
-          const shouldLaunchAgent = workflow?.autoLaunchAgent !== false && !!adapters.issueTracker;
+          const shouldLaunchAgent = settings.autoLaunchAgent && !!adapters.issueTracker;
           let promptTmp: string | null = null;
           if (shouldLaunchAgent) {
             const prompt = adapters.issueTracker!.buildPrompt(issue);
@@ -2239,7 +2278,7 @@ const inputRouter = new InputRouter(
           // isn't ejected from the session. Use a double-quoted command sub so
           // `cat` reads the prompt verbatim without word-splitting.
           const claudeFragment = promptTmp
-            ? `${claudeCommand} "$(cat ${promptTmp})"; rm -f ${promptTmp}; exec $SHELL`
+            ? `${settings.claudeCommand} "$(cat ${promptTmp})"; rm -f ${promptTmp}; exec $SHELL`
             : `exec $SHELL`;
 
           // STATE 2: Worktree exists but no session → launch claude directly
@@ -2253,50 +2292,37 @@ const inputRouter = new InputRouter(
             return;
           }
 
-          // STATE 1: Nothing exists → create worktree + session
-          const isBare = Bun.spawnSync(
-            ["git", "--git-dir", `${expandedDir}/.git`, "config", "--get", "core.bare"],
-            { stdout: "pipe", stderr: "ignore" },
-          ).stdout.toString().trim() === "true";
-
-          // Use Linear's branch name for the git branch
-          let branchName: string;
-          if (issue.branchName) {
-            branchName = issue.branchName;
-          } else {
-            const template = workflow?.sessionNameTemplate ?? "{identifier}";
-            branchName = template
-              .replace("{identifier}", issue.identifier.toLowerCase())
-              .replace("{title}", issue.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40));
-          }
-
-          if (isBare) {
-            const wtPath = `${expandedDir}/${session}`;
-            // Main (left) pane runs claude — but first it has to wait for the
-            // sibling setup pane to materialize the worktree directory. Tmux
-            // wants a cwd that exists at split time, so we open the pane in
-            // the bare repo root and have the shell cd into the worktree once
-            // wtm finishes.
-            const mainCmd = `while [ ! -d ${tq(wtPath)} ]; do sleep 0.2; done; cd ${tq(wtPath)}; ${claudeFragment}`;
-            await control.sendCommand(
-              `new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(expandedDir)} ${tq(mainCmd)}`,
-            );
-            // Setup (right) pane runs wtm and exits on success — no trailing
-            // `exec $SHELL` so the pane auto-closes. On failure we drop to a
-            // shell so the user can see the error (without this, the pane
-            // would vanish and the main pane would wait forever for a worktree
-            // that never gets created). `-d` keeps focus on claude; `-l 30%`
-            // makes setup narrow and leaves claude with ~70%.
-            const setupCmd = `wtm create ${session} --from ${baseBranch} --no-shell || exec $SHELL`;
-            await control.sendCommand(
-              `split-window -h -d -l 30% -t ${tq(session)} -c ${tq(expandedDir)} ${tq(setupCmd)}`,
-            );
-          } else {
-            Bun.spawnSync(["git", "checkout", "-b", branchName, baseBranch], { cwd: expandedDir, stdout: "ignore", stderr: "ignore" });
-            await control.sendCommand(
-              `new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(expandedDir)} ${tq(claudeFragment)}`,
-            );
-          }
+          // STATE 1: Nothing exists → create worktree + session. Every issue
+          // gets a worktree; `wtmIntegration` picks the mechanism only, so
+          // both paths land the same `<repo>/<session>` directory and the
+          // session name doubles as the branch name (the one-name rule).
+          const wtPath = `${expandedDir}/${session}`;
+          // Main (left) pane runs claude — but first it has to wait for the
+          // sibling setup pane to materialize the worktree directory. Tmux
+          // wants a cwd that exists at split time, so we open the pane in
+          // the repo root and have the shell cd into the worktree once
+          // creation finishes.
+          const mainCmd = `while [ ! -d ${tq(wtPath)} ]; do sleep 0.2; done; cd ${tq(wtPath)}; ${claudeFragment}`;
+          await control.sendCommand(
+            `new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(expandedDir)} ${tq(mainCmd)}`,
+          );
+          // Setup (right) pane creates the worktree and exits on success — no
+          // trailing `exec $SHELL` so the pane auto-closes. On failure we drop
+          // to a shell so the user can see the error (without this, the pane
+          // would vanish and the main pane would wait forever for a worktree
+          // that never gets created). `-d` keeps focus on claude; `-l 30%`
+          // makes setup narrow and leaves claude with ~70%.
+          const createCmd = buildWorktreeCommand({
+            wtm: settings.wtmIntegration,
+            session,
+            baseBranch,
+            noShell: true,
+          });
+          await control.sendCommand(
+            `split-window -h -d -l 30% -t ${tq(session)} -c ${tq(expandedDir)} ${tq(`${createCmd} || exec $SHELL`)}`,
+          );
+          // The new worktree changes what git reports for these paths.
+          repoFacts.clear();
 
           await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(session)}`);
           sessionState.addLink(session, { type: "issue", id: issue.id });
@@ -2733,9 +2759,13 @@ function buildPaletteCommands(): PaletteCommand[] {
     category: "setting",
   });
 
+  // The palette edits *global defaults*; per-repo overrides are the settings
+  // screen's "This repo" category. Label and action therefore both read the
+  // default tier, so what you see is what the keypress changes.
+  const repoNow = repoDefaultsView();
   commands.push({
     id: "setting-wtm",
-    label: `wtm integration: ${cfg.wtmIntegration !== false ? "on" : "off"}`,
+    label: `wtm integration: ${repoNow.wtmIntegration ? "on" : "off"}`,
     category: "setting",
   });
   commands.push({
@@ -2788,7 +2818,7 @@ function buildPaletteCommands(): PaletteCommand[] {
   const wf = cfg.issueWorkflow;
   commands.push({
     id: "setting-default-branch",
-    label: `Default base branch: ${wf?.defaultBaseBranch ?? "main"}`,
+    label: `Default base branch: ${repoNow.defaultBaseBranch}`,
     category: "setting",
   });
   commands.push({
@@ -2798,17 +2828,12 @@ function buildPaletteCommands(): PaletteCommand[] {
   });
   commands.push({
     id: "setting-session-template",
-    label: `Session name template: ${wf?.sessionNameTemplate ?? "{identifier}"}`,
-    category: "setting",
-  });
-  commands.push({
-    id: "setting-auto-worktree",
-    label: `Auto-create worktree: ${wf?.autoCreateWorktree !== false ? "on" : "off"}`,
+    label: `Session name template: ${repoNow.sessionNameTemplate}`,
     category: "setting",
   });
   commands.push({
     id: "setting-auto-agent",
-    label: `Auto-launch agent: ${wf?.autoLaunchAgent !== false ? "on" : "off"}`,
+    label: `Auto-launch agent: ${repoNow.autoLaunchAgent ? "on" : "off"}`,
     category: "setting",
   });
 
@@ -2859,6 +2884,78 @@ function currentStateColorName(state: AgentState): string {
 
 function persistStateColor(state: AgentState, name: string): void {
   configStore.set("stateColors", { ...configStore.config.stateColors, [state]: name });
+}
+
+// The per-repo settings, described once and rendered into two tiers: the
+// global-default rows under "Issue Workflow", and the override rows under a
+// "This repo" category that only appears when the active session is inside a
+// repo. Describing them once is what keeps the two tiers from drifting.
+const REPO_SETTING_ROWS: Array<{
+  id: string;
+  label: string;
+  field: keyof RepoSettings;
+  kind: "text" | "boolean";
+}> = [
+  { id: "default-branch", label: "Default base branch", field: "defaultBaseBranch", kind: "text" },
+  { id: "session-template", label: "Session name template", field: "sessionNameTemplate", kind: "text" },
+  { id: "claude-command", label: "Claude command", field: "claudeCommand", kind: "text" },
+  { id: "wtm", label: "wtm integration", field: "wtmIntegration", kind: "boolean" },
+  { id: "auto-agent", label: "Auto-launch agent", field: "autoLaunchAgent", kind: "boolean" },
+];
+
+/** Global-default rows — these write to `repoDefaults`. */
+function repoDefaultSettings(): SettingDef[] {
+  const shown = (field: keyof RepoSettings): string => {
+    const v = configStore.config.repoDefaults?.[field] ?? REPO_SETTING_DEFAULTS[field];
+    return typeof v === "boolean" ? (v ? "on" : "off") : String(v);
+  };
+  return REPO_SETTING_ROWS.map((row) => row.kind === "boolean"
+    ? {
+        id: row.id, label: row.label, type: "boolean" as const,
+        getValue: () => shown(row.field),
+        onToggle: () => configStore.setRepoDefault(row.field, shown(row.field) !== "on" as never),
+      }
+    : {
+        id: row.id, label: row.label, type: "text" as const,
+        getValue: () => shown(row.field),
+        onTextCommit: (v: string) => configStore.setRepoDefault(row.field, v as never),
+      });
+}
+
+/**
+ * Override rows for the repo the active session lives in. Absent entirely when
+ * there is no repo-backed session — an override category with nothing to
+ * override would just be a second, confusing copy of the defaults.
+ */
+function currentRepoCategory(): SettingsCategory[] {
+  const name = currentSessions.find((s) => s.id === currentSessionId)?.name;
+  const dir = name ? sessionDir(name) : null;
+  if (!dir) return [];
+  const key = repoFacts.get(dir).key;
+  if (!key) return [];
+
+  const label = key.replace(/\/\.git$/, "").split("/").pop() ?? key;
+  const effective = () => repoSettingsFor(dir);
+  const scopeOf = (field: keyof RepoSettings) =>
+    configStore.config.repos?.[key]?.[field] !== undefined ? "override" as const : "inherited" as const;
+  const shown = (field: keyof RepoSettings): string => {
+    const v = effective()[field as keyof ResolvedRepoSettings];
+    return typeof v === "boolean" ? (v ? "on" : "off") : String(v);
+  };
+
+  const settings: SettingDef[] = REPO_SETTING_ROWS.map((row) => ({
+    id: `repo-${row.id}`,
+    label: row.label,
+    type: row.kind,
+    getValue: () => shown(row.field),
+    getScope: () => scopeOf(row.field),
+    onClearOverride: () => configStore.clearRepoOverride(key, row.field),
+    ...(row.kind === "boolean"
+      ? { onToggle: () => configStore.setRepoOverride(key, row.field, (shown(row.field) !== "on") as never) }
+      : { onTextCommit: (v: string) => configStore.setRepoOverride(key, row.field, v as never) }),
+  }));
+
+  return [{ label: `This repo · ${label}`, collapsed: false, settings }];
 }
 
 function buildSettingsCategories(): SettingsCategory[] {
@@ -2959,37 +3056,13 @@ function buildSettingsCategories(): SettingsCategory[] {
           options: ["linear", "github", "none"],
           onOptionSelect: (v) => configStore.setAdapter("issueTracker", v === "none" ? null : { type: v }),
         },
-        {
-          id: "claude-command", label: "Claude command", type: "text" as const,
-          getValue: () => claudeCommand,
-          onTextCommit: (v) => { claudeCommand = v; configStore.set("claudeCommand", v); },
-        },
       ],
     },
     {
       label: "Issue Workflow",
       collapsed: false,
       settings: [
-        {
-          id: "default-branch", label: "Default base branch", type: "text" as const,
-          getValue: () => wf()?.defaultBaseBranch ?? "main",
-          onTextCommit: (v) => configStore.setWorkflow("defaultBaseBranch", v),
-        },
-        {
-          id: "session-template", label: "Session name template", type: "text" as const,
-          getValue: () => wf()?.sessionNameTemplate ?? "{identifier}",
-          onTextCommit: (v) => configStore.setWorkflow("sessionNameTemplate", v),
-        },
-        {
-          id: "auto-worktree", label: "Auto-create worktree", type: "boolean" as const,
-          getValue: () => wf()?.autoCreateWorktree !== false ? "on" : "off",
-          onToggle: () => configStore.setWorkflow("autoCreateWorktree", wf()?.autoCreateWorktree === false),
-        },
-        {
-          id: "auto-agent", label: "Auto-launch agent", type: "boolean" as const,
-          getValue: () => wf()?.autoLaunchAgent !== false ? "on" : "off",
-          onToggle: () => configStore.setWorkflow("autoLaunchAgent", wf()?.autoLaunchAgent === false),
-        },
+        ...repoDefaultSettings(),
         {
           id: "team-repo-map", label: "Team → repo mappings", type: "map" as const,
           getValue: () => {
@@ -3032,6 +3105,7 @@ function buildSettingsCategories(): SettingsCategory[] {
         },
       ],
     },
+    ...currentRepoCategory(),
   ];
 }
 
@@ -3075,7 +3149,7 @@ function resolveIssueSessionName(issue: import("./adapters/types").Issue): strin
   if (issue.branchName) {
     branchName = issue.branchName;
   } else {
-    const template = workflow?.sessionNameTemplate ?? "{identifier}";
+    const template = repoSettingsFor(repoDir.replace("~", homedir())).sessionNameTemplate;
     branchName = template
       .replace("{identifier}", issue.identifier.toLowerCase())
       .replace("{title}", issue.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40));
@@ -3450,7 +3524,13 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
               // directory but a `foo_bar` session, drifting the two apart.
               const session = sanitizeTmuxSessionName(result.name);
               const wtPath = `${result.dir}/${session}`;
-              const cmd = `wtm create ${session} --from ${result.baseBranch} --no-shell; cd ${session}; exec $SHELL`;
+              const createCmd = buildWorktreeCommand({
+                wtm: repoSettingsFor(result.dir).wtmIntegration,
+                session,
+                baseBranch: result.baseBranch,
+                noShell: true,
+              });
+              const cmd = `${createCmd}; cd ${session}; exec $SHELL`;
               await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(result.dir)} ${tq(cmd)}`);
               const waitCmd = `while [ ! -d ${tq(wtPath)} ]; do sleep 0.2; done; cd ${tq(wtPath)} && exec $SHELL`;
               await control.sendCommand(`split-window -h -d -t ${tq(session)} -c ${tq(result.dir)} ${tq(waitCmd)}`);
@@ -3578,20 +3658,18 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       return;
     }
     case "setting-wtm": {
-      const current = configStore.config.wtmIntegration !== false;
-      configStore.set("wtmIntegration", !current);
+      configStore.setRepoDefault("wtmIntegration", !repoDefaultsView().wtmIntegration);
       return;
     }
     case "setting-claude-command": {
-      const current = configStore.config.claudeCommand ?? "claude";
       const modal = new InputModal({
         header: "Claude Command",
-        subheader: "Command to launch Claude Code from toolbar",
-        value: current,
+        subheader: "Command to launch Claude Code from toolbar (global default)",
+        value: repoDefaultsView().claudeCommand,
       });
       modal.open();
       openModal(modal, async (value) => {
-        configStore.set("claudeCommand", value as string);
+        configStore.setRepoDefault("claudeCommand", value as string);
       });
       return;
     }
@@ -3672,15 +3750,14 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       return;
     }
     case "setting-default-branch": {
-      const current = configStore.config.issueWorkflow?.defaultBaseBranch ?? "main";
       const modal = new InputModal({
         header: "Default Base Branch",
-        subheader: "Branch to create worktrees from",
-        value: current,
+        subheader: "Branch to create worktrees from (global default)",
+        value: repoDefaultsView().defaultBaseBranch,
       });
       modal.open();
       openModal(modal, async (value) => {
-        configStore.setWorkflow("defaultBaseBranch", value as string);
+        configStore.setRepoDefault("defaultBaseBranch", value as string);
       });
       return;
     }
@@ -3741,26 +3818,19 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       return;
     }
     case "setting-session-template": {
-      const current = configStore.config.issueWorkflow?.sessionNameTemplate ?? "{identifier}";
       const modal = new InputModal({
         header: "Session Name Template",
-        subheader: "Variables: {identifier}, {title}",
-        value: current,
+        subheader: "Variables: {identifier}, {title} (global default)",
+        value: repoDefaultsView().sessionNameTemplate,
       });
       modal.open();
       openModal(modal, async (value) => {
-        configStore.setWorkflow("sessionNameTemplate", value as string);
+        configStore.setRepoDefault("sessionNameTemplate", value as string);
       });
       return;
     }
-    case "setting-auto-worktree": {
-      const current = configStore.config.issueWorkflow?.autoCreateWorktree !== false;
-      configStore.setWorkflow("autoCreateWorktree", !current);
-      return;
-    }
     case "setting-auto-agent": {
-      const current = configStore.config.issueWorkflow?.autoLaunchAgent !== false;
-      configStore.setWorkflow("autoLaunchAgent", !current);
+      configStore.setRepoDefault("autoLaunchAgent", !repoDefaultsView().autoLaunchAgent);
       return;
     }
     case "link-issue": {
@@ -3886,7 +3956,7 @@ async function handleToolbarAction(id: string): Promise<void> {
       await toggleDiffPanel();
       return;
     case "claude":
-      await control.sendCommand(`split-window -t ${ptyClientName} -h -c '#{pane_current_path}' ${claudeCommand}`);
+      await control.sendCommand(`split-window -t ${ptyClientName} -h -c '#{pane_current_path}' ${currentRepoSettings().claudeCommand}`);
       return;
     case "settings": {
       const settingsCommands = buildPaletteCommands().filter(c => c.category === "setting");
@@ -4004,8 +4074,8 @@ try {
   configWatcher = watch(configStore.configPath, () => {
     const updated = configStore.reload();
     const newWidth = updated.sidebarWidth || 26;
-    const newClaudeCmd = updated.claudeCommand || "claude";
-    claudeCommand = newClaudeCmd;
+    // No claudeCommand to refresh here: it is resolved per repo at each use
+    // site, so an external config edit takes effect on the next resolution.
     const newCacheTimers = updated.cacheTimers !== false;
     if (newCacheTimers !== cacheTimersEnabled) {
       cacheTimersEnabled = newCacheTimers;
