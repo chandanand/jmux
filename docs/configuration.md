@@ -121,7 +121,6 @@ jmux's own settings (not tmux settings) live in `~/.config/jmux/config.json`. Ed
   "sidebarWidth": 26,
   "infoPanelWidth": 80,
   "infoPanelSplitRatio": 0.5,
-  "claudeCommand": "claude",
   "cacheTimers": true,
   "stateColors": {
     "running": "green",
@@ -133,7 +132,6 @@ jmux's own settings (not tmux settings) live in `~/.config/jmux/config.json`. Ed
     { "id": "default", "name": "Main" }
   ],
   "projectDirs": ["~/Code", "~/Projects"],
-  "wtmIntegration": true,
   "diffPanel": {
     "splitRatio": 0.4,
     "hunkCommand": "hunk"
@@ -143,15 +141,54 @@ jmux's own settings (not tmux settings) live in `~/.config/jmux/config.json`. Ed
     "issueTracker": { "type": "linear" }
   },
   "issueWorkflow": {
-    "teamRepoMap": {},
+    "teamRepoMap": {}
+  },
+  "repoDefaults": {
     "defaultBaseBranch": "main",
-    "autoCreateWorktree": true,
+    "wtmIntegration": true,
     "autoLaunchAgent": true,
-    "sessionNameTemplate": "{identifier}"
+    "sessionNameTemplate": "{identifier}",
+    "claudeCommand": "claude"
+  },
+  "repos": {},
+  "pipeline": {
+    "parkStages": [],
+    "unparkOn": ["state-regression", "issue-comment", "mr-activity", "pipeline-failed"],
+    "autoParkIdleDays": null,
+    "transitionConfirm": "undo-toast",
+    "upNext": []
   },
   "panelViews": []
 }
 ```
+
+### Per-repo settings (`repoDefaults` / `repos`)
+
+Some settings are properties of a **repo**, not of you or the UI — the trunk
+branch, whether the repo is wtm-managed, the agent command. Those live in
+`repoDefaults` (the global default) and `repos` (per-repo overrides), resolved
+as:
+
+```
+repos[repoKey].x  ??  repoDefaults.x  ??  built-in default
+```
+
+The repo key is the canonical **git common dir**, which is identical for a
+repo's main checkout and every one of its worktrees, so all sessions in a repo
+resolve to one entry. jmux migrates older configs into this shape once, on
+first launch — the previous `claudeCommand` / `wtmIntegration` top-level keys
+and the `issueWorkflow` workflow keys move to `repoDefaults` automatically.
+
+The settings screen (`Ctrl-a i`) shows both tiers: the global rows under
+**Issue Workflow**, and a **This repo** category for the repo your active
+session lives in, where each row is marked `(inherited)` or `(override)` and
+`d` clears an override back to inherited.
+
+`teamRepoMap` deliberately stays under `issueWorkflow`: it is the cross-repo
+routing index that maps a tracker team *onto* a repo, so it cannot itself be
+per-repo.
+
+See `docs/adr/0004-per-repo-settings-keyed-on-repo-root.md`.
 
 ### Resizing the sidebar and the info panel with the mouse
 

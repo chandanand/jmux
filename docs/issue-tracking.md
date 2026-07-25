@@ -152,22 +152,31 @@ The most powerful feature: select an issue in the panel and press `n` to create 
       "Platform": "~/repos/backend",
       "Frontend": "~/repos/frontend",
       "Mobile": "~/repos/mobile-app"
-    },
+    }
+  },
+  "repoDefaults": {
     "defaultBaseBranch": "main",
-    "autoCreateWorktree": true,
+    "wtmIntegration": true,
     "autoLaunchAgent": true,
-    "sessionNameTemplate": "{identifier}"
+    "sessionNameTemplate": "{identifier}",
+    "claudeCommand": "claude"
   }
 }
 ```
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `teamRepoMap` | `{}` | Maps Linear team names to local repo directories |
-| `defaultBaseBranch` | `"main"` | Branch to create worktrees from |
-| `autoCreateWorktree` | `true` | Create a git worktree automatically |
-| `autoLaunchAgent` | `true` | Launch Claude Code with issue context |
-| `sessionNameTemplate` | `"{identifier}"` | Template for session names. Supports `{identifier}` and `{title}` |
+| Key | Tier | Default | Description |
+|-----|------|---------|-------------|
+| `teamRepoMap` | global | `{}` | Maps Linear team names to local repo directories |
+| `defaultBaseBranch` | per-repo | `"main"` | Branch to create worktrees from |
+| `wtmIntegration` | per-repo | bare-repo detection | `true` → `wtm create`; `false` → `git worktree add` |
+| `autoLaunchAgent` | per-repo | `true` | Launch Claude Code with issue context |
+| `sessionNameTemplate` | per-repo | `"{identifier}"` | Template for session names. Supports `{identifier}` and `{title}` |
+| `claudeCommand` | per-repo | `"claude"` | Command used to launch the agent |
+
+Per-repo keys go in `repoDefaults` (global default) and may be overridden per
+repo under `repos` — see [Configuration](configuration.md). Every issue always
+gets a worktree; `wtmIntegration` only picks the mechanism. The old
+`autoCreateWorktree` toggle was removed because it could never be turned off.
 
 ### Team-to-repo mapping
 
@@ -320,9 +329,127 @@ The sidebar and panel show auth state. If authentication fails, jmux logs the er
 
 ---
 
+## The Work Pipeline
+
+jmux projects your tracker's own workflow states onto four **stages**, and
+behaves differently for each. Stages drive behaviour; the raw state name is
+what you actually see on screen.
+
+| Stage | Behaviour |
+|-------|-----------|
+| `idea` | Captured, not started — absent from the sidebar |
+| `active` | Normal sidebar row |
+| `parked` | Handed off — collapsed into one row at the bottom |
+| `done` | Finished |
+
+With no configuration, stages come from the tracker's own category
+(`triage`/`backlog` → idea, `unstarted`/`started` → active,
+`completed`/`canceled` → done). **Nothing maps to `parked` by default**, so
+parking is inert until you opt in. Name the states that diverge under
+**Settings → Stages** (or `repoDefaults.parkedStates` etc.) — these are
+per-repo, because repos differ in workflow vocabulary.
+
+### Parking (the back burner)
+
+Work that is merged and sitting in QA still owns a session you might need
+again, but it should not take up sidebar space. Set **Park stages** to
+`parked` and any session whose issue reaches a parked state collapses into a
+single `Parked (n)` row at the bottom of the sidebar. The session, its
+worktree and its scrollback are all untouched.
+
+Parking is only safe because it reverses itself. Any configured signal pulls a
+session straight back out, flagged:
+
+| Trigger | Fires when |
+|---------|-----------|
+| `state-regression` | The issue's stage changes — this is your **QA Failed** case |
+| `issue-comment` | A new comment lands on the issue |
+| `mr-activity` | The MR is touched (comment, push, review) |
+| `pipeline-failed` | A pipeline goes red |
+| `agent-attention` | The agent in that session wants you |
+
+`Ctrl-a p` → **Park session** / **Unpark session** overrides the derived
+answer for sessions with no issue, or when you disagree with your tracker. An
+override is remembered against the stage it was made at and drops once the
+issue moves on, so it can't silently suppress parking forever.
+
+Sessions with no linked issue can auto-park on idleness instead
+(`pipeline.autoParkIdleDays`).
+
+### Capture (`Ctrl-a c`)
+
+One composer, two commit keys:
+
+| Key | Action |
+|-----|--------|
+| `Enter` | File the issue and stay where you are |
+| `Ctrl-S` | File it, create the worktree + session, and launch the agent on it |
+| `Tab` | Move between title / team / description |
+
+Agents can file issues themselves without any UI at all:
+
+```bash
+jmux ctl issue create --title "Auth times out on cold start" \
+  --description "Noticed while working TRA-1200" --team Platform
+jmux ctl issue create --title "Fix flaky test" --start   # capture and start
+```
+
+### Queues and Up next (`Ctrl-a u`)
+
+Panel views can be narrowed into named pull queues:
+
+```json
+{
+  "id": "qa-failed", "label": "QA Failed", "source": "issues",
+  "filter": { "scope": "assigned", "states": ["QA Failed"] },
+  "groupBy": "none", "subGroupBy": "none", "sortBy": "priority", "sortOrder": "asc"
+}
+```
+
+| Filter key | Meaning |
+|-----------|---------|
+| `states` | Raw tracker state names (case-insensitive) |
+| `stages` | Lifecycle stages — tracker-agnostic |
+| `labels` | Any matching label name |
+| `priorityAtMost` | Keep issues at least this urgent (1=urgent … 4=low) |
+
+Rather than writing that by hand, shape a view live with the panel's `g` / `G`
+/ `/` / `?` keys and then run **Save current view as tab** from the palette.
+
+`pipeline.upNext` is an ordered list of view ids. `Ctrl-a u` takes the first
+item from the first non-empty queue and starts work on it, so the daily ritual
+is one keystroke.
+
+### Transitions (writes to your tracker)
+
+jmux can move an issue along as a byproduct of what you already did:
+
+| Event | Setting |
+|-------|---------|
+| Session created from an issue | `onSessionStartState` |
+| An MR appears on the session's branch | `onMrOpenState` |
+| That MR merges | `onMrMergedState` |
+
+All default to `null` — **jmux never writes to your tracker until you set
+these.** They are per-repo, since they name states. Every transition is an
+*edge*: an MR that was already merged the first time jmux sees it never fires,
+so attaching to an old session cannot replay history into your tracker.
+
+`pipeline.transitionConfirm` controls how much ceremony a write gets:
+
+| Mode | Behaviour |
+|------|-----------|
+| `undo-toast` (default) | Writes, then shows `TRA-123 → QA  ^a z undo` in the toolbar for 20s |
+| `always` | Asks before every write |
+| `never` | Writes silently |
+
+`Ctrl-a z` takes the last write back while the toast is up.
+
+---
+
 ## Settings Reference
 
-All issue tracking settings are available in the settings screen (`Ctrl-a i`) under **Integrations** and **Issue Workflow**, or in `~/.config/jmux/config.json`:
+All issue tracking settings are available in the settings screen (`Ctrl-a i`) under **Integrations**, **Issue Workflow**, **Pipeline**, **Stages**, **Transitions** and **This repo**, or in `~/.config/jmux/config.json`:
 
 ```json
 {
@@ -331,11 +458,21 @@ All issue tracking settings are available in the settings screen (`Ctrl-a i`) un
     "issueTracker": { "type": "linear" }
   },
   "issueWorkflow": {
-    "teamRepoMap": { "Platform": "~/repos/backend" },
+    "teamRepoMap": { "Platform": "~/repos/backend" }
+  },
+  "repoDefaults": {
     "defaultBaseBranch": "main",
-    "autoCreateWorktree": true,
     "autoLaunchAgent": true,
-    "sessionNameTemplate": "{identifier}"
+    "sessionNameTemplate": "{identifier}",
+    "claudeCommand": "claude",
+    "parkedStates": ["In Review", "QA"],
+    "onMrMergedState": "QA"
+  },
+  "pipeline": {
+    "parkStages": ["parked"],
+    "unparkOn": ["state-regression", "issue-comment", "mr-activity", "pipeline-failed"],
+    "transitionConfirm": "undo-toast",
+    "upNext": ["release-blockers", "qa-failed", "todo"]
   },
   "panelViews": []
 }

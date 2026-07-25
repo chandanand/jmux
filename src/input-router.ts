@@ -101,6 +101,7 @@ export interface InputRouterOptions {
   onSettings?: () => void;
   onCaptureIssue?: () => void;
   onStartUpNext?: () => void;
+  onUndoTransition?: () => void;
   onSettingsScreen?: () => void;  // Ctrl-a I (uppercase) — full settings screen
   onGroupCycle?: () => void;      // Ctrl-a G — cycle sidebar group mode
   onSortCycle?: () => void;       // Ctrl-a s — cycle sidebar sort mode
@@ -405,6 +406,7 @@ export class InputRouter {
           if (data === "i") { this.opts.onSettings?.(); return; }
           if (data === "c") { this.opts.onCaptureIssue?.(); return; }
           if (data === "u") { this.opts.onStartUpNext?.(); return; }
+          if (data === "z") { this.opts.onUndoTransition?.(); return; }
           if (data === "I") { this.opts.onSettingsScreen?.(); return; }
           if (data === "G") { this.opts.onGroupCycle?.(); return; }
           if (data === "s") { this.opts.onSortCycle?.(); return; }
@@ -436,6 +438,11 @@ export class InputRouter {
         // Pull the next thing off the queue rotation and start working it.
         if (data === "u") {
           this.opts.onStartUpNext?.();
+          return;
+        }
+        // Take back the last status write, while the undo window is open.
+        if (data === "z") {
+          this.opts.onUndoTransition?.();
           return;
         }
         if (data === "I") {

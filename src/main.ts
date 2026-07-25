@@ -48,7 +48,14 @@ import { createAdapters } from "./adapters/registry";
 import { PollCoordinator } from "./adapters/poll-coordinator";
 import { SessionState } from "./session-state";
 import type { SessionContext, WorkflowState } from "./adapters/types";
-import { stageForIssue, STAGE_ORDER, STAGE_LABELS } from "./work-stage";
+import { stageForIssue, resolveIssueRepoDir, STAGE_ORDER, STAGE_LABELS } from "./work-stage";
+import {
+  detectMrTransitions,
+  transitionTarget,
+  TRANSITION_LABELS,
+  type MrSnapshot,
+  type TransitionEvent,
+} from "./transitions";
 import {
   isParked,
   clearStaleOverride,
@@ -555,7 +562,10 @@ function makeToolbar(): ToolbarConfig {
     hoveredButton: hoveredToolbarButton,
     tabs: currentWindows,
     hoveredTabId,
-    statusChip: snapshotChipLabel(getSnapshotHealth()),
+    // A live undo takes the chip: it is transient and time-boxed, and being
+    // able to take the write back matters more for those 20s than ambient
+    // snapshot health does.
+    statusChip: undoChipLabel() ?? snapshotChipLabel(getSnapshotHealth()),
   };
 }
 
@@ -1024,6 +1034,7 @@ const pollCoordinator = new PollCoordinator({
     // A poll is the main way a stage changes (and the only way an unpark
     // signal arrives), so parking is re-derived on every one.
     recomputeParking();
+    checkMrTransitions();
     if (sessionName === "__global__") refreshTeams();
     scheduleRender();
   },
@@ -1157,6 +1168,136 @@ function recomputeParking(): void {
   }
 
   sidebar.setParkedSessions(parked);
+}
+
+// --- Status transitions ---
+//
+// The one place jmux writes to a shared tracker. Everything here is opt-in per
+// repo and per event; with no configuration these functions do nothing.
+
+const UNDO_WINDOW_MS = 20_000;
+
+/** Last-seen MR states per session, for edge detection across polls. */
+const mrSnapshots = new Map<string, MrSnapshot[]>();
+
+interface PendingUndo {
+  issueId: string;
+  identifier: string;
+  from: string;
+  to: string;
+  expiresAt: number;
+}
+let pendingUndo: PendingUndo | null = null;
+
+function transitionConfirmMode(): "always" | "undo-toast" | "never" {
+  return configStore.config.pipeline?.transitionConfirm ?? "undo-toast";
+}
+
+/** The toolbar chip text while an undo is still available, else null. */
+function undoChipLabel(): string | null {
+  if (!pendingUndo) return null;
+  if (Date.now() > pendingUndo.expiresAt) { pendingUndo = null; return null; }
+  return `${pendingUndo.identifier} → ${pendingUndo.to}  ^a z undo`;
+}
+
+async function applyTransition(
+  issue: import("./adapters/types").Issue,
+  event: TransitionEvent,
+  target: string,
+): Promise<void> {
+  const tracker = adapters.issueTracker;
+  if (!tracker || tracker.authState !== "ok") return;
+  if (issue.status === target) return; // already there — nothing to say
+
+  const from = issue.status;
+  try {
+    await tracker.updateStatus(issue.id, target);
+  } catch (e) {
+    logError("jmux", `transition failed for ${issue.identifier}: ${(e as Error).message}`);
+    return;
+  }
+
+  if (transitionConfirmMode() !== "never") {
+    pendingUndo = {
+      issueId: issue.id,
+      identifier: issue.identifier,
+      from,
+      to: target,
+      expiresAt: Date.now() + UNDO_WINDOW_MS,
+    };
+  }
+  logError("jmux", `transition: ${issue.identifier} ${from} → ${target} (${TRANSITION_LABELS[event]})`);
+  pollCoordinator.pollGlobal();
+  scheduleRender();
+}
+
+/** Revert the most recent transition, if the undo window is still open. */
+async function undoLastTransition(): Promise<void> {
+  const undo = pendingUndo;
+  if (!undo || Date.now() > undo.expiresAt) { pendingUndo = null; return; }
+  pendingUndo = null;
+  const tracker = adapters.issueTracker;
+  if (!tracker || tracker.authState !== "ok") return;
+  try {
+    await tracker.updateStatus(undo.issueId, undo.from);
+    pollCoordinator.pollGlobal();
+  } catch (e) {
+    logError("jmux", `undo failed for ${undo.identifier}: ${(e as Error).message}`);
+  }
+  scheduleRender();
+}
+
+/**
+ * Run a transition through the configured confirmation policy. "always" asks
+ * first; "undo-toast" writes and leaves an undo on screen; "never" writes
+ * silently.
+ */
+async function requestTransition(
+  issue: import("./adapters/types").Issue,
+  event: TransitionEvent,
+): Promise<void> {
+  const dir = resolveIssueRepoDir(issue, configStore.config, homedir());
+  const target = transitionTarget(event, repoSettingsFor(dir));
+  if (!target || issue.status === target) return;
+
+  if (transitionConfirmMode() !== "always") {
+    await applyTransition(issue, event, target);
+    return;
+  }
+
+  const modal = new ListModal({
+    header: `${issue.identifier} → ${target}?`,
+    subheader: `${TRANSITION_LABELS[event]} · currently ${issue.status}`,
+    items: [{ id: "yes", label: `Move to ${target}` }, { id: "no", label: "Leave it" }],
+  });
+  modal.open();
+  openModal(modal, async (value) => {
+    if ((value as ListItem).id === "yes") await applyTransition(issue, event, target);
+  });
+}
+
+/** Detect MR edges for every session and fire whatever transitions they imply. */
+function checkMrTransitions(): void {
+  for (const session of currentSessions) {
+    const ctx = pollCoordinator.getContext(session.name);
+    if (!ctx) continue;
+    const next: MrSnapshot[] = ctx.mrs.map((m) => ({ id: m.id, status: m.status }));
+    const prev = mrSnapshots.get(session.name);
+    mrSnapshots.set(session.name, next);
+    // No baseline yet: record and stay silent. The first poll of a session is
+    // observation, never a trigger.
+    if (!prev) continue;
+
+    const { opened, merged } = detectMrTransitions(prev, next);
+    if (!opened && !merged) continue;
+    const issue = ctx.issues[0];
+    if (!issue) continue;
+    // Merged is the later edge, so it wins when both fire in one poll.
+    void requestTransition(issue, merged ? "mr-merged" : "mr-open");
+  }
+  for (const name of mrSnapshots.keys()) {
+    if (!currentSessions.some((s) => s.name === name)) mrSnapshots.delete(name);
+  }
 }
 
 /** Toggle an explicit park decision for a session and re-derive the band. */
@@ -2128,6 +2269,7 @@ const inputRouter = new InputRouter(
     onSettings: () => handleToolbarAction("settings"),
     onCaptureIssue: () => openCreateIssueModal(),
     onStartUpNext: () => { void startUpNext(); },
+    onUndoTransition: () => { void undoLastTransition(); },
     onSettingsScreen: () => toggleSettingsScreen(),
     onGroupCycle: () => { applySidebarGroup(sidebar.cycleGroupMode()); scheduleRender(); },
     onSortCycle: () => { applySidebarSort(sidebar.cycleSortMode()); scheduleRender(); },
@@ -3296,6 +3438,13 @@ function buildSettingsCategories(): SettingsCategory[] {
       collapsed: true,
       settings: [
         ...repoDefaultSettings("transitions"),
+        {
+          id: "transition-confirm", label: "Confirmation", type: "list" as const,
+          getValue: () => transitionConfirmMode(),
+          options: ["undo-toast", "always", "never"],
+          onOptionSelect: (v) =>
+            configStore.setPipeline("transitionConfirm", v as "always" | "undo-toast" | "never"),
+        },
       ],
     },
     ...currentRepoCategory(),
@@ -3416,6 +3565,7 @@ async function startWorkOnIssue(
             );
             await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(session)}`);
             sessionState.addLink(session, { type: "issue", id: issue.id });
+            void requestTransition(issue, "session-start");
             return;
           }
 
@@ -3453,6 +3603,7 @@ async function startWorkOnIssue(
 
           await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(session)}`);
           sessionState.addLink(session, { type: "issue", id: issue.id });
+          void requestTransition(issue, "session-start");
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           const lines: StyledLine[] = [
