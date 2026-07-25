@@ -309,3 +309,143 @@ describe("SettingsScreen dot leaders", () => {
     expect(grid.cells[4][dotCol].fgMode).toBe(tokens.ruleHairline.fgMode!);
   });
 });
+
+// --- multiselect primitive ---
+//
+// Parking stages, unpark triggers and queue state-filters are all "pick a
+// subset from a live list", which none of boolean/text/list/map can express.
+// The picker EditState is reused, but Enter toggles instead of committing so
+// several options can be chosen in one visit.
+
+function multiselectCategory(
+  selected: string[],
+  onToggle: (id: string) => void = () => {},
+): SettingsCategory[] {
+  return [{
+    label: "Pipeline",
+    collapsed: false,
+    settings: [{
+      id: "park-states",
+      label: "Parked states",
+      type: "multiselect",
+      getValue: () => (selected.length ? selected.join(", ") : "none"),
+      getOptions: () => [
+        { id: "In Review", label: "In Review" },
+        { id: "QA", label: "QA" },
+        { id: "Staging", label: "Staging" },
+      ],
+      getSelected: () => selected,
+      onToggleOption: onToggle,
+    }],
+  }];
+}
+
+describe("SettingsScreen multiselect", () => {
+  test("collapsed row shows the summary from getValue()", () => {
+    const s = new SettingsScreen();
+    s.open(multiselectCategory(["QA", "Staging"]));
+    const grid = s.render(100, 24);
+    const { left, right } = expectedBounds(100);
+    const row = rowText(grid, 3, left, right);
+    expect(row).toContain("Parked states");
+    expect(row).toContain("QA, Staging");
+  });
+
+  test("Enter opens a checkbox picker reflecting current selection", () => {
+    const s = new SettingsScreen();
+    s.open(multiselectCategory(["QA"]));
+    s.handleInput("\x1b[B"); // move onto the setting
+    s.handleInput("\r");
+    const grid = s.render(100, 24);
+    const all = Array.from({ length: 24 }, (_, r) => rowText(grid, r, 0, 100)).join("\n");
+    expect(all).toContain("[ ] In Review");
+    expect(all).toContain("[x] QA");
+    expect(all).toContain("[ ] Staging");
+  });
+
+  test("Enter on an item toggles it and keeps the picker open", () => {
+    const toggled: string[] = [];
+    const s = new SettingsScreen();
+    s.open(multiselectCategory(["QA"], (id) => toggled.push(id)));
+    s.handleInput("\x1b[B");
+    s.handleInput("\r");       // open picker, cursor on "In Review"
+    s.handleInput("\r");       // toggle it
+    expect(toggled).toEqual(["In Review"]);
+    expect(s.isEditing).toBe(true); // still open for a second pick
+    s.handleInput("\x1b[B");
+    s.handleInput("\r");
+    expect(toggled).toEqual(["In Review", "QA"]);
+  });
+
+  test("Escape closes the picker", () => {
+    const s = new SettingsScreen();
+    s.open(multiselectCategory([]));
+    s.handleInput("\x1b[B");
+    s.handleInput("\r");
+    expect(s.isEditing).toBe(true);
+    s.handleInput("\x1b");
+    expect(s.isEditing).toBe(false);
+    expect(s.isOpen).toBe(true); // closing the picker must not close settings
+  });
+});
+
+// --- inherited / override marker ---
+//
+// The per-repo override category shows each row's *effective* value plus where
+// that value came from, and `d` clears an override back to inherited. Without
+// the marker an override is invisible and the delete key has nothing to act on.
+
+function scopedCategory(
+  scope: "inherited" | "override",
+  onClear: () => void = () => {},
+): SettingsCategory[] {
+  return [{
+    label: "This repo",
+    collapsed: false,
+    settings: [{
+      id: "base-branch",
+      label: "Base branch",
+      type: "text",
+      getValue: () => "develop",
+      onTextCommit: () => {},
+      getScope: () => scope,
+      onClearOverride: onClear,
+    }],
+  }];
+}
+
+describe("SettingsScreen override marker", () => {
+  test("an inherited value is marked inherited", () => {
+    const s = new SettingsScreen();
+    s.open(scopedCategory("inherited"));
+    const grid = s.render(100, 24);
+    const { left, right } = expectedBounds(100);
+    expect(rowText(grid, 3, left, right)).toContain("(inherited)");
+  });
+
+  test("an overridden value is marked override", () => {
+    const s = new SettingsScreen();
+    s.open(scopedCategory("override"));
+    const grid = s.render(100, 24);
+    const { left, right } = expectedBounds(100);
+    expect(rowText(grid, 3, left, right)).toContain("(override)");
+  });
+
+  test("d clears an override back to inherited", () => {
+    let cleared = 0;
+    const s = new SettingsScreen();
+    s.open(scopedCategory("override", () => { cleared++; }));
+    s.handleInput("\x1b[B");
+    s.handleInput("d");
+    expect(cleared).toBe(1);
+  });
+
+  test("d does nothing on an inherited row", () => {
+    let cleared = 0;
+    const s = new SettingsScreen();
+    s.open(scopedCategory("inherited", () => { cleared++; }));
+    s.handleInput("\x1b[B");
+    s.handleInput("d");
+    expect(cleared).toBe(0);
+  });
+});

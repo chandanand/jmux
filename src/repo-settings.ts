@@ -134,6 +134,55 @@ export function buildWorktreeCommand(o: {
   return `git worktree add ./${o.session} -b ${o.session} ${o.baseBranch}`;
 }
 
+/** The git-derived facts about a directory that settings resolution needs. */
+export interface RepoFacts {
+  /** Canonical git common dir — the repo key. null when not inside a repo. */
+  key: string | null;
+  /** Whether the repo is bare, which seeds the wtmIntegration base default. */
+  bare: boolean;
+}
+
+/**
+ * Caches the *git* facts about a directory — deliberately not the resolved
+ * settings. Git facts (which repo a dir belongs to, whether it is bare) are
+ * stable for the life of a process; the config layered on top of them changes
+ * whenever the user edits a setting. Caching only the stable half means a
+ * settings change takes effect immediately without any invalidation protocol.
+ */
+export class RepoFactsCache {
+  private byDir = new Map<string, RepoFacts>();
+
+  constructor(private readonly run: GitRun = defaultGitRun) {}
+
+  get(dir: string): RepoFacts {
+    const hit = this.byDir.get(dir);
+    if (hit) return hit;
+    const key = resolveRepoRoot(dir, this.run);
+    const facts: RepoFacts = { key, bare: key ? detectBareRepo(dir, this.run) : false };
+    this.byDir.set(dir, facts);
+    return facts;
+  }
+
+  /** Drop cached facts — used when worktrees are created or removed. */
+  clear(): void {
+    this.byDir.clear();
+  }
+}
+
+/**
+ * The one place config + git facts become effective settings: seed the base
+ * with runtime bare detection, then apply global defaults and the per-repo
+ * override for this repo's key.
+ */
+export function resolveForRepo(
+  config: { repoDefaults?: RepoSettings; repos?: Record<string, RepoSettings> },
+  facts: RepoFacts,
+): ResolvedRepoSettings {
+  const base: ResolvedRepoSettings = { ...REPO_SETTING_DEFAULTS, wtmIntegration: facts.bare };
+  const override = facts.key ? config.repos?.[facts.key] : undefined;
+  return resolveRepoSettings(config.repoDefaults, override, base);
+}
+
 const RELOCATED_TOP_LEVEL = ["claudeCommand", "wtmIntegration"] as const;
 const RELOCATED_WORKFLOW = ["defaultBaseBranch", "autoLaunchAgent", "sessionNameTemplate"] as const;
 

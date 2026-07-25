@@ -7,6 +7,8 @@ import {
   detectBareRepo,
   buildWorktreeCommand,
   migrateLegacyConfig,
+  RepoFactsCache,
+  resolveForRepo,
   type GitRun,
 } from "../repo-settings";
 
@@ -153,5 +155,60 @@ describe("migrateLegacyConfig", () => {
     };
     const { changed } = migrateLegacyConfig(migrated);
     expect(changed).toBe(false);
+  });
+});
+
+describe("RepoFactsCache", () => {
+  test("resolves key and bare flag, then serves from cache", () => {
+    let calls = 0;
+    const run: GitRun = (args) => {
+      calls++;
+      if (args.includes("--git-common-dir")) return "/code/jmux/.git\n";
+      if (args.includes("--is-bare-repository")) return "true\n";
+      return null;
+    };
+    const cache = new RepoFactsCache(run);
+    expect(cache.get("/code/jmux/feat-x")).toEqual({ key: "/code/jmux/.git", bare: true });
+    const after = calls;
+    expect(cache.get("/code/jmux/feat-x")).toEqual({ key: "/code/jmux/.git", bare: true });
+    expect(calls).toBe(after); // second lookup hits the cache
+  });
+
+  test("non-repo dirs resolve to a null key and are not bare", () => {
+    const cache = new RepoFactsCache(() => null);
+    expect(cache.get("/tmp/x")).toEqual({ key: null, bare: false });
+  });
+});
+
+describe("resolveForRepo", () => {
+  const facts = { key: "/code/jmux/.git", bare: false };
+
+  test("per-repo override beats global default beats bare-seeded base", () => {
+    const r = resolveForRepo(
+      {
+        repoDefaults: { defaultBaseBranch: "develop" },
+        repos: { "/code/jmux/.git": { defaultBaseBranch: "master" } },
+      },
+      facts,
+    );
+    expect(r.defaultBaseBranch).toBe("master");
+  });
+
+  test("wtmIntegration base default is the runtime bare detection", () => {
+    expect(resolveForRepo({}, { key: "/x", bare: true }).wtmIntegration).toBe(true);
+    expect(resolveForRepo({}, { key: "/x", bare: false }).wtmIntegration).toBe(false);
+  });
+
+  test("an explicit setting still beats bare detection", () => {
+    const r = resolveForRepo({ repoDefaults: { wtmIntegration: true } }, { key: "/x", bare: false });
+    expect(r.wtmIntegration).toBe(true);
+  });
+
+  test("a null key (not a repo) falls back to global defaults", () => {
+    const r = resolveForRepo(
+      { repoDefaults: { defaultBaseBranch: "develop" }, repos: { "/other/.git": { defaultBaseBranch: "zzz" } } },
+      { key: null, bare: false },
+    );
+    expect(r.defaultBaseBranch).toBe("develop");
   });
 });
