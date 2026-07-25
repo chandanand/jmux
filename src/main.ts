@@ -22,7 +22,7 @@ import {
   type NewSessionResult,
   type NewSessionProviders,
 } from "./new-session-modal";
-import { CreateIssueModal, type CreateIssueResult } from "./create-issue-modal";
+import { CaptureModal, type CaptureResult } from "./capture-modal";
 import { buildPinCommands } from "./cli/pane";
 import type { CellAttrs } from "./cell-grid";
 import { createGrid } from "./cell-grid";
@@ -1948,14 +1948,20 @@ function openCreateIssueModal(): void {
   if (cachedTeams.length === 0) return;
 
   const preselectedTeamId = resolvePreselectedTeamId();
-  const modal = new CreateIssueModal({ teams: cachedTeams, preselectedTeamId });
+  const modal = new CaptureModal({ teams: cachedTeams, preselectedTeamId });
   modal.open();
   openModal(modal, async (value) => {
-    const result = value as CreateIssueResult;
+    const result = value as CaptureResult;
     try {
       const issue = await adapters.issueTracker!.createIssue(result.teamId, result.title, result.description);
       pollCoordinator.addGlobalIssue(issue);
       scheduleRender();
+      // "Capture & start" is the same capture plus the panel's own `n` flow, so
+      // an idea reaches a running agent without a second trip through the UI.
+      if (result.mode === "start") {
+        const state = getIssueSessionStates().get(issue.id);
+        await startWorkOnIssue(issue, state?.state ?? "none", state?.sessionName);
+      }
     } catch (e) {
       logError("jmux", `failed to create issue: ${(e as Error).message}`);
     }
@@ -2115,6 +2121,7 @@ const inputRouter = new InputRouter(
     onModalToggle: () => togglePalette(),
     onNewSession: () => handlePaletteAction({ commandId: "new-session" }),
     onSettings: () => handleToolbarAction("settings"),
+    onCaptureIssue: () => openCreateIssueModal(),
     onSettingsScreen: () => toggleSettingsScreen(),
     onGroupCycle: () => { applySidebarGroup(sidebar.cycleGroupMode()); scheduleRender(); },
     onSortCycle: () => { applySidebarSort(sidebar.cycleSortMode()); scheduleRender(); },
@@ -2368,155 +2375,13 @@ const inputRouter = new InputRouter(
       const nodes = buildViewNodes(rawItems, effectiveView, viewState.collapsedGroups);
       const selected = nodes[viewState.selectedIndex];
       if (selected?.kind !== "item" || selected.item.type !== "issue") return;
-      const issue = selected.item.raw as import("./adapters/types").Issue;
-      const issueState = selected.item.issueSessionState ?? "none";
-      const linkedSessionName = selected.item.linkedSessionName;
-
-      // STATE 3: a live session already exists for this issue (either via an
-      // explicit L-key link or a workflow-derived name match). Switch to it.
-      // Done before the workflow/repoDir check so explicit links work even
-      // when the issue's team has no teamRepoMap entry.
-      if (issueState === "session" && linkedSessionName) {
-        if (!ptyClientName) await resolveClientName();
-        if (!ptyClientName) return;
-        await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(linkedSessionName)}`);
-        return;
-      }
-
-      const workflow = configStore.config.issueWorkflow;
-      const repoDir = workflow?.teamRepoMap?.[issue.team ?? ""];
-
-      // Automated path: config maps this issue's team to a repo
-      if (repoDir) {
-        if (!ptyClientName) await resolveClientName();
-        if (!ptyClientName) return;
-
-        const session = resolveIssueSessionName(issue);
-        if (!session) return;
-
-        const expandedDir = repoDir.replace("~", homedir());
-        // Settings resolve against the *issue's* repo, not the session the user
-        // happens to be sitting in — the issue panel is a cross-repo union.
-        const settings = repoSettingsFor(expandedDir);
-        const baseBranch = settings.defaultBaseBranch;
-
-        try {
-          // Seed the first user message for Claude by writing the issue prompt
-          // to a temp file — the main pane reads it via $(cat ...) and claude
-          // takes its content as a positional argument (the documented
-          // interactive-seed form). Without this the pane falls back to
-          // `exec $SHELL` so the session is usable even if the agent is off.
-          const shouldLaunchAgent = settings.autoLaunchAgent && !!adapters.issueTracker;
-          let promptTmp: string | null = null;
-          if (shouldLaunchAgent) {
-            const prompt = adapters.issueTracker!.buildPrompt(issue);
-            promptTmp = `/tmp/jmux-prompt-${Date.now()}.md`;
-            writeFileSync(promptTmp, prompt);
-          }
-          // `exec $SHELL` tail keeps the pane alive if claude exits so the user
-          // isn't ejected from the session. Use a double-quoted command sub so
-          // `cat` reads the prompt verbatim without word-splitting.
-          const claudeFragment = promptTmp
-            ? `${settings.claudeCommand} "$(cat ${promptTmp})"; rm -f ${promptTmp}; exec $SHELL`
-            : `exec $SHELL`;
-
-          // STATE 2: Worktree exists but no session → launch claude directly
-          if (issueState === "worktree") {
-            const wtPath = `${expandedDir}/${session}`;
-            await control.sendCommand(
-              `new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(wtPath)} ${tq(claudeFragment)}`,
-            );
-            await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(session)}`);
-            sessionState.addLink(session, { type: "issue", id: issue.id });
-            return;
-          }
-
-          // STATE 1: Nothing exists → create worktree + session. Every issue
-          // gets a worktree; `wtmIntegration` picks the mechanism only, so
-          // both paths land the same `<repo>/<session>` directory and the
-          // session name doubles as the branch name (the one-name rule).
-          const wtPath = `${expandedDir}/${session}`;
-          // Main (left) pane runs claude — but first it has to wait for the
-          // sibling setup pane to materialize the worktree directory. Tmux
-          // wants a cwd that exists at split time, so we open the pane in
-          // the repo root and have the shell cd into the worktree once
-          // creation finishes.
-          const mainCmd = `while [ ! -d ${tq(wtPath)} ]; do sleep 0.2; done; cd ${tq(wtPath)}; ${claudeFragment}`;
-          await control.sendCommand(
-            `new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(expandedDir)} ${tq(mainCmd)}`,
-          );
-          // Setup (right) pane creates the worktree and exits on success — no
-          // trailing `exec $SHELL` so the pane auto-closes. On failure we drop
-          // to a shell so the user can see the error (without this, the pane
-          // would vanish and the main pane would wait forever for a worktree
-          // that never gets created). `-d` keeps focus on claude; `-l 30%`
-          // makes setup narrow and leaves claude with ~70%.
-          const createCmd = buildWorktreeCommand({
-            wtm: settings.wtmIntegration,
-            session,
-            baseBranch,
-            noShell: true,
-          });
-          await control.sendCommand(
-            `split-window -h -d -l 30% -t ${tq(session)} -c ${tq(expandedDir)} ${tq(`${createCmd} || exec $SHELL`)}`,
-          );
-          // The new worktree changes what git reports for these paths.
-          repoFacts.clear();
-
-          await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(session)}`);
-          sessionState.addLink(session, { type: "issue", id: issue.id });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          const lines: StyledLine[] = [
-            [],
-            [{ text: `Failed to create session for ${issue.identifier}`, attrs: { fg: 1, fgMode: 1, bg: theme.surface, bgMode: 2 } }],
-            [],
-            [{ text: message, attrs: { ...neutralFg(8), dim: true, bg: theme.surface, bgMode: 2 } }],
-            [],
-            [{ text: "Press q or Esc to close.", attrs: { ...neutralFg(8), dim: true, bg: theme.surface, bgMode: 2 } }],
-          ];
-          const errorModal = new ContentModal({ lines, title: "Session Creation Failed" });
-          errorModal.setTermRows(process.stdout.rows || 24);
-          errorModal.open();
-          openModal(errorModal, () => {});
-        }
-        return;
-      }
-
-      // Fallback: no config mapping — open manual modal
-      const initialDirs = cachedProjectDirs.length > 0 ? cachedProjectDirs : [homedir()];
-      const modal = new NewSessionModal(getNewSessionProviders(initialDirs));
-      modal.open();
-      refreshProjectDirsInBackground((dirs) => {
-        modal.updateProjectDirs(dirs);
-        scheduleRender();
-      });
-      openModal(modal, async (value) => {
-        const result = value as NewSessionResult;
-        const parentClient = ptyClientName;
-        if (!parentClient) return;
-        try {
-          switch (result.type) {
-            case "standard": {
-              const s = sanitizeTmuxSessionName(result.name);
-              await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${s}`)} -s ${tq(s)} -c ${tq(result.dir)}`);
-              await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(s)}`);
-              sessionState.addLink(s, { type: "issue", id: issue.id });
-              break;
-            }
-            case "existing_worktree": {
-              const s = sanitizeTmuxSessionName(result.branch);
-              await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${s}`)} -s ${tq(s)} -c ${tq(result.path)}`);
-              await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(s)}`);
-              sessionState.addLink(s, { type: "issue", id: issue.id });
-              break;
-            }
-          }
-        } catch (err) {
-          showNewSessionError(result, err);
-        }
-      });
+      await startWorkOnIssue(
+        selected.item.raw as import("./adapters/types").Issue,
+        selected.item.issueSessionState ?? "none",
+        selected.item.linkedSessionName,
+      );
     },
+
     onPanelLinkToSession: () => {
       const view = panelViews.find((v) => v.id === infoPanel.activeTab);
       if (!view) return;
@@ -3444,6 +3309,162 @@ function resolveIssueSessionName(issue: import("./adapters/types").Issue): strin
       .replace("{title}", issue.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40));
   }
   return sanitizeTmuxSessionName(branchName);
+}
+
+/**
+ * Provision (or return to) the session for an issue. Shared by the panel's `n`
+ * key and the capture composer's "capture & start", so both go through exactly
+ * one implementation of the three-state flow.
+ */
+async function startWorkOnIssue(
+  issue: import("./adapters/types").Issue,
+  issueState: "none" | "worktree" | "session",
+  linkedSessionName: string | undefined,
+): Promise<void> {
+      // STATE 3: a live session already exists for this issue (either via an
+      // explicit L-key link or a workflow-derived name match). Switch to it.
+      // Done before the workflow/repoDir check so explicit links work even
+      // when the issue's team has no teamRepoMap entry.
+      if (issueState === "session" && linkedSessionName) {
+        if (!ptyClientName) await resolveClientName();
+        if (!ptyClientName) return;
+        await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(linkedSessionName)}`);
+        return;
+      }
+
+      const workflow = configStore.config.issueWorkflow;
+      const repoDir = workflow?.teamRepoMap?.[issue.team ?? ""];
+
+      // Automated path: config maps this issue's team to a repo
+      if (repoDir) {
+        if (!ptyClientName) await resolveClientName();
+        if (!ptyClientName) return;
+
+        const session = resolveIssueSessionName(issue);
+        if (!session) return;
+
+        const expandedDir = repoDir.replace("~", homedir());
+        // Settings resolve against the *issue's* repo, not the session the user
+        // happens to be sitting in — the issue panel is a cross-repo union.
+        const settings = repoSettingsFor(expandedDir);
+        const baseBranch = settings.defaultBaseBranch;
+
+        try {
+          // Seed the first user message for Claude by writing the issue prompt
+          // to a temp file — the main pane reads it via $(cat ...) and claude
+          // takes its content as a positional argument (the documented
+          // interactive-seed form). Without this the pane falls back to
+          // `exec $SHELL` so the session is usable even if the agent is off.
+          const shouldLaunchAgent = settings.autoLaunchAgent && !!adapters.issueTracker;
+          let promptTmp: string | null = null;
+          if (shouldLaunchAgent) {
+            const prompt = adapters.issueTracker!.buildPrompt(issue);
+            promptTmp = `/tmp/jmux-prompt-${Date.now()}.md`;
+            writeFileSync(promptTmp, prompt);
+          }
+          // `exec $SHELL` tail keeps the pane alive if claude exits so the user
+          // isn't ejected from the session. Use a double-quoted command sub so
+          // `cat` reads the prompt verbatim without word-splitting.
+          const claudeFragment = promptTmp
+            ? `${settings.claudeCommand} "$(cat ${promptTmp})"; rm -f ${promptTmp}; exec $SHELL`
+            : `exec $SHELL`;
+
+          // STATE 2: Worktree exists but no session → launch claude directly
+          if (issueState === "worktree") {
+            const wtPath = `${expandedDir}/${session}`;
+            await control.sendCommand(
+              `new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(wtPath)} ${tq(claudeFragment)}`,
+            );
+            await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(session)}`);
+            sessionState.addLink(session, { type: "issue", id: issue.id });
+            return;
+          }
+
+          // STATE 1: Nothing exists → create worktree + session. Every issue
+          // gets a worktree; `wtmIntegration` picks the mechanism only, so
+          // both paths land the same `<repo>/<session>` directory and the
+          // session name doubles as the branch name (the one-name rule).
+          const wtPath = `${expandedDir}/${session}`;
+          // Main (left) pane runs claude — but first it has to wait for the
+          // sibling setup pane to materialize the worktree directory. Tmux
+          // wants a cwd that exists at split time, so we open the pane in
+          // the repo root and have the shell cd into the worktree once
+          // creation finishes.
+          const mainCmd = `while [ ! -d ${tq(wtPath)} ]; do sleep 0.2; done; cd ${tq(wtPath)}; ${claudeFragment}`;
+          await control.sendCommand(
+            `new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(expandedDir)} ${tq(mainCmd)}`,
+          );
+          // Setup (right) pane creates the worktree and exits on success — no
+          // trailing `exec $SHELL` so the pane auto-closes. On failure we drop
+          // to a shell so the user can see the error (without this, the pane
+          // would vanish and the main pane would wait forever for a worktree
+          // that never gets created). `-d` keeps focus on claude; `-l 30%`
+          // makes setup narrow and leaves claude with ~70%.
+          const createCmd = buildWorktreeCommand({
+            wtm: settings.wtmIntegration,
+            session,
+            baseBranch,
+            noShell: true,
+          });
+          await control.sendCommand(
+            `split-window -h -d -l 30% -t ${tq(session)} -c ${tq(expandedDir)} ${tq(`${createCmd} || exec $SHELL`)}`,
+          );
+          // The new worktree changes what git reports for these paths.
+          repoFacts.clear();
+
+          await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(session)}`);
+          sessionState.addLink(session, { type: "issue", id: issue.id });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          const lines: StyledLine[] = [
+            [],
+            [{ text: `Failed to create session for ${issue.identifier}`, attrs: { fg: 1, fgMode: 1, bg: theme.surface, bgMode: 2 } }],
+            [],
+            [{ text: message, attrs: { ...neutralFg(8), dim: true, bg: theme.surface, bgMode: 2 } }],
+            [],
+            [{ text: "Press q or Esc to close.", attrs: { ...neutralFg(8), dim: true, bg: theme.surface, bgMode: 2 } }],
+          ];
+          const errorModal = new ContentModal({ lines, title: "Session Creation Failed" });
+          errorModal.setTermRows(process.stdout.rows || 24);
+          errorModal.open();
+          openModal(errorModal, () => {});
+        }
+        return;
+      }
+
+      // Fallback: no config mapping — open manual modal
+      const initialDirs = cachedProjectDirs.length > 0 ? cachedProjectDirs : [homedir()];
+      const modal = new NewSessionModal(getNewSessionProviders(initialDirs));
+      modal.open();
+      refreshProjectDirsInBackground((dirs) => {
+        modal.updateProjectDirs(dirs);
+        scheduleRender();
+      });
+      openModal(modal, async (value) => {
+        const result = value as NewSessionResult;
+        const parentClient = ptyClientName;
+        if (!parentClient) return;
+        try {
+          switch (result.type) {
+            case "standard": {
+              const s = sanitizeTmuxSessionName(result.name);
+              await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${s}`)} -s ${tq(s)} -c ${tq(result.dir)}`);
+              await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(s)}`);
+              sessionState.addLink(s, { type: "issue", id: issue.id });
+              break;
+            }
+            case "existing_worktree": {
+              const s = sanitizeTmuxSessionName(result.branch);
+              await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${s}`)} -s ${tq(s)} -c ${tq(result.path)}`);
+              await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(s)}`);
+              sessionState.addLink(s, { type: "issue", id: issue.id });
+              break;
+            }
+          }
+        } catch (err) {
+          showNewSessionError(result, err);
+        }
+      });
 }
 
 function getIssueSessionStates(): Map<string, IssueSessionInfo> {

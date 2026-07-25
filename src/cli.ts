@@ -47,6 +47,9 @@ const VALUE_FLAGS = new Set([
   "worktree",
   "interval",
   "tab",
+  "title",
+  "description",
+  "team",
 ]);
 const BOOL_FLAGS = new Set([
   "force",
@@ -58,6 +61,7 @@ const BOOL_FLAGS = new Set([
   "all",
   "no-launch-agent",
   "launch-agent",
+  "start",
 ]);
 
 const CTL_HELP = `
@@ -72,7 +76,7 @@ GROUPS
   pane       Manage tmux panes
   run-claude Run a Claude Code agent in a session
   agent      Inspect agent state (agent state | agent watch)
-  issue      Link/start work from issues (issue get|link|unlink|start)
+  issue      Capture/link/start work from issues (issue get|link|unlink|start|create)
   status     One-shot orchestration snapshot of the whole workspace
   cc         Command Center tabs (cc tabs)
 
@@ -93,11 +97,15 @@ FLAGS
   --lines <val>        Number of lines
   --window <val>       Window target
   --reason <val>       Attention reason text
+  --title <val>        Issue title (issue create)
+  --description <val>  Issue description (issue create)
+  --team <val>         Team name or id (issue create)
   --repo <val>         Repository path (issue start/link)
   --base-branch <val>  Base branch for new worktree (issue start)
   --interval <val>     Poll interval in ms (agent watch)
   --tab <val>          Command Center tab id or name (pane pin)
   --all                Operate on all sessions (agent state/watch)
+  --start              Start work immediately after creating (issue create)
   --no-launch-agent    Don't auto-launch Claude (issue start)
   --force              Skip confirmation prompts
   --no-enter           Don't send Enter after keys

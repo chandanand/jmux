@@ -38,7 +38,7 @@ const CHROME_MODULES = [
   "content-modal.ts",
   "new-session-modal.ts",
   "textarea-modal.ts",
-  "create-issue-modal.ts",
+  "capture-modal.ts",
   "settings-screen.ts",
   "panel-view-renderer.ts",
   "info-panel.ts",
