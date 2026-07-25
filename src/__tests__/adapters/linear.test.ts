@@ -1,6 +1,6 @@
 // src/__tests__/adapters/linear.test.ts
 import { describe, test, expect } from "bun:test";
-import { LinearAdapter, extractIssueIdFromBranch } from "../../adapters/linear";
+import { LinearAdapter, extractIssueIdFromBranch, mapWorkflowStates } from "../../adapters/linear";
 
 describe("extractIssueIdFromBranch", () => {
   test("extracts from standard branch name", () => {
@@ -75,5 +75,52 @@ describe("LinearAdapter", () => {
       if (origKey !== undefined) process.env.LINEAR_API_KEY = origKey;
       if (origToken !== undefined) process.env.LINEAR_TOKEN = origToken;
     }
+  });
+});
+
+describe("mapWorkflowStates", () => {
+  test("flattens team states and de-duplicates by name", () => {
+    const raw = {
+      teams: {
+        nodes: [
+          { name: "Platform", states: { nodes: [
+            { id: "s1", name: "Todo", type: "unstarted", position: 1 },
+            { id: "s2", name: "QA", type: "started", position: 2 },
+          ] } },
+          { name: "Web", states: { nodes: [
+            // Same name on another team — one picker row, not two.
+            { id: "s3", name: "QA", type: "started", position: 2 },
+            { id: "s4", name: "Shipped", type: "completed", position: 3 },
+          ] } },
+        ],
+      },
+    };
+    const states = mapWorkflowStates(raw);
+    expect(states.map((s) => s.name)).toEqual(["Todo", "QA", "Shipped"]);
+    expect(states.find((s) => s.name === "QA")?.type).toBe("started");
+  });
+
+  test("sorts by workflow position so the picker reads in lifecycle order", () => {
+    const raw = {
+      teams: { nodes: [{ name: "T", states: { nodes: [
+        { id: "c", name: "Done", type: "completed", position: 9 },
+        { id: "a", name: "Backlog", type: "backlog", position: 1 },
+        { id: "b", name: "Doing", type: "started", position: 5 },
+      ] } }] },
+    };
+    expect(mapWorkflowStates(raw).map((s) => s.name)).toEqual(["Backlog", "Doing", "Done"]);
+  });
+
+  test("tolerates missing or malformed payloads", () => {
+    expect(mapWorkflowStates(null)).toEqual([]);
+    expect(mapWorkflowStates({})).toEqual([]);
+    expect(mapWorkflowStates({ teams: { nodes: [{ name: "T" }] } })).toEqual([]);
+  });
+});
+
+describe("listWorkflowStates", () => {
+  test("returns empty array when not authenticated", async () => {
+    const adapter = new LinearAdapter({ type: "linear" });
+    expect(await adapter.listWorkflowStates()).toEqual([]);
   });
 });

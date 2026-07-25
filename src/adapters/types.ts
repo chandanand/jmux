@@ -46,6 +46,18 @@ export interface Issue {
   links?: Array<{ type: string; title?: string; url: string }>;
 }
 
+/**
+ * One workflow state a tracker offers, across all teams. Needed as a *global*
+ * list (not the per-issue `getAvailableStatuses`) so settings can offer a
+ * picker of real state names before any particular issue is selected.
+ */
+export interface WorkflowState {
+  id: string;
+  name: string;
+  type: IssueStateType;
+  team?: string;
+}
+
 export interface BranchContext {
   sessionName: string;
   remote: string;
@@ -96,6 +108,12 @@ export interface IssueTrackerAdapter {
   pollIssue(issueId: string): Promise<Issue>;
   pollAllIssues(issueIds: string[]): Promise<Map<string, Issue>>;
   getAvailableStatuses(issueId: string): Promise<string[]>;
+  /**
+   * Every workflow state across every team, de-duplicated by name. Trackers
+   * with no real workflow (only open/closed) return a short list, which is the
+   * signal that stage mapping has little to work with.
+   */
+  listWorkflowStates(): Promise<WorkflowState[]>;
   openInBrowser(issueId: string): void;
   updateStatus(issueId: string, status: string): Promise<void>;
   createIssue(teamId: string, title: string, description: string): Promise<Issue>;

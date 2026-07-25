@@ -77,8 +77,9 @@ describe("projectStage", () => {
       doneStates: ["QA"],
     };
     // STAGE_ORDER is the tie-break, so the result is deterministic rather
-    // than dependent on object key order.
-    expect(projectStage(issue({ status: "QA" }), messy)).toBe(STAGE_ORDER.find((s) => s === "active"));
+    // than dependent on object key order: the earliest listed stage wins.
+    const expected = STAGE_ORDER.filter((s) => s === "active" || s === "parked" || s === "done")[0];
+    expect(projectStage(issue({ status: "QA" }), messy)).toBe(expected!);
   });
 });
 

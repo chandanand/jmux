@@ -1,8 +1,18 @@
-import type { IssueTrackerAdapter, Issue, AdapterAuthState } from "../adapters/types";
+import type { IssueTrackerAdapter, Issue, AdapterAuthState, IssueStateType, WorkflowState } from "../adapters/types";
 import { buildLinearPrompt } from "../adapters/linear-prompt";
 import { DEMO_ISSUES, DEMO_TEAMS } from "./seed-data";
 
 const AVAILABLE_STATUSES = ["Backlog", "Todo", "In Progress", "In Review", "Done"];
+
+// Category per demo state, so demo mode exercises the same stateType-based
+// stage fallback the real adapters do.
+const DEMO_STATE_TYPES: Record<string, IssueStateType> = {
+  Backlog: "backlog",
+  Todo: "unstarted",
+  "In Progress": "started",
+  "In Review": "started",
+  Done: "completed",
+};
 
 export class DemoIssueTrackerAdapter implements IssueTrackerAdapter {
   type = "demo";
@@ -63,6 +73,15 @@ export class DemoIssueTrackerAdapter implements IssueTrackerAdapter {
 
   async getAvailableStatuses(_issueId: string): Promise<string[]> {
     return [...AVAILABLE_STATUSES];
+  }
+
+  async listWorkflowStates(): Promise<WorkflowState[]> {
+    return AVAILABLE_STATUSES.map((name, i) => ({
+      id: `demo-state-${i}`,
+      name,
+      type: DEMO_STATE_TYPES[name] ?? "unstarted",
+      team: "Demo",
+    }));
   }
 
   openInBrowser(_issueId: string): void {
