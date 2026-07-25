@@ -42,7 +42,7 @@ import { StdinGate } from "./stdin-gate";
 import { TmuxControl, type ControlEvent } from "./tmux-control";
 import { DiffPanel } from "./diff-panel";
 import { InfoPanel, rebuildInfoPanelColors } from "./info-panel";
-import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, type PanelView } from "./panel-view";
+import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, type PanelView } from "./panel-view";
 import { transformIssues, transformMrs, buildViewNodes, renderView, createViewState, filterItems, rebuildPanelViewColors, computeViewLayout, splitRatioForSepRow, DEFAULT_PANEL_SPLIT_RATIO, type ViewState, type ViewNode, type IssueSessionInfo } from "./panel-view-renderer";
 import { createAdapters } from "./adapters/registry";
 import { PollCoordinator } from "./adapters/poll-coordinator";
@@ -981,7 +981,7 @@ const adapters = demoCtx
   ? { codeHost: demoCtx.codeHost, issueTracker: demoCtx.issueTracker }
   : createAdapters(configStore.config.adapters);
 const infoPanel = new InfoPanel({ viewIds: [], viewLabels: new Map() });
-const panelViews = parseViews(configStore.config.panelViews);
+let panelViews = parseViews(configStore.config.panelViews);
 const viewStates = new Map<string, ViewState>();
 for (const view of panelViews) {
   viewStates.set(view.id, createViewState());
@@ -1000,6 +1000,11 @@ async function initAdapters(): Promise<void> {
       process.stderr.write(`jmux: ${adapters.issueTracker.type} adapter auth failed — check ${adapters.issueTracker.authHint}\n`);
     }
   }
+  refreshPanelViews();
+}
+
+/** Re-publish the visible tab set to the panel (after auth, or a saved view). */
+function refreshPanelViews(): void {
   const visibleViews = panelViews.filter((v) => {
     if (v.source === "issues") return adapters.issueTracker?.authState === "ok";
     if (v.source === "mrs") return adapters.codeHost?.authState === "ok";
@@ -1850,7 +1855,7 @@ function renderFrame(): void {
 
         let rawItems: import("./panel-view-renderer").RenderableItem[];
         if (view.source === "issues") {
-          rawItems = transformIssues(pollCoordinator.getGlobalIssues(), linkedIssueIds, getIssueSessionStates());
+          rawItems = transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates());
         } else if (view.filter.scope === "reviewing") {
           rawItems = transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds);
         } else {
@@ -2122,6 +2127,7 @@ const inputRouter = new InputRouter(
     onNewSession: () => handlePaletteAction({ commandId: "new-session" }),
     onSettings: () => handleToolbarAction("settings"),
     onCaptureIssue: () => openCreateIssueModal(),
+    onStartUpNext: () => { void startUpNext(); },
     onSettingsScreen: () => toggleSettingsScreen(),
     onGroupCycle: () => { applySidebarGroup(sidebar.cycleGroupMode()); scheduleRender(); },
     onSortCycle: () => { applySidebarSort(sidebar.cycleSortMode()); scheduleRender(); },
@@ -2287,7 +2293,7 @@ const inputRouter = new InputRouter(
       const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
       let rawItems: import("./panel-view-renderer").RenderableItem[];
       if (view.source === "issues") {
-        rawItems = transformIssues(pollCoordinator.getGlobalIssues(), linkedIssueIds, getIssueSessionStates());
+        rawItems = transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates());
       } else if (view.filter.scope === "reviewing") {
         rawItems = transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds);
       } else {
@@ -2346,7 +2352,7 @@ const inputRouter = new InputRouter(
       const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
       const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
       let rawItems = view.source === "issues"
-        ? transformIssues(pollCoordinator.getGlobalIssues(), linkedIssueIds, getIssueSessionStates())
+        ? transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates())
         : view.filter.scope === "reviewing"
           ? transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds)
           : transformMrs(pollCoordinator.getGlobalMrs(), linkedMrIds);
@@ -2369,7 +2375,7 @@ const inputRouter = new InputRouter(
       const sessionName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
       const ctx = pollCoordinator.getContext(sessionName);
       const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
-      let rawItems = transformIssues(pollCoordinator.getGlobalIssues(), linkedIssueIds, getIssueSessionStates());
+      let rawItems = transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates());
       if (viewState.filterQuery) rawItems = filterItems(rawItems, viewState.filterQuery);
       const effectiveView = viewState.filterQuery ? { ...view, groupBy: "none" as const } : view;
       const nodes = buildViewNodes(rawItems, effectiveView, viewState.collapsedGroups);
@@ -2392,7 +2398,7 @@ const inputRouter = new InputRouter(
       const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
       const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
       let rawItems = view.source === "issues"
-        ? transformIssues(pollCoordinator.getGlobalIssues(), linkedIssueIds, getIssueSessionStates())
+        ? transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates())
         : view.filter.scope === "reviewing"
           ? transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds)
           : transformMrs(pollCoordinator.getGlobalMrs(), linkedMrIds);
@@ -2503,7 +2509,7 @@ const inputRouter = new InputRouter(
         const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
         const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
         let rawItems = view.source === "issues"
-          ? transformIssues(pollCoordinator.getGlobalIssues(), linkedIssueIds, getIssueSessionStates())
+          ? transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates())
           : view.filter.scope === "reviewing"
             ? transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds)
             : transformMrs(pollCoordinator.getGlobalMrs(), linkedMrIds);
@@ -2544,7 +2550,7 @@ const inputRouter = new InputRouter(
       const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
       const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
       let rawItems = view.source === "issues"
-        ? transformIssues(pollCoordinator.getGlobalIssues(), linkedIssueIds, getIssueSessionStates())
+        ? transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates())
         : view.filter.scope === "reviewing"
           ? transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds)
           : transformMrs(pollCoordinator.getGlobalMrs(), linkedMrIds);
@@ -2699,6 +2705,21 @@ function buildPaletteCommands(): PaletteCommand[] {
           id: "pin-session",
           label: `Pin session: ${currentName}`,
           category: "session",
+        });
+      }
+      if (panelViews.some((v) => v.id === infoPanel.activeTab)) {
+        commands.push({
+          id: "save-view-as-tab",
+          label: "Save current view as tab",
+          category: "issue",
+        });
+      }
+      const next = upNextIssue();
+      if (next) {
+        commands.push({
+          id: "start-up-next",
+          label: `Up next · ${next.viewLabel}: ${next.issue.identifier} ${next.issue.title}`,
+          category: "issue",
         });
       }
       commands.push({
@@ -3220,6 +3241,24 @@ function buildSettingsCategories(): SettingsCategory[] {
           },
         },
         {
+          id: "up-next-order", label: "Up next queue order", type: "multiselect" as const,
+          getValue: () => {
+            const ids = configStore.config.pipeline?.upNext ?? [];
+            if (ids.length === 0) return "off";
+            return ids.map((id) => panelViews.find((v) => v.id === id)?.label ?? id).join(" → ");
+          },
+          getOptions: () => panelViews.filter((v) => v.source === "issues").map((v) => ({ id: v.id, label: v.label })),
+          getSelected: () => configStore.config.pipeline?.upNext ?? [],
+          onToggleOption: (id) => {
+            // Append on add so toggling order-of-selection *is* queue priority —
+            // pick Release Blockers first and it is checked first.
+            const cur = (configStore.config.pipeline?.upNext ?? []).slice();
+            const at = cur.indexOf(id);
+            if (at >= 0) cur.splice(at, 1); else cur.push(id);
+            configStore.setPipeline("upNext", cur);
+          },
+        },
+        {
           id: "auto-park-idle", label: "Auto-park idle sessions (days)", type: "text" as const,
           getValue: () => {
             const d = configStore.config.pipeline?.autoParkIdleDays ?? null;
@@ -3467,6 +3506,52 @@ async function startWorkOnIssue(
       });
 }
 
+/**
+ * The global issue list narrowed by a view's filter. Every panel read goes
+ * through here so a named queue ("QA Failed") means the same thing whether it
+ * is being rendered, navigated, or acted on.
+ */
+function issuesForView(view: PanelView | undefined): import("./adapters/types").Issue[] {
+  const all = pollCoordinator.getGlobalIssues();
+  if (!view || view.source !== "issues") return all;
+  const stageOf = (issue: { status: string }) =>
+    stageForIssue(issue as import("./adapters/types").Issue, configStore.config, (d) => repoFacts.get(d), homedir());
+  return all.filter((issue) => matchesIssueFilter(issue, view.filter, stageOf));
+}
+
+/**
+ * The next issue to pull, honouring the configured queue order. Ordering
+ * *within* a queue reuses buildViewNodes so "the top of the list" means
+ * exactly what the panel shows — no second sort implementation to drift.
+ */
+function upNextIssue(): { viewLabel: string; issue: import("./adapters/types").Issue } | null {
+  const order = configStore.config.pipeline?.upNext ?? [];
+  if (order.length === 0) return null;
+
+  const byView = new Map<string, import("./adapters/types").Issue[]>();
+  for (const view of panelViews) {
+    if (view.source !== "issues") continue;
+    const items = transformIssues(issuesForView(view), new Set(), getIssueSessionStates());
+    const issues = buildViewNodes(items, view, new Set())
+      .filter((n) => n.kind === "item" && n.item.type === "issue")
+      .map((n) => (n as Extract<ViewNode, { kind: "item" }>).item.raw as import("./adapters/types").Issue);
+    byView.set(view.id, issues);
+  }
+
+  const picked = pickUpNext(order, byView);
+  if (!picked) return null;
+  const view = panelViews.find((v) => v.id === picked.viewId);
+  return { viewLabel: view?.label ?? picked.viewId, issue: picked.item };
+}
+
+/** Start (or switch to) whatever is at the top of the queue rotation. */
+async function startUpNext(): Promise<void> {
+  const next = upNextIssue();
+  if (!next) return;
+  const state = getIssueSessionStates().get(next.issue.id);
+  await startWorkOnIssue(next.issue, state?.state ?? "none", state?.sessionName);
+}
+
 function getIssueSessionStates(): Map<string, IssueSessionInfo> {
   const states = new Map<string, IssueSessionInfo>();
   const workflow = configStore.config.issueWorkflow;
@@ -3539,7 +3624,7 @@ function focusPanelOnSessionIssue(sessionName: string): void {
     const viewState = viewStates.get(view.id);
     if (!viewState) continue;
 
-    const rawItems = transformIssues(pollCoordinator.getGlobalIssues(), linkedIssueIds, getIssueSessionStates());
+    const rawItems = transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates());
     const nodes = buildViewNodes(rawItems, view, viewState.collapsedGroups);
 
     for (let i = 0; i < nodes.length; i++) {
@@ -3728,6 +3813,36 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
   if (commandId === "toggle-park-session") {
     const currentName = currentSessions.find(s => s.id === currentSessionId)?.name;
     if (currentName) toggleParked(currentName);
+    return;
+  }
+
+  if (commandId === "start-up-next") {
+    await startUpNext();
+    return;
+  }
+
+  if (commandId === "save-view-as-tab") {
+    const view = panelViews.find((v) => v.id === infoPanel.activeTab);
+    if (!view) return;
+    const modal = new InputModal({
+      header: "Save view as tab",
+      subheader: "Name this queue",
+      value: view.label,
+    });
+    modal.open();
+    openModal(modal, async (value) => {
+      const label = (value as string).trim();
+      if (!label) return;
+      // Configure-by-demonstration: the panel's own g/G//? cycling has already
+      // shaped this view against real data, so saving is a rename + clone
+      // rather than a form the user has to fill in blind.
+      const id = `${label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${Date.now().toString(36)}`;
+      configStore.saveView({ ...view, id, label });
+      panelViews = parseViews(configStore.config.panelViews);
+      viewStates.set(id, createViewState());
+      refreshPanelViews();
+      scheduleRender();
+    });
     return;
   }
 

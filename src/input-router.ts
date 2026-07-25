@@ -100,6 +100,7 @@ export interface InputRouterOptions {
   onNewSession?: () => void;
   onSettings?: () => void;
   onCaptureIssue?: () => void;
+  onStartUpNext?: () => void;
   onSettingsScreen?: () => void;  // Ctrl-a I (uppercase) — full settings screen
   onGroupCycle?: () => void;      // Ctrl-a G — cycle sidebar group mode
   onSortCycle?: () => void;       // Ctrl-a s — cycle sidebar sort mode
@@ -403,6 +404,7 @@ export class InputRouter {
           if (data === "n") { this.opts.onNewSession?.(); return; }
           if (data === "i") { this.opts.onSettings?.(); return; }
           if (data === "c") { this.opts.onCaptureIssue?.(); return; }
+          if (data === "u") { this.opts.onStartUpNext?.(); return; }
           if (data === "I") { this.opts.onSettingsScreen?.(); return; }
           if (data === "G") { this.opts.onGroupCycle?.(); return; }
           if (data === "s") { this.opts.onSortCycle?.(); return; }
@@ -429,6 +431,11 @@ export class InputRouter {
         // Capture: file an issue from wherever you are, without losing your place.
         if (data === "c") {
           this.opts.onCaptureIssue?.();
+          return;
+        }
+        // Pull the next thing off the queue rotation and start working it.
+        if (data === "u") {
+          this.opts.onStartUpNext?.();
           return;
         }
         if (data === "I") {
