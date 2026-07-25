@@ -4,14 +4,19 @@ import { homedir } from "os";
 import type { AdapterConfig } from "./adapters/types";
 import type { PanelView } from "./panel-view";
 import type { TabEntry } from "./glass/tabs";
+import type { RepoSettings } from "./repo-settings";
+import { migrateLegacyConfig } from "./repo-settings";
 import { logError } from "./log";
 
+/**
+ * Cross-repo routing only. Everything that is a property of a *repo* rather
+ * than of the workspace now lives in `repoDefaults` / `repos` — see
+ * docs/adr/0004-per-repo-settings-keyed-on-repo-root.md. `teamRepoMap` stays
+ * here because it is precisely the index that maps a tracker team onto a repo,
+ * so it cannot itself be per-repo.
+ */
 export interface IssueWorkflowConfig {
   teamRepoMap?: Record<string, string>;  // Linear team name → repo directory
-  defaultBaseBranch?: string;             // default: "main"
-  autoCreateWorktree?: boolean;           // default: true
-  autoLaunchAgent?: boolean;              // default: true — launch claude with issue context
-  sessionNameTemplate?: string;           // default: "{identifier}" — supports {identifier}, {title}
 }
 
 export interface SnapshotConfig {
@@ -38,7 +43,6 @@ export interface JmuxConfig {
   infoPanelWidth?: number;
   /** Info panel list/detail split, as a fraction of the splittable rows. */
   infoPanelSplitRatio?: number;
-  claudeCommand?: string;
   cacheTimers?: boolean;
   windowBranches?: boolean;
   pinnedSessions?: string[];
@@ -47,7 +51,6 @@ export interface JmuxConfig {
   /** Case-insensitive regex matched against pane_current_command for auto-pin (e.g. Codex). */
   agentPaneCommandRegex?: string;
   projectDirs?: string[];
-  wtmIntegration?: boolean;
   diffPanel?: {
     splitRatio?: number;
     hunkCommand?: string;
@@ -67,6 +70,10 @@ export interface JmuxConfig {
   sidebarSort?: "project" | "status" | "activity" | "name";
   /** Ordered Command Center tab registry; index 0 is the protected default. */
   commandCenterTabs?: TabEntry[];
+  /** Global defaults for per-repo workflow settings. */
+  repoDefaults?: RepoSettings;
+  /** Per-repo overrides, keyed by canonical repo root (git common dir). */
+  repos?: Record<string, RepoSettings>;
 }
 
 /**
@@ -144,15 +151,16 @@ function mergeConfigWithDefaults(userConfig: JmuxConfig, defaults: JmuxConfig): 
  */
 export function loadUserConfig(configPath?: string): JmuxConfig {
   const path = configPath ?? DEFAULT_CONFIG_PATH;
-  let userConfig: JmuxConfig = {};
+  let raw: JmuxConfig = {};
   try {
     if (existsSync(path)) {
-      userConfig = JSON.parse(readFileSync(path, "utf-8")) as JmuxConfig;
+      raw = JSON.parse(readFileSync(path, "utf-8")) as JmuxConfig;
     }
   } catch {
     // Invalid config — use defaults
   }
-  return mergeConfigWithDefaults(userConfig, defaultConfig);
+  const { config } = migrateLegacyConfig(raw);
+  return mergeConfigWithDefaults(config, defaultConfig);
 }
 
 /**
@@ -166,7 +174,19 @@ export class ConfigStore {
 
   constructor(configPath?: string) {
     this.path = configPath ?? DEFAULT_CONFIG_PATH;
-    this.data = loadUserConfig(this.path);
+    let raw: JmuxConfig = {};
+    try {
+      if (existsSync(this.path)) {
+        raw = JSON.parse(readFileSync(this.path, "utf-8")) as JmuxConfig;
+      }
+    } catch {
+      // Invalid config — use defaults
+    }
+    // Rewrite the file once when the on-disk shape predates repoDefaults/repos,
+    // so no consumption site ever has to check two locations for a field.
+    const { config, changed } = migrateLegacyConfig(raw);
+    this.data = mergeConfigWithDefaults(config, defaultConfig);
+    if (changed) this.persist();
   }
 
   /** Current in-memory config snapshot. */
@@ -211,6 +231,31 @@ export class ConfigStore {
   setWorkflow<K extends keyof IssueWorkflowConfig>(key: K, value: IssueWorkflowConfig[K]): void {
     if (!this.data.issueWorkflow) this.data.issueWorkflow = {};
     this.data.issueWorkflow[key] = value;
+    this.persist();
+  }
+
+  /** Set a global repo-default and persist. */
+  setRepoDefault<K extends keyof RepoSettings>(key: K, value: RepoSettings[K]): void {
+    if (!this.data.repoDefaults) this.data.repoDefaults = {};
+    this.data.repoDefaults[key] = value;
+    this.persist();
+  }
+
+  /** Set a per-repo override and persist. */
+  setRepoOverride<K extends keyof RepoSettings>(repoKey: string, key: K, value: RepoSettings[K]): void {
+    if (!this.data.repos) this.data.repos = {};
+    if (!this.data.repos[repoKey]) this.data.repos[repoKey] = {};
+    this.data.repos[repoKey]![key] = value;
+    this.persist();
+  }
+
+  /** Clear a per-repo override, pruning emptied entries/containers, and persist. */
+  clearRepoOverride(repoKey: string, key: keyof RepoSettings): void {
+    const entry = this.data.repos?.[repoKey];
+    if (!entry) return;
+    delete entry[key];
+    if (Object.keys(entry).length === 0) delete this.data.repos![repoKey];
+    if (this.data.repos && Object.keys(this.data.repos).length === 0) delete this.data.repos;
     this.persist();
   }
 
