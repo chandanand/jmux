@@ -47,7 +47,7 @@ import { transformIssues, transformMrs, buildViewNodes, renderView, createViewSt
 import { createAdapters } from "./adapters/registry";
 import { PollCoordinator } from "./adapters/poll-coordinator";
 import { SessionState } from "./session-state";
-import type { SessionContext } from "./adapters/types";
+import type { SessionContext, WorkflowState } from "./adapters/types";
 import type { DemoContext } from "./demo/setup";
 import type { SessionInfo, WindowTab, PaletteCommand, PaletteResult, AgentState } from "./types";
 import { loadProjectDirsCache, saveProjectDirsCache } from "./project-dirs-cache";
@@ -1030,6 +1030,22 @@ async function refreshTeams(): Promise<void> {
   } catch (e) {
     logError("jmux", `team fetch failed: ${(e as Error).message}`);
   }
+  try {
+    cachedWorkflowStates = await adapters.issueTracker.listWorkflowStates();
+  } catch (e) {
+    logError("jmux", `workflow state fetch failed: ${(e as Error).message}`);
+  }
+}
+
+/**
+ * Every workflow state the tracker offers, for the stage/transition pickers.
+ * Empty when the tracker is unauthenticated or exposes no real workflow —
+ * settings surfaces that rather than showing an empty picker with no reason.
+ */
+let cachedWorkflowStates: WorkflowState[] = [];
+
+function workflowStateOptions(): Array<{ id: string; label: string }> {
+  return cachedWorkflowStates.map((s) => ({ id: s.name, label: s.name }));
 }
 
 function setDiffFocus(focused: boolean): void {
@@ -2887,39 +2903,109 @@ function persistStateColor(state: AgentState, name: string): void {
 }
 
 // The per-repo settings, described once and rendered into two tiers: the
-// global-default rows under "Issue Workflow", and the override rows under a
-// "This repo" category that only appears when the active session is inside a
-// repo. Describing them once is what keeps the two tiers from drifting.
-const REPO_SETTING_ROWS: Array<{
+// global-default rows (writing `repoDefaults`) and the override rows under a
+// "This repo" category (writing `repos[key]`). Describing them once is what
+// keeps the two tiers from drifting, and is why adding a per-repo setting is
+// a one-line change here rather than an edit in two places.
+type RepoRowKind = "text" | "boolean" | "multiselect" | "state";
+
+interface RepoRow {
   id: string;
   label: string;
   field: keyof RepoSettings;
-  kind: "text" | "boolean";
-}> = [
-  { id: "default-branch", label: "Default base branch", field: "defaultBaseBranch", kind: "text" },
-  { id: "session-template", label: "Session name template", field: "sessionNameTemplate", kind: "text" },
-  { id: "claude-command", label: "Claude command", field: "claudeCommand", kind: "text" },
-  { id: "wtm", label: "wtm integration", field: "wtmIntegration", kind: "boolean" },
-  { id: "auto-agent", label: "Auto-launch agent", field: "autoLaunchAgent", kind: "boolean" },
+  kind: RepoRowKind;
+  group: "workflow" | "stages" | "transitions";
+}
+
+const REPO_SETTING_ROWS: RepoRow[] = [
+  { id: "default-branch", label: "Default base branch", field: "defaultBaseBranch", kind: "text", group: "workflow" },
+  { id: "session-template", label: "Session name template", field: "sessionNameTemplate", kind: "text", group: "workflow" },
+  { id: "claude-command", label: "Claude command", field: "claudeCommand", kind: "text", group: "workflow" },
+  { id: "wtm", label: "wtm integration", field: "wtmIntegration", kind: "boolean", group: "workflow" },
+  { id: "auto-agent", label: "Auto-launch agent", field: "autoLaunchAgent", kind: "boolean", group: "workflow" },
+
+  { id: "idea-states", label: "Idea states", field: "ideaStates", kind: "multiselect", group: "stages" },
+  { id: "active-states", label: "Active states", field: "activeStates", kind: "multiselect", group: "stages" },
+  { id: "parked-states", label: "Parked states", field: "parkedStates", kind: "multiselect", group: "stages" },
+  { id: "done-states", label: "Done states", field: "doneStates", kind: "multiselect", group: "stages" },
+
+  { id: "on-start", label: "On session start", field: "onSessionStartState", kind: "state", group: "transitions" },
+  { id: "on-mr-open", label: "On MR opened", field: "onMrOpenState", kind: "state", group: "transitions" },
+  { id: "on-mr-merged", label: "On MR merged", field: "onMrMergedState", kind: "state", group: "transitions" },
 ];
 
+/** Sentinel option meaning "leave the tracker alone on this event". */
+const NEVER_OPTION = "(never)";
+
+/**
+ * Where a tier reads its effective value from and where it writes it back to.
+ * The two tiers differ only in these four functions, so every row kind is
+ * implemented once.
+ */
+interface RepoTier {
+  idPrefix: string;
+  read: (field: keyof RepoSettings) => unknown;
+  write: (field: keyof RepoSettings, value: unknown) => void;
+  scope?: (field: keyof RepoSettings) => "inherited" | "override";
+  clear?: (field: keyof RepoSettings) => void;
+}
+
+function buildRepoRows(group: RepoRow["group"], tier: RepoTier): SettingDef[] {
+  return REPO_SETTING_ROWS.filter((r) => r.group === group).map((row) => {
+    const shown = (): string => {
+      const v = tier.read(row.field);
+      if (typeof v === "boolean") return v ? "on" : "off";
+      if (Array.isArray(v)) return v.length ? v.join(", ") : "none";
+      if (v === null || v === undefined) return NEVER_OPTION;
+      return String(v);
+    };
+    const base: SettingDef = {
+      id: `${tier.idPrefix}${row.id}`,
+      label: row.label,
+      type: row.kind === "state" ? "list" : row.kind,
+      getValue: shown,
+      ...(tier.scope ? { getScope: () => tier.scope!(row.field) } : {}),
+      ...(tier.clear ? { onClearOverride: () => tier.clear!(row.field) } : {}),
+    };
+
+    switch (row.kind) {
+      case "boolean":
+        return { ...base, onToggle: () => tier.write(row.field, shown() !== "on") };
+      case "text":
+        return { ...base, onTextCommit: (v: string) => tier.write(row.field, v) };
+      case "multiselect":
+        return {
+          ...base,
+          getOptions: workflowStateOptions,
+          getSelected: () => (tier.read(row.field) as string[] | undefined) ?? [],
+          onToggleOption: (id: string) => {
+            const cur = ((tier.read(row.field) as string[] | undefined) ?? []).slice();
+            const at = cur.findIndex((n) => n.toLowerCase() === id.toLowerCase());
+            if (at >= 0) cur.splice(at, 1); else cur.push(id);
+            tier.write(row.field, cur);
+          },
+        };
+      case "state":
+        return {
+          ...base,
+          options: [NEVER_OPTION, ...cachedWorkflowStates.map((s) => s.name)],
+          onOptionSelect: (v: string) => tier.write(row.field, v === NEVER_OPTION ? null : v),
+        };
+    }
+  });
+}
+
 /** Global-default rows — these write to `repoDefaults`. */
-function repoDefaultSettings(): SettingDef[] {
-  const shown = (field: keyof RepoSettings): string => {
-    const v = configStore.config.repoDefaults?.[field] ?? REPO_SETTING_DEFAULTS[field];
-    return typeof v === "boolean" ? (v ? "on" : "off") : String(v);
+function repoDefaultTier(): RepoTier {
+  return {
+    idPrefix: "",
+    read: (field) => configStore.config.repoDefaults?.[field] ?? REPO_SETTING_DEFAULTS[field],
+    write: (field, value) => configStore.setRepoDefault(field, value as never),
   };
-  return REPO_SETTING_ROWS.map((row) => row.kind === "boolean"
-    ? {
-        id: row.id, label: row.label, type: "boolean" as const,
-        getValue: () => shown(row.field),
-        onToggle: () => configStore.setRepoDefault(row.field, shown(row.field) !== "on" as never),
-      }
-    : {
-        id: row.id, label: row.label, type: "text" as const,
-        getValue: () => shown(row.field),
-        onTextCommit: (v: string) => configStore.setRepoDefault(row.field, v as never),
-      });
+}
+
+function repoDefaultSettings(group: RepoRow["group"] = "workflow"): SettingDef[] {
+  return buildRepoRows(group, repoDefaultTier());
 }
 
 /**
@@ -2935,27 +3021,24 @@ function currentRepoCategory(): SettingsCategory[] {
   if (!key) return [];
 
   const label = key.replace(/\/\.git$/, "").split("/").pop() ?? key;
-  const effective = () => repoSettingsFor(dir);
-  const scopeOf = (field: keyof RepoSettings) =>
-    configStore.config.repos?.[key]?.[field] !== undefined ? "override" as const : "inherited" as const;
-  const shown = (field: keyof RepoSettings): string => {
-    const v = effective()[field as keyof ResolvedRepoSettings];
-    return typeof v === "boolean" ? (v ? "on" : "off") : String(v);
+  const tier: RepoTier = {
+    idPrefix: "repo-",
+    read: (field) => repoSettingsFor(dir)[field as keyof ResolvedRepoSettings],
+    write: (field, value) => configStore.setRepoOverride(key, field, value as never),
+    scope: (field) =>
+      configStore.config.repos?.[key]?.[field] !== undefined ? "override" : "inherited",
+    clear: (field) => configStore.clearRepoOverride(key, field),
   };
 
-  const settings: SettingDef[] = REPO_SETTING_ROWS.map((row) => ({
-    id: `repo-${row.id}`,
-    label: row.label,
-    type: row.kind,
-    getValue: () => shown(row.field),
-    getScope: () => scopeOf(row.field),
-    onClearOverride: () => configStore.clearRepoOverride(key, row.field),
-    ...(row.kind === "boolean"
-      ? { onToggle: () => configStore.setRepoOverride(key, row.field, (shown(row.field) !== "on") as never) }
-      : { onTextCommit: (v: string) => configStore.setRepoOverride(key, row.field, v as never) }),
-  }));
-
-  return [{ label: `This repo · ${label}`, collapsed: false, settings }];
+  return [{
+    label: `This repo · ${label}`,
+    collapsed: false,
+    settings: [
+      ...buildRepoRows("workflow", tier),
+      ...buildRepoRows("stages", tier),
+      ...buildRepoRows("transitions", tier),
+    ],
+  }];
 }
 
 function buildSettingsCategories(): SettingsCategory[] {
@@ -3103,6 +3186,32 @@ function buildSettingsCategories(): SettingsCategory[] {
             configStore.set("projectDirs", newDirs);
           },
         },
+      ],
+    },
+    {
+      label: "Stages",
+      collapsed: false,
+      settings: [
+        ...repoDefaultSettings("stages"),
+        {
+          id: "stage-source", label: "Tracker states available", type: "text" as const,
+          getValue: () => {
+            if (adapters.issueTracker?.authState !== "ok") return "tracker not connected";
+            return cachedWorkflowStates.length > 0
+              ? `${cachedWorkflowStates.length} states`
+              : "none reported";
+          },
+        },
+      ],
+    },
+    {
+      // Quarantined from the rest deliberately: this is the only section that
+      // WRITES to a shared team tracker, so turning it on should feel like a
+      // decision rather than a stray keypress.
+      label: "Transitions (writes to your tracker)",
+      collapsed: true,
+      settings: [
+        ...repoDefaultSettings("transitions"),
       ],
     },
     ...currentRepoCategory(),
