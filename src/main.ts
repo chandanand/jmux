@@ -565,7 +565,7 @@ function makeToolbar(): ToolbarConfig {
     // A live undo takes the chip: it is transient and time-boxed, and being
     // able to take the write back matters more for those 20s than ambient
     // snapshot health does.
-    statusChip: undoChipLabel() ?? snapshotChipLabel(getSnapshotHealth()),
+    statusChip: undoChipLabel() ?? toastLabel() ?? snapshotChipLabel(getSnapshotHealth()),
   };
 }
 
@@ -1198,6 +1198,23 @@ function undoChipLabel(): string | null {
   if (!pendingUndo) return null;
   if (Date.now() > pendingUndo.expiresAt) { pendingUndo = null; return null; }
   return `${pendingUndo.identifier} → ${pendingUndo.to}  ^a Z undo`;
+}
+
+// A transient confirmation in the toolbar chip. Actions that deliberately
+// leave you where you are still have to say they happened — a keypress with no
+// visible effect is indistinguishable from one that failed.
+let statusToast: { text: string; expiresAt: number } | null = null;
+const TOAST_MS = 6_000;
+
+function showToast(text: string): void {
+  statusToast = { text, expiresAt: Date.now() + TOAST_MS };
+  scheduleRender();
+}
+
+function toastLabel(): string | null {
+  if (!statusToast) return null;
+  if (Date.now() > statusToast.expiresAt) { statusToast = null; return null; }
+  return statusToast.text;
 }
 
 async function applyTransition(
@@ -2136,15 +2153,22 @@ function openCreateIssueModal(): void {
     try {
       const issue = await adapters.issueTracker!.createIssue(result.teamId, result.title, result.description);
       pollCoordinator.addGlobalIssue(issue);
-      scheduleRender();
       // "Capture & start" is the same capture plus the panel's own `n` flow, so
       // an idea reaches a running agent without a second trip through the UI.
       if (result.mode === "start") {
+        showToast(`${issue.identifier} created`);
         const state = getIssueSessionStates().get(issue.id);
         await startWorkOnIssue(issue, state?.state ?? "none", state?.sessionName);
+        return;
       }
+      // Capture-and-stay: confirm it landed, and highlight it if the list
+      // happens to be on screen — but don't move the user.
+      showToast(`${issue.identifier} captured`);
+      selectIssueInOpenPanel(issue.id);
+      scheduleRender();
     } catch (e) {
       logError("jmux", `failed to create issue: ${(e as Error).message}`);
+      showToast("Issue creation failed — see jmux.log");
     }
   });
 }
@@ -3783,6 +3807,38 @@ function getIssueSessionStates(): Map<string, IssueSessionInfo> {
     }
   }
   return states;
+}
+
+/**
+ * Select an issue in the panel *if the panel is already showing an issues tab*.
+ *
+ * Deliberately passive: it never opens the panel, never switches tabs and never
+ * takes keyboard focus. Capture exists so you don't lose your place, so it must
+ * not yank you somewhere — but if the list is already on screen, leaving the
+ * new issue unhighlighted would be its own small lie.
+ */
+function selectIssueInOpenPanel(issueId: string): void {
+  if (!diffPanel.isActive()) return;
+  const view = panelViews.find((v) => v.id === infoPanel.activeTab);
+  if (!view || view.source !== "issues") return;
+  const viewState = viewStates.get(view.id);
+  if (!viewState) return;
+
+  const rawItems = transformIssues(issuesForView(view), new Set(), getIssueSessionStates());
+  const nodes = buildViewNodes(rawItems, view, viewState.collapsedGroups);
+  const index = nodes.findIndex(
+    (n) => n.kind === "item" && n.item.type === "issue" && n.item.id === issueId,
+  );
+  if (index < 0) return;
+
+  viewState.selectedIndex = index;
+  viewState.detailScrollOffset = 0;
+  const { listRows } = panelViewLayout(layout.ptyRows, viewState);
+  if (index >= viewState.scrollOffset + listRows) {
+    viewState.scrollOffset = index - listRows + 1;
+  } else if (index < viewState.scrollOffset) {
+    viewState.scrollOffset = index;
+  }
 }
 
 function focusPanelOnSessionIssue(sessionName: string): void {
