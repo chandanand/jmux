@@ -1,6 +1,6 @@
 import type { CellGrid } from "./types";
 import { ColorMode } from "./types";
-import { createGrid, writeString, type CellAttrs } from "./cell-grid";
+import { createGrid, writeString, textCols, truncateToCols, type CellAttrs } from "./cell-grid";
 import { theme, neutralFg } from "./theme";
 import { tokens, space, frame } from "./chrome-tokens";
 
@@ -45,6 +45,12 @@ export interface SettingDef {
    * supplies a right-hand summary, so the row reads like the others.
    */
   onActivate?: () => void;
+  /**
+   * One sentence saying what this setting does, shown on the workflow screen's
+   * explain line while the row is selected. Optional and ignored by the
+   * settings screen, which has no explain line of its own.
+   */
+  describe?: () => string;
 }
 
 export interface SettingsCategory {
@@ -106,6 +112,65 @@ export function rebuildSettingsColors(): void {
   EDIT_CURSOR.bg = theme.selected;
 }
 rebuildSettingsColors();
+
+// --- Shared row dialect ---
+//
+// `label ·········· value (marker)` with a ▸ cursor in the left gutter — the
+// one row treatment used by every full-screen chrome surface. Exported so the
+// workflow screen paints its behaviour bands identically instead of growing a
+// second, drifting copy of this arithmetic.
+//
+// All widths go through textCols/truncateToCols rather than String.length:
+// these rows carry user data (tracker status names), which may contain
+// width-2 characters.
+
+export interface SettingRowOpts {
+  label: string;
+  labelAttrs: CellAttrs;
+  /** Right-aligned, painted left to right; each part keeps its own attrs. */
+  value: ReadonlyArray<{ text: string; attrs: CellAttrs }>;
+  selected: boolean;
+  /** Columns from `left` to the label. The cursor sits two columns before it. */
+  indent?: number;
+  /** Dot leader between label and value. Off for rows that expand in place. */
+  leader?: boolean;
+}
+
+export function drawSettingRow(
+  grid: CellGrid,
+  row: number,
+  bounds: { left: number; right: number },
+  opts: SettingRowOpts,
+): void {
+  const { left, right } = bounds;
+  const indent = left + (opts.indent ?? 2);
+
+  const maxLabelCols = Math.max(1, Math.floor((right - indent - 2) * 0.5));
+  const label = truncateToCols(opts.label, maxLabelCols);
+  writeString(grid, row, indent, label, opts.labelAttrs);
+
+  const valueCols = opts.value.reduce((n, part) => n + textCols(part.text), 0);
+  const valueCol = right - valueCols;
+  const labelEnd = indent + textCols(label);
+
+  if (valueCol > labelEnd + 1) {
+    if (opts.leader !== false) {
+      const leaderStart = labelEnd + 1;
+      // Reserve one flanking space each side so the dots never touch either end.
+      const maxDots = valueCol - 1 - leaderStart - 1;
+      if (maxDots >= 2) {
+        writeString(grid, row, leaderStart, " " + "·".repeat(maxDots) + " ", HAIRLINE_ATTRS);
+      }
+    }
+    let col = valueCol;
+    for (const part of opts.value) {
+      writeString(grid, row, col, part.text, part.attrs);
+      col += textCols(part.text);
+    }
+  }
+
+  if (opts.selected) writeString(grid, row, indent - 2, "▸", CURSOR_ATTRS);
+}
 
 // --- Node model ---
 
@@ -346,8 +411,6 @@ export class SettingsScreen {
   }
 
   private renderSetting(grid: CellGrid, row: number, left: number, right: number, setting: SettingDef, selected: boolean): void {
-    const indent = left + 2;
-
     // Check if this setting is being edited
     if (this.editState?.settingId === setting.id) {
       if (this.editState.mode === "text") {
@@ -360,53 +423,34 @@ export class SettingsScreen {
       }
     }
 
-    const maxLabelLen = Math.max(1, Math.floor((right - indent - 2) * 0.5));
-    const displayLabel = setting.label.length > maxLabelLen
-      ? setting.label.slice(0, maxLabelLen - 1) + "\u2026"
-      : setting.label;
-
-    writeString(grid, row, indent, displayLabel, selected ? LABEL_ACTIVE : LABEL_ATTRS);
-
-    // Value
     const value = setting.getValue();
     const isBoolean = setting.type === "boolean";
     const isMap = setting.type === "map";
     const valueStr = isMap
       ? (this.expandedMaps.has(setting.id) ? "▾" : `▸ ${value}`)
-      : value.length > 25 ? value.slice(0, 24) + "\u2026" : value;
+      : truncateToCols(value, 25);
 
     // Per-repo rows carry a provenance marker after the value, so an override
     // is visible at a glance and the [d] clear key has something to point at.
     const scope = setting.getScope?.();
-    const marker = scope ? ` (${scope})` : "";
 
-    // Dot leader computed within the measure: label, leader, value — the
-    // leader fills exactly the space between them (measureWidth - label -
-    // value - the flanking padding), never past `right`.
-    const valueCol = right - valueStr.length - marker.length;
-    const labelEnd = indent + displayLabel.length;
-    if (valueCol > labelEnd + 1) {
-      if (!isMap) {
-        const leaderStart = labelEnd + 1;
-        const leaderEnd = valueCol - 1;
-        const maxDots = leaderEnd - leaderStart - 1; // reserve one flanking space each side
-        if (maxDots >= 2) {
-          const dots = " " + "·".repeat(maxDots) + " ";
-          writeString(grid, row, leaderStart, dots, HAIRLINE_ATTRS);
-        }
-      }
-
-      let valAttrs: CellAttrs;
-      if (isBoolean) {
-        valAttrs = value === "on" ? ON_ATTRS : OFF_ATTRS;
-      } else {
-        valAttrs = selected ? VALUE_ACTIVE : VALUE_ATTRS;
-      }
-      writeString(grid, row, valueCol, valueStr, valAttrs);
-      if (marker) writeString(grid, row, valueCol + valueStr.length, marker, DIM_ATTRS);
-    }
-
-    if (selected) writeString(grid, row, indent - 2, "▸", CURSOR_ATTRS);
+    drawSettingRow(grid, row, { left, right }, {
+      label: setting.label,
+      labelAttrs: selected ? LABEL_ACTIVE : LABEL_ATTRS,
+      value: [
+        {
+          text: valueStr,
+          attrs: isBoolean
+            ? (value === "on" ? ON_ATTRS : OFF_ATTRS)
+            : (selected ? VALUE_ACTIVE : VALUE_ATTRS),
+        },
+        ...(scope ? [{ text: ` (${scope})`, attrs: DIM_ATTRS }] : []),
+      ],
+      selected,
+      // A map row expands in place rather than carrying a value, so a leader
+      // pointing at its ▸/▾ chevron would read as a value it doesn't have.
+      leader: !isMap,
+    });
   }
 
   private renderTextEdit(grid: CellGrid, row: number, left: number, right: number, setting: SettingDef, state: Extract<EditState, { mode: "text" }>): void {
