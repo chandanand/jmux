@@ -2,8 +2,8 @@
 import type { CellGrid } from "./types";
 import { ColorMode } from "./types";
 import { createGrid, writeString, textCols, truncateToCols, type CellAttrs, type StyledLine } from "./cell-grid";
-import type { PanelView, GroupByField } from "./panel-view";
-import type { Issue, IssueStateType, MergeRequest } from "./adapters/types";
+import { sectionIndexForStatus, type PanelView, type GroupByField } from "./panel-view";
+import type { Issue, IssueStateType, MergeRequest, PipelineStatus } from "./adapters/types";
 import { fuzzyMatch } from "./fuzzy";
 import { renderMarkdownToStyledLines } from "./markdown";
 import { neutralFg } from "./theme";
@@ -35,6 +35,36 @@ export interface RenderableItem {
   // workflow-derived name. Used by the n-key handler to switch.
   linkedSessionName?: string;
   stateType?: IssueStateType;  // only for issues; stable ordering across status renames
+  /** Worst pipeline state across the issue's linked MRs, if any are known. */
+  pipeline?: PipelineStatus["state"];
+}
+
+/** Worst-first, so one red pipeline is never hidden behind a green one. */
+const PIPELINE_RANK: Record<string, number> = {
+  failed: 0, running: 1, pending: 2, canceled: 3, passed: 4,
+};
+
+export const PIPELINE_GLYPH: Record<string, string> = {
+  failed: "\u2717", running: "\u27f3", pending: "\u25cb", canceled: "\u2014", passed: "\u2713",
+};
+
+/**
+ * Compact relative age, e.g. `3d`. Returns "" for an unknown timestamp rather
+ * than dating it to the epoch.
+ */
+export function formatAge(updatedAt: number, now: number): string {
+  if (!updatedAt) return "";
+  const secs = Math.max(0, Math.floor((now - updatedAt) / 1000));
+  if (secs < 60) return "now";
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `${days}d`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 9) return `${weeks}w`;
+  return `${Math.floor(days / 30)}mo`;
 }
 
 export type ViewNode =
@@ -59,10 +89,21 @@ export function transformIssues(
   issues: Issue[],
   linkedIds: Set<string>,
   sessionStates?: Map<string, IssueSessionInfo>,
+  /** MR web URL → MR, so an issue can surface its own pipeline state. */
+  mrsByUrl?: Map<string, Pick<MergeRequest, "pipeline">>,
 ): RenderableItem[] {
   return issues.map((issue) => {
     const info = sessionStates?.get(issue.id);
+    let pipeline: PipelineStatus["state"] | undefined;
+    for (const url of issue.linkedMrUrls ?? []) {
+      const state = mrsByUrl?.get(url)?.pipeline?.state;
+      if (!state) continue;
+      if (pipeline === undefined || (PIPELINE_RANK[state] ?? 9) < (PIPELINE_RANK[pipeline] ?? 9)) {
+        pipeline = state;
+      }
+    }
     return {
+      pipeline,
       id: issue.id,
       type: "issue" as const,
       primary: issue.identifier,
@@ -136,19 +177,40 @@ export function buildViewNodes(
     ordered = sortItems(items, view.sortBy, view.sortOrder);
   }
 
+  // Explicit groups drive both membership and headers: an item belongs to the
+  // first group claiming its status, and anything unclaimed is not in this tab
+  // at all. Config order is priority order, so it is preserved verbatim rather
+  // than sorted — that is the whole point of naming the sections by hand.
+  if (view.sections && view.sections.length > 0) {
+    const buckets: RenderableItem[][] = view.sections.map(() => []);
+    for (const item of ordered) {
+      const idx = sectionIndexForStatus(item.status, view.sections);
+      if (idx >= 0) buckets[idx]!.push(item);
+    }
+    const nodes: ViewNode[] = [];
+    view.sections.forEach((group, i) => {
+      const members = buckets[i]!;
+      const collapsed = collapsedGroups.has(group.label);
+      nodes.push({ kind: "group", key: group.label, label: group.label, count: members.length, collapsed, depth: 0 });
+      if (collapsed) return;
+      for (const item of members) nodes.push({ kind: "item", item, depth: 1 });
+    });
+    return nodes;
+  }
+
   if (view.groupBy === "none") {
     return ordered.map((item) => ({ kind: "item" as const, item, depth: 0 }));
   }
 
-  // Group
-  const groups = new Map<string, RenderableItem[]>();
+  // Derived grouping (groupBy) — only reached when a view defines no sections.
+  const derived = new Map<string, RenderableItem[]>();
   for (const item of ordered) {
     const key = getField(item, view.groupBy);
-    const list = groups.get(key) ?? [];
+    const list = derived.get(key) ?? [];
     list.push(item);
-    groups.set(key, list);
+    derived.set(key, list);
   }
-  const sortedGroups = sortGroupEntries([...groups.entries()], view.groupBy);
+  const sortedGroups = sortGroupEntries([...derived.entries()], view.groupBy);
 
   const nodes: ViewNode[] = [];
   for (const [label, groupItems] of sortedGroups) {
@@ -196,6 +258,7 @@ const STATE_TYPE_RANK: Record<IssueStateType, number> = {
   started: 3,
   completed: 4,
   canceled: 5,
+  duplicate: 6,
 };
 
 // Order group keys by an intrinsic property of the field (alphabetical for
@@ -277,6 +340,19 @@ const PRIORITY_ATTRS: Record<number, CellAttrs> = {
   4: { fg: 8, fgMode: ColorMode.Palette, dim: true },
 };
 const DIM_ATTRS: CellAttrs = { fg: 8, fgMode: ColorMode.Palette, dim: true };
+// Same palette the sidebar uses for pipeline glyphs, so a red MR reads the same
+// in both places.
+const PIPELINE_ATTRS: Record<string, CellAttrs> = {
+  failed: { fg: 1, fgMode: ColorMode.Palette },
+  running: { fg: 3, fgMode: ColorMode.Palette },
+  pending: { fg: 8, fgMode: ColorMode.Palette, dim: true },
+  canceled: { fg: 8, fgMode: ColorMode.Palette, dim: true },
+  passed: { fg: 2, fgMode: ColorMode.Palette },
+};
+
+/** Injectable clock so row rendering stays deterministic under test. */
+let nowMs: () => number = () => Date.now();
+export function setPanelClock(fn: () => number): void { nowMs = fn; }
 const DETAIL_LABEL: CellAttrs = { fg: 8, fgMode: ColorMode.Palette, dim: true };
 const DETAIL_VALUE: CellAttrs = { fg: 7, fgMode: ColorMode.Palette };
 const DETAIL_KEY: CellAttrs = { fg: 2, fgMode: ColorMode.Palette };
@@ -535,19 +611,32 @@ function renderItem(grid: CellGrid, row: number, cols: number, item: RenderableI
   writeString(grid, row, col, glyph, glyphAttrs);
   col += 2;
 
-  // Priority badge (right-aligned)
-  const priBadge = item.priority > 0 && item.priority <= 4 ? `P${item.priority}` : "";
-  const priCol = priBadge ? cols - priBadge.length - 1 : cols;
+  // Right-hand gutter, packed right-to-left: age, then pipeline, then priority.
+  // Each is optional, so the title reclaims whatever they don't use.
+  let right = cols;
 
-  // Primary + title
-  const maxTextLen = priCol - col - 1;
+  const age = formatAge(item.updatedAt, nowMs());
+  if (age) {
+    right -= age.length + 1;
+    writeString(grid, row, right + 1, age, DIM_ATTRS);
+  }
+
+  const pipeGlyph = item.pipeline ? PIPELINE_GLYPH[item.pipeline] : "";
+  if (pipeGlyph) {
+    right -= 2;
+    writeString(grid, row, right + 1, pipeGlyph, PIPELINE_ATTRS[item.pipeline!] ?? DIM_ATTRS);
+  }
+
+  const priBadge = item.priority > 0 && item.priority <= 4 ? `P${item.priority}` : "";
+  if (priBadge) {
+    right -= priBadge.length + 1;
+    writeString(grid, row, right + 1, priBadge, PRIORITY_ATTRS[item.priority] ?? DIM_ATTRS);
+  }
+
+  // Primary + title fills whatever is left of the gutter.
+  const maxTextLen = right - col - 1;
   const text = truncateToCols(`${item.primary} ${item.title}`, maxTextLen);
   writeString(grid, row, col, text, selected ? { ...TITLE_ATTRS, bold: true } : TITLE_ATTRS);
-
-  if (priBadge) {
-    const priAttrs = PRIORITY_ATTRS[item.priority] ?? DIM_ATTRS;
-    writeString(grid, row, priCol, priBadge, priAttrs);
-  }
 }
 
 type DetailLine =

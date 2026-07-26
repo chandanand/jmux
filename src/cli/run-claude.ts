@@ -2,6 +2,7 @@ import { writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { resolve } from "path";
 import { sanitizeTmuxSessionName, buildOtelResourceAttrs, loadUserConfig } from "../config";
+import { RepoFactsCache, resolveForRepo } from "../repo-settings";
 import { runTmuxDirect } from "./tmux";
 import { tmuxOrThrow, CliError, type CliContext } from "./context";
 import type { ParsedCtlArgs } from "../cli";
@@ -38,7 +39,9 @@ export function handleRunClaude(ctx: CliContext, parsed: ParsedCtlArgs): unknown
   const { name, dir } = validateRunClaude(flags);
 
   const config = loadUserConfig();
-  const claudeCmd = config.claudeCommand ?? "claude";
+  // The agent command is per-repo; resolve it from the directory the new
+  // session will run in rather than from a single global value.
+  const claudeCmd = resolveForRepo(config, new RepoFactsCache().get(dir)).claudeCommand;
 
   const shell = process.env.SHELL ?? "/bin/sh";
 

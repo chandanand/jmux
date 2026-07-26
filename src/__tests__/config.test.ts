@@ -100,10 +100,10 @@ describe("ConfigStore", () => {
   });
 
   test("loads existing config from disk", () => {
-    writeFileSync(cfgPath, JSON.stringify({ sidebarWidth: 30, claudeCommand: "cc" }));
+    writeFileSync(cfgPath, JSON.stringify({ sidebarWidth: 30, agentPaneCommandRegex: "cc" }));
     const store = new ConfigStore(cfgPath);
     expect(store.config.sidebarWidth).toBe(30);
-    expect(store.config.claudeCommand).toBe("cc");
+    expect(store.config.agentPaneCommandRegex).toBe("cc");
   });
 
   test("set persists to disk and updates in-memory", () => {
@@ -117,49 +117,69 @@ describe("ConfigStore", () => {
   });
 
   test("set preserves other keys", () => {
-    writeFileSync(cfgPath, JSON.stringify({ sidebarWidth: 30, claudeCommand: "cc" }));
+    writeFileSync(cfgPath, JSON.stringify({ sidebarWidth: 30, agentPaneCommandRegex: "cc" }));
     const store = new ConfigStore(cfgPath);
     store.set("sidebarWidth", 40);
-    expect(store.config.claudeCommand).toBe("cc");
+    expect(store.config.agentPaneCommandRegex).toBe("cc");
   });
 
   test("delete removes key and persists", () => {
-    writeFileSync(cfgPath, JSON.stringify({ sidebarWidth: 30, claudeCommand: "cc" }));
+    writeFileSync(cfgPath, JSON.stringify({ sidebarWidth: 30, agentPaneCommandRegex: "cc" }));
     const store = new ConfigStore(cfgPath);
-    store.delete("claudeCommand");
-    expect(store.config.claudeCommand).toBeUndefined();
+    store.delete("agentPaneCommandRegex");
+    expect(store.config.agentPaneCommandRegex).toBeUndefined();
 
     const fromDisk = JSON.parse(require("fs").readFileSync(cfgPath, "utf-8"));
-    expect(fromDisk.claudeCommand).toBeUndefined();
+    expect(fromDisk.agentPaneCommandRegex).toBeUndefined();
   });
 
   test("merge shallow-merges and persists", () => {
     writeFileSync(cfgPath, JSON.stringify({ sidebarWidth: 30 }));
     const store = new ConfigStore(cfgPath);
-    store.merge({ claudeCommand: "cc", cacheTimers: false });
+    store.merge({ agentPaneCommandRegex: "cc", cacheTimers: false });
     expect(store.config.sidebarWidth).toBe(30);
-    expect(store.config.claudeCommand).toBe("cc");
+    expect(store.config.agentPaneCommandRegex).toBe("cc");
     expect(store.config.cacheTimers).toBe(false);
   });
 
   test("setWorkflow creates issueWorkflow if missing", () => {
     const store = new ConfigStore(cfgPath);
-    store.setWorkflow("defaultBaseBranch", "develop");
-    expect(store.config.issueWorkflow?.defaultBaseBranch).toBe("develop");
+    store.setWorkflow("teamRepoMap", { core: "/code/core" });
+    expect(store.config.issueWorkflow?.teamRepoMap?.core).toBe("/code/core");
 
     const fromDisk = JSON.parse(require("fs").readFileSync(cfgPath, "utf-8"));
-    expect(fromDisk.issueWorkflow.defaultBaseBranch).toBe("develop");
+    expect(fromDisk.issueWorkflow.teamRepoMap.core).toBe("/code/core");
   });
 
-  test("setWorkflow preserves other workflow keys", () => {
+  test("loadUserConfig migrates legacy fields into repoDefaults", () => {
     writeFileSync(cfgPath, JSON.stringify({
-      issueWorkflow: { defaultBaseBranch: "main", autoCreateWorktree: true },
+      claudeCommand: "cc",
+      issueWorkflow: { defaultBaseBranch: "develop", teamRepoMap: { core: "/c" } },
     }));
     const store = new ConfigStore(cfgPath);
-    store.setWorkflow("sessionNameTemplate", "{identifier}-wt");
-    expect(store.config.issueWorkflow?.defaultBaseBranch).toBe("main");
-    expect(store.config.issueWorkflow?.autoCreateWorktree).toBe(true);
-    expect(store.config.issueWorkflow?.sessionNameTemplate).toBe("{identifier}-wt");
+    expect(store.config.repoDefaults?.claudeCommand).toBe("cc");
+    expect(store.config.repoDefaults?.defaultBaseBranch).toBe("develop");
+    expect(store.config.issueWorkflow?.teamRepoMap?.core).toBe("/c");
+    // migration persisted to disk
+    const onDisk = JSON.parse(require("fs").readFileSync(cfgPath, "utf-8"));
+    expect(onDisk.claudeCommand).toBeUndefined();
+    expect(onDisk.repoDefaults.claudeCommand).toBe("cc");
+  });
+
+  test("setRepoDefault writes under repoDefaults and persists", () => {
+    const store = new ConfigStore(cfgPath);
+    store.setRepoDefault("defaultBaseBranch", "develop");
+    expect(store.config.repoDefaults?.defaultBaseBranch).toBe("develop");
+    const onDisk = JSON.parse(require("fs").readFileSync(cfgPath, "utf-8"));
+    expect(onDisk.repoDefaults.defaultBaseBranch).toBe("develop");
+  });
+
+  test("setRepoOverride and clearRepoOverride manage repos[key]", () => {
+    const store = new ConfigStore(cfgPath);
+    store.setRepoOverride("/code/jmux/.git", "wtmIntegration", false);
+    expect(store.config.repos?.["/code/jmux/.git"]?.wtmIntegration).toBe(false);
+    store.clearRepoOverride("/code/jmux/.git", "wtmIntegration");
+    expect(store.config.repos?.["/code/jmux/.git"]).toBeUndefined(); // emptied entry pruned
   });
 
   test("setTeamRepo adds and removes mappings", () => {
@@ -223,10 +243,10 @@ describe("ConfigStore", () => {
     store.set("sidebarWidth", 30);
 
     // External write
-    writeFileSync(cfgPath, JSON.stringify({ sidebarWidth: 50, claudeCommand: "external" }));
+    writeFileSync(cfgPath, JSON.stringify({ sidebarWidth: 50, agentPaneCommandRegex: "external" }));
     const reloaded = store.reload();
     expect(reloaded.sidebarWidth).toBe(50);
-    expect(store.config.claudeCommand).toBe("external");
+    expect(store.config.agentPaneCommandRegex).toBe("external");
   });
 
   test("ensureExists creates file when missing", () => {

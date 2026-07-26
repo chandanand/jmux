@@ -1884,3 +1884,83 @@ describe("Sidebar — sort & filter", () => {
     expect(sep.replace(/[─\s]/g, "")).toBe("");
   });
 });
+
+// --- Parked band ---
+//
+// The mirror image of the Pinned band: pins float to the top, parked sinks to
+// the bottom as a single collapsed row. The point is to shrink handed-off work
+// to one line without killing the session, so the row must be collapsed by
+// default and must still show a count of what is waiting inside it.
+
+describe("Sidebar parked band", () => {
+  const W = 26;
+
+  function parkedSidebar(parked: string[]): Sidebar {
+    const sb = new Sidebar(W, 30);
+    sb.setParkedSessions(new Set(parked));
+    sb.updateSessions(
+      makeSessions([
+        { name: "alpha", directory: "~/Code/work/alpha" },
+        { name: "beta", directory: "~/Code/work/beta" },
+        { name: "gamma", directory: "~/Code/work/gamma" },
+      ]),
+    );
+    return sb;
+  }
+
+  function allText(sb: Sidebar): string {
+    const g = sb.getGrid();
+    return Array.from({ length: g.rows }, (_, r) =>
+      Array.from({ length: W }, (_, i) => g.cells[r][i].char).join("")).join("\n");
+  }
+
+  function lineOf(sb: Sidebar, needle: string): number {
+    const g = sb.getGrid();
+    for (let r = 0; r < g.rows; r++) {
+      const line = Array.from({ length: W }, (_, i) => g.cells[r][i].char).join("");
+      if (line.includes(needle)) return r;
+    }
+    return -1;
+  }
+
+  test("no Parked group when nothing is parked", () => {
+    expect(allText(parkedSidebar([]))).not.toContain("Parked");
+  });
+
+  test("parked sessions collapse into one Parked row at the bottom", () => {
+    const sb = parkedSidebar(["beta"]);
+    const parkedRow = lineOf(sb, "Parked");
+    expect(parkedRow).toBeGreaterThan(-1);
+    // Below every unparked session — it is the back burner, not a headline.
+    expect(parkedRow).toBeGreaterThan(lineOf(sb, "alpha"));
+    expect(parkedRow).toBeGreaterThan(lineOf(sb, "gamma"));
+  });
+
+  test("the band is collapsed by default, hiding its members", () => {
+    expect(allText(parkedSidebar(["beta"]))).not.toContain("beta");
+  });
+
+  test("expanding the band reveals its members", () => {
+    const sb = parkedSidebar(["beta"]);
+    sb.toggleGroup("parked");
+    expect(allText(sb)).toContain("beta");
+  });
+
+  test("parked sessions are excluded from their normal group", () => {
+    const sb = parkedSidebar(["beta"]);
+    sb.toggleGroup("parked");
+    // "beta" appears once, under Parked — not also under its project group.
+    const occurrences = allText(sb).split("\n").filter((l) => l.includes("beta")).length;
+    expect(occurrences).toBe(1);
+  });
+
+  test("a pinned session is never also parked — pinning wins", () => {
+    const sb = new Sidebar(W, 30);
+    sb.setPinnedSessions(new Set(["beta"]));
+    sb.setParkedSessions(new Set(["beta"]));
+    sb.updateSessions(makeSessions([{ name: "alpha" }, { name: "beta" }]));
+    const text = allText(sb);
+    expect(text).toContain("Pinned");
+    expect(text).not.toContain("Parked");
+  });
+});

@@ -1,5 +1,5 @@
 // src/adapters/linear.ts
-import { HttpError, type IssueTrackerAdapter, type AdapterAuthState, type Issue, type IssueStateType } from "./types";
+import { HttpError, type IssueTrackerAdapter, type AdapterAuthState, type Issue, type IssueStateType, type WorkflowState } from "./types";
 import { buildLinearPrompt } from "./linear-prompt";
 import { logError } from "../log";
 
@@ -8,7 +8,7 @@ const LINEAR_API = "https://api.linear.app/graphql";
 // Shared GraphQL fields for issue queries
 const ISSUE_FIELDS = `id identifier title description branchName state { name type } assignee { name } team { name } project { name } priority updatedAt labels { nodes { name parent { name } } } attachments { nodes { title url sourceType } } comments(first: 20) { nodes { id parent { id } body user { name } createdAt } } url`;
 
-const ISSUE_STATE_TYPES: ReadonlySet<IssueStateType> = new Set(["triage", "backlog", "unstarted", "started", "completed", "canceled"]);
+const ISSUE_STATE_TYPES: ReadonlySet<IssueStateType> = new Set(["triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"]);
 function isIssueStateType(v: unknown): v is IssueStateType {
   return typeof v === "string" && ISSUE_STATE_TYPES.has(v as IssueStateType);
 }
@@ -130,6 +130,13 @@ export class LinearAdapter implements IssueTrackerAdapter {
     return resp.data.viewer.assignedIssues.nodes.map((n: any) => this.mapIssue(n));
   }
 
+  async listWorkflowStates(): Promise<WorkflowState[]> {
+    if (this.authState !== "ok") return [];
+    const query = `query { teams { nodes { name states { nodes { id name type position } } } } }`;
+    const resp = await this.graphql(query, {});
+    return mapWorkflowStates(resp?.data);
+  }
+
   async getTeams(): Promise<Array<{ id: string; name: string }>> {
     if (this.authState !== "ok") return [];
     const query = `query { teams { nodes { id name } } }`;
@@ -236,4 +243,42 @@ export class LinearAdapter implements IssueTrackerAdapter {
       return null;
     }
   }
+}
+
+/**
+ * Flatten Linear's per-team workflow states into one global, position-ordered
+ * list, de-duplicated by name.
+ *
+ * De-duplication by *name* rather than id is deliberate and matches how stage
+ * mapping is configured: a workspace that calls the same step "QA" on every
+ * team should produce one picker row and one mapping entry, not one per team.
+ * Teams that genuinely diverge simply contribute their own extra names.
+ */
+export function mapWorkflowStates(data: unknown): WorkflowState[] {
+  const teams = (data as any)?.teams?.nodes;
+  if (!Array.isArray(teams)) return [];
+
+  const rows: Array<{ state: WorkflowState; position: number }> = [];
+  const seen = new Set<string>();
+  for (const team of teams) {
+    const nodes = team?.states?.nodes;
+    if (!Array.isArray(nodes)) continue;
+    for (const n of nodes) {
+      const name = typeof n?.name === "string" ? n.name : "";
+      if (!name) continue;
+      const key = name.trim().toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push({
+        state: {
+          id: typeof n.id === "string" ? n.id : "",
+          name,
+          type: (n.type ?? "unstarted") as IssueStateType,
+          team: typeof team?.name === "string" ? team.name : undefined,
+        },
+        position: typeof n.position === "number" ? n.position : 0,
+      });
+    }
+  }
+  return rows.sort((a, b) => a.position - b.position).map((r) => r.state);
 }

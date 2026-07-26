@@ -341,6 +341,13 @@
   .term .body{ padding:24px 26px; font-family:'JetBrains Mono',monospace; font-size:12.5px; line-height:1.95; color:#d7cfbf; }
   .term .c{ color:#7b7360; } .term .w{ color:#e7dfce; } .term .a{ color:var(--ac); } .term .am{ color:var(--amber); }
   .term .o{ color:#948a76; }
+  .term.screen{ max-width:648px; }
+  .term.screen .body{ line-height:1.5; white-space:pre; overflow-x:auto; font-size:12px; }
+  .termcap{ color:var(--ink3); font-size:13.5px; line-height:1.65; max-width:600px; margin:18px auto 0; }
+  .term.screen .body .hd{ color:#e7dfce; } .term.screen .body .dim{ color:#6f6857; }
+  .term.screen .body .pk{ color:var(--amber); } .term.screen .body .sel{ color:var(--ac); }
+  .term.screen .body .gr{ color:var(--green); }
+  .term.mini{ max-width:340px; margin-top:0; }
   .new{ font-size:9px; color:var(--ink2); background:var(--tint); border:1px solid var(--bd); padding:2px 7px; border-radius:4px; margin-left:8px; vertical-align:middle; letter-spacing:.06em; font-family:'JetBrains Mono'; font-weight:600; }
 
   /* ============ ECOSYSTEM ============ */
@@ -416,6 +423,7 @@
   <a href="#top" class="brand"><img src="assets/logo.svg" alt="" width="30" height="30"> jmux <span class="v">v0.23.0</span></a>
   <div class="navlinks">
     <a href="#features" class="hide-sm">Features</a>
+    <a href="#workflow" class="hide-sm">Workflow</a>
     <a href="#ecosystem" class="hide-sm">Ecosystem</a>
     <a href="https://github.com/jarredkenny/jmux#readme" target="_blank" rel="noopener" class="hide-sm">Docs</a>
     <button class="tt" onclick="toggleTheme()" aria-label="Toggle theme" title="Toggle light / dark">
@@ -431,7 +439,7 @@
 <header class="hero" id="top">
   <div class="wrap grid">
     <div class="hero-copy">
-      <a href="#command-center" class="badge">▦&nbsp;New · The Command Center&nbsp;→</a>
+      <a href="#workflow" class="badge">&#x23F8;&#xFE0E;&nbsp;New · Workflow orchestration&nbsp;→</a>
       <div class="eyebrow">Terminal Agent Orchestrator</div>
       <h1>Replace nothing.<span class="m serif"><em>Orchestrate</em> everything.</span></h1>
       <p class="lead">Agent IDEs want your terminal. New multiplexers want your tmux. jmux takes neither — it drives the real tmux you already run, and layers on agent state, context cost, and diff review.</p>
@@ -508,6 +516,11 @@
         <p>Pin the agent pane from every session and drive them all at once in one live grid, organized into named tabs. Tile borders glow by state — type into any tile to steer that agent. Pin by hand, or auto-pin every agent pane — Claude, Codex, or any command you name. Fully non-destructive: panes never leave their session.</p>
       </div>
       <div class="tile animate-in">
+        <div class="ico" aria-hidden="true">⏸</div>
+        <h3>Parked Work</h3>
+        <p>Sessions on work you've handed off — merged, in QA, awaiting review — collapse into one <span class="mono" style="color:var(--ink)">Parked (n)</span> row. Nothing is killed, and any signal pulls one straight back out.</p>
+      </div>
+      <div class="tile animate-in">
         <div class="ico" aria-hidden="true">⚑</div>
         <h3>Attention Flags</h3>
         <p>When an agent finishes or needs you, its session raises an orange <span style="color:var(--amber)">!</span> in the sidebar — from a Claude Code Stop hook.</p>
@@ -576,10 +589,96 @@
       <h2>Linear, GitHub &amp; GitLab<br><em>in the terminal.</em></h2>
       <p class="lead">The info panel shows your Linear issues and your GitHub/GitLab PRs/MRs in tabbed views, with pipeline status glyphs in the sidebar. Sessions auto-link to their branch's PR and issue.</p>
       <p class="lead">Select an issue, press <span class="kbd">n</span> — jmux creates a worktree, opens a session, and launches your agent with the issue context. <span class="kbd">o</span> open · <span class="kbd">s</span> status · <span class="kbd">a</span> approve.</p>
+      <p class="lead">Or skip the picking entirely: <span class="kbd">Ctrl-a u</span> pulls the top item off your queue and does the whole thing. <span class="kbd">Ctrl-a a</span> files a new issue from wherever you are — <span class="kbd">Ctrl-S</span> files it <em>and</em> starts work on it.</p>
+      <p><a href="https://github.com/jarredkenny/jmux/blob/main/docs/issue-tracking.md" target="_blank" rel="noopener" class="link-u">Issue &amp; MR integration guide →</a></p>
     </div>
     <div class="shot animate-in">
       <figure class="main"><img src="assets/linear-issues.webp" alt="jmux info panel showing Linear issues alongside a session"></figure>
       <figure class="detail dr"><img src="assets/detail-linear.webp" alt="The Issues panel: Backlog and To do lists of tracker issues"></figure>
+    </div>
+  </div>
+</section>
+
+<!-- 4 · SHOWCASE ·3b — Team workflow orchestration -->
+<section class="sec panel cliband center" id="workflow">
+  <div class="wrap">
+    <div class="animate-in"><div class="eyebrow">Team workflow orchestration <span class="new">NEW</span></div>
+    <h2>The workflow is your team's.<br><em>The orchestration</em> is jmux's.</h2>
+    <p class="lead" style="margin:20px auto 0;max-width:600px">Your team already keeps Linear current. jmux reads those same statuses and runs your terminal from them — what stays in your working set, what drops out of the way, what you pick up next. <strong style="color:var(--ink)">No second list to maintain.</strong></p></div>
+    <div class="term screen">
+      <div class="bar"><span class="d" style="background:#ff5f56"></span><span class="d" style="background:#ffbd2e"></span><span class="d" style="background:#27c93f"></span><small>workflow</small></div>
+      <div class="body"><span class="hd">Workflow</span>                   <span class="dim">Linear · 25 statuses · 10 not in a tab</span>
+
+<span class="dim">Tabs ────────────────────────────────────────────────────────────</span>
+    Urgent ······························ 1st up next  2 statuses
+    To do ······························· 2nd up next  2 statuses
+    Waiting ····································· <span class="pk">&#x23F8;&#xFE0E;</span> 9  9 statuses
+    <span class="dim">+ New tab</span>
+
+<span class="dim">Statuses ────────────────────────────────────────────────────────</span>
+    <span class="dim">Status                Heading  Tab             Parks   Issues</span>
+    Release Blockers               Urgent                       0
+    To do                          To do                        4
+  <span class="sel">▸</span> QA (PRE-RELEASE WEB)  In QA    Waiting           <span class="pk">&#x23F8;&#xFE0E;</span>         19
+    QA (RELEASE BR)       In QA    Waiting           <span class="pk">&#x23F8;&#xFE0E;</span>          8
+    MR Review                      Waiting           <span class="pk">&#x23F8;&#xFE0E;</span>          5
+    Backlog                        —                            5
+
+<span class="dim">Parking ─────────────────────────────────────────────────────────</span>
+    Bring a session back when ······ comment, MR, pipeline, agent
+
+<span class="sel">QA (PRE-RELEASE WEB) · 19 issues · Waiting · parks its sessions (3 now)</span>
+<span class="dim">↑↓ move · ↵ tab · space parks · r heading · d remove · esc close</span></div>
+    </div>
+    <p class="termcap"><span class="kbd">Ctrl-a W</span> — your tabs, then every status your tracker offers, with two settings each: which tab it appears in, and whether work in it has left your hands.</p>
+    <p class="termcap" style="margin-top:22px"><a href="https://github.com/jarredkenny/jmux/blob/main/docs/issue-tracking.md#the-work-pipeline" target="_blank" rel="noopener" class="link-u">Read the work-pipeline guide →</a></p>
+    <div class="ecogrid" style="margin-top:48px">
+      <div class="ecocard animate-in"><div class="nm">Handed-off work parks</div><div class="tg">automatic</div><p>In review, in QA, blocked on a teammate — that session drops into one <span class="mono">Parked (n)</span> row. Nothing is killed.</p></div>
+      <div class="ecocard animate-in"><div class="nm">And comes back</div><div class="tg">reversible</div><p>The issue moves, someone comments, the MR is touched, a pipeline goes red. It returns flagged, without you watching.</p></div>
+      <div class="ecocard animate-in"><div class="nm">Pull the next thing</div><div class="tg">on demand</div><p><span class="mono">Ctrl-a u</span> takes the top of your queue and does the whole ticket-to-worktree-to-agent dance.</p></div>
+      <div class="ecocard animate-in"><div class="nm">Progress, reported for you</div><div class="tg">opt-in</div><p>Move an issue along when work starts, an MR opens, or it merges — with <span class="mono">^a Z</span> to undo. Off until you say so.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- 4 · SHOWCASE ·3c — Sidebar grouping & ordering -->
+<section class="sec showcase" id="sidebar">
+  <div class="wrap showrow" style="grid-template-columns:1.25fr .95fr">
+    <div class="txt animate-in">
+      <div class="eyebrow">Grouping &amp; ordering <span class="new">NEW</span></div>
+      <h2>The top of your sidebar<br><em>is what needs you.</em></h2>
+      <p class="lead">Two signals meet in one list. Agent state comes from Claude Code's hooks and telemetry; parked comes from your team's tracker. The sidebar sorts by both — so the thing waiting on a human is at the top, and the thing waiting on someone else is out of sight.</p>
+      <ul class="points">
+        <li><strong>Headers rank by urgency, not alphabet</strong> — <span class="kbd">Ctrl-a G</span> groups by state and the bands land in a fixed order: Needs you, Running, Active, Done, Idle. No hunting.</li>
+        <li><strong>Handed-off work sinks to the bottom</strong> — one collapsed <span class="mono" style="color:var(--ink)">Parked (9)</span> band, fed by the statuses you ticked on the workflow screen. Still one keypress from open.</li>
+        <li><strong>Or group by project</strong> — every worktree of a repo under one header. Sort within any group by name, activity, or state with <span class="kbd">Ctrl-a s</span>.</li>
+        <li><strong>Narrow to the live ones</strong> — <span class="kbd">Ctrl-a f</span> filters to <em>Needs you</em> or <em>Active</em> when a twenty-session day gets loud.</li>
+      </ul>
+      <p style="margin-top:26px"><a href="https://github.com/jarredkenny/jmux/blob/main/docs/cheat-sheet.md#grouping-sorting-and-filtering" target="_blank" rel="noopener" class="link-u">Every grouping and sort mode →</a></p>
+    </div>
+    <div class="animate-in">
+      <div class="term screen mini">
+        <div class="bar"><span class="d" style="background:#ff5f56"></span><span class="d" style="background:#ffbd2e"></span><span class="d" style="background:#27c93f"></span><small>sidebar</small></div>
+        <div class="body"> <span class="dim">⊞ Status  ⇅ Activity</span>  <span class="pk">2!</span>
+<span class="dim">──────────────────────────</span>
+ <span class="hd">⌘ Command Center</span>
+
+ <span class="dim">Needs you</span> <span class="dim">───────────────</span>
+
+<span class="sel">▎</span><span class="pk">!</span> <span class="hd">auth-refactor</span>
+<span class="sel">▎</span>  <span class="dim">feat/eng-1234-auth… 13s</span>
+<span class="sel">▎</span>                  <span class="pk">WAITING</span>
+
+ <span class="dim">Active</span> <span class="dim">──────────────────</span>
+
+ <span class="gr">●</span> <span class="hd">api-pagination</span>
+   <span class="dim">feat/eng-1241-cursor-p…</span>
+
+ <span class="gr">●</span> <span class="hd">chart-perf</span>
+   <span class="dim">perf/dash-315-chart-re…</span>
+
+ <span class="dim">Parked</span> <span class="dim">───────────────(9)</span></div>
+      </div>
     </div>
   </div>
 </section>
@@ -592,7 +691,7 @@
       <h2>It's real tmux.<br><em>Bring everything.</em></h2>
       <p class="lead">The other agent multiplexers are <strong>replacements</strong> — a new server, a new config, a new keymap, and your tmux plugins left behind. jmux drives the tmux binary you already have. Your <span class="mono" style="color:var(--ink)">~/.tmux.conf</span>, prefix key, plugins, theme, and bindings all carry over; jmux enforces only the handful of settings it needs to draw its own chrome.</p>
       <p class="lead">Which means the exit is free too. Your sessions are ordinary tmux sessions — <strong>quit jmux and <span class="mono" style="color:var(--ink)">tmux attach</span> still lands you exactly where you were</strong>. No export, no lock-in, nothing to migrate in either direction.</p>
-      <p class="lead">The chrome follows suit: every glyph and surface is drawn from <strong>your terminal's own palette</strong>, so jmux looks native in light or dark without a line of config. Tune the rest from the settings modal (<span class="kbd">Ctrl-a i</span>) — <span style="color:var(--green)">running</span> / <span style="color:var(--amber)">waiting</span> / <span style="color:var(--blue)">complete</span> colors, code host, issue tracker, panel widths.</p>
+      <p class="lead">The chrome follows suit: every glyph and surface is drawn from <strong>your terminal's own palette</strong>, so jmux looks native in light or dark without a line of config. Tune the rest from the settings screen (<span class="kbd">Ctrl-a I</span>) — <span style="color:var(--green)">running</span> / <span style="color:var(--amber)">waiting</span> / <span style="color:var(--blue)">complete</span> colors, code host, issue tracker, panel widths.</p>
     </div>
     <div class="stackpair">
       <figure class="back"><img src="assets/command-center.webp" alt="jmux chrome peeking behind the theme stack"></figure>

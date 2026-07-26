@@ -9,6 +9,7 @@ import {
   loadUserConfig,
   type JmuxConfig,
 } from "../config";
+import { RepoFactsCache, resolveForRepo } from "../repo-settings";
 import { INTERNAL_SESSION_FILTER } from "../glass/internal-sessions";
 import { LinearAdapter } from "../adapters/linear";
 import { buildLinearPrompt } from "../adapters/linear-prompt";
@@ -149,6 +150,55 @@ export function resolveRepoForIssue(
   return null;
 }
 
+export interface IssueCreateArgs {
+  title: string;
+  description: string;
+  team: string | null;
+  start: boolean;
+}
+
+/**
+ * Validate `ctl issue create` flags.
+ *
+ * This exists so an agent running inside a jmux session can file an issue the
+ * moment it notices something out of scope, without the user context-switching
+ * to a browser. That is the whole point: the idea never leaves the tracker.
+ */
+export function validateIssueCreate(
+  flags: Record<string, string | boolean>,
+): IssueCreateArgs {
+  const title = typeof flags.title === "string" ? flags.title.trim() : "";
+  if (!title) throw new CliError("issue create requires --title <text>");
+  return {
+    title,
+    description: typeof flags.description === "string" ? flags.description : "",
+    team: typeof flags.team === "string" ? flags.team : null,
+    start: flags.start === true,
+  };
+}
+
+/**
+ * Map a user-supplied team (id or name) onto a team id. With exactly one team
+ * the flag is optional — most single-team workspaces should never have to
+ * think about it.
+ */
+export function resolveTeamId(
+  input: string | null,
+  teams: Array<{ id: string; name: string }>,
+): string {
+  if (!input) {
+    if (teams.length === 1) return teams[0]!.id;
+    throw new CliError(
+      `--team is required when the workspace has ${teams.length} teams`,
+    );
+  }
+  const exact = teams.find((t) => t.id === input);
+  if (exact) return exact.id;
+  const byName = teams.find((t) => t.name.toLowerCase() === input.toLowerCase());
+  if (byName) return byName.id;
+  throw new CliError(`unknown team "${input}"`);
+}
+
 // --- Handlers ----------------------------------------------------------------
 
 export async function handleIssue(
@@ -165,11 +215,41 @@ export async function handleIssue(
       return issueUnlink(ctx, parsed);
     case "start":
       return await issueStart(ctx, parsed);
+    case "create":
+      return await issueCreate(ctx, parsed);
     default:
       throw new CliError(
-        `Unknown issue action "${action}". Known actions: get, link, unlink, start`,
+        `Unknown issue action "${action}". Known actions: get, link, unlink, start, create`,
       );
   }
+}
+
+async function issueCreate(
+  ctx: CliContext,
+  parsed: ParsedCtlArgs,
+): Promise<unknown> {
+  const args = validateIssueCreate(parsed.flags);
+
+  const adapter = new LinearAdapter({});
+  await adapter.authenticate();
+  if (adapter.authState !== "ok") {
+    throw new CliError(`issue tracker not authenticated (${adapter.authHint})`);
+  }
+
+  const teamId = resolveTeamId(args.team, await adapter.getTeams());
+  const issue = await adapter.createIssue(teamId, args.title, args.description);
+
+  // Capture and start are one flow with two commit points: file it and move
+  // on, or file it and be working on it a keystroke later.
+  if (!args.start) {
+    return { created: true, identifier: issue.identifier, id: issue.id, url: issue.webUrl, started: false };
+  }
+
+  const started = await issueStart(ctx, {
+    ...parsed,
+    positional: [issue.identifier],
+  });
+  return { created: true, identifier: issue.identifier, id: issue.id, url: issue.webUrl, started };
 }
 
 async function fetchIssue(issueId: string): Promise<Issue | null> {
@@ -354,10 +434,12 @@ async function issueStart(
 
   const branchName = computeBranchName(issueId, issue);
   const sessionName = sanitizeTmuxSessionName(branchName);
+  // Settings resolve against the repo this issue routes to, not the CLI's cwd.
+  const repoSettings = resolveForRepo(config, new RepoFactsCache().get(repo));
   const baseBranch =
     typeof flags["base-branch"] === "string"
       ? flags["base-branch"]
-      : config.issueWorkflow?.defaultBaseBranch ?? "main";
+      : repoSettings.defaultBaseBranch;
   const worktreePath = computeWorktreePath(repo, branchName);
 
   createWorktree(repo, worktreePath, branchName, baseBranch);
@@ -366,7 +448,7 @@ async function issueStart(
   const launchAgent = !flags["no-launch-agent"];
   let launchCmd: string | null = null;
   if (launchAgent) {
-    const claudeCmd = config.claudeCommand ?? "claude";
+    const claudeCmd = repoSettings.claudeCommand;
     const shell = process.env.SHELL ?? "/bin/sh";
     let promptFile: string | null = null;
     if (issue) {

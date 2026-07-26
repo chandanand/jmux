@@ -9,6 +9,8 @@ import {
   computeWorktreePath,
   resolveRepoForIssue,
   expandTilde,
+  validateIssueCreate,
+  resolveTeamId,
   type IssueLinkRow,
 } from "../../cli/issue";
 import type { Issue } from "../../adapters/types";
@@ -165,5 +167,62 @@ describe("resolveRepoForIssue", () => {
   test("returns null when nothing resolves", () => {
     expect(resolveRepoForIssue({}, issue({ team: "Unknown" }), config)).toBeNull();
     expect(resolveRepoForIssue({}, null, config)).toBeNull();
+  });
+});
+
+describe("validateIssueCreate", () => {
+  test("requires a title", () => {
+    expect(() => validateIssueCreate({})).toThrow(/title/i);
+    expect(() => validateIssueCreate({ title: true })).toThrow(/title/i);
+  });
+
+  test("accepts a title alone; description defaults to empty", () => {
+    expect(validateIssueCreate({ title: "Fix auth" })).toEqual({
+      title: "Fix auth",
+      description: "",
+      team: null,
+      start: false,
+    });
+  });
+
+  test("carries description, team and the --start flag", () => {
+    expect(validateIssueCreate({
+      title: "Fix auth",
+      description: "It times out",
+      team: "Platform",
+      start: true,
+    })).toEqual({
+      title: "Fix auth",
+      description: "It times out",
+      team: "Platform",
+      start: true,
+    });
+  });
+});
+
+describe("resolveTeamId", () => {
+  const teams = [
+    { id: "t-plat", name: "Platform" },
+    { id: "t-web", name: "Web" },
+  ];
+
+  test("passes an exact id straight through", () => {
+    expect(resolveTeamId("t-web", teams)).toBe("t-web");
+  });
+
+  test("resolves a team name case-insensitively", () => {
+    expect(resolveTeamId("platform", teams)).toBe("t-plat");
+  });
+
+  test("defaults to the only team when none is given", () => {
+    expect(resolveTeamId(null, [{ id: "solo", name: "Solo" }])).toBe("solo");
+  });
+
+  test("throws when ambiguous and unspecified", () => {
+    expect(() => resolveTeamId(null, teams)).toThrow(/--team/);
+  });
+
+  test("throws for an unknown team", () => {
+    expect(() => resolveTeamId("Mobile", teams)).toThrow(/Mobile/);
   });
 });

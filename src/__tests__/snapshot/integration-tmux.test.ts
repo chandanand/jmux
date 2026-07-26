@@ -85,7 +85,7 @@ describe.skipIf(!hasTmux())("snapshot/restore against real tmux", () => {
       clock: new ProductionClock(),
       jmuxVersion: "test",
       userShell: process.env.SHELL ?? "/bin/sh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
     });
     const eligibility = await restorer.checkEligibility();
     expect(eligibility.ok).toBe(true);

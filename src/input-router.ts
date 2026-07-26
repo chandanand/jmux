@@ -99,7 +99,13 @@ export interface InputRouterOptions {
   onModalToggle?: () => void;
   onNewSession?: () => void;
   onSettings?: () => void;
+  onCaptureIssue?: () => void;
+  onStartUpNext?: () => void;
+  onUndoTransition?: () => void;
   onSettingsScreen?: () => void;  // Ctrl-a I (uppercase) — full settings screen
+  // Ctrl-a W (uppercase) — the workflow screen. Uppercase because tmux binds
+  // lowercase `w` to choose-tree and jmux never unbinds it.
+  onWorkflowScreen?: () => void;
   onGroupCycle?: () => void;      // Ctrl-a G — cycle sidebar group mode
   onSortCycle?: () => void;       // Ctrl-a s — cycle sidebar sort mode
   onFilterCycle?: () => void;     // Ctrl-a f — cycle sidebar filter mode
@@ -131,6 +137,7 @@ export interface InputRouterOptions {
   onPanelScroll?: (delta: number, row: number) => void; // wheel scroll in panel area, row relative to content
   onPanelSelectPrev?: () => void;
   onPanelSelectNext?: () => void;
+  onPanelEditFilter?: () => void;
   onPanelCycleGroupBy?: () => void;
   onPanelCycleSubGroupBy?: () => void;
   onPanelCycleSortBy?: () => void;
@@ -401,7 +408,11 @@ export class InputRouter {
           if (data === "p") { this.opts.onModalToggle?.(); return; }
           if (data === "n") { this.opts.onNewSession?.(); return; }
           if (data === "i") { this.opts.onSettings?.(); return; }
+          if (data === "a") { this.opts.onCaptureIssue?.(); return; }
+          if (data === "u") { this.opts.onStartUpNext?.(); return; }
+          if (data === "Z") { this.opts.onUndoTransition?.(); return; }
           if (data === "I") { this.opts.onSettingsScreen?.(); return; }
+          if (data === "W") { this.opts.onWorkflowScreen?.(); return; }
           if (data === "G") { this.opts.onGroupCycle?.(); return; }
           if (data === "s") { this.opts.onSortCycle?.(); return; }
           if (data === "f") { this.opts.onFilterCycle?.(); return; }
@@ -424,8 +435,29 @@ export class InputRouter {
           this.opts.onSettings?.();
           return;
         }
+        // Capture: file an issue from wherever you are, without losing your place.
+        // `a` not `c`: `c` is tmux's new-window and stealing it would be a
+        // regression. Same reason undo is `Z` — `z` is pane/panel zoom.
+        if (data === "a") {
+          this.opts.onCaptureIssue?.();
+          return;
+        }
+        // Pull the next thing off the queue rotation and start working it.
+        if (data === "u") {
+          this.opts.onStartUpNext?.();
+          return;
+        }
+        // Take back the last status write, while the undo window is open.
+        if (data === "Z") {
+          this.opts.onUndoTransition?.();
+          return;
+        }
         if (data === "I") {
           this.opts.onSettingsScreen?.();
+          return;
+        }
+        if (data === "W") {
+          this.opts.onWorkflowScreen?.();
           return;
         }
         if (data === "G") {
@@ -757,6 +789,9 @@ export class InputRouter {
         if (data === "/" && this.opts.onPanelFilterStart) { this.panelFilterActive = true; this.opts.onPanelFilterStart(); return; }
         if (data === "S" && this.opts.onPanelCycleSortBy) { this.opts.onPanelCycleSortBy(); return; }
         if (data === "?" && this.opts.onPanelToggleSortOrder) { this.opts.onPanelToggleSortOrder(); return; }
+        // Membership filter (states / stages / labels / priority) — the axes
+        // that turn a generic list into a named pull queue.
+        if (data === "F" && this.opts.onPanelEditFilter) { this.opts.onPanelEditFilter(); return; }
         if (data === "r" && this.opts.onPanelRefresh) { this.opts.onPanelRefresh(); return; }
         if (data === "\r" && this.opts.onPanelToggleCollapse) { this.opts.onPanelToggleCollapse(); return; }
         if (data === "n" && this.opts.onPanelCreateSession) { this.opts.onPanelCreateSession(); return; }

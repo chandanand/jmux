@@ -44,7 +44,7 @@ describe("Restorer attach target selection", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async (p) => p === "/ok",
     });
     await r.run(makeSnap("beta", { alpha: true, beta: true }));
@@ -59,7 +59,7 @@ describe("Restorer attach target selection", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async (p) => p === "/ok",
     });
     await r.run(makeSnap("beta", { alpha: true, beta: false }));
@@ -74,7 +74,7 @@ describe("Restorer attach target selection", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async () => false,
     });
     await r.run(makeSnap("alpha", { alpha: false, beta: false }));

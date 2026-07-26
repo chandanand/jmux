@@ -42,6 +42,7 @@ If not set, you're outside jmux and most commands require explicit `--session` f
 | `jmux ctl agent watch [--session N] [--all]` | Stream agent state changes as JSONL |
 | `jmux ctl session attention set --target N [--reason "..."]` | Flag a session as needing the human |
 | `jmux ctl session attention clear --target N` | Clear the attention flag |
+| `jmux ctl issue create --title T [--description D] [--team T] [--start]` | File a new issue; `--start` also provisions the session |
 | `jmux ctl issue start <issue-id> [--repo P]` | Start (or resume) work for an issue |
 | `jmux ctl issue get <issue-id>` | Fetch issue details from the tracker |
 | `jmux ctl issue link <session> <issue-id>` | Link a session to an issue |

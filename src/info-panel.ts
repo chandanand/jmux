@@ -49,12 +49,15 @@ rebuildInfoPanelColors();
 export interface InfoPanelConfig {
   viewIds: string[];      // ordered list of view IDs to show as tabs
   viewLabels: Map<string, string>; // id → label for tab bar rendering
+  /** id → item count, rendered beside the label. Absent = no count shown. */
+  viewCounts?: Map<string, number>;
 }
 
 export class InfoPanel {
   private _tabs: InfoTab[] = [];
   private _activeTab: InfoTab = "diff";
   private _viewLabels = new Map<string, string>();
+  private _viewCounts = new Map<string, number>();
 
   constructor(config: InfoPanelConfig) {
     this.rebuildTabs(config);
@@ -98,8 +101,14 @@ export class InfoPanel {
     this._activeTab = this._tabs[(idx - 1 + this._tabs.length) % this._tabs.length];
   }
 
-  private tabLabel(tab: InfoTab): string {
-    return ` ${tab === "diff" ? "Diff" : (this._viewLabels.get(tab) ?? tab)} `;
+  /** Public so tab-strip rendering can be asserted without pixel-peeping. */
+  tabLabel(tab: InfoTab): string {
+    if (tab === "diff") return " Diff ";
+    const label = this._viewLabels.get(tab) ?? tab;
+    // A count on the tab itself is what makes an attention-model layout work:
+    // "is anything urgent?" shouldn't require switching tabs to find out.
+    const count = this._viewCounts.get(tab);
+    return count ? ` ${label} ${count} ` : ` ${label} `;
   }
 
   // Places every tab once (paint and hit-test both read from this). No
@@ -165,5 +174,6 @@ export class InfoPanel {
       this._tabs.push(id);
     }
     this._viewLabels = config.viewLabels;
+    this._viewCounts = config.viewCounts ?? new Map();
   }
 }

@@ -46,7 +46,7 @@ describe("Restorer missing cwd", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async () => false,
     });
     await r.run(snap);
@@ -66,7 +66,7 @@ describe("Restorer missing cwd", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
       cwdExists: async () => false,
     });
     await r.run(snap);

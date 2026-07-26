@@ -114,14 +114,13 @@ Changes here persist until you update jmux. For durable customizations, prefer `
 
 ## jmux Application Config
 
-jmux's own settings (not tmux settings) live in `~/.config/jmux/config.json`. Edit it directly or use the settings screen (`Ctrl-a i`). Changes are hot-reloaded.
+jmux's own settings (not tmux settings) live in `~/.config/jmux/config.json`. Edit it directly or use the settings screen (`Ctrl-a I` — capital I; lowercase `Ctrl-a i` opens the shorter settings palette). Changes are hot-reloaded.
 
 ```json
 {
   "sidebarWidth": 26,
   "infoPanelWidth": 80,
   "infoPanelSplitRatio": 0.5,
-  "claudeCommand": "claude",
   "cacheTimers": true,
   "stateColors": {
     "running": "green",
@@ -133,7 +132,6 @@ jmux's own settings (not tmux settings) live in `~/.config/jmux/config.json`. Ed
     { "id": "default", "name": "Main" }
   ],
   "projectDirs": ["~/Code", "~/Projects"],
-  "wtmIntegration": true,
   "diffPanel": {
     "splitRatio": 0.4,
     "hunkCommand": "hunk"
@@ -143,15 +141,60 @@ jmux's own settings (not tmux settings) live in `~/.config/jmux/config.json`. Ed
     "issueTracker": { "type": "linear" }
   },
   "issueWorkflow": {
-    "teamRepoMap": {},
+    "teamRepoMap": {}
+  },
+  "repoDefaults": {
     "defaultBaseBranch": "main",
-    "autoCreateWorktree": true,
+    "wtmIntegration": true,
     "autoLaunchAgent": true,
-    "sessionNameTemplate": "{identifier}"
+    "sessionNameTemplate": "{identifier}",
+    "claudeCommand": "claude"
+  },
+  "repos": {},
+  "pipeline": {
+    "parkedStates": [],
+    "unparkOn": ["state-regression", "issue-comment", "mr-activity", "pipeline-failed"],
+    "autoParkIdleDays": null,
+    "transitionConfirm": "undo-toast",
+    "upNext": []
   },
   "panelViews": []
 }
 ```
+
+### Per-repo settings (`repoDefaults` / `repos`)
+
+Some settings are properties of a **repo**, not of you or the UI — the trunk
+branch, whether the repo is wtm-managed, the agent command. Those live in
+`repoDefaults` (the global default) and `repos` (per-repo overrides), resolved
+as:
+
+```
+repos[repoKey].x  ??  repoDefaults.x  ??  built-in default
+```
+
+The repo key is the canonical **git common dir**, which is identical for a
+repo's main checkout and every one of its worktrees, so all sessions in a repo
+resolve to one entry. jmux migrates older configs into this shape once, on
+first launch — the previous `claudeCommand` / `wtmIntegration` top-level keys
+and the `issueWorkflow` workflow keys move to `repoDefaults` automatically.
+
+The settings screen (`Ctrl-a I`) shows both tiers: the global rows under
+**Repo**, and a **This repo** category for the repo your active session lives
+in, where each row is marked `(inherited)` or `(override)` and `d` clears an
+override back to inherited.
+
+The transition states (`onSessionStartState`, `onMrOpenState`,
+`onMrMergedState`) are per-repo too, but they are edited on the workflow screen
+(`Ctrl-a W`) alongside everything else the pipeline does. It shows the value in
+force for the repo you are in, with the same `(inherited)` / `(override)`
+markers; `g` switches to the global defaults.
+
+`teamRepoMap` deliberately stays under `issueWorkflow`: it is the cross-repo
+routing index that maps a tracker team *onto* a repo, so it cannot itself be
+per-repo.
+
+See `docs/adr/0004-per-repo-settings-keyed-on-repo-root.md`.
 
 ### Resizing the sidebar and the info panel with the mouse
 
@@ -196,7 +239,7 @@ breakdown, and the Command Center tile borders. Each value is a named ANSI color
 `bright*` variants (e.g. `brightblue`). Unset or unrecognized names fall back to
 the defaults (`running` green, `waiting` yellow, `complete` blue). The bold/dim
 emphasis per state is fixed; only the hue is configurable. Set these from the
-settings screen (`Ctrl-a i` → Display) or the command palette (`Ctrl-a p`).
+settings screen (`Ctrl-a I` → Display) or the command palette (`Ctrl-a p`).
 
 ### Command Center tabs
 

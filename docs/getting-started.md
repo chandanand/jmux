@@ -256,7 +256,7 @@ export GITLAB_TOKEN="glpat-..."        # personal access token with api scope
 
 ### 2. Enable the adapters
 
-Open settings with `Ctrl-a` then `i`, navigate to **Integrations**, and set:
+Open settings with `Ctrl-a` then `I` (capital), navigate to **Integrations**, and set:
 - **Code host** → `gitlab`
 - **Issue tracker** → `linear`
 
@@ -279,24 +279,53 @@ Adapters authenticate on startup. Once connected, press `Ctrl-a g` and use `[`/`
 
 If you want to create sessions directly from issues (press `n` on an issue), tell jmux which Linear team maps to which local repository:
 
-In settings (`Ctrl-a i` > **Issue Workflow** > **Team -> repo mappings**), add entries like:
+In settings (`Ctrl-a I` > **Repo** > **Team → repo mappings**), add entries like:
 - `Platform` → `~/repos/backend`
 - `Frontend` → `~/repos/frontend`
 
 Now selecting an issue and pressing `n` will create a worktree, open a session, and optionally launch Claude Code with the issue context — all in one step.
 
-See [issue-tracking.md](issue-tracking.md) for the full reference including custom views, pipeline glyphs, and manual linking.
+### 5. Set up the work pipeline (optional)
+
+Press `Ctrl-a W`. If you've configured nothing yet, the first row offers
+**⚑ Suggest a starting layout**, which builds `To do` / `In progress` / `Done`
+tabs from your tracker's own categories. Press `Enter` on it and you have a
+working setup.
+
+From there, each status in the table has two settings:
+
+- **`Enter`** — which tab it appears in.
+- **`space`** — whether it **parks**. Tick the statuses that mean "someone else
+  has this now" (merged, in QA, awaiting review). Sessions whose issue reaches
+  one collapse into a single `Parked (n)` row at the bottom of the sidebar,
+  untouched, and come straight back out when the issue moves, someone comments,
+  the MR is touched, or a pipeline fails.
+
+Two keystrokes worth knowing once that's set up:
+
+| Key | Action |
+|-----|--------|
+| `Ctrl-a u` | Start the next issue from your queue rotation (press `u` on a tab to add it) |
+| `Ctrl-a a` | Capture a new issue — `Enter` files it, `Ctrl-S` files it *and* starts work |
+
+See [issue-tracking.md](issue-tracking.md) for the full reference including custom views, pipeline glyphs, status writes back to your tracker, and manual linking.
 
 ---
 
 ## Settings
 
-Press `Ctrl-a` then `i` to open the settings screen:
+Press `Ctrl-a` then `I` (capital) to open the settings screen:
 
-- **Display** — sidebar width, cache timers
-- **Integrations** — code host (GitLab), issue tracker (Linear), Claude command
-- **Issue Workflow** — base branch, worktree creation, agent launch, team-to-repo mapping
-- **Directories** — project directories for session creation
+- **Display** — sidebar width, panel width, cache timers, state colours
+- **Integrations** — code host (GitLab), issue tracker (Linear)
+- **Repo** — base branch, worktree creation, agent launch, team-to-repo mapping
+- **Project** — project directories for session creation
+- **Workflow** — opens the workflow screen (below)
+
+The issue pipeline has a screen of its own: `Ctrl-a W` shows your tabs, then a
+table of every tracker status with two settings each — which tab it appears in,
+and whether it parks — plus the up-next order and status writes back to your
+tracker.
 
 Settings are saved to `~/.config/jmux/config.json` and most take effect immediately.
 

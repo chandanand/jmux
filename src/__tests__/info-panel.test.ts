@@ -116,3 +116,37 @@ describe("InfoPanel", () => {
     expect(panel.activeTab).toBe("diff");
   });
 });
+
+describe("InfoPanel tab counts", () => {
+  // An attention model only works if you can see where attention is needed
+  // without visiting each tab.
+  function panel(counts?: Map<string, number>): InfoPanel {
+    const p = new InfoPanel({ viewIds: [], viewLabels: new Map() });
+    p.updateConfig({
+      viewIds: ["urgent", "todo"],
+      viewLabels: new Map([["urgent", "Urgent"], ["todo", "To do"]]),
+      viewCounts: counts,
+    });
+    return p;
+  }
+
+  test("a non-zero count renders beside the label", () => {
+    expect(panel(new Map([["urgent", 3]])).tabLabel("urgent")).toBe(" Urgent 3 ");
+  });
+
+  test("a zero count is omitted rather than shown as 0", () => {
+    expect(panel(new Map([["urgent", 0]])).tabLabel("urgent")).toBe(" Urgent ");
+  });
+
+  test("tabs with no count entry render plain", () => {
+    expect(panel(new Map([["urgent", 3]])).tabLabel("todo")).toBe(" To do ");
+  });
+
+  test("omitting counts entirely keeps the old rendering", () => {
+    expect(panel().tabLabel("urgent")).toBe(" Urgent ");
+  });
+
+  test("the diff tab never takes a count", () => {
+    expect(panel(new Map([["diff", 9]])).tabLabel("diff")).toBe(" Diff ");
+  });
+});

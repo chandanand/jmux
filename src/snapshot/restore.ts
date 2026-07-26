@@ -10,7 +10,12 @@ export interface RestorerOptions {
   clock: Clock;
   jmuxVersion: string;
   userShell: string;
-  claudeCommand: string;
+  /**
+   * The agent command is a per-repo setting, so it cannot be captured once at
+   * construction — a restore spans sessions in different repos. Resolved from
+   * each restored pane's own cwd instead.
+   */
+  resolveClaudeCommand: (cwd: string) => string;
   cwdExists?: (path: string) => Promise<boolean>;
   sessionLinksSink?: (
     name: string,
@@ -246,7 +251,7 @@ export class Restorer {
           : "",
         capturedAt,
         kind: firstPane.kind,
-        claudeCommand: this.opts.claudeCommand,
+        claudeCommand: this.opts.resolveClaudeCommand(firstPane.cwd),
         userShell: this.opts.userShell,
       });
 
@@ -294,7 +299,7 @@ export class Restorer {
             : "",
           capturedAt,
           kind: p.kind,
-          claudeCommand: this.opts.claudeCommand,
+          claudeCommand: this.opts.resolveClaudeCommand(p.cwd),
           userShell: this.opts.userShell,
         });
         const r2 = await this.opts.runner.run([

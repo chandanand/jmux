@@ -1,11 +1,12 @@
 import type { CellGrid } from "./types";
-import { createGrid, writeString } from "./cell-grid";
+import { createGrid, writeString, textCols } from "./cell-grid";
 import { fuzzyMatch, truncateLabel, type FuzzyResult } from "./fuzzy";
 import {
   HEADER_ATTRS, SUBHEADER_ATTRS, PROMPT_ATTRS, INPUT_ATTRS,
   RESULT_ATTRS, SELECTED_RESULT_ATTRS,
   MATCH_ATTRS, SELECTED_MATCH_ATTRS,
   BG_ATTRS, SELECTED_BG_ATTRS,
+  CATEGORY_ATTRS, SELECTED_CATEGORY_ATTRS,
   NO_MATCHES_ATTRS,
   type ModalAction,
 } from "./modal";
@@ -200,9 +201,18 @@ export class ListModal {
           writeString(grid, row, 1, "▸", baseAttrs);
         }
 
+        // Optional right-aligned annotation (e.g. where a status currently
+        // lives), reserved before the label so the two can't collide.
+        const annotation = entry.item.annotation ?? "";
+        const annCols = annotation ? textCols(annotation) + 2 : 0;
+        if (annotation && width - annCols > 6) {
+          writeString(grid, row, width - annCols + 1, annotation,
+            isSelected ? SELECTED_CATEGORY_ATTRS : CATEGORY_ATTRS);
+        }
+
         // Label with match highlighting
         const labelStart = 3;
-        const maxLabelLen = width - labelStart;
+        const maxLabelLen = Math.max(1, width - labelStart - annCols);
         const label = truncateLabel(entry.item.label, maxLabelLen);
         const matchIndices = new Set(entry.match.indices);
 

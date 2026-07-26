@@ -17,8 +17,41 @@ The sidebar shows all sessions with:
 - Green `▎` marker + highlighted background on the active session
 - Green `●` dot for sessions with new output since you last viewed them
 - Orange `!` flag for attention (e.g. Claude Code finished a response)
-- Sessions sharing a parent directory are grouped under a header
 - `▲` / `▼` indicators when sessions overflow the sidebar
+
+### Grouping, sorting and filtering
+
+Grouping and sorting are two independent axes: grouping decides how sessions
+bucket into headers, sorting decides the order *within* a bucket.
+
+| Key | Action | Cycles through |
+|-----|--------|----------------|
+| `Ctrl-a G` | Cycle grouping | `Flat` → `Project` → `Status` |
+| `Ctrl-a s` | Cycle sort within a group | `Name` → `Activity` → `Status` |
+| `Ctrl-a f` | Cycle filter | `All` → `Needs you` → `Active` |
+
+The current modes show as chips at the top of the sidebar (`⊞ Status  ⇅ Activity`),
+alongside a count of sessions wanting your attention. `Ctrl-a s` deliberately
+shadows tmux's `choose-session`, which the sidebar already replaces.
+
+| Mode | Meaning |
+|------|---------|
+| Group `Project` | One header per repo — every worktree of it together. Headers are alphabetical. |
+| Group `Status` | One header per agent state, ordered by urgency rather than alphabetically: **Needs you → Running → Active → Done → Idle**. That order is fixed and does not follow the sort mode. |
+| Sort `Activity` | Most recent signal of life first — an agent-state change, an OTEL request, or tmux output. |
+| Sort `Status` | Same urgency rank as the status grouping, then recency, then name. |
+| Filter `Needs you` | Only sessions whose agent is waiting on you. |
+| Filter `Active` | Waiting *or* running — the sessions actually doing something. |
+
+Three bands sit outside the grouping, in fixed positions:
+
+- **Command Center** is always the first row.
+- **Pinned** is the top group whenever any pane is pinned.
+- **Parked** is always last and **collapsed by default**, showing its count
+  (`Parked (9)`). It holds sessions whose issue reached a status you marked as
+  parked on the workflow screen — see
+  [Parking](issue-tracking.md#parking-the-back-burner). Press `Enter` on the
+  header to expand it.
 
 ---
 
@@ -31,6 +64,11 @@ The sidebar shows all sessions with:
 | `Ctrl-a n` | New session / new worktree (auto-detects wtm projects) |
 | `Ctrl-a r` | Rename current session |
 | `Ctrl-a m` | Move current window to another session |
+
+Park a handed-off session (or bring one back) from the palette: **Park session**
+/ **Unpark session**. Parked sessions collapse into a single row at the bottom of
+the sidebar and pop back out automatically when their issue, MR or agent needs
+you — see [Issue Tracking](issue-tracking.md#parking-the-back-burner).
 
 ---
 
@@ -139,7 +177,29 @@ See [issue-tracking.md](issue-tracking.md) for setup and configuration.
 | `Ctrl-a p` | Command palette (fuzzy search all actions) |
 | `Ctrl-a k` | Clear pane content + scrollback |
 | `Ctrl-a y` | Copy entire pane content to clipboard |
-| `Ctrl-a i` | Settings |
+| `Ctrl-a i` | Settings palette (quick one-shot toggles) |
+| `Ctrl-a I` | Settings screen (display, integrations, repo, project) |
+| `Ctrl-a W` | Workflow screen (tabs, and a table of statuses → tab + parks) |
+
+---
+
+## Work Pipeline
+
+| Key | Action |
+|-----|--------|
+| `Ctrl-a W` | Configure the whole pipeline on one screen |
+| `Ctrl-a a` | Capture a new issue (`Enter` files it, `Ctrl-S` files it and starts work) |
+| `Ctrl-a u` | Start the next issue from your queue rotation |
+| `Ctrl-a Z` | Undo the last status write to your tracker |
+
+`Ctrl-a W` is two blocks: your tabs, then a table of every tracker status. Each
+status has two settings — which tab it appears in (`↵`) and whether it parks
+(`space`). `u` puts a tab in the `Ctrl-a u` rotation, `⇧↑↓` reorders, `d`
+removes. The line above the keys says what the selected row will actually do.
+
+With the info panel focused (`Shift-Right`), `F` narrows the current tab by
+label or priority, and the palette's **Save current view as tab** clones it
+under a new name.
 
 ---
 

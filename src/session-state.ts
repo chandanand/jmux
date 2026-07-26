@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { dirname } from "path";
+import type { ParkOverride } from "./parking";
 import { logError } from "./log";
 
 export interface SessionLink {
@@ -9,6 +10,8 @@ export interface SessionLink {
 
 interface StateData {
   sessionLinks: Record<string, SessionLink[]>;
+  /** Explicit park/unpark decisions, remembered against the stage they were made at. */
+  parkOverrides?: Record<string, ParkOverride>;
 }
 
 export class SessionState {
@@ -19,6 +22,20 @@ export class SessionState {
   constructor(filePath: string) {
     this.filePath = filePath;
     this.load();
+  }
+
+  getParkOverride(sessionName: string): ParkOverride | null {
+    return this.data.parkOverrides?.[sessionName] ?? null;
+  }
+
+  /** Record or clear an explicit park decision. */
+  setParkOverride(sessionName: string, override: ParkOverride | null): void {
+    if (!this.data.parkOverrides) this.data.parkOverrides = {};
+    if (override === null) delete this.data.parkOverrides[sessionName];
+    else this.data.parkOverrides[sessionName] = override;
+    if (Object.keys(this.data.parkOverrides).length === 0) delete this.data.parkOverrides;
+    this.save();
+    this.emitChange(sessionName);
   }
 
   getLinks(sessionName: string): SessionLink[] {
@@ -80,6 +97,17 @@ export class SessionState {
         delete this.data.sessionLinks[name];
         pruned.push(name);
       }
+    }
+    // Park overrides are keyed the same way and would otherwise accumulate
+    // forever, silently re-applying to any future session of the same name.
+    for (const name of Object.keys(this.data.parkOverrides ?? {})) {
+      if (!liveSessions.has(name)) {
+        delete this.data.parkOverrides![name];
+        if (!pruned.includes(name)) pruned.push(name);
+      }
+    }
+    if (this.data.parkOverrides && Object.keys(this.data.parkOverrides).length === 0) {
+      delete this.data.parkOverrides;
     }
     if (pruned.length > 0) {
       this.save();

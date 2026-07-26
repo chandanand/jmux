@@ -1,6 +1,6 @@
 import type { CellGrid } from "./types";
 import { ColorMode } from "./types";
-import { createGrid, writeString, type CellAttrs } from "./cell-grid";
+import { createGrid, writeString, textCols, truncateToCols, type CellAttrs } from "./cell-grid";
 import { theme, neutralFg } from "./theme";
 import { tokens, space, frame } from "./chrome-tokens";
 
@@ -9,7 +9,7 @@ import { tokens, space, frame } from "./chrome-tokens";
 export interface SettingDef {
   id: string;
   label: string;
-  type: "boolean" | "text" | "list" | "map";
+  type: "boolean" | "text" | "list" | "map" | "multiselect" | "action";
   getValue: () => string;
   // For boolean: toggle callback
   onToggle?: () => void;
@@ -24,6 +24,33 @@ export interface SettingDef {
   getMapValueOptions?: () => Array<{ id: string; label: string }>; // available values (e.g., project dirs)
   onMapSave?: (key: string, value: string) => void;
   onMapRemove?: (key: string) => void;
+  // For multiselect: a subset chosen from a (possibly live) option list.
+  // Options may come from a fixed set or from the issue tracker at call time —
+  // the primitive doesn't care, it just re-reads on every render so a toggle
+  // is reflected without any snapshot/invalidate dance.
+  getOptions?: () => Array<{ id: string; label: string }>;
+  getSelected?: () => string[];
+  onToggleOption?: (id: string) => void;
+  /**
+   * Where this row's effective value came from. Rows in the current-repo
+   * category report "override" when that repo sets the field and "inherited"
+   * when the value falls through to the global default. Omit for rows that
+   * aren't per-repo — they render no marker.
+   */
+  getScope?: () => "inherited" | "override";
+  /** Clear this repo's override, falling back to the inherited value. */
+  onClearOverride?: () => void;
+  /**
+   * For `action`: run on Enter instead of editing anything. `getValue` still
+   * supplies a right-hand summary, so the row reads like the others.
+   */
+  onActivate?: () => void;
+  /**
+   * One sentence saying what this setting does, shown on the workflow screen's
+   * explain line while the row is selected. Optional and ignored by the
+   * settings screen, which has no explain line of its own.
+   */
+  describe?: () => string;
 }
 
 export interface SettingsCategory {
@@ -86,6 +113,65 @@ export function rebuildSettingsColors(): void {
 }
 rebuildSettingsColors();
 
+// --- Shared row dialect ---
+//
+// `label ·········· value (marker)` with a ▸ cursor in the left gutter — the
+// one row treatment used by every full-screen chrome surface. Exported so the
+// workflow screen paints its behaviour bands identically instead of growing a
+// second, drifting copy of this arithmetic.
+//
+// All widths go through textCols/truncateToCols rather than String.length:
+// these rows carry user data (tracker status names), which may contain
+// width-2 characters.
+
+export interface SettingRowOpts {
+  label: string;
+  labelAttrs: CellAttrs;
+  /** Right-aligned, painted left to right; each part keeps its own attrs. */
+  value: ReadonlyArray<{ text: string; attrs: CellAttrs }>;
+  selected: boolean;
+  /** Columns from `left` to the label. The cursor sits two columns before it. */
+  indent?: number;
+  /** Dot leader between label and value. Off for rows that expand in place. */
+  leader?: boolean;
+}
+
+export function drawSettingRow(
+  grid: CellGrid,
+  row: number,
+  bounds: { left: number; right: number },
+  opts: SettingRowOpts,
+): void {
+  const { left, right } = bounds;
+  const indent = left + (opts.indent ?? 2);
+
+  const maxLabelCols = Math.max(1, Math.floor((right - indent - 2) * 0.5));
+  const label = truncateToCols(opts.label, maxLabelCols);
+  writeString(grid, row, indent, label, opts.labelAttrs);
+
+  const valueCols = opts.value.reduce((n, part) => n + textCols(part.text), 0);
+  const valueCol = right - valueCols;
+  const labelEnd = indent + textCols(label);
+
+  if (valueCol > labelEnd + 1) {
+    if (opts.leader !== false) {
+      const leaderStart = labelEnd + 1;
+      // Reserve one flanking space each side so the dots never touch either end.
+      const maxDots = valueCol - 1 - leaderStart - 1;
+      if (maxDots >= 2) {
+        writeString(grid, row, leaderStart, " " + "·".repeat(maxDots) + " ", HAIRLINE_ATTRS);
+      }
+    }
+    let col = valueCol;
+    for (const part of opts.value) {
+      writeString(grid, row, col, part.text, part.attrs);
+      col += textCols(part.text);
+    }
+  }
+
+  if (opts.selected) writeString(grid, row, indent - 2, "▸", CURSOR_ATTRS);
+}
+
 // --- Node model ---
 
 type SettingsNode =
@@ -100,7 +186,7 @@ type EditState =
   | null
   | { mode: "text"; settingId: string; buffer: string; cursorPos: number }
   | { mode: "list"; settingId: string; optionIndex: number; options: string[] }
-  | { mode: "picker"; settingId: string; title: string; items: PickerItem[]; filtered: PickerItem[]; selectedIndex: number; filter: string; onSelect: (item: PickerItem) => void };
+  | { mode: "picker"; settingId: string; title: string; items: PickerItem[]; filtered: PickerItem[]; selectedIndex: number; filter: string; onSelect: (item: PickerItem) => void; multi?: boolean };
 
 export type SettingsAction =
   | { type: "none" }
@@ -184,16 +270,19 @@ export class SettingsScreen {
       return this.handleEnter();
     }
 
-    // Delete key on map entries
-    if ((data === "d" || data === "\x7f") && this.getSelectedMapEntry()) {
+    // Delete key: removes a map entry, or clears a per-repo override back to
+    // the inherited value. Both are "unset this", so they share one key.
+    if (data === "d" || data === "\x7f") {
       const node = this.getSelectedNode();
       if (node?.kind === "map-entry") {
         const setting = this.findSetting(node.parentId);
-        if (setting?.onMapRemove) {
-          setting.onMapRemove(node.key);
-        }
+        setting?.onMapRemove?.(node.key);
+        return { type: "none" };
       }
-      return { type: "none" };
+      if (node?.kind === "setting" && node.setting.getScope?.() === "override") {
+        node.setting.onClearOverride?.();
+        return { type: "none" };
+      }
     }
 
     return { type: "none" };
@@ -322,8 +411,6 @@ export class SettingsScreen {
   }
 
   private renderSetting(grid: CellGrid, row: number, left: number, right: number, setting: SettingDef, selected: boolean): void {
-    const indent = left + 2;
-
     // Check if this setting is being edited
     if (this.editState?.settingId === setting.id) {
       if (this.editState.mode === "text") {
@@ -336,47 +423,34 @@ export class SettingsScreen {
       }
     }
 
-    const maxLabelLen = Math.max(1, Math.floor((right - indent - 2) * 0.5));
-    const displayLabel = setting.label.length > maxLabelLen
-      ? setting.label.slice(0, maxLabelLen - 1) + "\u2026"
-      : setting.label;
-
-    writeString(grid, row, indent, displayLabel, selected ? LABEL_ACTIVE : LABEL_ATTRS);
-
-    // Value
     const value = setting.getValue();
     const isBoolean = setting.type === "boolean";
     const isMap = setting.type === "map";
     const valueStr = isMap
       ? (this.expandedMaps.has(setting.id) ? "▾" : `▸ ${value}`)
-      : value.length > 25 ? value.slice(0, 24) + "\u2026" : value;
+      : truncateToCols(value, 25);
 
-    // Dot leader computed within the measure: label, leader, value — the
-    // leader fills exactly the space between them (measureWidth - label -
-    // value - the flanking padding), never past `right`.
-    const valueCol = right - valueStr.length;
-    const labelEnd = indent + displayLabel.length;
-    if (valueCol > labelEnd + 1) {
-      if (!isMap) {
-        const leaderStart = labelEnd + 1;
-        const leaderEnd = valueCol - 1;
-        const maxDots = leaderEnd - leaderStart - 1; // reserve one flanking space each side
-        if (maxDots >= 2) {
-          const dots = " " + "·".repeat(maxDots) + " ";
-          writeString(grid, row, leaderStart, dots, HAIRLINE_ATTRS);
-        }
-      }
+    // Per-repo rows carry a provenance marker after the value, so an override
+    // is visible at a glance and the [d] clear key has something to point at.
+    const scope = setting.getScope?.();
 
-      let valAttrs: CellAttrs;
-      if (isBoolean) {
-        valAttrs = value === "on" ? ON_ATTRS : OFF_ATTRS;
-      } else {
-        valAttrs = selected ? VALUE_ACTIVE : VALUE_ATTRS;
-      }
-      writeString(grid, row, valueCol, valueStr, valAttrs);
-    }
-
-    if (selected) writeString(grid, row, indent - 2, "▸", CURSOR_ATTRS);
+    drawSettingRow(grid, row, { left, right }, {
+      label: setting.label,
+      labelAttrs: selected ? LABEL_ACTIVE : LABEL_ATTRS,
+      value: [
+        {
+          text: valueStr,
+          attrs: isBoolean
+            ? (value === "on" ? ON_ATTRS : OFF_ATTRS)
+            : (selected ? VALUE_ACTIVE : VALUE_ATTRS),
+        },
+        ...(scope ? [{ text: ` (${scope})`, attrs: DIM_ATTRS }] : []),
+      ],
+      selected,
+      // A map row expands in place rather than carrying a value, so a leader
+      // pointing at its ▸/▾ chevron would read as a value it doesn't have.
+      leader: !isMap,
+    });
   }
 
   private renderTextEdit(grid: CellGrid, row: number, left: number, right: number, setting: SettingDef, state: Extract<EditState, { mode: "text" }>): void {
@@ -523,6 +597,9 @@ export class SettingsScreen {
       }
       if (data === "\r") {
         const item = state.filtered[state.selectedIndex];
+        // A multi picker toggles and stays open — picking a subset in one
+        // visit is the whole point. Single pickers commit and close via
+        // their own onSelect.
         if (item) state.onSelect(item);
         return { type: "none" };
       }
@@ -596,6 +673,28 @@ export class SettingsScreen {
         } else {
           this.expandedMaps.add(setting.id);
         }
+        return { type: "none" };
+      }
+
+      if (setting.type === "action") {
+        setting.onActivate?.();
+        return { type: "none" };
+      }
+
+      if (setting.type === "multiselect" && setting.getOptions && setting.onToggleOption) {
+        const items = setting.getOptions();
+        const toggle = setting.onToggleOption;
+        this.editState = {
+          mode: "picker",
+          settingId: setting.id,
+          title: setting.label,
+          items,
+          filtered: items,
+          selectedIndex: 0,
+          filter: "",
+          multi: true,
+          onSelect: (item) => toggle(item.id),
+        };
         return { type: "none" };
       }
     }
@@ -744,6 +843,12 @@ export class SettingsScreen {
       scrollOff = state.selectedIndex - maxVisible + 1;
     }
 
+    // Checkbox state is re-read from the setting on every frame rather than
+    // snapshotted into the EditState, so a toggle shows up immediately.
+    const checked = state.multi
+      ? new Set(this.findSetting(state.settingId)?.getSelected?.() ?? [])
+      : null;
+
     for (let i = 0; i < state.filtered.length; i++) {
       const row = startRow + i - scrollOff;
       if (row < startRow || row >= rows) continue;
@@ -753,7 +858,8 @@ export class SettingsScreen {
       if (isSelected) {
         writeString(grid, row, pad, "▸", CURSOR_ATTRS);
       }
-      writeString(grid, row, pad + 2, item.label, isSelected ? LABEL_ACTIVE : LABEL_ATTRS);
+      const label = checked ? `[${checked.has(item.id) ? "x" : " "}] ${item.label}` : item.label;
+      writeString(grid, row, pad + 2, label, isSelected ? LABEL_ACTIVE : LABEL_ATTRS);
     }
 
     if (state.filtered.length === 0) {
@@ -762,7 +868,15 @@ export class SettingsScreen {
 
     // Hint
     const hintRow = rows - 1;
-    writeString(grid, hintRow, pad, "↑↓ select  ·  Enter confirm  ·  Esc cancel  ·  type to filter", HINT_ATTRS);
+    writeString(
+      grid,
+      hintRow,
+      pad,
+      state.multi
+        ? "↑↓ select  ·  Enter toggle  ·  Esc done  ·  type to filter"
+        : "↑↓ select  ·  Enter confirm  ·  Esc cancel  ·  type to filter",
+      HINT_ATTRS,
+    );
 
     return grid;
   }

@@ -30,7 +30,7 @@ describe("Restorer eligibility", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
     });
     const result = await r.checkEligibility();
     expect(result.ok).toBe(true);
@@ -45,7 +45,7 @@ describe("Restorer eligibility", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
     });
     const result = await r.checkEligibility();
     expect(result.ok).toBe(false);
@@ -68,7 +68,7 @@ describe("Restorer eligibility", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
     });
     const result = await r.checkEligibility();
     expect(result.ok).toBe(true);
@@ -90,7 +90,7 @@ describe("Restorer eligibility", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
     });
     const result = await r.checkEligibility();
     expect(result.ok).toBe(false);
@@ -113,7 +113,7 @@ describe("Restorer eligibility", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
     });
     const result = await r.checkEligibility();
     expect(result.ok).toBe(false);
@@ -136,7 +136,7 @@ describe("Restorer eligibility", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
     });
     const result = await r.checkEligibility();
     expect(result.ok).toBe(false);
@@ -164,7 +164,7 @@ describe("Restorer eligibility", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
     });
     const result = await r.checkEligibility();
     expect(result.ok).toBe(true);
@@ -189,7 +189,7 @@ describe("Restorer eligibility", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
     });
     await r1.checkEligibility();
     // r1 now holds the lock
@@ -201,7 +201,7 @@ describe("Restorer eligibility", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
     });
     const result2 = await r2.checkEligibility();
     expect(result2.ok).toBe(false);
@@ -221,7 +221,7 @@ describe("Restorer eligibility", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
     });
     const result = await r.checkEligibility();
     expect(result.ok).toBe(false);
@@ -244,7 +244,7 @@ describe("Restorer eligibility", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
     });
     await r.checkEligibility();
     const lock = r.takeLock();
@@ -270,7 +270,7 @@ describe("Restorer eligibility", () => {
       clock: new FakeClock(),
       jmuxVersion: "test",
       userShell: "/bin/zsh",
-      claudeCommand: "claude",
+      resolveClaudeCommand: () => "claude",
     });
     await r.checkEligibility();
     // Lock is held after eligibility check

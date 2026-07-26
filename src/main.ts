@@ -22,7 +22,7 @@ import {
   type NewSessionResult,
   type NewSessionProviders,
 } from "./new-session-modal";
-import { CreateIssueModal, type CreateIssueResult } from "./create-issue-modal";
+import { CaptureModal, type CaptureResult } from "./capture-modal";
 import { buildPinCommands } from "./cli/pane";
 import type { CellAttrs } from "./cell-grid";
 import { createGrid } from "./cell-grid";
@@ -42,16 +42,48 @@ import { StdinGate } from "./stdin-gate";
 import { TmuxControl, type ControlEvent } from "./tmux-control";
 import { DiffPanel } from "./diff-panel";
 import { InfoPanel, rebuildInfoPanelColors } from "./info-panel";
-import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, type PanelView } from "./panel-view";
+import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, parkedStages, toggleParkedState, effectiveFilter, type PanelView } from "./panel-view";
 import { transformIssues, transformMrs, buildViewNodes, renderView, createViewState, filterItems, rebuildPanelViewColors, computeViewLayout, splitRatioForSepRow, DEFAULT_PANEL_SPLIT_RATIO, type ViewState, type ViewNode, type IssueSessionInfo } from "./panel-view-renderer";
 import { createAdapters } from "./adapters/registry";
 import { PollCoordinator } from "./adapters/poll-coordinator";
 import { SessionState } from "./session-state";
-import type { SessionContext } from "./adapters/types";
+import type { SessionContext, WorkflowState } from "./adapters/types";
+import { stageForIssue, resolveIssueRepoDir, STAGE_ORDER, STAGE_LABELS } from "./work-stage";
+import {
+  detectMrTransitions,
+  transitionTarget,
+  TRANSITION_LABELS,
+  type MrSnapshot,
+  type TransitionEvent,
+} from "./transitions";
+import {
+  isParked,
+  clearStaleOverride,
+  captureBaseline,
+  detectSignals,
+  DEFAULT_PARKING,
+  UNPARK_TRIGGERS,
+  UNPARK_TRIGGER_LABELS,
+  UNPARK_TRIGGER_SHORT,
+  parkingSetupWarning,
+  type ParkingConfig,
+  type ParkBaseline,
+  type ParkContext,
+  type UnparkTrigger,
+} from "./parking";
 import type { DemoContext } from "./demo/setup";
 import type { SessionInfo, WindowTab, PaletteCommand, PaletteResult, AgentState } from "./types";
 import { loadProjectDirsCache, saveProjectDirsCache } from "./project-dirs-cache";
 import { ConfigStore, sanitizeTmuxSessionName } from "./config";
+import {
+  RepoFactsCache,
+  resolveForRepo,
+  buildWorktreeCommand,
+  REPO_SETTING_DEFAULTS,
+  type RepoSettings,
+  type WorkStage,
+  type ResolvedRepoSettings,
+} from "./repo-settings";
 import {
   resolveStateColors,
   STATE_COLOR_NAMES,
@@ -295,7 +327,35 @@ const toolbarEnabled = true;
 // startup; changing it requires a restart (toolbarHeight feeds PTY sizing).
 const windowBranchesEnabled = configStore.config.windowBranches === true;
 const toolbarHeight = toolbarEnabled ? (windowBranchesEnabled ? 2 : 1) : 0;
-let claudeCommand = configStore.config.claudeCommand || "claude";
+// Per-repo workflow settings. Only the git facts are cached (see RepoFactsCache);
+// the config half is read fresh on every resolution so a settings edit applies
+// without an invalidation step. There is deliberately no module-level
+// `claudeCommand` any more — the answer depends on which repo you are asking about.
+const repoFacts = new RepoFactsCache();
+
+/** Effective workflow settings for a directory. A null dir yields global defaults. */
+function repoSettingsFor(dir: string | null | undefined): ResolvedRepoSettings {
+  if (!dir) return resolveForRepo(configStore.config, { key: null, bare: false });
+  return resolveForRepo(configStore.config, repoFacts.get(dir));
+}
+
+/** The directory a live session is rooted in, or null if we don't know it yet. */
+function sessionDir(name: string): string | null {
+  const session = currentSessions.find((s) => s.name === name);
+  return session ? (sessionDetailsCache.get(session.id)?.directory ?? null) : null;
+}
+
+/** Effective settings for the session the user is currently attached to. */
+function currentRepoSettings(): ResolvedRepoSettings {
+  const name = currentSessions.find((s) => s.id === currentSessionId)?.name;
+  return repoSettingsFor(name ? sessionDir(name) : null);
+}
+
+/** The global-default tier alone, with built-in defaults filled in. */
+function repoDefaultsView(): ResolvedRepoSettings {
+  return resolveForRepo({ repoDefaults: configStore.config.repoDefaults }, { key: null, bare: false });
+}
+
 let cacheTimersEnabled = configStore.config.cacheTimers !== false;
 let autoPinAgentPanes = configStore.config.autoPinAgentPanes === true;
 let agentPaneRegex = configStore.config.agentPaneCommandRegex ?? "codex";
@@ -504,7 +564,10 @@ function makeToolbar(): ToolbarConfig {
     hoveredButton: hoveredToolbarButton,
     tabs: currentWindows,
     hoveredTabId,
-    statusChip: snapshotChipLabel(getSnapshotHealth()),
+    // A live undo takes the chip: it is transient and time-boxed, and being
+    // able to take the write back matters more for those 20s than ambient
+    // snapshot health does.
+    statusChip: undoChipLabel() ?? toastLabel() ?? snapshotChipLabel(getSnapshotHealth()),
   };
 }
 
@@ -602,7 +665,7 @@ async function performBoot(opts: {
     clock,
     jmuxVersion: process.env.JMUX_VERSION ?? "dev",
     userShell: process.env.SHELL ?? "/bin/sh",
-    claudeCommand: opts.config.claudeCommand ?? "claude",
+    resolveClaudeCommand: (cwd) => repoSettingsFor(cwd).claudeCommand,
     configFile: opts.configFile,
     // If our held lock is reclaimed while running, tell the Snapshotter so it
     // stops capturing and surfaces `error` instead of silently double-writing.
@@ -735,6 +798,7 @@ const stdinGate = new StdinGate({
     rebuildSidebarColors();
     rebuildInfoPanelColors();
     rebuildSettingsColors();
+    rebuildWorkflowColors();
     rebuildPanelViewColors();
     applyPaneStyles(); // re-issue tmux window-style fades for the new theme
     // Pre-ready, the first paint after boot reads the freshly themed values;
@@ -843,6 +907,9 @@ const agentStateTracker = new AgentStateTracker();
 agentStateTracker.onChange((sessionId) => {
   const record = agentStateTracker.getRecord(sessionId);
   sidebar.setAgentStateRecord(sessionId, record);
+  // "Agent needs attention" is an unpark trigger, so a state change can pull a
+  // session back out of the band.
+  recomputeParking();
 
   // Mirror to snapshot if snapshotter is up.
   const sessionName = currentSessions.find((s) => s.id === sessionId)?.name;
@@ -920,14 +987,16 @@ let diffBridge: ScreenBridge | null = null;
 let diffPty: import("bun-pty").Terminal | null = null;
 let diffPanelFocused = false;
 const settingsScreen = new SettingsScreen();
+const workflowScreen = new WorkflowScreen();
 
 import { SettingsScreen, rebuildSettingsColors, type SettingDef, type SettingsCategory, type SettingsAction } from "./settings-screen";
+import { WorkflowScreen, rebuildWorkflowColors, TRANSITIONS_BAND, type WorkflowPort, type WorkflowBand, type SettingsTier } from "./workflow-screen";
 
 const adapters = demoCtx
   ? { codeHost: demoCtx.codeHost, issueTracker: demoCtx.issueTracker }
   : createAdapters(configStore.config.adapters);
 const infoPanel = new InfoPanel({ viewIds: [], viewLabels: new Map() });
-const panelViews = parseViews(configStore.config.panelViews);
+let panelViews = parseViews(configStore.config.panelViews);
 const viewStates = new Map<string, ViewState>();
 for (const view of panelViews) {
   viewStates.set(view.id, createViewState());
@@ -946,6 +1015,27 @@ async function initAdapters(): Promise<void> {
       process.stderr.write(`jmux: ${adapters.issueTracker.type} adapter auth failed — check ${adapters.issueTracker.authHint}\n`);
     }
   }
+  refreshPanelViews();
+}
+
+/**
+ * Item count per issues tab, for the tab strip. Recomputed on each poll so the
+ * strip answers "is anything urgent?" without switching tabs.
+ */
+function panelViewCounts(views: PanelView[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  const states = getIssueSessionStates();
+  const mrs = mrsByUrl();
+  for (const view of views) {
+    if (view.source !== "issues") continue;
+    const items = transformIssues(issuesForView(view), new Set(), states, mrs);
+    counts.set(view.id, buildViewNodes(items, view, new Set()).filter((n) => n.kind === "item").length);
+  }
+  return counts;
+}
+
+/** Re-publish the visible tab set to the panel (after auth, or a saved view). */
+function refreshPanelViews(): void {
   const visibleViews = panelViews.filter((v) => {
     if (v.source === "issues") return adapters.issueTracker?.authState === "ok";
     if (v.source === "mrs") return adapters.codeHost?.authState === "ok";
@@ -954,6 +1044,7 @@ async function initAdapters(): Promise<void> {
   infoPanel.updateConfig({
     viewIds: visibleViews.map((v) => v.id),
     viewLabels: new Map(visibleViews.map((v) => [v.id, v.label])),
+    viewCounts: panelViewCounts(visibleViews),
   });
 }
 
@@ -962,6 +1053,11 @@ const pollCoordinator = new PollCoordinator({
   issueTracker: adapters.issueTracker,
   onUpdate: (sessionName) => {
     sidebar.setSessionContexts(pollCoordinator.getAllContexts());
+    // A poll is the main way a stage changes (and the only way an unpark
+    // signal arrives), so parking is re-derived on every one.
+    recomputeParking();
+    checkMrTransitions();
+    refreshPanelViews();
     if (sessionName === "__global__") refreshTeams();
     scheduleRender();
   },
@@ -994,6 +1090,278 @@ async function refreshTeams(): Promise<void> {
   } catch (e) {
     logError("jmux", `team fetch failed: ${(e as Error).message}`);
   }
+  try {
+    cachedWorkflowStates = await adapters.issueTracker.listWorkflowStates();
+  } catch (e) {
+    logError("jmux", `workflow state fetch failed: ${(e as Error).message}`);
+  }
+}
+
+/**
+ * Every workflow state the tracker offers, for the stage/transition pickers.
+ * Empty when the tracker is unauthenticated or exposes no real workflow —
+ * settings surfaces that rather than showing an empty picker with no reason.
+ */
+let cachedWorkflowStates: WorkflowState[] = [];
+
+function workflowStateOptions(): Array<{ id: string; label: string }> {
+  return cachedWorkflowStates.map((s) => ({ id: s.name, label: s.name }));
+}
+
+// --- Parking ---
+//
+// Baselines are in-memory only. On restart a parked session simply re-parks
+// and captures a fresh baseline, so signals raised while jmux was down are not
+// replayed. The main path survives that: a QA-Failed issue changes *stage*, and
+// stage is re-derived from the tracker on every poll.
+const parkBaselines = new Map<string, ParkBaseline>();
+
+function parkingConfig(): ParkingConfig {
+  const p = configStore.config.pipeline;
+  return {
+    unparkOn: p?.unparkOn ?? DEFAULT_PARKING.unparkOn,
+    autoParkIdleDays: p?.autoParkIdleDays ?? DEFAULT_PARKING.autoParkIdleDays,
+  };
+}
+
+/** Statuses that park, as a stage map. The one thing behaviour keys off. */
+function parkedStates(): string[] {
+  return configStore.config.pipeline?.parkedStates ?? [];
+}
+
+function derivedStages(): Record<WorkStage, string[]> {
+  return parkedStages(parkedStates());
+}
+
+/** Stage of a session's linked issue, or null when it has none. */
+function stageOfSession(name: string): WorkStage | null {
+  const issue = pollCoordinator.getContext(name)?.issues[0];
+  if (!issue) return null;
+  return stageForIssue(issue, derivedStages());
+}
+
+/**
+ * Recompute which sessions belong in the Parked band. Cheap and idempotent, so
+ * it can run on any signal that might change the answer (session list changes,
+ * poll updates, agent-state changes, config edits).
+ */
+function recomputeParking(): void {
+  const config = parkingConfig();
+  const now = Date.now();
+  const parked = new Set<string>();
+  const live = new Set(currentSessions.map((s) => s.name));
+
+  for (const session of currentSessions) {
+    const name = session.name;
+    const stage = stageOfSession(name);
+
+    // An override answers "for this situation"; once the stage moves on it no
+    // longer applies, or one manual unpark would suppress parking forever.
+    const stored = sessionState.getParkOverride(name);
+    const fresh = clearStaleOverride(stored, stage);
+    if (stored && !fresh) sessionState.setParkOverride(name, null);
+
+    const ctx = pollCoordinator.getContext(name);
+    const baseline = parkBaselines.get(name);
+    const parkCtx: ParkContext = {
+      stage,
+      issues: ctx?.issues ?? [],
+      mrs: ctx?.mrs ?? [],
+    };
+    const signals = baseline ? detectSignals(baseline, parkCtx) : new Set<UnparkTrigger>();
+    const info = sidebar.getSortInfo(name);
+
+    const shouldPark = isParked(
+      {
+        name,
+        stage,
+        manual: fresh?.manual ?? null,
+        attention: info?.status === "waiting",
+        signals,
+        lastActivity: info?.lastActivity ?? now,
+      },
+      config,
+      now,
+    );
+
+    if (shouldPark) {
+      parked.add(name);
+      // Capture the baseline on the parking edge, so "changed since parked"
+      // has something to compare against.
+      if (!baseline) parkBaselines.set(name, captureBaseline(parkCtx));
+    } else {
+      parkBaselines.delete(name);
+    }
+  }
+
+  for (const name of parkBaselines.keys()) {
+    if (!live.has(name)) parkBaselines.delete(name);
+  }
+
+  sidebar.setParkedSessions(parked);
+}
+
+// --- Status transitions ---
+//
+// The one place jmux writes to a shared tracker. Everything here is opt-in per
+// repo and per event; with no configuration these functions do nothing.
+
+const UNDO_WINDOW_MS = 20_000;
+
+/** Last-seen MR states per session, for edge detection across polls. */
+const mrSnapshots = new Map<string, MrSnapshot[]>();
+
+interface PendingUndo {
+  issueId: string;
+  identifier: string;
+  from: string;
+  to: string;
+  expiresAt: number;
+}
+let pendingUndo: PendingUndo | null = null;
+
+function transitionConfirmMode(): "always" | "undo-toast" | "never" {
+  return configStore.config.pipeline?.transitionConfirm ?? "undo-toast";
+}
+
+/** The toolbar chip text while an undo is still available, else null. */
+function undoChipLabel(): string | null {
+  if (!pendingUndo) return null;
+  if (Date.now() > pendingUndo.expiresAt) { pendingUndo = null; return null; }
+  return `${pendingUndo.identifier} → ${pendingUndo.to}  ^a Z undo`;
+}
+
+// A transient confirmation in the toolbar chip. Actions that deliberately
+// leave you where you are still have to say they happened — a keypress with no
+// visible effect is indistinguishable from one that failed.
+let statusToast: { text: string; expiresAt: number } | null = null;
+const TOAST_MS = 6_000;
+
+function showToast(text: string): void {
+  statusToast = { text, expiresAt: Date.now() + TOAST_MS };
+  scheduleRender();
+}
+
+function toastLabel(): string | null {
+  if (!statusToast) return null;
+  if (Date.now() > statusToast.expiresAt) { statusToast = null; return null; }
+  return statusToast.text;
+}
+
+async function applyTransition(
+  issue: import("./adapters/types").Issue,
+  event: TransitionEvent,
+  target: string,
+): Promise<void> {
+  const tracker = adapters.issueTracker;
+  if (!tracker || tracker.authState !== "ok") return;
+  if (issue.status === target) return; // already there — nothing to say
+
+  const from = issue.status;
+  try {
+    await tracker.updateStatus(issue.id, target);
+  } catch (e) {
+    logError("jmux", `transition failed for ${issue.identifier}: ${(e as Error).message}`);
+    return;
+  }
+
+  if (transitionConfirmMode() !== "never") {
+    pendingUndo = {
+      issueId: issue.id,
+      identifier: issue.identifier,
+      from,
+      to: target,
+      expiresAt: Date.now() + UNDO_WINDOW_MS,
+    };
+  }
+  logError("jmux", `transition: ${issue.identifier} ${from} → ${target} (${TRANSITION_LABELS[event]})`);
+  pollCoordinator.pollGlobal();
+  scheduleRender();
+}
+
+/** Revert the most recent transition, if the undo window is still open. */
+async function undoLastTransition(): Promise<void> {
+  const undo = pendingUndo;
+  if (!undo || Date.now() > undo.expiresAt) { pendingUndo = null; return; }
+  pendingUndo = null;
+  const tracker = adapters.issueTracker;
+  if (!tracker || tracker.authState !== "ok") return;
+  try {
+    await tracker.updateStatus(undo.issueId, undo.from);
+    pollCoordinator.pollGlobal();
+  } catch (e) {
+    logError("jmux", `undo failed for ${undo.identifier}: ${(e as Error).message}`);
+  }
+  scheduleRender();
+}
+
+/**
+ * Run a transition through the configured confirmation policy. "always" asks
+ * first; "undo-toast" writes and leaves an undo on screen; "never" writes
+ * silently.
+ */
+async function requestTransition(
+  issue: import("./adapters/types").Issue,
+  event: TransitionEvent,
+): Promise<void> {
+  const dir = resolveIssueRepoDir(issue, configStore.config, homedir());
+  const target = transitionTarget(event, repoSettingsFor(dir));
+  if (!target || issue.status === target) return;
+
+  if (transitionConfirmMode() !== "always") {
+    await applyTransition(issue, event, target);
+    return;
+  }
+
+  const modal = new ListModal({
+    header: `${issue.identifier} → ${target}?`,
+    subheader: `${TRANSITION_LABELS[event]} · currently ${issue.status}`,
+    items: [{ id: "yes", label: `Move to ${target}` }, { id: "no", label: "Leave it" }],
+  });
+  modal.open();
+  openModal(modal, async (value) => {
+    if ((value as ListItem).id === "yes") await applyTransition(issue, event, target);
+  });
+}
+
+/** Detect MR edges for every session and fire whatever transitions they imply. */
+function checkMrTransitions(): void {
+  for (const session of currentSessions) {
+    const ctx = pollCoordinator.getContext(session.name);
+    if (!ctx) continue;
+    const next: MrSnapshot[] = ctx.mrs.map((m) => ({ id: m.id, status: m.status }));
+    const prev = mrSnapshots.get(session.name);
+    mrSnapshots.set(session.name, next);
+    // No baseline yet: record and stay silent. The first poll of a session is
+    // observation, never a trigger.
+    if (!prev) continue;
+
+    const { opened, merged } = detectMrTransitions(prev, next);
+    if (!opened && !merged) continue;
+    const issue = ctx.issues[0];
+    if (!issue) continue;
+    // Merged is the later edge, so it wins when both fire in one poll.
+    void requestTransition(issue, merged ? "mr-merged" : "mr-open");
+  }
+  for (const name of mrSnapshots.keys()) {
+    if (!currentSessions.some((s) => s.name === name)) mrSnapshots.delete(name);
+  }
+}
+
+/** Toggle an explicit park decision for a session and re-derive the band. */
+function toggleParked(name: string): void {
+  const stage = stageOfSession(name);
+  const current = clearStaleOverride(sessionState.getParkOverride(name), stage);
+  const nowParked = sidebar.isParked(name);
+  // Record the opposite of what is on screen, so the key always does the thing
+  // its label promises regardless of whether the current state was derived.
+  if (current?.manual === (nowParked ? "park" : "unpark")) {
+    sessionState.setParkOverride(name, null);
+  } else {
+    sessionState.setParkOverride(name, { manual: nowParked ? "unpark" : "park", atStage: stage });
+  }
+  recomputeParking();
+  scheduleRender();
 }
 
 function setDiffFocus(focused: boolean): void {
@@ -1368,7 +1736,7 @@ function relayout(): void {
  * which row bands (toolbar/rules/footer) exist differs.
  */
 function activeChromeLayout(): FrameLayout {
-  return settingsScreen.isOpen || inGlass ? fullScreenLayout : layout;
+  return settingsScreen.isOpen || workflowScreen.isOpen || inGlass ? fullScreenLayout : layout;
 }
 
 /**
@@ -1472,6 +1840,7 @@ async function fetchSessions(): Promise<void> {
       if (!knownSessions.has(name)) pollCoordinator.removeSession(name);
     }
     sidebar.setSessionContexts(pollCoordinator.getAllContexts());
+    recomputeParking();
 
     // Prune state for dead sessions
     const liveNames = sessions.map((s) => s.name);
@@ -1606,6 +1975,24 @@ function renderFrame(): void {
     return;
   }
 
+  // The workflow screen is the same class of surface as settings: a frameless
+  // full-screen takeover through fullScreenLayout, with no toolbar, no footer,
+  // and no modal overlay — it paints its own pickers and prompts.
+  if (workflowScreen.isOpen) {
+    const sidebarGrid = sidebarShown ? sidebar.getGrid() : null;
+    const totalCols = fullScreenLayout.termCols;
+    const contentCols = sidebarShown ? totalCols - fullScreenLayout.main.x : totalCols;
+    renderer.render(
+      fullScreenLayout,
+      workflowScreen.render(contentCols, fullScreenLayout.contentRows),
+      { x: 0, y: 0 },
+      sidebarGrid,
+      null, null, null, undefined, undefined,
+      dragChrome(),
+    );
+    return;
+  }
+
   // Pane-of-glass (Overview) replaces main content; toolbar hidden. Modals
   // (e.g. the command palette) still composite on top — otherwise they open
   // invisibly while the Command Center is up. Frameless full-screen takeover
@@ -1675,7 +2062,7 @@ function renderFrame(): void {
 
         let rawItems: import("./panel-view-renderer").RenderableItem[];
         if (view.source === "issues") {
-          rawItems = transformIssues(pollCoordinator.getGlobalIssues(), linkedIssueIds, getIssueSessionStates());
+          rawItems = transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl());
         } else if (view.filter.scope === "reviewing") {
           rawItems = transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds);
         } else {
@@ -1768,21 +2155,234 @@ function resolvePreselectedTeamId(): string | null {
   return null;
 }
 
+/** Explain, rather than no-op, when capture can't run. A key that silently
+ *  does nothing is indistinguishable from a broken one. */
+function explainCaptureUnavailable(reason: string, hint: string): void {
+  const onSurface = { bg: theme.surface, bgMode: 2 as const };
+  const lines: StyledLine[] = [
+    [],
+    [{ text: reason, attrs: { fg: 3, fgMode: 1, ...onSurface } }],
+    [],
+    [{ text: hint, attrs: { ...neutralFg(8), dim: true, ...onSurface } }],
+    [],
+    [{ text: "Press q or Esc to close.", attrs: { ...neutralFg(8), dim: true, ...onSurface } }],
+  ];
+  const modal = new ContentModal({ lines, title: "Can't capture an issue" });
+  modal.setTermRows(process.stdout.rows || 24);
+  modal.open();
+  openModal(modal, () => {});
+  scheduleRender();
+}
+
+/**
+ * A checklist built out of ListModal: each Enter toggles an option and reopens
+ * the list, Esc closes. Cheaper than a bespoke multi-select modal and it keeps
+ * the panel's editing surface consistent with every other picker.
+ */
+function openToggleList(opts: {
+  header: string;
+  options: Array<{ id: string; label: string; annotation?: string }>;
+  selected: () => string[];
+  toggle: (id: string) => void;
+}): void {
+  const render = (): void => {
+    if (opts.options.length === 0) return;
+    const chosen = new Set(opts.selected().map((s) => s.toLowerCase()));
+    const items = opts.options.map((o) => ({
+      id: o.id,
+      label: `${chosen.has(o.id.toLowerCase()) ? "[x]" : "[ ]"} ${o.label}`,
+      // Showing an already-assigned status's current home makes it obvious that
+      // ticking it *moves* it rather than duplicating it.
+      annotation: o.annotation,
+    }));
+    const modal = new ListModal({
+      header: opts.header,
+      subheader: "Enter toggles · Esc when done",
+      items,
+    });
+    modal.open();
+    openModal(modal, (value) => {
+      const picked = value as ListItem | undefined;
+      if (!picked) return;
+      opts.toggle(picked.id);
+      render();
+    });
+  };
+  render();
+}
+
+/** Mutate one filter axis of a view and persist it. */
+function updateViewFilter(view: PanelView, patch: Partial<PanelView["filter"]>): void {
+  view.filter = applyFilterPatch(view.filter, patch);
+  debouncedViewSave(view);
+  scheduleRender();
+}
+
+function toggleInFilterList(
+  view: PanelView,
+  key: "states" | "stages" | "labels",
+  id: string,
+): void {
+  view.filter = toggleFilterValue(view.filter, key, id);
+  debouncedViewSave(view);
+  scheduleRender();
+}
+
+const PRIORITY_CHOICES: Array<{ id: string; label: string }> = [
+  { id: "none", label: "Any priority" },
+  { id: "1", label: "Urgent only (P1)" },
+  { id: "2", label: "Urgent + High (P1–P2)" },
+  { id: "3", label: "P1–P3" },
+  { id: "4", label: "P1–P4 (excludes no-priority)" },
+];
+
+/** The filter menu for one issues view: one entry per membership axis. */
+function openViewFilterMenu(view: PanelView): void {
+  const f = view.filter;
+  const count = (k: "states" | "stages" | "labels") => (f[k] ?? []).length;
+  const labelsAvailable = new Set<string>();
+  for (const issue of pollCoordinator.getGlobalIssues()) {
+    for (const l of issue.labels ?? []) labelsAvailable.add(l.name);
+  }
+
+  // A tab with sections is governed by them, and `effectiveFilter` drops
+  // `filter.states` for it — so offering a States axis here would be a control
+  // that silently does nothing. The workflow screen is where its statuses live.
+  const sectioned = (view.sections?.length ?? 0) > 0;
+
+  const items: ListItem[] = [
+    ...(sectioned
+      ? [{ id: "workflow", label: "Statuses…", annotation: "in the workflow screen" }]
+      : [{ id: "states", label: `States… (${count("states") || "any"})` }]),
+    { id: "stages", label: `Stages… (${count("stages") || "any"})` },
+    { id: "labels", label: `Labels… (${count("labels") || "any"})` },
+    {
+      id: "priority",
+      label: `Priority: ${f.priorityAtMost ? `P1–P${f.priorityAtMost}` : "any"}`,
+    },
+    { id: "clear", label: "Clear all filters" },
+    { id: "workflow-screen", label: "Configure workflow…" },
+  ];
+
+  const modal = new ListModal({ header: `Filter — ${view.label}`, items });
+  modal.open();
+  openModal(modal, (value) => {
+    const picked = (value as ListItem | undefined)?.id;
+    if (!picked) return;
+    if (picked === "workflow" || picked === "workflow-screen") { openWorkflowScreen(); return; }
+    if (picked === "clear") {
+      view.filter = { scope: view.filter.scope };
+      debouncedViewSave(view);
+      scheduleRender();
+      return;
+    }
+    if (picked === "priority") {
+      const pick = new ListModal({ header: "Minimum priority", items: PRIORITY_CHOICES });
+      pick.open();
+      openModal(pick, (v) => {
+        const id = (v as ListItem | undefined)?.id;
+        if (!id) return;
+        updateViewFilter(view, { priorityAtMost: id === "none" ? undefined : Number(id) });
+      });
+      return;
+    }
+    if (picked === "states") {
+      openToggleList({
+        header: "States in this queue",
+        options: workflowStateOptions(),
+        selected: () => view.filter.states ?? [],
+        toggle: (id) => toggleInFilterList(view, "states", id),
+      });
+      return;
+    }
+    if (picked === "stages") {
+      openToggleList({
+        header: "Stages in this queue",
+        options: STAGE_ORDER.map((s) => ({ id: s, label: STAGE_LABELS[s] })),
+        selected: () => view.filter.stages ?? [],
+        toggle: (id) => toggleInFilterList(view, "stages", id),
+      });
+      return;
+    }
+    openToggleList({
+      header: "Labels in this queue",
+      options: [...labelsAvailable].sort().map((l) => ({ id: l, label: l })),
+      selected: () => view.filter.labels ?? [],
+      toggle: (id) => toggleInFilterList(view, "labels", id),
+    });
+  });
+}
+
+// --- Panel views ---
+//
+// Tabs and their sections are edited on the workflow screen (workflow-screen.ts),
+// which owns its own pickers and prompts. Everything that mutates the tab list
+// lands back here to be persisted.
+
+/** Swap in an edited view list, keeping derived state consistent, and persist. */
+function persistViews(next: PanelView[]): void {
+  panelViews = next;
+  const ids = new Set(panelViews.map((v) => v.id));
+  for (const v of panelViews) if (!viewStates.has(v.id)) viewStates.set(v.id, createViewState());
+  // A deleted tab must not linger in the up-next rotation, or `Ctrl-a u` would
+  // silently skip a queue that no longer exists.
+  const upNext = configStore.config.pipeline?.upNext ?? [];
+  const pruned = upNext.filter((id) => ids.has(id));
+  configStore.set("panelViews", panelViews);
+  if (pruned.length !== upNext.length) configStore.setPipeline("upNext", pruned);
+  refreshPanelViews();
+  // Which statuses park is independent of tab membership, but a tab edit can
+  // still change what a session's issue resolves to. Cheap and idempotent, so
+  // it runs on any edit — and the workflow screen, which reports "parks its
+  // sessions (n now)" while you edit, would otherwise be quoting a stale n.
+  recomputeParking();
+  scheduleRender();
+}
+
 function openCreateIssueModal(): void {
-  if (!adapters.issueTracker || adapters.issueTracker.authState !== "ok") return;
-  if (cachedTeams.length === 0) return;
+  if (!adapters.issueTracker || adapters.issueTracker.authState !== "ok") {
+    explainCaptureUnavailable(
+      "No issue tracker is connected.",
+      adapters.issueTracker
+        ? `Authentication failed — check ${adapters.issueTracker.authHint}.`
+        : "Set adapters.issueTracker in ~/.config/jmux/config.json.",
+    );
+    return;
+  }
+  if (cachedTeams.length === 0) {
+    // Teams arrive from an async poll, so this is usually just "too early".
+    refreshTeams();
+    explainCaptureUnavailable(
+      "No teams loaded from the issue tracker yet.",
+      "jmux is fetching them now — try again in a moment.",
+    );
+    return;
+  }
 
   const preselectedTeamId = resolvePreselectedTeamId();
-  const modal = new CreateIssueModal({ teams: cachedTeams, preselectedTeamId });
+  const modal = new CaptureModal({ teams: cachedTeams, preselectedTeamId });
   modal.open();
   openModal(modal, async (value) => {
-    const result = value as CreateIssueResult;
+    const result = value as CaptureResult;
     try {
       const issue = await adapters.issueTracker!.createIssue(result.teamId, result.title, result.description);
       pollCoordinator.addGlobalIssue(issue);
+      // "Capture & start" is the same capture plus the panel's own `n` flow, so
+      // an idea reaches a running agent without a second trip through the UI.
+      if (result.mode === "start") {
+        showToast(`${issue.identifier} created`);
+        const state = getIssueSessionStates().get(issue.id);
+        await startWorkOnIssue(issue, state?.state ?? "none", state?.sessionName);
+        return;
+      }
+      // Capture-and-stay: confirm it landed, and highlight it if the list
+      // happens to be on screen — but don't move the user.
+      showToast(`${issue.identifier} captured`);
+      selectIssueInOpenPanel(issue.id);
       scheduleRender();
     } catch (e) {
       logError("jmux", `failed to create issue: ${(e as Error).message}`);
+      showToast("Issue creation failed — see jmux.log");
     }
   });
 }
@@ -1940,12 +2540,20 @@ const inputRouter = new InputRouter(
     onModalToggle: () => togglePalette(),
     onNewSession: () => handlePaletteAction({ commandId: "new-session" }),
     onSettings: () => handleToolbarAction("settings"),
+    onCaptureIssue: () => openCreateIssueModal(),
+    onStartUpNext: () => { void startUpNext(); },
+    onUndoTransition: () => { void undoLastTransition(); },
     onSettingsScreen: () => toggleSettingsScreen(),
+    onWorkflowScreen: () => toggleWorkflowScreen(),
     onGroupCycle: () => { applySidebarGroup(sidebar.cycleGroupMode()); scheduleRender(); },
     onSortCycle: () => { applySidebarSort(sidebar.cycleSortMode()); scheduleRender(); },
     onFilterCycle: () => { sidebar.cycleFilterMode(); scheduleRender(); },
     onModalInput: (data) => {
-      // Settings screen consumes input when open
+      // Full-screen surfaces consume input while open, ahead of any modal.
+      if (workflowScreen.isOpen) {
+        handleWorkflowInput(data);
+        return;
+      }
       if (settingsScreen.isOpen) {
         handleSettingsInput(data);
         return;
@@ -2105,7 +2713,7 @@ const inputRouter = new InputRouter(
       const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
       let rawItems: import("./panel-view-renderer").RenderableItem[];
       if (view.source === "issues") {
-        rawItems = transformIssues(pollCoordinator.getGlobalIssues(), linkedIssueIds, getIssueSessionStates());
+        rawItems = transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl());
       } else if (view.filter.scope === "reviewing") {
         rawItems = transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds);
       } else {
@@ -2125,6 +2733,18 @@ const inputRouter = new InputRouter(
         }
         scheduleRender();
       }
+    },
+    // Edit the active view's membership filter from the panel itself.
+    //
+    // Without this, `states` / `stages` / `labels` / `priorityAtMost` could only
+    // be set by hand-editing config.json, which makes "build your own queue" a
+    // feature only people willing to write JSON can use. The option lists come
+    // from the tracker (workflow states) or from jmux's own stage set, so this
+    // works in any Linear workspace without knowing a thing about it.
+    onPanelEditFilter: () => {
+      const view = panelViews.find((v) => v.id === infoPanel.activeTab);
+      if (!view || view.source !== "issues") return;
+      openViewFilterMenu(view);
     },
     onPanelCycleGroupBy: () => {
       const view = panelViews.find((v) => v.id === infoPanel.activeTab);
@@ -2164,7 +2784,7 @@ const inputRouter = new InputRouter(
       const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
       const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
       let rawItems = view.source === "issues"
-        ? transformIssues(pollCoordinator.getGlobalIssues(), linkedIssueIds, getIssueSessionStates())
+        ? transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl())
         : view.filter.scope === "reviewing"
           ? transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds)
           : transformMrs(pollCoordinator.getGlobalMrs(), linkedMrIds);
@@ -2187,171 +2807,19 @@ const inputRouter = new InputRouter(
       const sessionName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
       const ctx = pollCoordinator.getContext(sessionName);
       const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
-      let rawItems = transformIssues(pollCoordinator.getGlobalIssues(), linkedIssueIds, getIssueSessionStates());
+      let rawItems = transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl());
       if (viewState.filterQuery) rawItems = filterItems(rawItems, viewState.filterQuery);
       const effectiveView = viewState.filterQuery ? { ...view, groupBy: "none" as const } : view;
       const nodes = buildViewNodes(rawItems, effectiveView, viewState.collapsedGroups);
       const selected = nodes[viewState.selectedIndex];
       if (selected?.kind !== "item" || selected.item.type !== "issue") return;
-      const issue = selected.item.raw as import("./adapters/types").Issue;
-      const issueState = selected.item.issueSessionState ?? "none";
-      const linkedSessionName = selected.item.linkedSessionName;
-
-      // STATE 3: a live session already exists for this issue (either via an
-      // explicit L-key link or a workflow-derived name match). Switch to it.
-      // Done before the workflow/repoDir check so explicit links work even
-      // when the issue's team has no teamRepoMap entry.
-      if (issueState === "session" && linkedSessionName) {
-        if (!ptyClientName) await resolveClientName();
-        if (!ptyClientName) return;
-        await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(linkedSessionName)}`);
-        return;
-      }
-
-      const workflow = configStore.config.issueWorkflow;
-      const repoDir = workflow?.teamRepoMap?.[issue.team ?? ""];
-
-      // Automated path: config maps this issue's team to a repo
-      if (repoDir) {
-        if (!ptyClientName) await resolveClientName();
-        if (!ptyClientName) return;
-
-        const session = resolveIssueSessionName(issue);
-        if (!session) return;
-
-        const expandedDir = repoDir.replace("~", homedir());
-        const baseBranch = workflow?.defaultBaseBranch ?? "main";
-
-        try {
-          // Seed the first user message for Claude by writing the issue prompt
-          // to a temp file — the main pane reads it via $(cat ...) and claude
-          // takes its content as a positional argument (the documented
-          // interactive-seed form). Without this the pane falls back to
-          // `exec $SHELL` so the session is usable even if the agent is off.
-          const shouldLaunchAgent = workflow?.autoLaunchAgent !== false && !!adapters.issueTracker;
-          let promptTmp: string | null = null;
-          if (shouldLaunchAgent) {
-            const prompt = adapters.issueTracker!.buildPrompt(issue);
-            promptTmp = `/tmp/jmux-prompt-${Date.now()}.md`;
-            writeFileSync(promptTmp, prompt);
-          }
-          // `exec $SHELL` tail keeps the pane alive if claude exits so the user
-          // isn't ejected from the session. Use a double-quoted command sub so
-          // `cat` reads the prompt verbatim without word-splitting.
-          const claudeFragment = promptTmp
-            ? `${claudeCommand} "$(cat ${promptTmp})"; rm -f ${promptTmp}; exec $SHELL`
-            : `exec $SHELL`;
-
-          // STATE 2: Worktree exists but no session → launch claude directly
-          if (issueState === "worktree") {
-            const wtPath = `${expandedDir}/${session}`;
-            await control.sendCommand(
-              `new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(wtPath)} ${tq(claudeFragment)}`,
-            );
-            await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(session)}`);
-            sessionState.addLink(session, { type: "issue", id: issue.id });
-            return;
-          }
-
-          // STATE 1: Nothing exists → create worktree + session
-          const isBare = Bun.spawnSync(
-            ["git", "--git-dir", `${expandedDir}/.git`, "config", "--get", "core.bare"],
-            { stdout: "pipe", stderr: "ignore" },
-          ).stdout.toString().trim() === "true";
-
-          // Use Linear's branch name for the git branch
-          let branchName: string;
-          if (issue.branchName) {
-            branchName = issue.branchName;
-          } else {
-            const template = workflow?.sessionNameTemplate ?? "{identifier}";
-            branchName = template
-              .replace("{identifier}", issue.identifier.toLowerCase())
-              .replace("{title}", issue.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40));
-          }
-
-          if (isBare) {
-            const wtPath = `${expandedDir}/${session}`;
-            // Main (left) pane runs claude — but first it has to wait for the
-            // sibling setup pane to materialize the worktree directory. Tmux
-            // wants a cwd that exists at split time, so we open the pane in
-            // the bare repo root and have the shell cd into the worktree once
-            // wtm finishes.
-            const mainCmd = `while [ ! -d ${tq(wtPath)} ]; do sleep 0.2; done; cd ${tq(wtPath)}; ${claudeFragment}`;
-            await control.sendCommand(
-              `new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(expandedDir)} ${tq(mainCmd)}`,
-            );
-            // Setup (right) pane runs wtm and exits on success — no trailing
-            // `exec $SHELL` so the pane auto-closes. On failure we drop to a
-            // shell so the user can see the error (without this, the pane
-            // would vanish and the main pane would wait forever for a worktree
-            // that never gets created). `-d` keeps focus on claude; `-l 30%`
-            // makes setup narrow and leaves claude with ~70%.
-            const setupCmd = `wtm create ${session} --from ${baseBranch} --no-shell || exec $SHELL`;
-            await control.sendCommand(
-              `split-window -h -d -l 30% -t ${tq(session)} -c ${tq(expandedDir)} ${tq(setupCmd)}`,
-            );
-          } else {
-            Bun.spawnSync(["git", "checkout", "-b", branchName, baseBranch], { cwd: expandedDir, stdout: "ignore", stderr: "ignore" });
-            await control.sendCommand(
-              `new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(expandedDir)} ${tq(claudeFragment)}`,
-            );
-          }
-
-          await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(session)}`);
-          sessionState.addLink(session, { type: "issue", id: issue.id });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          const lines: StyledLine[] = [
-            [],
-            [{ text: `Failed to create session for ${issue.identifier}`, attrs: { fg: 1, fgMode: 1, bg: theme.surface, bgMode: 2 } }],
-            [],
-            [{ text: message, attrs: { ...neutralFg(8), dim: true, bg: theme.surface, bgMode: 2 } }],
-            [],
-            [{ text: "Press q or Esc to close.", attrs: { ...neutralFg(8), dim: true, bg: theme.surface, bgMode: 2 } }],
-          ];
-          const errorModal = new ContentModal({ lines, title: "Session Creation Failed" });
-          errorModal.setTermRows(process.stdout.rows || 24);
-          errorModal.open();
-          openModal(errorModal, () => {});
-        }
-        return;
-      }
-
-      // Fallback: no config mapping — open manual modal
-      const initialDirs = cachedProjectDirs.length > 0 ? cachedProjectDirs : [homedir()];
-      const modal = new NewSessionModal(getNewSessionProviders(initialDirs));
-      modal.open();
-      refreshProjectDirsInBackground((dirs) => {
-        modal.updateProjectDirs(dirs);
-        scheduleRender();
-      });
-      openModal(modal, async (value) => {
-        const result = value as NewSessionResult;
-        const parentClient = ptyClientName;
-        if (!parentClient) return;
-        try {
-          switch (result.type) {
-            case "standard": {
-              const s = sanitizeTmuxSessionName(result.name);
-              await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${s}`)} -s ${tq(s)} -c ${tq(result.dir)}`);
-              await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(s)}`);
-              sessionState.addLink(s, { type: "issue", id: issue.id });
-              break;
-            }
-            case "existing_worktree": {
-              const s = sanitizeTmuxSessionName(result.branch);
-              await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${s}`)} -s ${tq(s)} -c ${tq(result.path)}`);
-              await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(s)}`);
-              sessionState.addLink(s, { type: "issue", id: issue.id });
-              break;
-            }
-          }
-        } catch (err) {
-          showNewSessionError(result, err);
-        }
-      });
+      await startWorkOnIssue(
+        selected.item.raw as import("./adapters/types").Issue,
+        selected.item.issueSessionState ?? "none",
+        selected.item.linkedSessionName,
+      );
     },
+
     onPanelLinkToSession: () => {
       const view = panelViews.find((v) => v.id === infoPanel.activeTab);
       if (!view) return;
@@ -2362,7 +2830,7 @@ const inputRouter = new InputRouter(
       const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
       const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
       let rawItems = view.source === "issues"
-        ? transformIssues(pollCoordinator.getGlobalIssues(), linkedIssueIds, getIssueSessionStates())
+        ? transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl())
         : view.filter.scope === "reviewing"
           ? transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds)
           : transformMrs(pollCoordinator.getGlobalMrs(), linkedMrIds);
@@ -2473,7 +2941,7 @@ const inputRouter = new InputRouter(
         const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
         const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
         let rawItems = view.source === "issues"
-          ? transformIssues(pollCoordinator.getGlobalIssues(), linkedIssueIds, getIssueSessionStates())
+          ? transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl())
           : view.filter.scope === "reviewing"
             ? transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds)
             : transformMrs(pollCoordinator.getGlobalMrs(), linkedMrIds);
@@ -2514,7 +2982,7 @@ const inputRouter = new InputRouter(
       const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
       const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
       let rawItems = view.source === "issues"
-        ? transformIssues(pollCoordinator.getGlobalIssues(), linkedIssueIds, getIssueSessionStates())
+        ? transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl())
         : view.filter.scope === "reviewing"
           ? transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds)
           : transformMrs(pollCoordinator.getGlobalMrs(), linkedMrIds);
@@ -2671,6 +3139,28 @@ function buildPaletteCommands(): PaletteCommand[] {
           category: "session",
         });
       }
+      if (panelViews.some((v) => v.id === infoPanel.activeTab)) {
+        commands.push({
+          id: "save-view-as-tab",
+          label: "Save current view as tab",
+          category: "issue",
+        });
+      }
+      const next = upNextIssue();
+      if (next) {
+        commands.push({
+          id: "start-up-next",
+          label: `Up next · ${next.viewLabel}: ${next.issue.identifier} ${next.issue.title}`,
+          category: "issue",
+        });
+      }
+      commands.push({
+        id: "toggle-park-session",
+        label: sidebar.isParked(currentName)
+          ? `Unpark session: ${currentName}`
+          : `Park session: ${currentName}`,
+        category: "session",
+      });
     }
   }
 
@@ -2733,9 +3223,13 @@ function buildPaletteCommands(): PaletteCommand[] {
     category: "setting",
   });
 
+  // The palette edits *global defaults*; per-repo overrides are the settings
+  // screen's "This repo" category. Label and action therefore both read the
+  // default tier, so what you see is what the keypress changes.
+  const repoNow = repoDefaultsView();
   commands.push({
     id: "setting-wtm",
-    label: `wtm integration: ${cfg.wtmIntegration !== false ? "on" : "off"}`,
+    label: `wtm integration: ${repoNow.wtmIntegration ? "on" : "off"}`,
     category: "setting",
   });
   commands.push({
@@ -2746,6 +3240,19 @@ function buildPaletteCommands(): PaletteCommand[] {
   commands.push({
     id: "setting-project-dirs",
     label: "Project directories",
+    category: "setting",
+  });
+  // The palette only lists one-shot setting *commands*; anything with a real
+  // editor (the stage/parking multiselects) lives in the settings screen, so
+  // the palette needs a way through to it rather than being a dead end.
+  commands.push({
+    id: "setting-edit-workflow",
+    label: "Configure workflow (statuses, queues, parking, tracker writes)…",
+    category: "setting",
+  });
+  commands.push({
+    id: "setting-open-screen",
+    label: "All settings…",
     category: "setting",
   });
   commands.push({
@@ -2788,7 +3295,7 @@ function buildPaletteCommands(): PaletteCommand[] {
   const wf = cfg.issueWorkflow;
   commands.push({
     id: "setting-default-branch",
-    label: `Default base branch: ${wf?.defaultBaseBranch ?? "main"}`,
+    label: `Default base branch: ${repoNow.defaultBaseBranch}`,
     category: "setting",
   });
   commands.push({
@@ -2798,17 +3305,12 @@ function buildPaletteCommands(): PaletteCommand[] {
   });
   commands.push({
     id: "setting-session-template",
-    label: `Session name template: ${wf?.sessionNameTemplate ?? "{identifier}"}`,
-    category: "setting",
-  });
-  commands.push({
-    id: "setting-auto-worktree",
-    label: `Auto-create worktree: ${wf?.autoCreateWorktree !== false ? "on" : "off"}`,
+    label: `Session name template: ${repoNow.sessionNameTemplate}`,
     category: "setting",
   });
   commands.push({
     id: "setting-auto-agent",
-    label: `Auto-launch agent: ${wf?.autoLaunchAgent !== false ? "on" : "off"}`,
+    label: `Auto-launch agent: ${repoNow.autoLaunchAgent ? "on" : "off"}`,
     category: "setting",
   });
 
@@ -2859,6 +3361,139 @@ function currentStateColorName(state: AgentState): string {
 
 function persistStateColor(state: AgentState, name: string): void {
   configStore.set("stateColors", { ...configStore.config.stateColors, [state]: name });
+}
+
+// The per-repo settings, described once and rendered into two tiers: the
+// global-default rows (writing `repoDefaults`) and the override rows under a
+// "This repo" category (writing `repos[key]`). Describing them once is what
+// keeps the two tiers from drifting, and is why adding a per-repo setting is
+// a one-line change here rather than an edit in two places.
+type RepoRowKind = "text" | "boolean" | "multiselect" | "state";
+
+interface RepoRow {
+  id: string;
+  label: string;
+  field: keyof RepoSettings;
+  kind: RepoRowKind;
+  group: "workflow" | "transitions";
+}
+
+const REPO_SETTING_ROWS: RepoRow[] = [
+  { id: "default-branch", label: "Default base branch", field: "defaultBaseBranch", kind: "text", group: "workflow" },
+  { id: "session-template", label: "Session name template", field: "sessionNameTemplate", kind: "text", group: "workflow" },
+  { id: "claude-command", label: "Claude command", field: "claudeCommand", kind: "text", group: "workflow" },
+  { id: "wtm", label: "wtm integration", field: "wtmIntegration", kind: "boolean", group: "workflow" },
+  { id: "auto-agent", label: "Auto-launch agent", field: "autoLaunchAgent", kind: "boolean", group: "workflow" },
+
+  { id: "on-start", label: "On session start", field: "onSessionStartState", kind: "state", group: "transitions" },
+  { id: "on-mr-open", label: "On MR opened", field: "onMrOpenState", kind: "state", group: "transitions" },
+  { id: "on-mr-merged", label: "On MR merged", field: "onMrMergedState", kind: "state", group: "transitions" },
+];
+
+/** Sentinel option meaning "leave the tracker alone on this event". */
+const NEVER_OPTION = "(never)";
+
+/**
+ * Where a tier reads its effective value from and where it writes it back to.
+ * The two tiers differ only in these four functions, so every row kind is
+ * implemented once.
+ */
+interface RepoTier {
+  idPrefix: string;
+  read: (field: keyof RepoSettings) => unknown;
+  write: (field: keyof RepoSettings, value: unknown) => void;
+  scope?: (field: keyof RepoSettings) => "inherited" | "override";
+  clear?: (field: keyof RepoSettings) => void;
+}
+
+function buildRepoRows(group: RepoRow["group"], tier: RepoTier): SettingDef[] {
+  return REPO_SETTING_ROWS.filter((r) => r.group === group).map((row) => {
+    const shown = (): string => {
+      const v = tier.read(row.field);
+      if (typeof v === "boolean") return v ? "on" : "off";
+      if (Array.isArray(v)) return v.length ? v.join(", ") : "none";
+      if (v === null || v === undefined) return NEVER_OPTION;
+      return String(v);
+    };
+    const base: SettingDef = {
+      id: `${tier.idPrefix}${row.id}`,
+      label: row.label,
+      type: row.kind === "state" ? "list" : row.kind,
+      getValue: shown,
+      ...(tier.scope ? { getScope: () => tier.scope!(row.field) } : {}),
+      ...(tier.clear ? { onClearOverride: () => tier.clear!(row.field) } : {}),
+    };
+
+    switch (row.kind) {
+      case "boolean":
+        return { ...base, onToggle: () => tier.write(row.field, shown() !== "on") };
+      case "text":
+        return { ...base, onTextCommit: (v: string) => tier.write(row.field, v) };
+      case "multiselect":
+        return {
+          ...base,
+          getOptions: workflowStateOptions,
+          getSelected: () => (tier.read(row.field) as string[] | undefined) ?? [],
+          onToggleOption: (id: string) => {
+            const cur = ((tier.read(row.field) as string[] | undefined) ?? []).slice();
+            const at = cur.findIndex((n) => n.toLowerCase() === id.toLowerCase());
+            if (at >= 0) cur.splice(at, 1); else cur.push(id);
+            tier.write(row.field, cur);
+          },
+        };
+      case "state":
+        return {
+          ...base,
+          options: [NEVER_OPTION, ...cachedWorkflowStates.map((s) => s.name)],
+          onOptionSelect: (v: string) => tier.write(row.field, v === NEVER_OPTION ? null : v),
+        };
+    }
+  });
+}
+
+/** Global-default rows — these write to `repoDefaults`. */
+function repoDefaultTier(): RepoTier {
+  return {
+    idPrefix: "",
+    read: (field) => configStore.config.repoDefaults?.[field] ?? REPO_SETTING_DEFAULTS[field],
+    write: (field, value) => configStore.setRepoDefault(field, value as never),
+  };
+}
+
+function repoDefaultSettings(group: RepoRow["group"] = "workflow"): SettingDef[] {
+  return buildRepoRows(group, repoDefaultTier());
+}
+
+/**
+ * Override rows for the repo the active session lives in. Absent entirely when
+ * there is no repo-backed session — an override category with nothing to
+ * override would just be a second, confusing copy of the defaults.
+ */
+function currentRepoCategory(): SettingsCategory[] {
+  const name = currentSessions.find((s) => s.id === currentSessionId)?.name;
+  const dir = name ? sessionDir(name) : null;
+  if (!dir) return [];
+  const key = repoFacts.get(dir).key;
+  if (!key) return [];
+
+  const label = key.replace(/\/\.git$/, "").split("/").pop() ?? key;
+  const tier: RepoTier = {
+    idPrefix: "repo-",
+    read: (field) => repoSettingsFor(dir)[field as keyof ResolvedRepoSettings],
+    write: (field, value) => configStore.setRepoOverride(key, field, value as never),
+    scope: (field) =>
+      configStore.config.repos?.[key]?.[field] !== undefined ? "override" : "inherited",
+    clear: (field) => configStore.clearRepoOverride(key, field),
+  };
+
+  // Transitions are not here: they moved onto the workflow screen, which shows
+  // the effective value for this repo and switches tier with `g`. Listing them
+  // in both places is how the chain came to be split across four categories.
+  return [{
+    label: `This repo · ${label}`,
+    collapsed: false,
+    settings: buildRepoRows("workflow", tier),
+  }];
 }
 
 function buildSettingsCategories(): SettingsCategory[] {
@@ -2944,7 +3579,7 @@ function buildSettingsCategories(): SettingsCategory[] {
       ],
     },
     {
-      label: "Adapters",
+      label: "Integrations",
       collapsed: false,
       settings: [
         {
@@ -2959,37 +3594,13 @@ function buildSettingsCategories(): SettingsCategory[] {
           options: ["linear", "github", "none"],
           onOptionSelect: (v) => configStore.setAdapter("issueTracker", v === "none" ? null : { type: v }),
         },
-        {
-          id: "claude-command", label: "Claude command", type: "text" as const,
-          getValue: () => claudeCommand,
-          onTextCommit: (v) => { claudeCommand = v; configStore.set("claudeCommand", v); },
-        },
       ],
     },
     {
-      label: "Issue Workflow",
+      label: "Repo",
       collapsed: false,
       settings: [
-        {
-          id: "default-branch", label: "Default base branch", type: "text" as const,
-          getValue: () => wf()?.defaultBaseBranch ?? "main",
-          onTextCommit: (v) => configStore.setWorkflow("defaultBaseBranch", v),
-        },
-        {
-          id: "session-template", label: "Session name template", type: "text" as const,
-          getValue: () => wf()?.sessionNameTemplate ?? "{identifier}",
-          onTextCommit: (v) => configStore.setWorkflow("sessionNameTemplate", v),
-        },
-        {
-          id: "auto-worktree", label: "Auto-create worktree", type: "boolean" as const,
-          getValue: () => wf()?.autoCreateWorktree !== false ? "on" : "off",
-          onToggle: () => configStore.setWorkflow("autoCreateWorktree", wf()?.autoCreateWorktree === false),
-        },
-        {
-          id: "auto-agent", label: "Auto-launch agent", type: "boolean" as const,
-          getValue: () => wf()?.autoLaunchAgent !== false ? "on" : "off",
-          onToggle: () => configStore.setWorkflow("autoLaunchAgent", wf()?.autoLaunchAgent === false),
-        },
+        ...repoDefaultSettings(),
         {
           id: "team-repo-map", label: "Team → repo mappings", type: "map" as const,
           getValue: () => {
@@ -3032,13 +3643,63 @@ function buildSettingsCategories(): SettingsCategory[] {
         },
       ],
     },
+    {
+      // One row, because the whole chain — tabs, which statuses land in each,
+      // what they mean, and everything that keys off that (parking, up next,
+      // tracker writes) — lives on one screen now. Splitting it across four
+      // settings categories and a modal stack is what made it confusing.
+      label: "Workflow",
+      collapsed: false,
+      settings: [
+        {
+          id: "edit-workflow", label: "Configure workflow…", type: "action" as const,
+          getValue: () => {
+            const tabs = panelViews.filter((v) => v.source === "issues");
+            const mapped = tabs.reduce(
+              (n, v) => n + (v.sections ?? []).reduce((m, sec) => m + sec.states.length, 0), 0);
+            const free = cachedWorkflowStates.filter(
+              (st) => !tabs.some((v) => (v.sections ?? []).some((sec) =>
+                sec.states.some((x) => x.trim().toLowerCase() === st.name.trim().toLowerCase())))).length;
+            const parks = parkedStates().length;
+            const tail = parks > 0 ? `${parks} park` : "nothing parks";
+            return free > 0 ? `${free} statuses not in a tab · ${tail}` : `${mapped} statuses · ${tail}`;
+          },
+          // The settings screen consumes every keystroke while it is open, so a
+          // surface opened from here has to take routing over rather than
+          // layering on top. openWorkflowScreen() closes settings first.
+          onActivate: () => openWorkflowScreen(),
+        },
+      ],
+    },
+    {
+      label: "Diagnostics",
+      collapsed: false,
+      settings: [
+        {
+          id: "park-status", label: "Parking status", type: "text" as const,
+          getValue: () =>
+            parkingSetupWarning(derivedStages().parked.length)
+            ?? `active — ${currentSessions.filter((x) => sidebar.isParked(x.name)).length} parked`,
+        },
+        {
+          id: "stage-source", label: "Tracker states available", type: "text" as const,
+          getValue: () => {
+            if (adapters.issueTracker?.authState !== "ok") return "tracker not connected";
+            return cachedWorkflowStates.length > 0
+              ? `${cachedWorkflowStates.length} states`
+              : "none reported";
+          },
+        },
+      ],
+    },
+    ...currentRepoCategory(),
   ];
 }
 
 function toggleSettingsScreen(): void {
   if (settingsScreen.isOpen) {
     settingsScreen.close();
-    inputRouter.setModalOpen(false);
+    inputRouter.setModalOpen(inputConsumerActive());
   } else {
     settingsScreen.open(buildSettingsCategories());
     inputRouter.setModalOpen(true);
@@ -3048,6 +3709,204 @@ function toggleSettingsScreen(): void {
   // should use even though the terminal geometry itself hasn't changed.
   applyChromeLayout();
   scheduleRender();
+}
+
+// --- Workflow screen ---
+//
+// The one surface that configures the issue pipeline: every tracker status,
+// grouped under the tab it feeds, with the behaviour that keys off it below.
+// See src/workflow-screen.ts for why it is shaped like that.
+
+/** Issues sitting in each status right now, keyed by lowercased status name. */
+function issueCountsByStatus(): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const issue of pollCoordinator.getGlobalIssues()) {
+    const key = (issue.status ?? "").trim().toLowerCase();
+    if (key) out.set(key, (out.get(key) ?? 0) + 1);
+  }
+  return out;
+}
+
+/**
+ * Sessions each status is currently parking. This is what turns "this tab
+ * parks" from a claim into an observation — the reported failure was a mapping
+ * that looked configured and did nothing.
+ */
+function parkedCountsByStatus(): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const session of currentSessions) {
+    if (!sidebar.isParked(session.name)) continue;
+    const status = pollCoordinator.getContext(session.name)?.issues[0]?.status;
+    const key = (status ?? "").trim().toLowerCase();
+    if (key) out.set(key, (out.get(key) ?? 0) + 1);
+  }
+  return out;
+}
+
+/** The repo whose overrides the `repo` tier edits, or null when there is none. */
+function currentRepoTier(): { label: string; tier: RepoTier } | null {
+  const name = currentSessions.find((s) => s.id === currentSessionId)?.name;
+  const dir = name ? sessionDir(name) : null;
+  if (!dir) return null;
+  const key = repoFacts.get(dir).key;
+  if (!key) return null;
+  return {
+    label: key.replace(/\/\.git$/, "").split("/").pop() ?? key,
+    tier: {
+      idPrefix: "repo-",
+      read: (field) => repoSettingsFor(dir)[field as keyof ResolvedRepoSettings],
+      write: (field, value) => configStore.setRepoOverride(key, field, value as never),
+      scope: (field) =>
+        configStore.config.repos?.[key]?.[field] !== undefined ? "override" : "inherited",
+      clear: (field) => configStore.clearRepoOverride(key, field),
+    },
+  };
+}
+
+function workflowBands(tier: SettingsTier): WorkflowBand[] {
+  const repo = currentRepoTier();
+  return [
+    {
+      label: "Parking",
+      hint: "Parking is only safe because it reverses itself.",
+      settings: [
+        {
+          id: "unpark-on", label: "Bring a session back when", type: "multiselect" as const,
+          getValue: () => {
+            const v = configStore.config.pipeline?.unparkOn ?? DEFAULT_PARKING.unparkOn;
+            // Name them. "5 signals" told you a count, not what would happen.
+            return v.length ? v.map((t) => UNPARK_TRIGGER_SHORT[t]).join(", ") : "never";
+          },
+          describe: () => {
+            const v = configStore.config.pipeline?.unparkOn ?? DEFAULT_PARKING.unparkOn;
+            return v.length === 0
+              ? "Nothing brings a parked session back on its own — you would have to notice."
+              : `Beats every parking rule, even a manual park: ${
+                  v.map((t) => UNPARK_TRIGGER_LABELS[t]).join(", ")}.`;
+          },
+          getOptions: () => UNPARK_TRIGGERS.map((t) => ({ id: t, label: UNPARK_TRIGGER_LABELS[t] })),
+          getSelected: () => configStore.config.pipeline?.unparkOn ?? DEFAULT_PARKING.unparkOn,
+          onToggleOption: (id: string) => {
+            const cur = (configStore.config.pipeline?.unparkOn ?? DEFAULT_PARKING.unparkOn).slice();
+            const at = cur.indexOf(id as UnparkTrigger);
+            if (at >= 0) cur.splice(at, 1); else cur.push(id as UnparkTrigger);
+            configStore.setPipeline("unparkOn", cur);
+            recomputeParking();
+          },
+        },
+        {
+          id: "auto-park-idle", label: "Park issue-less sessions after", type: "text" as const,
+          getValue: () => {
+            const d = configStore.config.pipeline?.autoParkIdleDays ?? null;
+            return d === null ? "never" : `${d} ${d === 1 ? "day" : "days"}`;
+          },
+          describe: () => "Sessions with a linked issue are governed by their tab instead. Blank or 0 turns this off.",
+          onTextCommit: (v: string) => {
+            const n = parseInt(v, 10);
+            configStore.setPipeline("autoParkIdleDays", isNaN(n) || n <= 0 ? null : n);
+            recomputeParking();
+          },
+        },
+      ],
+    },
+    {
+      label: TRANSITIONS_BAND,
+      hint: "jmux writes nothing to your tracker until one of these names a state.",
+      settings: [
+        ...buildRepoRows("transitions", tier === "repo" && repo ? repo.tier : repoDefaultTier()),
+        {
+          id: "transition-confirm", label: "Confirmation", type: "list" as const,
+          getValue: () => transitionConfirmMode(),
+          describe: () => "undo-toast writes and offers Ctrl-a Z for 20s; always asks first; never writes silently.",
+          options: ["undo-toast", "always", "never"],
+          onOptionSelect: (v: string) =>
+            configStore.setPipeline("transitionConfirm", v as "always" | "undo-toast" | "never"),
+        },
+      ],
+    },
+  ];
+}
+
+function buildWorkflowPort(): WorkflowPort {
+  return {
+    getViews: () => panelViews,
+    setViews: (next) => persistViews(next),
+    getStatuses: () => cachedWorkflowStates,
+    getIssueCounts: issueCountsByStatus,
+    getParkedCounts: parkedCountsByStatus,
+    getParkedStates: parkedStates,
+    toggleParked: (state) => {
+      configStore.setPipeline("parkedStates", toggleParkedState(parkedStates(), state));
+      recomputeParking();
+    },
+    getUpNext: () => configStore.config.pipeline?.upNext ?? [],
+    toggleUpNext: (viewId) => {
+      // Append on add, so the order you add them is the order Ctrl-a u checks.
+      const cur = (configStore.config.pipeline?.upNext ?? []).slice();
+      const at = cur.indexOf(viewId);
+      if (at >= 0) cur.splice(at, 1); else cur.push(viewId);
+      configStore.setPipeline("upNext", cur);
+      scheduleRender();
+    },
+    getBands: workflowBands,
+    trackerLabel: () => {
+      const type = configStore.config.adapters?.issueTracker?.type;
+      if (!type || adapters.issueTracker?.authState !== "ok") return null;
+      return type.charAt(0).toUpperCase() + type.slice(1);
+    },
+    repoLabel: () => currentRepoTier()?.label ?? null,
+  };
+}
+
+/**
+ * Open the workflow screen, closing whatever full-screen surface is up first.
+ * Settings hands off to it, and a full-screen surface consumes every keystroke
+ * while open — two of them at once would leave one painted and deaf.
+ */
+function openWorkflowScreen(): void {
+  if (settingsScreen.isOpen) settingsScreen.close();
+  closeModal();
+  workflowScreen.open(buildWorkflowPort());
+  inputRouter.setModalOpen(true);
+  applyChromeLayout();
+  scheduleRender();
+}
+
+function toggleWorkflowScreen(): void {
+  if (workflowScreen.isOpen) {
+    workflowScreen.close();
+    inputRouter.setModalOpen(inputConsumerActive());
+    applyChromeLayout();
+    scheduleRender();
+    return;
+  }
+  openWorkflowScreen();
+}
+
+function handleWorkflowInput(data: string): void {
+  const wasOpen = workflowScreen.isOpen;
+  workflowScreen.handleInput(data);
+  // The screen closes itself on Escape/q without going through the toggle, so
+  // the chrome layout and input routing are re-synced here the same way
+  // handleSettingsInput does it.
+  if (wasOpen && !workflowScreen.isOpen) {
+    applyChromeLayout();
+    inputRouter.setModalOpen(inputConsumerActive());
+  }
+  scheduleRender();
+}
+
+/**
+ * Whether *something* is currently claiming keyboard input from the pty.
+ *
+ * Every surface that takes input over has to be counted here. This has been
+ * got wrong twice, both times the same way: a settings row closes settings in
+ * order to hand off to another surface, and the close path then clears input
+ * routing on the way out — leaving the new surface painted and deaf. Asking
+ * one question with one answer is what stops the next surface repeating it.
+ */
+function inputConsumerActive(): boolean {
+  return settingsScreen.isOpen || workflowScreen.isOpen || activeModal?.isOpen() === true;
 }
 
 function handleSettingsInput(data: string): void {
@@ -3060,7 +3919,7 @@ function handleSettingsInput(data: string): void {
     // that path does, or the input router keeps classifying clicks against
     // the stale frameless layout until the next resize.
     applyChromeLayout();
-    inputRouter.setModalOpen(false);
+    inputRouter.setModalOpen(inputConsumerActive());
   }
 
   scheduleRender();
@@ -3075,12 +3934,227 @@ function resolveIssueSessionName(issue: import("./adapters/types").Issue): strin
   if (issue.branchName) {
     branchName = issue.branchName;
   } else {
-    const template = workflow?.sessionNameTemplate ?? "{identifier}";
+    const template = repoSettingsFor(repoDir.replace("~", homedir())).sessionNameTemplate;
     branchName = template
       .replace("{identifier}", issue.identifier.toLowerCase())
       .replace("{title}", issue.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40));
   }
   return sanitizeTmuxSessionName(branchName);
+}
+
+/**
+ * Provision (or return to) the session for an issue. Shared by the panel's `n`
+ * key and the capture composer's "capture & start", so both go through exactly
+ * one implementation of the three-state flow.
+ */
+async function startWorkOnIssue(
+  issue: import("./adapters/types").Issue,
+  issueState: "none" | "worktree" | "session",
+  linkedSessionName: string | undefined,
+): Promise<void> {
+      // STATE 3: a live session already exists for this issue (either via an
+      // explicit L-key link or a workflow-derived name match). Switch to it.
+      // Done before the workflow/repoDir check so explicit links work even
+      // when the issue's team has no teamRepoMap entry.
+      if (issueState === "session" && linkedSessionName) {
+        if (!ptyClientName) await resolveClientName();
+        if (!ptyClientName) return;
+        await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(linkedSessionName)}`);
+        return;
+      }
+
+      const workflow = configStore.config.issueWorkflow;
+      const repoDir = workflow?.teamRepoMap?.[issue.team ?? ""];
+
+      // Automated path: config maps this issue's team to a repo
+      if (repoDir) {
+        if (!ptyClientName) await resolveClientName();
+        if (!ptyClientName) return;
+
+        const session = resolveIssueSessionName(issue);
+        if (!session) return;
+
+        const expandedDir = repoDir.replace("~", homedir());
+        // Settings resolve against the *issue's* repo, not the session the user
+        // happens to be sitting in — the issue panel is a cross-repo union.
+        const settings = repoSettingsFor(expandedDir);
+        const baseBranch = settings.defaultBaseBranch;
+
+        try {
+          // Seed the first user message for Claude by writing the issue prompt
+          // to a temp file — the main pane reads it via $(cat ...) and claude
+          // takes its content as a positional argument (the documented
+          // interactive-seed form). Without this the pane falls back to
+          // `exec $SHELL` so the session is usable even if the agent is off.
+          const shouldLaunchAgent = settings.autoLaunchAgent && !!adapters.issueTracker;
+          let promptTmp: string | null = null;
+          if (shouldLaunchAgent) {
+            const prompt = adapters.issueTracker!.buildPrompt(issue);
+            promptTmp = `/tmp/jmux-prompt-${Date.now()}.md`;
+            writeFileSync(promptTmp, prompt);
+          }
+          // `exec $SHELL` tail keeps the pane alive if claude exits so the user
+          // isn't ejected from the session. Use a double-quoted command sub so
+          // `cat` reads the prompt verbatim without word-splitting.
+          const claudeFragment = promptTmp
+            ? `${settings.claudeCommand} "$(cat ${promptTmp})"; rm -f ${promptTmp}; exec $SHELL`
+            : `exec $SHELL`;
+
+          // STATE 2: Worktree exists but no session → launch claude directly
+          if (issueState === "worktree") {
+            const wtPath = `${expandedDir}/${session}`;
+            await control.sendCommand(
+              `new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(wtPath)} ${tq(claudeFragment)}`,
+            );
+            await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(session)}`);
+            sessionState.addLink(session, { type: "issue", id: issue.id });
+            void requestTransition(issue, "session-start");
+            return;
+          }
+
+          // STATE 1: Nothing exists → create worktree + session. Every issue
+          // gets a worktree; `wtmIntegration` picks the mechanism only, so
+          // both paths land the same `<repo>/<session>` directory and the
+          // session name doubles as the branch name (the one-name rule).
+          const wtPath = `${expandedDir}/${session}`;
+          // Main (left) pane runs claude — but first it has to wait for the
+          // sibling setup pane to materialize the worktree directory. Tmux
+          // wants a cwd that exists at split time, so we open the pane in
+          // the repo root and have the shell cd into the worktree once
+          // creation finishes.
+          const mainCmd = `while [ ! -d ${tq(wtPath)} ]; do sleep 0.2; done; cd ${tq(wtPath)}; ${claudeFragment}`;
+          await control.sendCommand(
+            `new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(expandedDir)} ${tq(mainCmd)}`,
+          );
+          // Setup (right) pane creates the worktree and exits on success — no
+          // trailing `exec $SHELL` so the pane auto-closes. On failure we drop
+          // to a shell so the user can see the error (without this, the pane
+          // would vanish and the main pane would wait forever for a worktree
+          // that never gets created). `-d` keeps focus on claude; `-l 30%`
+          // makes setup narrow and leaves claude with ~70%.
+          const createCmd = buildWorktreeCommand({
+            wtm: settings.wtmIntegration,
+            session,
+            baseBranch,
+            noShell: true,
+          });
+          await control.sendCommand(
+            `split-window -h -d -l 30% -t ${tq(session)} -c ${tq(expandedDir)} ${tq(`${createCmd} || exec $SHELL`)}`,
+          );
+          // The new worktree changes what git reports for these paths.
+          repoFacts.clear();
+
+          await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(session)}`);
+          sessionState.addLink(session, { type: "issue", id: issue.id });
+          void requestTransition(issue, "session-start");
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          const lines: StyledLine[] = [
+            [],
+            [{ text: `Failed to create session for ${issue.identifier}`, attrs: { fg: 1, fgMode: 1, bg: theme.surface, bgMode: 2 } }],
+            [],
+            [{ text: message, attrs: { ...neutralFg(8), dim: true, bg: theme.surface, bgMode: 2 } }],
+            [],
+            [{ text: "Press q or Esc to close.", attrs: { ...neutralFg(8), dim: true, bg: theme.surface, bgMode: 2 } }],
+          ];
+          const errorModal = new ContentModal({ lines, title: "Session Creation Failed" });
+          errorModal.setTermRows(process.stdout.rows || 24);
+          errorModal.open();
+          openModal(errorModal, () => {});
+        }
+        return;
+      }
+
+      // Fallback: no config mapping — open manual modal
+      const initialDirs = cachedProjectDirs.length > 0 ? cachedProjectDirs : [homedir()];
+      const modal = new NewSessionModal(getNewSessionProviders(initialDirs));
+      modal.open();
+      refreshProjectDirsInBackground((dirs) => {
+        modal.updateProjectDirs(dirs);
+        scheduleRender();
+      });
+      openModal(modal, async (value) => {
+        const result = value as NewSessionResult;
+        const parentClient = ptyClientName;
+        if (!parentClient) return;
+        try {
+          switch (result.type) {
+            case "standard": {
+              const s = sanitizeTmuxSessionName(result.name);
+              await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${s}`)} -s ${tq(s)} -c ${tq(result.dir)}`);
+              await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(s)}`);
+              sessionState.addLink(s, { type: "issue", id: issue.id });
+              break;
+            }
+            case "existing_worktree": {
+              const s = sanitizeTmuxSessionName(result.branch);
+              await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${s}`)} -s ${tq(s)} -c ${tq(result.path)}`);
+              await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(s)}`);
+              sessionState.addLink(s, { type: "issue", id: issue.id });
+              break;
+            }
+          }
+        } catch (err) {
+          showNewSessionError(result, err);
+        }
+      });
+}
+
+/**
+ * The global issue list narrowed by a view's filter. Every panel read goes
+ * through here so a named queue ("QA Failed") means the same thing whether it
+ * is being rendered, navigated, or acted on.
+ */
+/** MR web URL → MR, the join an issue needs to show its own pipeline state. */
+function mrsByUrl(): Map<string, import("./adapters/types").MergeRequest> {
+  const map = new Map<string, import("./adapters/types").MergeRequest>();
+  for (const mr of pollCoordinator.getGlobalMrs()) map.set(mr.webUrl, mr);
+  return map;
+}
+
+function issuesForView(view: PanelView | undefined): import("./adapters/types").Issue[] {
+  const all = pollCoordinator.getGlobalIssues();
+  if (!view || view.source !== "issues") return all;
+  const stages = derivedStages();
+  const stageOf = (issue: { status: string }) =>
+    stageForIssue(issue as import("./adapters/types").Issue, stages);
+  // effectiveFilter drops `filter.states` for a sectioned view: sections are
+  // the unit of classification, and ANDing the two silently hid issues a
+  // section had claimed.
+  return all.filter((issue) => matchesIssueFilter(issue, effectiveFilter(view), stageOf));
+}
+
+/**
+ * The next issue to pull, honouring the configured queue order. Ordering
+ * *within* a queue reuses buildViewNodes so "the top of the list" means
+ * exactly what the panel shows — no second sort implementation to drift.
+ */
+function upNextIssue(): { viewLabel: string; issue: import("./adapters/types").Issue } | null {
+  const order = configStore.config.pipeline?.upNext ?? [];
+  if (order.length === 0) return null;
+
+  const byView = new Map<string, import("./adapters/types").Issue[]>();
+  for (const view of panelViews) {
+    if (view.source !== "issues") continue;
+    const items = transformIssues(issuesForView(view), new Set(), getIssueSessionStates(), mrsByUrl());
+    const issues = buildViewNodes(items, view, new Set())
+      .filter((n) => n.kind === "item" && n.item.type === "issue")
+      .map((n) => (n as Extract<ViewNode, { kind: "item" }>).item.raw as import("./adapters/types").Issue);
+    byView.set(view.id, issues);
+  }
+
+  const picked = pickUpNext(order, byView);
+  if (!picked) return null;
+  const view = panelViews.find((v) => v.id === picked.viewId);
+  return { viewLabel: view?.label ?? picked.viewId, issue: picked.item };
+}
+
+/** Start (or switch to) whatever is at the top of the queue rotation. */
+async function startUpNext(): Promise<void> {
+  const next = upNextIssue();
+  if (!next) return;
+  const state = getIssueSessionStates().get(next.issue.id);
+  await startWorkOnIssue(next.issue, state?.state ?? "none", state?.sessionName);
 }
 
 function getIssueSessionStates(): Map<string, IssueSessionInfo> {
@@ -3130,6 +4204,38 @@ function getIssueSessionStates(): Map<string, IssueSessionInfo> {
   return states;
 }
 
+/**
+ * Select an issue in the panel *if the panel is already showing an issues tab*.
+ *
+ * Deliberately passive: it never opens the panel, never switches tabs and never
+ * takes keyboard focus. Capture exists so you don't lose your place, so it must
+ * not yank you somewhere — but if the list is already on screen, leaving the
+ * new issue unhighlighted would be its own small lie.
+ */
+function selectIssueInOpenPanel(issueId: string): void {
+  if (!diffPanel.isActive()) return;
+  const view = panelViews.find((v) => v.id === infoPanel.activeTab);
+  if (!view || view.source !== "issues") return;
+  const viewState = viewStates.get(view.id);
+  if (!viewState) return;
+
+  const rawItems = transformIssues(issuesForView(view), new Set(), getIssueSessionStates(), mrsByUrl());
+  const nodes = buildViewNodes(rawItems, view, viewState.collapsedGroups);
+  const index = nodes.findIndex(
+    (n) => n.kind === "item" && n.item.type === "issue" && n.item.id === issueId,
+  );
+  if (index < 0) return;
+
+  viewState.selectedIndex = index;
+  viewState.detailScrollOffset = 0;
+  const { listRows } = panelViewLayout(layout.ptyRows, viewState);
+  if (index >= viewState.scrollOffset + listRows) {
+    viewState.scrollOffset = index - listRows + 1;
+  } else if (index < viewState.scrollOffset) {
+    viewState.scrollOffset = index;
+  }
+}
+
 function focusPanelOnSessionIssue(sessionName: string): void {
   // sessionState is authoritative for links and is synchronous, so it reflects
   // freshly-added links from onPanelCreateSession even before pollCoordinator
@@ -3155,7 +4261,7 @@ function focusPanelOnSessionIssue(sessionName: string): void {
     const viewState = viewStates.get(view.id);
     if (!viewState) continue;
 
-    const rawItems = transformIssues(pollCoordinator.getGlobalIssues(), linkedIssueIds, getIssueSessionStates());
+    const rawItems = transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl());
     const nodes = buildViewNodes(rawItems, view, viewState.collapsedGroups);
 
     for (let i = 0; i < nodes.length; i++) {
@@ -3341,6 +4447,42 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
     return;
   }
 
+  if (commandId === "toggle-park-session") {
+    const currentName = currentSessions.find(s => s.id === currentSessionId)?.name;
+    if (currentName) toggleParked(currentName);
+    return;
+  }
+
+  if (commandId === "start-up-next") {
+    await startUpNext();
+    return;
+  }
+
+  if (commandId === "save-view-as-tab") {
+    const view = panelViews.find((v) => v.id === infoPanel.activeTab);
+    if (!view) return;
+    const modal = new InputModal({
+      header: "Save view as tab",
+      subheader: "Name this queue",
+      value: view.label,
+    });
+    modal.open();
+    openModal(modal, async (value) => {
+      const label = (value as string).trim();
+      if (!label) return;
+      // Configure-by-demonstration: the panel's own g/G//? cycling has already
+      // shaped this view against real data, so saving is a rename + clone
+      // rather than a form the user has to fill in blind.
+      const id = `${label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${Date.now().toString(36)}`;
+      configStore.saveView({ ...view, id, label });
+      panelViews = parseViews(configStore.config.panelViews);
+      viewStates.set(id, createViewState());
+      refreshPanelViews();
+      scheduleRender();
+    });
+    return;
+  }
+
   // Pin the current session's active pane (or move the focused tile) to a
   // chosen/created tab. Writers only set/unset `@jmux-pinned`; the TUI reflects
   // it into Command Center live-mirror tiles — no pane is ever moved or broken.
@@ -3450,7 +4592,13 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
               // directory but a `foo_bar` session, drifting the two apart.
               const session = sanitizeTmuxSessionName(result.name);
               const wtPath = `${result.dir}/${session}`;
-              const cmd = `wtm create ${session} --from ${result.baseBranch} --no-shell; cd ${session}; exec $SHELL`;
+              const createCmd = buildWorktreeCommand({
+                wtm: repoSettingsFor(result.dir).wtmIntegration,
+                session,
+                baseBranch: result.baseBranch,
+                noShell: true,
+              });
+              const cmd = `${createCmd}; cd ${session}; exec $SHELL`;
               await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(result.dir)} ${tq(cmd)}`);
               const waitCmd = `while [ ! -d ${tq(wtPath)} ]; do sleep 0.2; done; cd ${tq(wtPath)} && exec $SHELL`;
               await control.sendCommand(`split-window -h -d -t ${tq(session)} -c ${tq(result.dir)} ${tq(waitCmd)}`);
@@ -3578,21 +4726,27 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       return;
     }
     case "setting-wtm": {
-      const current = configStore.config.wtmIntegration !== false;
-      configStore.set("wtmIntegration", !current);
+      configStore.setRepoDefault("wtmIntegration", !repoDefaultsView().wtmIntegration);
       return;
     }
     case "setting-claude-command": {
-      const current = configStore.config.claudeCommand ?? "claude";
       const modal = new InputModal({
         header: "Claude Command",
-        subheader: "Command to launch Claude Code from toolbar",
-        value: current,
+        subheader: "Command to launch Claude Code from toolbar (global default)",
+        value: repoDefaultsView().claudeCommand,
       });
       modal.open();
       openModal(modal, async (value) => {
-        configStore.set("claudeCommand", value as string);
+        configStore.setRepoDefault("claudeCommand", value as string);
       });
+      return;
+    }
+    case "setting-edit-workflow": {
+      openWorkflowScreen();
+      return;
+    }
+    case "setting-open-screen": {
+      toggleSettingsScreen();
       return;
     }
     case "setting-project-dirs": {
@@ -3672,15 +4826,14 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       return;
     }
     case "setting-default-branch": {
-      const current = configStore.config.issueWorkflow?.defaultBaseBranch ?? "main";
       const modal = new InputModal({
         header: "Default Base Branch",
-        subheader: "Branch to create worktrees from",
-        value: current,
+        subheader: "Branch to create worktrees from (global default)",
+        value: repoDefaultsView().defaultBaseBranch,
       });
       modal.open();
       openModal(modal, async (value) => {
-        configStore.setWorkflow("defaultBaseBranch", value as string);
+        configStore.setRepoDefault("defaultBaseBranch", value as string);
       });
       return;
     }
@@ -3741,26 +4894,19 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       return;
     }
     case "setting-session-template": {
-      const current = configStore.config.issueWorkflow?.sessionNameTemplate ?? "{identifier}";
       const modal = new InputModal({
         header: "Session Name Template",
-        subheader: "Variables: {identifier}, {title}",
-        value: current,
+        subheader: "Variables: {identifier}, {title} (global default)",
+        value: repoDefaultsView().sessionNameTemplate,
       });
       modal.open();
       openModal(modal, async (value) => {
-        configStore.setWorkflow("sessionNameTemplate", value as string);
+        configStore.setRepoDefault("sessionNameTemplate", value as string);
       });
       return;
     }
-    case "setting-auto-worktree": {
-      const current = configStore.config.issueWorkflow?.autoCreateWorktree !== false;
-      configStore.setWorkflow("autoCreateWorktree", !current);
-      return;
-    }
     case "setting-auto-agent": {
-      const current = configStore.config.issueWorkflow?.autoLaunchAgent !== false;
-      configStore.setWorkflow("autoLaunchAgent", !current);
+      configStore.setRepoDefault("autoLaunchAgent", !repoDefaultsView().autoLaunchAgent);
       return;
     }
     case "link-issue": {
@@ -3886,7 +5032,7 @@ async function handleToolbarAction(id: string): Promise<void> {
       await toggleDiffPanel();
       return;
     case "claude":
-      await control.sendCommand(`split-window -t ${ptyClientName} -h -c '#{pane_current_path}' ${claudeCommand}`);
+      await control.sendCommand(`split-window -t ${ptyClientName} -h -c '#{pane_current_path}' ${currentRepoSettings().claudeCommand}`);
       return;
     case "settings": {
       const settingsCommands = buildPaletteCommands().filter(c => c.category === "setting");
@@ -4004,8 +5150,8 @@ try {
   configWatcher = watch(configStore.configPath, () => {
     const updated = configStore.reload();
     const newWidth = updated.sidebarWidth || 26;
-    const newClaudeCmd = updated.claudeCommand || "claude";
-    claudeCommand = newClaudeCmd;
+    // No claudeCommand to refresh here: it is resolved per repo at each use
+    // site, so an external config edit takes effect on the next resolution.
     const newCacheTimers = updated.cacheTimers !== false;
     if (newCacheTimers !== cacheTimersEnabled) {
       cacheTimersEnabled = newCacheTimers;
