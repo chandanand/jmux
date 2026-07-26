@@ -6,6 +6,7 @@ import {
   renderView,
   createViewState,
   pickSessionIndicator,
+  formatAge,
   type RenderableItem,
   computeViewLayout,
   splitRatioForSepRow,
@@ -396,5 +397,41 @@ describe("buildViewNodes with explicit groups", () => {
     );
     const ids = nodes.filter((n) => n.kind === "item").map((n: any) => n.item.id);
     expect(ids).toEqual(["urgent", "low"]);
+  });
+});
+
+describe("issue row extras", () => {
+  test("formatAge renders compact relative ages", () => {
+    const now = Date.UTC(2026, 0, 30);
+    expect(formatAge(now, now)).toBe("now");
+    expect(formatAge(now - 5 * 60_000, now)).toBe("5m");
+    expect(formatAge(now - 3 * 3600_000, now)).toBe("3h");
+    expect(formatAge(now - 3 * 86400_000, now)).toBe("3d");
+    expect(formatAge(now - 21 * 86400_000, now)).toBe("3w");
+    expect(formatAge(now - 200 * 86400_000, now)).toBe("6mo");
+  });
+
+  test("an unknown timestamp renders nothing rather than 1970", () => {
+    expect(formatAge(0, Date.UTC(2026, 0, 30))).toBe("");
+  });
+
+  test("transformIssues carries the worst pipeline state of the linked MRs", () => {
+    // The loop ends in MRs, so "which of these went red" should be visible on
+    // the issue row without opening anything.
+    const issue = {
+      id: "i1", identifier: "TRA-1", title: "t", status: "MR Review",
+      assignee: null, linkedMrUrls: ["u1", "u2"], webUrl: "",
+    } as any;
+    const mrs = new Map([
+      ["u1", { pipeline: { state: "passed" } }],
+      ["u2", { pipeline: { state: "failed" } }],
+    ]) as any;
+    const [item] = transformIssues([issue], new Set(), undefined, mrs);
+    expect(item.pipeline).toBe("failed");
+  });
+
+  test("no linked MRs leaves the pipeline undefined", () => {
+    const issue = { id: "i", identifier: "T-1", title: "t", status: "s", assignee: null, linkedMrUrls: [], webUrl: "" } as any;
+    expect(transformIssues([issue], new Set(), undefined, new Map()).pop()!.pipeline).toBeUndefined();
   });
 });

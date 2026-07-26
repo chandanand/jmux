@@ -1014,6 +1014,22 @@ async function initAdapters(): Promise<void> {
   refreshPanelViews();
 }
 
+/**
+ * Item count per issues tab, for the tab strip. Recomputed on each poll so the
+ * strip answers "is anything urgent?" without switching tabs.
+ */
+function panelViewCounts(views: PanelView[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  const states = getIssueSessionStates();
+  const mrs = mrsByUrl();
+  for (const view of views) {
+    if (view.source !== "issues") continue;
+    const items = transformIssues(issuesForView(view), new Set(), states, mrs);
+    counts.set(view.id, buildViewNodes(items, view, new Set()).filter((n) => n.kind === "item").length);
+  }
+  return counts;
+}
+
 /** Re-publish the visible tab set to the panel (after auth, or a saved view). */
 function refreshPanelViews(): void {
   const visibleViews = panelViews.filter((v) => {
@@ -1024,6 +1040,7 @@ function refreshPanelViews(): void {
   infoPanel.updateConfig({
     viewIds: visibleViews.map((v) => v.id),
     viewLabels: new Map(visibleViews.map((v) => [v.id, v.label])),
+    viewCounts: panelViewCounts(visibleViews),
   });
 }
 
@@ -1036,6 +1053,7 @@ const pollCoordinator = new PollCoordinator({
     // signal arrives), so parking is re-derived on every one.
     recomputeParking();
     checkMrTransitions();
+    refreshPanelViews();
     if (sessionName === "__global__") refreshTeams();
     scheduleRender();
   },
@@ -2014,7 +2032,7 @@ function renderFrame(): void {
 
         let rawItems: import("./panel-view-renderer").RenderableItem[];
         if (view.source === "issues") {
-          rawItems = transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates());
+          rawItems = transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl());
         } else if (view.filter.scope === "reviewing") {
           rawItems = transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds);
         } else {
@@ -2622,7 +2640,7 @@ const inputRouter = new InputRouter(
       const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
       let rawItems: import("./panel-view-renderer").RenderableItem[];
       if (view.source === "issues") {
-        rawItems = transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates());
+        rawItems = transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl());
       } else if (view.filter.scope === "reviewing") {
         rawItems = transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds);
       } else {
@@ -2693,7 +2711,7 @@ const inputRouter = new InputRouter(
       const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
       const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
       let rawItems = view.source === "issues"
-        ? transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates())
+        ? transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl())
         : view.filter.scope === "reviewing"
           ? transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds)
           : transformMrs(pollCoordinator.getGlobalMrs(), linkedMrIds);
@@ -2716,7 +2734,7 @@ const inputRouter = new InputRouter(
       const sessionName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
       const ctx = pollCoordinator.getContext(sessionName);
       const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
-      let rawItems = transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates());
+      let rawItems = transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl());
       if (viewState.filterQuery) rawItems = filterItems(rawItems, viewState.filterQuery);
       const effectiveView = viewState.filterQuery ? { ...view, groupBy: "none" as const } : view;
       const nodes = buildViewNodes(rawItems, effectiveView, viewState.collapsedGroups);
@@ -2739,7 +2757,7 @@ const inputRouter = new InputRouter(
       const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
       const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
       let rawItems = view.source === "issues"
-        ? transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates())
+        ? transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl())
         : view.filter.scope === "reviewing"
           ? transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds)
           : transformMrs(pollCoordinator.getGlobalMrs(), linkedMrIds);
@@ -2850,7 +2868,7 @@ const inputRouter = new InputRouter(
         const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
         const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
         let rawItems = view.source === "issues"
-          ? transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates())
+          ? transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl())
           : view.filter.scope === "reviewing"
             ? transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds)
             : transformMrs(pollCoordinator.getGlobalMrs(), linkedMrIds);
@@ -2891,7 +2909,7 @@ const inputRouter = new InputRouter(
       const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
       const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
       let rawItems = view.source === "issues"
-        ? transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates())
+        ? transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl())
         : view.filter.scope === "reviewing"
           ? transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds)
           : transformMrs(pollCoordinator.getGlobalMrs(), linkedMrIds);
@@ -3889,6 +3907,13 @@ async function startWorkOnIssue(
  * through here so a named queue ("QA Failed") means the same thing whether it
  * is being rendered, navigated, or acted on.
  */
+/** MR web URL → MR, the join an issue needs to show its own pipeline state. */
+function mrsByUrl(): Map<string, import("./adapters/types").MergeRequest> {
+  const map = new Map<string, import("./adapters/types").MergeRequest>();
+  for (const mr of pollCoordinator.getGlobalMrs()) map.set(mr.webUrl, mr);
+  return map;
+}
+
 function issuesForView(view: PanelView | undefined): import("./adapters/types").Issue[] {
   const all = pollCoordinator.getGlobalIssues();
   if (!view || view.source !== "issues") return all;
@@ -3909,7 +3934,7 @@ function upNextIssue(): { viewLabel: string; issue: import("./adapters/types").I
   const byView = new Map<string, import("./adapters/types").Issue[]>();
   for (const view of panelViews) {
     if (view.source !== "issues") continue;
-    const items = transformIssues(issuesForView(view), new Set(), getIssueSessionStates());
+    const items = transformIssues(issuesForView(view), new Set(), getIssueSessionStates(), mrsByUrl());
     const issues = buildViewNodes(items, view, new Set())
       .filter((n) => n.kind === "item" && n.item.type === "issue")
       .map((n) => (n as Extract<ViewNode, { kind: "item" }>).item.raw as import("./adapters/types").Issue);
@@ -3992,7 +4017,7 @@ function selectIssueInOpenPanel(issueId: string): void {
   const viewState = viewStates.get(view.id);
   if (!viewState) return;
 
-  const rawItems = transformIssues(issuesForView(view), new Set(), getIssueSessionStates());
+  const rawItems = transformIssues(issuesForView(view), new Set(), getIssueSessionStates(), mrsByUrl());
   const nodes = buildViewNodes(rawItems, view, viewState.collapsedGroups);
   const index = nodes.findIndex(
     (n) => n.kind === "item" && n.item.type === "issue" && n.item.id === issueId,
@@ -4034,7 +4059,7 @@ function focusPanelOnSessionIssue(sessionName: string): void {
     const viewState = viewStates.get(view.id);
     if (!viewState) continue;
 
-    const rawItems = transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates());
+    const rawItems = transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl());
     const nodes = buildViewNodes(rawItems, view, viewState.collapsedGroups);
 
     for (let i = 0; i < nodes.length; i++) {
