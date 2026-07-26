@@ -42,7 +42,7 @@ import { StdinGate } from "./stdin-gate";
 import { TmuxControl, type ControlEvent } from "./tmux-control";
 import { DiffPanel } from "./diff-panel";
 import { InfoPanel, rebuildInfoPanelColors } from "./info-panel";
-import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, stagesFromViews, stateAssignments, assignStateToGroup, unassignState, createView, renameView, moveView, deleteView, createSection, renameSection, moveSection, deleteSection, type PanelView } from "./panel-view";
+import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, parkedStages, toggleParkedState, effectiveFilter, type PanelView } from "./panel-view";
 import { transformIssues, transformMrs, buildViewNodes, renderView, createViewState, filterItems, rebuildPanelViewColors, computeViewLayout, splitRatioForSepRow, DEFAULT_PANEL_SPLIT_RATIO, type ViewState, type ViewNode, type IssueSessionInfo } from "./panel-view-renderer";
 import { createAdapters } from "./adapters/registry";
 import { PollCoordinator } from "./adapters/poll-coordinator";
@@ -64,6 +64,7 @@ import {
   DEFAULT_PARKING,
   UNPARK_TRIGGERS,
   UNPARK_TRIGGER_LABELS,
+  UNPARK_TRIGGER_SHORT,
   parkingSetupWarning,
   type ParkingConfig,
   type ParkBaseline,
@@ -797,6 +798,7 @@ const stdinGate = new StdinGate({
     rebuildSidebarColors();
     rebuildInfoPanelColors();
     rebuildSettingsColors();
+    rebuildWorkflowColors();
     rebuildPanelViewColors();
     applyPaneStyles(); // re-issue tmux window-style fades for the new theme
     // Pre-ready, the first paint after boot reads the freshly themed values;
@@ -985,8 +987,10 @@ let diffBridge: ScreenBridge | null = null;
 let diffPty: import("bun-pty").Terminal | null = null;
 let diffPanelFocused = false;
 const settingsScreen = new SettingsScreen();
+const workflowScreen = new WorkflowScreen();
 
 import { SettingsScreen, rebuildSettingsColors, type SettingDef, type SettingsCategory, type SettingsAction } from "./settings-screen";
+import { WorkflowScreen, rebuildWorkflowColors, TRANSITIONS_BAND, type WorkflowPort, type WorkflowBand, type SettingsTier } from "./workflow-screen";
 
 const adapters = demoCtx
   ? { codeHost: demoCtx.codeHost, issueTracker: demoCtx.issueTracker }
@@ -1115,15 +1119,18 @@ const parkBaselines = new Map<string, ParkBaseline>();
 function parkingConfig(): ParkingConfig {
   const p = configStore.config.pipeline;
   return {
-    parkStages: p?.parkStages ?? DEFAULT_PARKING.parkStages,
     unparkOn: p?.unparkOn ?? DEFAULT_PARKING.unparkOn,
     autoParkIdleDays: p?.autoParkIdleDays ?? DEFAULT_PARKING.autoParkIdleDays,
   };
 }
 
-/** Stage lists derived from the queue tabs — the single source of truth. */
+/** Statuses that park, as a stage map. The one thing behaviour keys off. */
+function parkedStates(): string[] {
+  return configStore.config.pipeline?.parkedStates ?? [];
+}
+
 function derivedStages(): Record<WorkStage, string[]> {
-  return stagesFromViews(panelViews);
+  return parkedStages(parkedStates());
 }
 
 /** Stage of a session's linked issue, or null when it has none. */
@@ -1729,7 +1736,7 @@ function relayout(): void {
  * which row bands (toolbar/rules/footer) exist differs.
  */
 function activeChromeLayout(): FrameLayout {
-  return settingsScreen.isOpen || inGlass ? fullScreenLayout : layout;
+  return settingsScreen.isOpen || workflowScreen.isOpen || inGlass ? fullScreenLayout : layout;
 }
 
 /**
@@ -1963,6 +1970,24 @@ function renderFrame(): void {
       null, // no modal cursor
       undefined, // no diff panel
       undefined, // no footer — frameless full-screen view
+      dragChrome(),
+    );
+    return;
+  }
+
+  // The workflow screen is the same class of surface as settings: a frameless
+  // full-screen takeover through fullScreenLayout, with no toolbar, no footer,
+  // and no modal overlay — it paints its own pickers and prompts.
+  if (workflowScreen.isOpen) {
+    const sidebarGrid = sidebarShown ? sidebar.getGrid() : null;
+    const totalCols = fullScreenLayout.termCols;
+    const contentCols = sidebarShown ? totalCols - fullScreenLayout.main.x : totalCols;
+    renderer.render(
+      fullScreenLayout,
+      workflowScreen.render(contentCols, fullScreenLayout.contentRows),
+      { x: 0, y: 0 },
+      sidebarGrid,
+      null, null, null, undefined, undefined,
       dragChrome(),
     );
     return;
@@ -2220,8 +2245,15 @@ function openViewFilterMenu(view: PanelView): void {
     for (const l of issue.labels ?? []) labelsAvailable.add(l.name);
   }
 
+  // A tab with sections is governed by them, and `effectiveFilter` drops
+  // `filter.states` for it — so offering a States axis here would be a control
+  // that silently does nothing. The workflow screen is where its statuses live.
+  const sectioned = (view.sections?.length ?? 0) > 0;
+
   const items: ListItem[] = [
-    { id: "states", label: `States… (${count("states") || "any"})` },
+    ...(sectioned
+      ? [{ id: "workflow", label: "Statuses…", annotation: "in the workflow screen" }]
+      : [{ id: "states", label: `States… (${count("states") || "any"})` }]),
     { id: "stages", label: `Stages… (${count("stages") || "any"})` },
     { id: "labels", label: `Labels… (${count("labels") || "any"})` },
     {
@@ -2229,7 +2261,7 @@ function openViewFilterMenu(view: PanelView): void {
       label: `Priority: ${f.priorityAtMost ? `P1–P${f.priorityAtMost}` : "any"}`,
     },
     { id: "clear", label: "Clear all filters" },
-    { id: "groups", label: "Edit tabs & groups…" },
+    { id: "workflow-screen", label: "Configure workflow…" },
   ];
 
   const modal = new ListModal({ header: `Filter — ${view.label}`, items });
@@ -2237,7 +2269,7 @@ function openViewFilterMenu(view: PanelView): void {
   openModal(modal, (value) => {
     const picked = (value as ListItem | undefined)?.id;
     if (!picked) return;
-    if (picked === "groups") { openQueueTabMenu(view.id); return; }
+    if (picked === "workflow" || picked === "workflow-screen") { openWorkflowScreen(); return; }
     if (picked === "clear") {
       view.filter = { scope: view.filter.scope };
       debouncedViewSave(view);
@@ -2281,12 +2313,11 @@ function openViewFilterMenu(view: PanelView): void {
   });
 }
 
-// --- Queue editor ---
+// --- Panel views ---
 //
-// Tabs and groups, fully editable without touching config.json. Built from the
-// existing ListModal / InputModal / toggle-list rather than a bespoke tree
-// editor: three shallow menus (queues → tab → group) cover create, rename,
-// reorder, delete and state assignment.
+// Tabs and their sections are edited on the workflow screen (workflow-screen.ts),
+// which owns its own pickers and prompts. Everything that mutates the tab list
+// lands back here to be persisted.
 
 /** Swap in an edited view list, keeping derived state consistent, and persist. */
 function persistViews(next: PanelView[]): void {
@@ -2300,198 +2331,12 @@ function persistViews(next: PanelView[]): void {
   configStore.set("panelViews", panelViews);
   if (pruned.length !== upNext.length) configStore.setPipeline("upNext", pruned);
   refreshPanelViews();
+  // Which statuses park is independent of tab membership, but a tab edit can
+  // still change what a session's issue resolves to. Cheap and idempotent, so
+  // it runs on any edit — and the workflow screen, which reports "parks its
+  // sessions (n now)" while you edit, would otherwise be quoting a stale n.
+  recomputeParking();
   scheduleRender();
-}
-
-function pickList(header: string, items: ListItem[], onPick: (id: string) => void): void {
-  const modal = new ListModal({ header, items });
-  modal.open();
-  openModal(modal, (v) => {
-    const id = (v as ListItem | undefined)?.id;
-    if (id) onPick(id);
-  });
-}
-
-function promptText(header: string, value: string, onCommit: (v: string) => void): void {
-  const modal = new InputModal({ header, value });
-  modal.open();
-  openModal(modal, (v) => onCommit(v as string));
-}
-
-/** Top level: every issues tab, plus "new tab". */
-function openQueueEditor(): void {
-  const views = panelViews.filter((v) => v.source === "issues");
-  const items: ListItem[] = views.map((v) => ({
-    id: v.id,
-    label: v.label,
-    annotation: v.sections
-      ? `${v.sections.length} sections · ${v.sections.reduce((n, x) => n + x.states.length, 0)} statuses`
-      : "no sections",
-  }));
-  items.push({ id: "\x00new", label: "+ New tab" });
-
-  pickList("Queues", items, (id) => {
-    if (id === "\x00new") {
-      return promptText("New tab name", "", (label) => {
-        persistViews(createView(panelViews, label));
-        openQueueEditor();
-      });
-    }
-    openQueueTabMenu(id);
-  });
-}
-
-/**
- * Every tracker status, unassigned ones first, annotated with where an
- * already-assigned status currently lives. Sorting the free ones to the top is
- * the point: those are the ones still needing a decision.
- */
-function statusPickerItems(): ListItem[] {
-  const assigned = new Map(
-    stateAssignments(panelViews).map((a) => [a.state.toLowerCase(), `${a.viewLabel} / ${a.sectionLabel}`]),
-  );
-  const names = cachedWorkflowStates.map((s) => s.name);
-  const free = names.filter((n) => !assigned.has(n.toLowerCase()));
-  const taken = names.filter((n) => assigned.has(n.toLowerCase()));
-  return [...free, ...taken].map((n) => ({
-    id: n,
-    label: n,
-    annotation: assigned.get(n.toLowerCase()) ?? "",
-  }));
-}
-
-/** A section label derived from a status, disambiguated if the tab has one already. */
-function uniqueSectionLabel(viewId: string, base: string): string {
-  const existing = panelViews.find((v) => v.id === viewId)?.sections ?? [];
-  const taken = new Set(existing.map((sec) => sec.label.toLowerCase()));
-  if (!taken.has(base.toLowerCase())) return base;
-  for (let n = 2; ; n++) {
-    const candidate = `${base} ${n}`;
-    if (!taken.has(candidate.toLowerCase())) return candidate;
-  }
-}
-
-/** One tab: the sections it contains, plus tab-level actions. */
-function openQueueTabMenu(viewId: string): void {
-  const view = panelViews.find((v) => v.id === viewId);
-  if (!view) return;
-  const items: ListItem[] = (view.sections ?? []).map((sec) => ({
-    id: `s\x00${sec.label}`,
-    label: sec.label,
-    annotation: `${sec.stage ? STAGE_LABELS[sec.stage] : "no stage"} · ${sec.states.length} statuses`,
-  }));
-  items.push(
-    { id: "\x00newsection", label: "+ Add section from a status…" },
-    { id: "\x00rename", label: "Rename tab…" },
-    { id: "\x00up", label: "Move tab up" },
-    { id: "\x00down", label: "Move tab down" },
-    { id: "\x00delete", label: "Delete tab" },
-    { id: "\x00back", label: "← Back to queues" },
-  );
-
-  pickList(view.label, items, (id) => {
-    if (id.startsWith("s\x00")) return openQueueSectionMenu(viewId, id.slice(2));
-    switch (id) {
-      case "\x00newsection":
-        // A section is *defined by* the statuses it covers, so it is created by
-        // choosing one — not by inventing a name up front. The status becomes
-        // the label, which is right in the common 1:1 case and renameable in
-        // the few places several statuses collapse into one section.
-        return pickList("Add section — pick a status", statusPickerItems(), (state) => {
-          const label = uniqueSectionLabel(viewId, state);
-          let next = createSection(panelViews, viewId, label);
-          next = assignStateToGroup(next, state, viewId, label);
-          persistViews(next);
-          openQueueSectionMenu(viewId, label);
-        });
-      case "\x00rename":
-        return promptText("Rename tab", view.label, (label) => {
-          persistViews(renameView(panelViews, viewId, label));
-          openQueueTabMenu(viewId);
-        });
-      case "\x00up":
-        persistViews(moveView(panelViews, viewId, -1));
-        return openQueueTabMenu(viewId);
-      case "\x00down":
-        persistViews(moveView(panelViews, viewId, 1));
-        return openQueueTabMenu(viewId);
-      case "\x00delete":
-        persistViews(deleteView(panelViews, viewId));
-        return openQueueEditor();
-      default:
-        return openQueueEditor();
-    }
-  });
-}
-
-/** One section: its statuses, what it means, and where it sits. */
-function openQueueSectionMenu(viewId: string, label: string): void {
-  const view = panelViews.find((v) => v.id === viewId);
-  const section = view?.sections?.find((sec) => sec.label === label);
-  if (!view || !section) return;
-
-  pickList(`${view.label} / ${label}`, [
-    { id: "states", label: "Statuses…", annotation: `${section.states.length} selected` },
-    { id: "stage", label: "Means…", annotation: section.stage ? STAGE_LABELS[section.stage] : "nothing (tracker default)" },
-    { id: "rename", label: "Rename section…" },
-    { id: "up", label: "Move section up" },
-    { id: "down", label: "Move section down" },
-    { id: "delete", label: "Delete section" },
-    { id: "back", label: "← Back" },
-  ], (id) => {
-    switch (id) {
-      case "states":
-        return openToggleList({
-          header: `Statuses in ${view.label} / ${label}`,
-          options: statusPickerItems().map((it) =>
-            // Its own section is where it should be; don't label that a move.
-            it.annotation === `${view.label} / ${label}` ? { ...it, annotation: "" } : it),
-          selected: () =>
-            panelViews.find((v) => v.id === viewId)?.sections?.find((x) => x.label === label)?.states ?? [],
-          // Assigning moves a status out of any other section, so it can only
-          // ever have one home — and therefore one meaning.
-          toggle: (state) => {
-            const cur = panelViews.find((v) => v.id === viewId)?.sections?.find((x) => x.label === label);
-            const has = cur?.states.some((x) => x.toLowerCase() === state.toLowerCase());
-            persistViews(has
-              ? unassignState(panelViews, state)
-              : assignStateToGroup(panelViews, state, viewId, label));
-          },
-        });
-      case "stage":
-        // Stage sits on the section, not the tab: a section is the unit of
-        // classification, so one tab can mix "still mine" with "someone else's".
-        return pickList("This section means", [
-          ...STAGE_ORDER.map((st) => ({ id: st, label: STAGE_LABELS[st] })),
-          { id: "none", label: "Nothing — use the tracker's own category" },
-        ], (stage) => {
-          persistViews(panelViews.map((v) => v.id !== viewId ? v : {
-            ...v,
-            sections: (v.sections ?? []).map((sec) => sec.label !== label ? sec : {
-              ...sec,
-              ...(stage === "none" ? { stage: undefined } : { stage: stage as WorkStage }),
-            }),
-          }));
-          openQueueSectionMenu(viewId, label);
-        });
-      case "rename":
-        return promptText("Rename section", label, (next) => {
-          persistViews(renameSection(panelViews, viewId, label, next));
-          openQueueTabMenu(viewId);
-        });
-      case "up":
-        persistViews(moveSection(panelViews, viewId, label, -1));
-        return openQueueTabMenu(viewId);
-      case "down":
-        persistViews(moveSection(panelViews, viewId, label, 1));
-        return openQueueTabMenu(viewId);
-      case "delete":
-        persistViews(deleteSection(panelViews, viewId, label));
-        return openQueueTabMenu(viewId);
-      default:
-        return openQueueTabMenu(viewId);
-    }
-  });
 }
 
 function openCreateIssueModal(): void {
@@ -2699,11 +2544,16 @@ const inputRouter = new InputRouter(
     onStartUpNext: () => { void startUpNext(); },
     onUndoTransition: () => { void undoLastTransition(); },
     onSettingsScreen: () => toggleSettingsScreen(),
+    onWorkflowScreen: () => toggleWorkflowScreen(),
     onGroupCycle: () => { applySidebarGroup(sidebar.cycleGroupMode()); scheduleRender(); },
     onSortCycle: () => { applySidebarSort(sidebar.cycleSortMode()); scheduleRender(); },
     onFilterCycle: () => { sidebar.cycleFilterMode(); scheduleRender(); },
     onModalInput: (data) => {
-      // Settings screen consumes input when open
+      // Full-screen surfaces consume input while open, ahead of any modal.
+      if (workflowScreen.isOpen) {
+        handleWorkflowInput(data);
+        return;
+      }
       if (settingsScreen.isOpen) {
         handleSettingsInput(data);
         return;
@@ -3396,13 +3246,13 @@ function buildPaletteCommands(): PaletteCommand[] {
   // editor (the stage/parking multiselects) lives in the settings screen, so
   // the palette needs a way through to it rather than being a dead end.
   commands.push({
-    id: "setting-edit-queues",
-    label: "Edit queue tabs & groups…",
+    id: "setting-edit-workflow",
+    label: "Configure workflow (statuses, queues, parking, tracker writes)…",
     category: "setting",
   });
   commands.push({
     id: "setting-open-screen",
-    label: "All settings (stages, parking, transitions)…",
+    label: "All settings…",
     category: "setting",
   });
   commands.push({
@@ -3636,13 +3486,13 @@ function currentRepoCategory(): SettingsCategory[] {
     clear: (field) => configStore.clearRepoOverride(key, field),
   };
 
+  // Transitions are not here: they moved onto the workflow screen, which shows
+  // the effective value for this repo and switches tier with `g`. Listing them
+  // in both places is how the chain came to be split across four categories.
   return [{
     label: `This repo · ${label}`,
     collapsed: false,
-    settings: [
-      ...buildRepoRows("workflow", tier),
-      ...buildRepoRows("transitions", tier),
-    ],
+    settings: buildRepoRows("workflow", tier),
   }];
 }
 
@@ -3794,110 +3644,30 @@ function buildSettingsCategories(): SettingsCategory[] {
       ],
     },
     {
-      // Exactly one entry. Creating tabs, naming them, choosing which statuses
-      // land in each section and what those sections mean — all of it happens
-      // inside one editor. Splitting it across settings rows is what made this
-      // confusing in the first place.
-      label: "Queues",
+      // One row, because the whole chain — tabs, which statuses land in each,
+      // what they mean, and everything that keys off that (parking, up next,
+      // tracker writes) — lives on one screen now. Splitting it across four
+      // settings categories and a modal stack is what made it confusing.
+      label: "Workflow",
       collapsed: false,
       settings: [
         {
-          id: "edit-queues", label: "Manage queues…", type: "action" as const,
+          id: "edit-workflow", label: "Configure workflow…", type: "action" as const,
           getValue: () => {
             const tabs = panelViews.filter((v) => v.source === "issues");
-            const statuses = tabs.reduce(
+            const mapped = tabs.reduce(
               (n, v) => n + (v.sections ?? []).reduce((m, sec) => m + sec.states.length, 0), 0);
-            return `${tabs.length} tabs · ${statuses} statuses`;
+            const free = cachedWorkflowStates.filter(
+              (st) => !tabs.some((v) => (v.sections ?? []).some((sec) =>
+                sec.states.some((x) => x.trim().toLowerCase() === st.name.trim().toLowerCase())))).length;
+            const parks = parkedStates().length;
+            const tail = parks > 0 ? `${parks} park` : "nothing parks";
+            return free > 0 ? `${free} statuses not in a tab · ${tail}` : `${mapped} statuses · ${tail}`;
           },
           // The settings screen consumes every keystroke while it is open, so a
-          // modal opened from here would paint nothing and never receive input.
-          // Hand off instead: close settings, then open the editor.
-          onActivate: () => { toggleSettingsScreen(); openQueueEditor(); },
-        },
-      ],
-    },
-    {
-      label: "Automation",
-      collapsed: false,
-      settings: [
-        {
-          id: "park-stages", label: "Park stages", type: "multiselect" as const,
-          getValue: () => {
-            const v = configStore.config.pipeline?.parkStages ?? DEFAULT_PARKING.parkStages;
-            return v.length ? v.map((s) => STAGE_LABELS[s]).join(", ") : "none";
-          },
-          getOptions: () => STAGE_ORDER.map((s) => ({ id: s, label: STAGE_LABELS[s] })),
-          getSelected: () => configStore.config.pipeline?.parkStages ?? DEFAULT_PARKING.parkStages,
-          onToggleOption: (id) => {
-            const cur = (configStore.config.pipeline?.parkStages ?? DEFAULT_PARKING.parkStages).slice();
-            const at = cur.indexOf(id as WorkStage);
-            if (at >= 0) cur.splice(at, 1); else cur.push(id as WorkStage);
-            configStore.setPipeline("parkStages", cur);
-            recomputeParking();
-          },
-        },
-        {
-          id: "unpark-on", label: "Unpark on", type: "multiselect" as const,
-          getValue: () => {
-            const v = configStore.config.pipeline?.unparkOn ?? DEFAULT_PARKING.unparkOn;
-            return v.length ? `${v.length} selected` : "never";
-          },
-          getOptions: () => UNPARK_TRIGGERS.map((t) => ({ id: t, label: UNPARK_TRIGGER_LABELS[t] })),
-          getSelected: () => configStore.config.pipeline?.unparkOn ?? DEFAULT_PARKING.unparkOn,
-          onToggleOption: (id) => {
-            const cur = (configStore.config.pipeline?.unparkOn ?? DEFAULT_PARKING.unparkOn).slice();
-            const at = cur.indexOf(id as UnparkTrigger);
-            if (at >= 0) cur.splice(at, 1); else cur.push(id as UnparkTrigger);
-            configStore.setPipeline("unparkOn", cur);
-            recomputeParking();
-          },
-        },
-        {
-          id: "up-next-order", label: "Up next queue order", type: "multiselect" as const,
-          getValue: () => {
-            const ids = configStore.config.pipeline?.upNext ?? [];
-            if (ids.length === 0) return "off";
-            return ids.map((id) => panelViews.find((v) => v.id === id)?.label ?? id).join(" → ");
-          },
-          getOptions: () => panelViews.filter((v) => v.source === "issues").map((v) => ({ id: v.id, label: v.label })),
-          getSelected: () => configStore.config.pipeline?.upNext ?? [],
-          onToggleOption: (id) => {
-            // Append on add so toggling order-of-selection *is* queue priority —
-            // pick Release Blockers first and it is checked first.
-            const cur = (configStore.config.pipeline?.upNext ?? []).slice();
-            const at = cur.indexOf(id);
-            if (at >= 0) cur.splice(at, 1); else cur.push(id);
-            configStore.setPipeline("upNext", cur);
-          },
-        },
-        {
-          id: "auto-park-idle", label: "Auto-park idle sessions (days)", type: "text" as const,
-          getValue: () => {
-            const d = configStore.config.pipeline?.autoParkIdleDays ?? null;
-            return d === null ? "off" : String(d);
-          },
-          onTextCommit: (v) => {
-            const n = parseInt(v, 10);
-            configStore.setPipeline("autoParkIdleDays", isNaN(n) || n <= 0 ? null : n);
-            recomputeParking();
-          },
-        },
-      ],
-    },
-    {
-      // Quarantined from the rest deliberately: this is the only section that
-      // WRITES to a shared team tracker, so turning it on should feel like a
-      // decision rather than a stray keypress.
-      label: "Transitions (writes to your tracker)",
-      collapsed: true,
-      settings: [
-        ...repoDefaultSettings("transitions"),
-        {
-          id: "transition-confirm", label: "Confirmation", type: "list" as const,
-          getValue: () => transitionConfirmMode(),
-          options: ["undo-toast", "always", "never"],
-          onOptionSelect: (v) =>
-            configStore.setPipeline("transitionConfirm", v as "always" | "undo-toast" | "never"),
+          // surface opened from here has to take routing over rather than
+          // layering on top. openWorkflowScreen() closes settings first.
+          onActivate: () => openWorkflowScreen(),
         },
       ],
     },
@@ -3907,13 +3677,9 @@ function buildSettingsCategories(): SettingsCategory[] {
       settings: [
         {
           id: "park-status", label: "Parking status", type: "text" as const,
-          getValue: () => {
-            const st = derivedStages();
-            return parkingSetupWarning(parkingConfig().parkStages, {
-              idea: st.idea.length, active: st.active.length,
-              parked: st.parked.length, done: st.done.length,
-            }) ?? `active — ${currentSessions.filter((x) => sidebar.isParked(x.name)).length} parked`;
-          },
+          getValue: () =>
+            parkingSetupWarning(derivedStages().parked.length)
+            ?? `active — ${currentSessions.filter((x) => sidebar.isParked(x.name)).length} parked`,
         },
         {
           id: "stage-source", label: "Tracker states available", type: "text" as const,
@@ -3933,7 +3699,7 @@ function buildSettingsCategories(): SettingsCategory[] {
 function toggleSettingsScreen(): void {
   if (settingsScreen.isOpen) {
     settingsScreen.close();
-    inputRouter.setModalOpen(false);
+    inputRouter.setModalOpen(inputConsumerActive());
   } else {
     settingsScreen.open(buildSettingsCategories());
     inputRouter.setModalOpen(true);
@@ -3943,6 +3709,204 @@ function toggleSettingsScreen(): void {
   // should use even though the terminal geometry itself hasn't changed.
   applyChromeLayout();
   scheduleRender();
+}
+
+// --- Workflow screen ---
+//
+// The one surface that configures the issue pipeline: every tracker status,
+// grouped under the tab it feeds, with the behaviour that keys off it below.
+// See src/workflow-screen.ts for why it is shaped like that.
+
+/** Issues sitting in each status right now, keyed by lowercased status name. */
+function issueCountsByStatus(): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const issue of pollCoordinator.getGlobalIssues()) {
+    const key = (issue.status ?? "").trim().toLowerCase();
+    if (key) out.set(key, (out.get(key) ?? 0) + 1);
+  }
+  return out;
+}
+
+/**
+ * Sessions each status is currently parking. This is what turns "this tab
+ * parks" from a claim into an observation — the reported failure was a mapping
+ * that looked configured and did nothing.
+ */
+function parkedCountsByStatus(): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const session of currentSessions) {
+    if (!sidebar.isParked(session.name)) continue;
+    const status = pollCoordinator.getContext(session.name)?.issues[0]?.status;
+    const key = (status ?? "").trim().toLowerCase();
+    if (key) out.set(key, (out.get(key) ?? 0) + 1);
+  }
+  return out;
+}
+
+/** The repo whose overrides the `repo` tier edits, or null when there is none. */
+function currentRepoTier(): { label: string; tier: RepoTier } | null {
+  const name = currentSessions.find((s) => s.id === currentSessionId)?.name;
+  const dir = name ? sessionDir(name) : null;
+  if (!dir) return null;
+  const key = repoFacts.get(dir).key;
+  if (!key) return null;
+  return {
+    label: key.replace(/\/\.git$/, "").split("/").pop() ?? key,
+    tier: {
+      idPrefix: "repo-",
+      read: (field) => repoSettingsFor(dir)[field as keyof ResolvedRepoSettings],
+      write: (field, value) => configStore.setRepoOverride(key, field, value as never),
+      scope: (field) =>
+        configStore.config.repos?.[key]?.[field] !== undefined ? "override" : "inherited",
+      clear: (field) => configStore.clearRepoOverride(key, field),
+    },
+  };
+}
+
+function workflowBands(tier: SettingsTier): WorkflowBand[] {
+  const repo = currentRepoTier();
+  return [
+    {
+      label: "Parking",
+      hint: "Parking is only safe because it reverses itself.",
+      settings: [
+        {
+          id: "unpark-on", label: "Bring a session back when", type: "multiselect" as const,
+          getValue: () => {
+            const v = configStore.config.pipeline?.unparkOn ?? DEFAULT_PARKING.unparkOn;
+            // Name them. "5 signals" told you a count, not what would happen.
+            return v.length ? v.map((t) => UNPARK_TRIGGER_SHORT[t]).join(", ") : "never";
+          },
+          describe: () => {
+            const v = configStore.config.pipeline?.unparkOn ?? DEFAULT_PARKING.unparkOn;
+            return v.length === 0
+              ? "Nothing brings a parked session back on its own — you would have to notice."
+              : `Beats every parking rule, even a manual park: ${
+                  v.map((t) => UNPARK_TRIGGER_LABELS[t]).join(", ")}.`;
+          },
+          getOptions: () => UNPARK_TRIGGERS.map((t) => ({ id: t, label: UNPARK_TRIGGER_LABELS[t] })),
+          getSelected: () => configStore.config.pipeline?.unparkOn ?? DEFAULT_PARKING.unparkOn,
+          onToggleOption: (id: string) => {
+            const cur = (configStore.config.pipeline?.unparkOn ?? DEFAULT_PARKING.unparkOn).slice();
+            const at = cur.indexOf(id as UnparkTrigger);
+            if (at >= 0) cur.splice(at, 1); else cur.push(id as UnparkTrigger);
+            configStore.setPipeline("unparkOn", cur);
+            recomputeParking();
+          },
+        },
+        {
+          id: "auto-park-idle", label: "Park issue-less sessions after", type: "text" as const,
+          getValue: () => {
+            const d = configStore.config.pipeline?.autoParkIdleDays ?? null;
+            return d === null ? "never" : `${d} ${d === 1 ? "day" : "days"}`;
+          },
+          describe: () => "Sessions with a linked issue are governed by their tab instead. Blank or 0 turns this off.",
+          onTextCommit: (v: string) => {
+            const n = parseInt(v, 10);
+            configStore.setPipeline("autoParkIdleDays", isNaN(n) || n <= 0 ? null : n);
+            recomputeParking();
+          },
+        },
+      ],
+    },
+    {
+      label: TRANSITIONS_BAND,
+      hint: "jmux writes nothing to your tracker until one of these names a state.",
+      settings: [
+        ...buildRepoRows("transitions", tier === "repo" && repo ? repo.tier : repoDefaultTier()),
+        {
+          id: "transition-confirm", label: "Confirmation", type: "list" as const,
+          getValue: () => transitionConfirmMode(),
+          describe: () => "undo-toast writes and offers Ctrl-a Z for 20s; always asks first; never writes silently.",
+          options: ["undo-toast", "always", "never"],
+          onOptionSelect: (v: string) =>
+            configStore.setPipeline("transitionConfirm", v as "always" | "undo-toast" | "never"),
+        },
+      ],
+    },
+  ];
+}
+
+function buildWorkflowPort(): WorkflowPort {
+  return {
+    getViews: () => panelViews,
+    setViews: (next) => persistViews(next),
+    getStatuses: () => cachedWorkflowStates,
+    getIssueCounts: issueCountsByStatus,
+    getParkedCounts: parkedCountsByStatus,
+    getParkedStates: parkedStates,
+    toggleParked: (state) => {
+      configStore.setPipeline("parkedStates", toggleParkedState(parkedStates(), state));
+      recomputeParking();
+    },
+    getUpNext: () => configStore.config.pipeline?.upNext ?? [],
+    toggleUpNext: (viewId) => {
+      // Append on add, so the order you add them is the order Ctrl-a u checks.
+      const cur = (configStore.config.pipeline?.upNext ?? []).slice();
+      const at = cur.indexOf(viewId);
+      if (at >= 0) cur.splice(at, 1); else cur.push(viewId);
+      configStore.setPipeline("upNext", cur);
+      scheduleRender();
+    },
+    getBands: workflowBands,
+    trackerLabel: () => {
+      const type = configStore.config.adapters?.issueTracker?.type;
+      if (!type || adapters.issueTracker?.authState !== "ok") return null;
+      return type.charAt(0).toUpperCase() + type.slice(1);
+    },
+    repoLabel: () => currentRepoTier()?.label ?? null,
+  };
+}
+
+/**
+ * Open the workflow screen, closing whatever full-screen surface is up first.
+ * Settings hands off to it, and a full-screen surface consumes every keystroke
+ * while open — two of them at once would leave one painted and deaf.
+ */
+function openWorkflowScreen(): void {
+  if (settingsScreen.isOpen) settingsScreen.close();
+  closeModal();
+  workflowScreen.open(buildWorkflowPort());
+  inputRouter.setModalOpen(true);
+  applyChromeLayout();
+  scheduleRender();
+}
+
+function toggleWorkflowScreen(): void {
+  if (workflowScreen.isOpen) {
+    workflowScreen.close();
+    inputRouter.setModalOpen(inputConsumerActive());
+    applyChromeLayout();
+    scheduleRender();
+    return;
+  }
+  openWorkflowScreen();
+}
+
+function handleWorkflowInput(data: string): void {
+  const wasOpen = workflowScreen.isOpen;
+  workflowScreen.handleInput(data);
+  // The screen closes itself on Escape/q without going through the toggle, so
+  // the chrome layout and input routing are re-synced here the same way
+  // handleSettingsInput does it.
+  if (wasOpen && !workflowScreen.isOpen) {
+    applyChromeLayout();
+    inputRouter.setModalOpen(inputConsumerActive());
+  }
+  scheduleRender();
+}
+
+/**
+ * Whether *something* is currently claiming keyboard input from the pty.
+ *
+ * Every surface that takes input over has to be counted here. This has been
+ * got wrong twice, both times the same way: a settings row closes settings in
+ * order to hand off to another surface, and the close path then clears input
+ * routing on the way out — leaving the new surface painted and deaf. Asking
+ * one question with one answer is what stops the next surface repeating it.
+ */
+function inputConsumerActive(): boolean {
+  return settingsScreen.isOpen || workflowScreen.isOpen || activeModal?.isOpen() === true;
 }
 
 function handleSettingsInput(data: string): void {
@@ -3955,11 +3919,7 @@ function handleSettingsInput(data: string): void {
     // that path does, or the input router keeps classifying clicks against
     // the stale frameless layout until the next resize.
     applyChromeLayout();
-    // ...but an `action` row may have closed settings precisely in order to
-    // hand off to a modal (the queue editor does). That modal has already
-    // claimed input routing; clearing it here would send every subsequent
-    // keystroke to the pty instead, leaving the modal visible but deaf.
-    if (!activeModal?.isOpen()) inputRouter.setModalOpen(false);
+    inputRouter.setModalOpen(inputConsumerActive());
   }
 
   scheduleRender();
@@ -4158,7 +4118,10 @@ function issuesForView(view: PanelView | undefined): import("./adapters/types").
   const stages = derivedStages();
   const stageOf = (issue: { status: string }) =>
     stageForIssue(issue as import("./adapters/types").Issue, stages);
-  return all.filter((issue) => matchesIssueFilter(issue, view.filter, stageOf));
+  // effectiveFilter drops `filter.states` for a sectioned view: sections are
+  // the unit of classification, and ANDing the two silently hid issues a
+  // section had claimed.
+  return all.filter((issue) => matchesIssueFilter(issue, effectiveFilter(view), stageOf));
 }
 
 /**
@@ -4778,8 +4741,8 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       });
       return;
     }
-    case "setting-edit-queues": {
-      openQueueEditor();
+    case "setting-edit-workflow": {
+      openWorkflowScreen();
       return;
     }
     case "setting-open-screen": {

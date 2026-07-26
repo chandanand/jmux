@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { parseViews, DEFAULT_VIEWS, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, sectionIndexForStatus, stateAssignments, assignStateToGroup, unassignState, createView, renameView, moveView, deleteView, createSection, renameSection, moveSection, deleteSection, stagesFromViews, type PanelView } from "../panel-view";
+import { parseViews, DEFAULT_VIEWS, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, sectionIndexForStatus, stateAssignments, assignStateToGroup, unassignState, createView, renameView, moveView, deleteView, createSection, renameSection, moveSection, deleteSection, parkedStages, toggleParkedState, isParkedState, effectiveFilter, suggestLayout, pruneEmptySections, type PanelView } from "../panel-view";
 import type { WorkStage } from "../repo-settings";
 
 describe("parseViews", () => {
@@ -281,11 +281,15 @@ describe("parseViews with sections", () => {
     expect(v.sections?.map((g) => g.label)).toEqual(["Good"]);
   });
 
-  test("a section with no statuses yet is kept — it is a valid empty bucket", () => {
-    // Creating a section then assigning statuses is the normal editor flow, so
-    // an empty one must survive a save/reload round trip.
+  test("a section with no statuses is dropped — it can never claim an issue", () => {
+    // This used to be kept, because the old editor created a section and then
+    // asked which statuses it covered, so an empty one was a legitimate
+    // intermediate state that had to survive a save. The workflow screen has
+    // no such step: a section is created *from* a status, and every path that
+    // could empty one runs through pruneEmptySections. What is left is dead
+    // config the editor gives you no way to see or remove.
     const [v] = parseViews([{ ...base, sections: [{ label: "New", states: [] }] }]);
-    expect(v.sections).toEqual([{ label: "New", states: [] }]);
+    expect(v.sections).toBeUndefined();
   });
 
   test("a view with no groups key stays ungrouped", () => {
@@ -468,70 +472,190 @@ describe("group CRUD", () => {
 // display (which tab) and again for behaviour (which stage), and nothing kept
 // the two honest — they had already drifted in practice.
 
-describe("stagesFromViews", () => {
-  const V = (over: any = {}) => parseViews([{
-    id: "waiting", label: "Waiting", source: "issues", filter: { scope: "assigned" },
-    groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
-    sections: [{ label: "In QA", states: ["QA", "QA2"] }, { label: "In review", states: ["MR Review"] }],
-    ...over,
-  }]);
-
-  test("a section's states become its stage's list", () => {
-    const staged = parseViews([{
-      id: "w", label: "W", source: "issues", filter: { scope: "assigned" },
-      groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
-      sections: [
-        { label: "In QA", states: ["QA", "QA2"], stage: "parked" },
-        { label: "In review", states: ["MR Review"], stage: "parked" },
-      ],
-    }]);
-    expect(stagesFromViews(staged).parked).toEqual(["QA", "QA2", "MR Review"]);
+describe("parkedStages", () => {
+  test("only `parked` is ever populated — the rest come from the tracker", () => {
+    // The other three stages used to be authored too: 25 decisions where three
+    // of the four possible answers behaved identically. projectStage falls
+    // through to the tracker's own category for anything not listed here.
+    const st = parkedStages(["In QA", "MR Review"]);
+    expect(st.parked).toEqual(["In QA", "MR Review"]);
+    expect([st.idea, st.active, st.done]).toEqual([[], [], []]);
   });
 
-  test("sections with no stage contribute nothing", () => {
-    const s = stagesFromViews(V());
-    expect(s.parked).toEqual([]);
-    expect(s.active).toEqual([]);
-  });
-
-  test("one tab can hold sections of different stages", () => {
-    // The reason stage sits on the section: a "Post-merge" tab legitimately
-    // holds work that is still yours (active) beside work that is not (parked).
-    const mixed = parseViews([{
-      id: "pm", label: "Post-merge", source: "issues", filter: { scope: "assigned" },
-      groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
-      sections: [
-        { label: "Dev Confirm", states: ["Dev Confirm"], stage: "active" },
-        { label: "In QA", states: ["QA"], stage: "parked" },
-      ],
-    }]);
-    const st = stagesFromViews(mixed);
-    expect(st.active).toEqual(["Dev Confirm"]);
-    expect(st.parked).toEqual(["QA"]);
-  });
-
-  test("several tabs can share one stage", () => {
-    const views = parseViews([
-      { id: "a", label: "A", source: "issues", filter: { scope: "assigned" },
-        groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
-        sections: [{ label: "g", states: ["s1"], stage: "active" }] },
-      { id: "b", label: "B", source: "issues", filter: { scope: "assigned" },
-        groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
-        sections: [{ label: "g", states: ["s2"], stage: "active" }] },
-    ]);
-    expect(stagesFromViews(views).active).toEqual(["s1", "s2"]);
-  });
-
-  test("an invalid stage on a section is dropped rather than trusted", () => {
-    const bad = parseViews([{
-      id: "x", label: "X", source: "issues", filter: { scope: "assigned" },
-      groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
-      sections: [{ label: "s", states: ["a"], stage: "nonsense" }],
-    }]);
-    expect(bad[0].sections![0].stage).toBeUndefined();
+  test("nothing parks by default, so an unconfigured jmux hides nothing", () => {
+    expect(parkedStages([]).parked).toEqual([]);
   });
 
   test("every stage key is always present, so callers need no guards", () => {
-    expect(Object.keys(stagesFromViews([])).sort()).toEqual(["active", "done", "idea", "parked"]);
+    expect(Object.keys(parkedStages([])).sort()).toEqual(["active", "done", "idea", "parked"]);
+  });
+
+  test("does not alias the caller's array", () => {
+    const src = ["In QA"];
+    parkedStages(src).parked.push("oops");
+    expect(src).toEqual(["In QA"]);
+  });
+});
+
+describe("toggleParkedState", () => {
+  test("adds a status that is not there, keeping order", () => {
+    expect(toggleParkedState(["a"], "b")).toEqual(["a", "b"]);
+  });
+
+  test("removes one that is, case-insensitively", () => {
+    // Tracker state names are matched case-insensitively everywhere else, and
+    // a status that could be added twice would park under one spelling only.
+    expect(toggleParkedState(["In QA", "b"], "in qa")).toEqual(["b"]);
+  });
+
+  test("never mutates the input", () => {
+    const src = ["a"];
+    toggleParkedState(src, "b");
+    expect(src).toEqual(["a"]);
+  });
+
+  test("isParkedState matches the same way", () => {
+    expect(isParkedState(["In QA"], "in qa")).toBe(true);
+    expect(isParkedState(["In QA"], "MR Review")).toBe(false);
+  });
+});
+
+describe("effectiveFilter", () => {
+  const sectioned = (states: string[] | undefined): PanelView => ({
+    id: "x", label: "X", source: "issues",
+    filter: { scope: "assigned", ...(states ? { states } : {}), labels: ["bug"] },
+    groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
+    sessionLinkedFirst: false,
+    sections: [{ label: "s", states: ["Todo"] }],
+  });
+
+  test("drops filter.states when the view has sections", () => {
+    // Sections drive membership; a states filter set from the panel's F menu
+    // would otherwise AND with them and silently hide issues.
+    expect(effectiveFilter(sectioned(["Doing"]))).toEqual({ scope: "assigned", labels: ["bug"] });
+  });
+
+  test("keeps every other axis when sections are present", () => {
+    const view = sectioned(undefined);
+    view.filter.priorityAtMost = 2;
+    expect(effectiveFilter(view)).toEqual({ scope: "assigned", labels: ["bug"], priorityAtMost: 2 });
+  });
+
+  test("leaves filter.states alone when the view has no sections", () => {
+    const view = sectioned(["Doing"]);
+    delete view.sections;
+    expect(effectiveFilter(view).states).toEqual(["Doing"]);
+  });
+
+  test("an empty sections array does not count as sectioned", () => {
+    // createView() seeds `sections: []`; until a section exists the tab is
+    // still governed by its filter, so a states filter must survive.
+    const view = sectioned(["Doing"]);
+    view.sections = [];
+    expect(effectiveFilter(view).states).toEqual(["Doing"]);
+  });
+
+  test("returns the same object identity when nothing needs stripping", () => {
+    const view = sectioned(undefined);
+    delete view.sections;
+    expect(effectiveFilter(view)).toBe(view.filter);
+  });
+});
+
+describe("suggestLayout", () => {
+  const states = [
+    { name: "Triage", type: "triage" as const },
+    { name: "Backlog", type: "backlog" as const },
+    { name: "Todo", type: "unstarted" as const },
+    { name: "In Progress", type: "started" as const },
+    { name: "Done", type: "completed" as const },
+    { name: "Canceled", type: "canceled" as const },
+    { name: "Duplicate", type: "duplicate" as const },
+  ];
+
+  test("builds one tab per lifecycle category, in lifecycle order", () => {
+    const views = suggestLayout(states);
+    expect(views.map((v) => v.label)).toEqual(["To do", "In progress", "Done"]);
+    expect(views.every((v) => v.source === "issues")).toBe(true);
+  });
+
+  test("every status lands in exactly one section", () => {
+    const seen = suggestLayout(states).flatMap((v) => v.sections!.flatMap((s) => s.states));
+    expect(seen.sort()).toEqual([...states.map((s) => s.name)].sort());
+  });
+
+  test("sections carry no stage — the tracker classifies them", () => {
+    expect(suggestLayout(states)[0].sections).toEqual([
+      { label: "Triage", states: ["Triage"] },
+      { label: "Backlog", states: ["Backlog"] },
+    ]);
+  });
+
+  test("omits tabs whose category the tracker has no states for", () => {
+    const views = suggestLayout([{ name: "Todo", type: "unstarted" as const }]);
+    expect(views.map((v) => v.label)).toEqual(["In progress"]);
+  });
+
+  test("returns nothing for a tracker that reports no states", () => {
+    expect(suggestLayout([])).toEqual([]);
+  });
+
+  test("de-duplicates states repeated across teams", () => {
+    // listWorkflowStates() unions every team, so the same status name recurs.
+    const dupes = [
+      { name: "Todo", type: "unstarted" as const, team: "A" },
+      { name: "Todo", type: "unstarted" as const, team: "B" },
+    ];
+    expect(suggestLayout(dupes)[0].sections![0].states).toEqual(["Todo"]);
+  });
+
+  test("output survives a parseViews round-trip unchanged", () => {
+    const views = suggestLayout(states);
+    expect(parseViews(JSON.parse(JSON.stringify(views)))).toEqual(views);
+  });
+});
+
+describe("pruneEmptySections", () => {
+  const withSections = (sections: Array<{ label: string; states: string[] }>): PanelView[] => ([{
+    id: "t", label: "T", source: "issues", filter: { scope: "assigned" },
+    groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
+    sessionLinkedFirst: false, sections,
+  }]);
+
+  test("drops a section left holding no statuses", () => {
+    expect(pruneEmptySections(withSections([
+      { label: "Kept", states: ["Todo"] },
+      { label: "Emptied", states: [] },
+    ]))[0].sections).toEqual([{ label: "Kept", states: ["Todo"] }]);
+  });
+
+  test("keeps a section whose statuses simply have no issues right now", () => {
+    // "Nothing is blocked" is information — that rule is about issues, not
+    // about statuses, and this must not eat it.
+    const views = withSections([{ label: "Blocked", states: ["Blocked"] }]);
+    expect(pruneEmptySections(views)).toEqual(views);
+  });
+
+  test("returns the same objects when there is nothing to prune", () => {
+    const views = withSections([{ label: "Kept", states: ["Todo"] }]);
+    expect(pruneEmptySections(views)[0]).toBe(views[0]);
+  });
+
+  test("leaves a view with no sections alone", () => {
+    expect(pruneEmptySections(DEFAULT_VIEWS)).toEqual(DEFAULT_VIEWS);
+  });
+
+  test("parseViews drops a zero-status section already written to disk", () => {
+    const parsed = parseViews([{
+      id: "t", label: "T", source: "issues", filter: { scope: "assigned" },
+      groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
+      sections: [
+        { label: "QA Failed", states: [] },
+        { label: "Release Blockers", states: ["Release Blockers"] },
+      ],
+    }]);
+    expect(parsed[0].sections).toEqual([
+      { label: "Release Blockers", states: ["Release Blockers"] },
+    ]);
   });
 });

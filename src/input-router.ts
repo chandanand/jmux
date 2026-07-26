@@ -103,6 +103,9 @@ export interface InputRouterOptions {
   onStartUpNext?: () => void;
   onUndoTransition?: () => void;
   onSettingsScreen?: () => void;  // Ctrl-a I (uppercase) — full settings screen
+  // Ctrl-a W (uppercase) — the workflow screen. Uppercase because tmux binds
+  // lowercase `w` to choose-tree and jmux never unbinds it.
+  onWorkflowScreen?: () => void;
   onGroupCycle?: () => void;      // Ctrl-a G — cycle sidebar group mode
   onSortCycle?: () => void;       // Ctrl-a s — cycle sidebar sort mode
   onFilterCycle?: () => void;     // Ctrl-a f — cycle sidebar filter mode
@@ -409,6 +412,7 @@ export class InputRouter {
           if (data === "u") { this.opts.onStartUpNext?.(); return; }
           if (data === "Z") { this.opts.onUndoTransition?.(); return; }
           if (data === "I") { this.opts.onSettingsScreen?.(); return; }
+          if (data === "W") { this.opts.onWorkflowScreen?.(); return; }
           if (data === "G") { this.opts.onGroupCycle?.(); return; }
           if (data === "s") { this.opts.onSortCycle?.(); return; }
           if (data === "f") { this.opts.onFilterCycle?.(); return; }
@@ -450,6 +454,10 @@ export class InputRouter {
         }
         if (data === "I") {
           this.opts.onSettingsScreen?.();
+          return;
+        }
+        if (data === "W") {
+          this.opts.onWorkflowScreen?.();
           return;
         }
         if (data === "G") {

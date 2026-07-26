@@ -97,7 +97,7 @@ export function resolveIssueRepoDir(
 
 /**
  * Stage for an issue. Stage lists are derived from the queue tabs (see
- * `stagesFromViews`), which are global — so unlike the earlier per-repo model
+ * `parkedStages`), which are global — so unlike the earlier per-repo model
  * this needs no repo key, and an issue's stage can no longer depend on which
  * session the user happens to be attached to.
  */

@@ -1805,6 +1805,8 @@ function pipelineRouter(sink: { calls: string[]; pty: string[] }): InputRouter {
       onCaptureIssue: () => { sink.calls.push("capture"); },
       onStartUpNext: () => { sink.calls.push("upnext"); },
       onUndoTransition: () => { sink.calls.push("undo"); },
+      onWorkflowScreen: () => { sink.calls.push("workflow"); },
+      onSettingsScreen: () => { sink.calls.push("settings"); },
     },
     baseLayout(24),
   );
@@ -1841,5 +1843,21 @@ describe("work-pipeline prefix chords", () => {
     const sink = chord("z");
     expect(sink.calls).toEqual([]);
     expect(sink.pty.join("")).toContain("z");
+  });
+
+  test("Ctrl-a W opens the workflow screen", () => {
+    expect(chord("W").calls).toEqual(["workflow"]);
+  });
+
+  test("Ctrl-a w is left to tmux (choose-tree), not stolen for the workflow screen", () => {
+    // Uppercase deliberately: tmux binds `w` by default and jmux has never
+    // unbound it, so claiming it would repeat the Ctrl-a c / Ctrl-a z mistake.
+    const sink = chord("w");
+    expect(sink.calls).toEqual([]);
+    expect(sink.pty.join("")).toContain("w");
+  });
+
+  test("Ctrl-a I still opens the settings screen alongside it", () => {
+    expect(chord("I").calls).toEqual(["settings"]);
   });
 });

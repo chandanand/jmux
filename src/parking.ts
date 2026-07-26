@@ -29,26 +29,34 @@ export const UNPARK_TRIGGERS: readonly UnparkTrigger[] = [
   "agent-attention",
 ];
 
+/** Phrased to read as a list mid-sentence, which is where they mostly appear. */
 export const UNPARK_TRIGGER_LABELS: Record<UnparkTrigger, string> = {
-  "state-regression": "Issue moved backwards",
-  "issue-comment": "New issue comment",
-  "mr-activity": "MR activity",
-  "pipeline-failed": "Pipeline failed",
-  "agent-attention": "Agent needs attention",
+  "state-regression": "the issue moves",
+  "issue-comment": "someone comments",
+  "mr-activity": "the MR is touched",
+  "pipeline-failed": "a pipeline goes red",
+  "agent-attention": "the agent wants you",
+};
+
+/**
+ * Short forms for summarising a selection on one row. Naming the signals beats
+ * a count — "5 signals" tells you how many things you can't see.
+ */
+export const UNPARK_TRIGGER_SHORT: Record<UnparkTrigger, string> = {
+  "state-regression": "issue moves",
+  "issue-comment": "comment",
+  "mr-activity": "MR",
+  "pipeline-failed": "pipeline",
+  "agent-attention": "agent",
 };
 
 export interface ParkingConfig {
-  /** Stages whose sessions park. Empty by default, so parking is opt-in. */
-  parkStages: WorkStage[];
   unparkOn: UnparkTrigger[];
   /** Idle days after which an issueless session parks. null disables. */
   autoParkIdleDays: number | null;
 }
 
 export const DEFAULT_PARKING: ParkingConfig = {
-  // A tab only declares stage=parked deliberately, so honouring it by default
-  // is the user's stated intent rather than a surprise.
-  parkStages: ["parked"],
   unparkOn: ["state-regression", "issue-comment", "mr-activity", "pipeline-failed"],
   autoParkIdleDays: null,
 };
@@ -95,7 +103,12 @@ export function isParked(
   if (input.manual === "unpark") return false;
   if (input.manual === "park") return true;
 
-  if (input.stage) return config.parkStages.includes(input.stage);
+  // `parked` is reached only by a tab the user flagged as parking, so there is
+  // nothing further to consult. There used to be a second setting listing the
+  // stages that park — "the stages that mean parked should park" — which could
+  // be switched off independently, leaving parking silently doing nothing while
+  // looking configured. One switch, in one place.
+  if (input.stage) return input.stage === "parked";
 
   // Issueless sessions have no stage to derive from, so idleness is the only
   // signal available. Sessions that DO have an issue are governed by their
@@ -173,24 +186,13 @@ export function detectSignals(baseline: ParkBaseline, ctx: ParkContext): Set<Unp
 }
 
 /**
- * Why parking isn't doing anything, or null when it is wired up.
+ * Why parking isn't doing anything, or null when it is.
  *
- * Parking needs two settings that live in two different sections — which
- * stages park (global) and which tracker states mean "parked" (per-repo) — and
- * a half-configured setup is indistinguishable from a broken feature. The
- * Pipeline section reports this so the gap is visible at the point of setup.
- *
- * Only the `parked` stage needs explicit state names: every other stage is
- * populated by the tracker's own stateType fallback, so selecting one of those
- * is always a valid configuration.
+ * Now a single condition — no tab is flagged to park — because there is a
+ * single switch. This used to report a half-configured setup, where parking
+ * needed two settings in two different settings categories and having only one
+ * of them was indistinguishable from a broken feature.
  */
-export function parkingSetupWarning(
-  parkStages: WorkStage[],
-  namedStatesByStage: Record<WorkStage, number>,
-): string | null {
-  if (parkStages.length === 0) return "inactive — no stages selected";
-  if (parkStages.includes("parked") && (namedStatesByStage.parked ?? 0) === 0) {
-    return "inactive — no states mapped to Parked";
-  }
-  return null;
+export function parkingSetupWarning(parkedStateCount: number): string | null {
+  return parkedStateCount === 0 ? "inactive — no tab is set to park" : null;
 }

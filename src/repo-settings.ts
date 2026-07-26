@@ -262,6 +262,8 @@ export function migrateLegacyConfig(raw: any): { config: any; changed: boolean }
   // `groups` became `sections`, and the lifecycle stage moved from the tab down
   // onto each section — a section is the unit of classification, so one tab can
   // legitimately mix "still mine" with "someone else's".
+  // Statuses collected on the way through, from every shape parking has had.
+  const parked: string[] = [];
   for (const view of (Array.isArray(config.panelViews) ? config.panelViews : []) as any[]) {
     if (Array.isArray(view.groups) && !Array.isArray(view.sections)) {
       view.sections = view.groups;
@@ -275,6 +277,50 @@ export function migrateLegacyConfig(raw: any): { config: any; changed: boolean }
       delete view.stage;
       changed = true;
     }
+
+    // ...and then out of the tabs entirely, into one flat list of the statuses
+    // that park. A section's `stage` was a four-way choice of which only
+    // `parked` did anything observable, so classifying a status was mostly a
+    // decision with no consequence; the other three stages need no
+    // configuration at all, because `stageFromStateType` already derives them
+    // from the tracker's own categories.
+    const sections = Array.isArray(view.sections) ? view.sections : [];
+    for (const section of sections) {
+      if (section?.stage === undefined) continue;
+      if (section.stage === "parked") parked.push(...(section.states ?? []));
+      delete section.stage;
+      changed = true;
+    }
+    // The intermediate shape, where parking was one flag on the tab.
+    if (view.parks !== undefined) {
+      if (view.parks === true) parked.push(...sections.flatMap((sec: any) => sec.states ?? []));
+      delete view.parks;
+      changed = true;
+    }
+  }
+
+  if (parked.length > 0) {
+    const pipeline = { ...(config.pipeline ?? {}) };
+    const seen = new Set((pipeline.parkedStates ?? []).map((s: string) => s.trim().toLowerCase()));
+    const merged = [...(pipeline.parkedStates ?? [])];
+    for (const state of parked) {
+      const key = state.trim().toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(state);
+    }
+    pipeline.parkedStates = merged;
+    config.pipeline = pipeline;
+    changed = true;
+  }
+
+  // The switch that said "the stages that mean parked should park" — a
+  // tautology that could be turned off, which is how parking came to look
+  // configured while doing nothing. The status says so directly now.
+  if (config.pipeline && typeof config.pipeline === "object"
+      && config.pipeline.parkStages !== undefined) {
+    delete config.pipeline.parkStages;
+    changed = true;
   }
 
   const wf = config.issueWorkflow;

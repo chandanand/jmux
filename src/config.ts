@@ -4,7 +4,7 @@ import { homedir } from "os";
 import type { AdapterConfig } from "./adapters/types";
 import type { PanelView } from "./panel-view";
 import type { TabEntry } from "./glass/tabs";
-import type { RepoSettings, WorkStage } from "./repo-settings";
+import type { RepoSettings } from "./repo-settings";
 import type { UnparkTrigger } from "./parking";
 import { migrateLegacyConfig } from "./repo-settings";
 import { logError } from "./log";
@@ -27,7 +27,8 @@ export interface IssueWorkflowConfig {
  * *state* means per repo lives in RepoSettings instead.
  */
 export interface PipelineConfig {
-  parkStages?: WorkStage[];
+  /** Statuses whose sessions park. Empty by default, so parking is opt-in. */
+  parkedStates?: string[];
   unparkOn?: UnparkTrigger[];
   autoParkIdleDays?: number | null;
   /** Confirmation policy for writes back to the issue tracker. */

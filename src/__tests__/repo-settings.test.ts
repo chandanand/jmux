@@ -283,7 +283,11 @@ describe("migrateStagesIntoViews", () => {
 });
 
 describe("sections migration", () => {
-  test("groups become sections and the tab's stage moves onto each", () => {
+  // Three hops, in one pass. `groups` became `sections`; the tab's stage moved
+  // down onto each section; then parking left the tabs entirely for one flat
+  // list of the statuses that park — because only `parked` ever did anything,
+  // and where a status shows is a separate question from whether it hides.
+  test("groups become sections, and a parked tab's states become parked states", () => {
     const { config, changed } = migrateLegacyConfig({
       panelViews: [{ id: "w", label: "W", stage: "parked",
         groups: [{ label: "In QA", states: ["QA"] }, { label: "In review", states: ["MR"] }] }],
@@ -292,23 +296,65 @@ describe("sections migration", () => {
     const v = config.panelViews[0];
     expect(v.groups).toBeUndefined();
     expect(v.stage).toBeUndefined();
+    expect(v.parks).toBeUndefined();
     expect(v.sections).toEqual([
-      { label: "In QA", states: ["QA"], stage: "parked" },
-      { label: "In review", states: ["MR"], stage: "parked" },
+      { label: "In QA", states: ["QA"] },
+      { label: "In review", states: ["MR"] },
+    ]);
+    expect(config.pipeline.parkedStates).toEqual(["QA", "MR"]);
+  });
+
+  test("only the parked sections' states carry over", () => {
+    // The mixed tab the old model existed to allow: one section still yours,
+    // one handed off. Per-status parking expresses it directly.
+    const { config } = migrateLegacyConfig({
+      panelViews: [{ id: "pm", label: "PM",
+        sections: [{ label: "Mine", states: ["a"], stage: "active" },
+                   { label: "Theirs", states: ["b"], stage: "parked" }] }],
+    });
+    expect(config.pipeline.parkedStates).toEqual(["b"]);
+    expect(config.panelViews[0].sections).toEqual([
+      { label: "Mine", states: ["a"] },
+      { label: "Theirs", states: ["b"] },
     ]);
   });
 
-  test("a section's own stage is not overwritten by the tab's", () => {
+  test("the intermediate per-tab flag migrates too", () => {
     const { config } = migrateLegacyConfig({
-      panelViews: [{ id: "pm", label: "PM", stage: "parked",
-        groups: [{ label: "Mine", states: ["a"], stage: "active" }, { label: "Theirs", states: ["b"] }] }],
+      panelViews: [{ id: "w", label: "W", parks: true,
+        sections: [{ label: "s", states: ["a", "b"] }] }],
     });
-    expect(config.panelViews[0].sections.map((s: any) => s.stage)).toEqual(["active", "parked"]);
+    expect(config.panelViews[0].parks).toBeUndefined();
+    expect(config.pipeline.parkedStates).toEqual(["a", "b"]);
+  });
+
+  test("a tab with nothing parked contributes nothing", () => {
+    const { config } = migrateLegacyConfig({
+      panelViews: [{ id: "t", label: "T",
+        sections: [{ label: "Mine", states: ["a"], stage: "active" }] }],
+    });
+    expect(config.pipeline).toBeUndefined();
+  });
+
+  test("existing parked states are kept, and duplicates are not doubled up", () => {
+    const { config } = migrateLegacyConfig({
+      pipeline: { parkedStates: ["QA"] },
+      panelViews: [{ id: "w", label: "W", parks: true,
+        sections: [{ label: "s", states: ["qa", "MR"] }] }],
+    });
+    expect(config.pipeline.parkedStates).toEqual(["QA", "MR"]);
+  });
+
+  test("the parkStages switch is dropped — a status says so directly now", () => {
+    const { config, changed } = migrateLegacyConfig({ pipeline: { parkStages: ["parked"], upNext: ["a"] } });
+    expect(changed).toBe(true);
+    expect(config.pipeline).toEqual({ upNext: ["a"] });
   });
 
   test("already-migrated views report no change", () => {
     const { changed } = migrateLegacyConfig({
-      panelViews: [{ id: "w", label: "W", sections: [{ label: "s", states: ["a"], stage: "parked" }] }],
+      pipeline: { parkedStates: ["a"] },
+      panelViews: [{ id: "w", label: "W", sections: [{ label: "s", states: ["a"] }] }],
     });
     expect(changed).toBe(false);
   });

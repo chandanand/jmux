@@ -29,22 +29,26 @@ function input(over: Partial<SessionParkInput> = {}): SessionParkInput {
 }
 
 describe("isParked defaults", () => {
-  test("the parked stage parks by default; nothing else does", () => {
-    // A tab only declares stage=parked deliberately, so acting on it is the
-    // stated intent — but no other stage is ever hidden without being asked.
+  test("the parked stage parks; nothing else does", () => {
+    // A status only reaches `parked` through a tab the user flagged, so acting
+    // on it is their stated intent — and no other stage is ever hidden.
     expect(isParked(input({ stage: "parked" }), cfg(), 0)).toBe(true);
     for (const stage of ["idea", "active", "done"] as const) {
       expect(isParked(input({ stage }), cfg(), 0)).toBe(false);
     }
   });
 
-  test("clearing parkStages disables parking entirely", () => {
-    expect(isParked(input({ stage: "parked" }), cfg({ parkStages: [] }), 0)).toBe(false);
+  test("parking is off precisely when no tab parks — there is no second switch", () => {
+    // There used to be a `parkStages` list here saying which stages park, so
+    // "this status parks" and "parked stages park" could disagree; the half-set
+    // state looked exactly like a broken feature. `parkedStages` now yields a
+    // parked state only for a status you ticked, so an empty list *is* off.
+    expect(isParked(input({ stage: null }), cfg(), 0)).toBe(false);
   });
 });
 
 describe("isParked derived from stage", () => {
-  const c = cfg({ parkStages: ["parked"] });
+  const c = cfg();
 
   test("a session whose issue is in a parked stage parks", () => {
     expect(isParked(input({ stage: "parked" }), c, 0)).toBe(true);
@@ -61,7 +65,7 @@ describe("isParked derived from stage", () => {
 });
 
 describe("isParked manual override", () => {
-  const c = cfg({ parkStages: ["parked"] });
+  const c = cfg();
 
   test("manual park parks a session with no issue at all", () => {
     expect(isParked(input({ manual: "park" }), c, 0)).toBe(true);
@@ -76,7 +80,7 @@ describe("isParked manual override", () => {
 describe("isParked auto-unpark", () => {
   // Parking is only safe if it reverses itself. Every configured signal must
   // beat both a derived park and an explicit manual park.
-  const c = cfg({ parkStages: ["parked"], unparkOn: ["state-regression", "mr-activity"] });
+  const c = cfg({ unparkOn: ["state-regression", "mr-activity"] });
 
   test("a configured signal unparks a derived park", () => {
     expect(isParked(input({ stage: "parked", signals: new Set(["state-regression"]) }), c, 0)).toBe(false);
@@ -92,7 +96,7 @@ describe("isParked auto-unpark", () => {
 
   test("agent attention unparks only when configured", () => {
     expect(isParked(input({ stage: "parked", attention: true }), c, 0)).toBe(true);
-    const withAttention = cfg({ parkStages: ["parked"], unparkOn: ["agent-attention"] });
+    const withAttention = cfg({ unparkOn: ["agent-attention"] });
     expect(isParked(input({ stage: "parked", attention: true }), withAttention, 0)).toBe(false);
   });
 });
@@ -201,29 +205,14 @@ describe("signal detection", () => {
 });
 
 describe("parkingSetupWarning", () => {
-  // Parking needs two settings in two different sections to be useful, and the
-  // half-configured state looks identical to a broken feature. This is what
-  // the Pipeline section reports so the gap is visible rather than mysterious.
-  const none = { idea: 0, active: 0, parked: 0, done: 0 };
-
-  test("warns when no stages are selected", () => {
-    expect(parkingSetupWarning([], { ...none, parked: 5 }))
-      .toMatch(/no stages selected/i);
+  // One condition now, because there is one switch. This used to report the
+  // half-configured state that arose from needing two settings in two different
+  // settings categories to agree.
+  test("warns when no tab parks, so nothing can ever reach the parked stage", () => {
+    expect(parkingSetupWarning(0)).toMatch(/no tab is set to park/i);
   });
 
-  test("warns when Parked is selected but no states map to it", () => {
-    // Nothing reaches the parked stage via stateType, so an empty list means
-    // the stage can never be occupied.
-    expect(parkingSetupWarning(["parked"], none)).toMatch(/no states mapped/i);
-  });
-
-  test("no warning once both halves are set", () => {
-    expect(parkingSetupWarning(["parked"], { ...none, parked: 5 })).toBeNull();
-  });
-
-  test("stages other than Parked are populated by the stateType fallback", () => {
-    // "done" has members even with no explicit names, so selecting it alone is
-    // a valid configuration.
-    expect(parkingSetupWarning(["done"], none)).toBeNull();
+  test("no warning once a tab parks", () => {
+    expect(parkingSetupWarning(6)).toBeNull();
   });
 });

@@ -1,6 +1,5 @@
+import type { IssueStateType } from "./adapters/types";
 import type { WorkStage } from "./repo-settings";
-
-export const STAGE_VALUES: readonly WorkStage[] = ["idea", "active", "parked", "done"];
 
 /**
  * Which items a view shows. `scope` picks the data source; everything else
@@ -69,20 +68,36 @@ export function matchesIssueFilter(
 }
 
 /**
- * A section: the unit of classification. An issue's status picks a section, the
- * section says what that means (`stage`), and the section belongs to a tab.
+ * The filter that actually governs membership.
  *
- * Stage lives here rather than on the tab because behaviour attaches where
- * classification happens — a tab is only a container. Keeping it on the tab
- * would make a mixed tab impossible: "Dev Confirm" (yours, active) and "In QA"
- * (theirs, parked) could never share one tab, which forces the layout instead
- * of letting the user choose it.
+ * `sections` and `filter.states` are two ways of saying "these statuses belong
+ * here", and a view carrying both used to apply them as an AND — so a states
+ * filter set from the panel's `F` menu silently hid issues its section claimed.
+ * Sections win, per the settled model: they are the unit of classification and
+ * the only one that also carries meaning. Every other axis (labels, priority,
+ * stages) narrows a sectioned view as normal.
+ */
+export function effectiveFilter(view: PanelView): PanelViewFilter {
+  if (!view.sections?.length || view.filter.states === undefined) return view.filter;
+  const { states, ...rest } = view.filter;
+  return rest;
+}
+
+/**
+ * A section: an ordered bucket of statuses inside a tab, and the header they
+ * render under in the panel. Nothing more — a section carries no behaviour.
+ *
+ * It used to carry a `stage`, so classifying a status meant choosing between
+ * four values of which only one (`parked`) did anything observable. That made
+ * every status a four-way decision with a 3-in-4 chance of being a no-op. The
+ * decision that actually matters — does this work leave my sidebar — is now one
+ * column in the workflow screen's status table (`pipeline.parkedStates`), and
+ * idea/active/done come from the tracker's own categories with nothing to
+ * configure.
  */
 export interface PanelViewSection {
   label: string;
   states: string[];
-  /** What this section means. Unset = fall back to the tracker's own category. */
-  stage?: WorkStage;
 }
 
 export type GroupByField = "team" | "project" | "status" | "priority" | "none";
@@ -122,20 +137,25 @@ export function sectionIndexForStatus(
   return -1;
 }
 
-/** Read a view's section list, dropping entries that can't render or match. */
+/**
+ * Read a view's section list, dropping entries that can't render or match.
+ *
+ * That includes sections holding no statuses: a section is *defined by* the
+ * statuses it covers, so an empty one is a header that can never claim an issue
+ * — invisible dead config the editor gives you no way to see or remove. Live
+ * edits prune the same case through `pruneEmptySections`; this catches the ones
+ * already written to disk.
+ */
 function parseSections(raw: unknown): PanelViewSection[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   const out: PanelViewSection[] = [];
   for (const entry of raw) {
     if (!entry || typeof entry !== "object") continue;
-    const { label, states, stage } = entry as Record<string, unknown>;
+    const { label, states } = entry as Record<string, unknown>;
     if (typeof label !== "string" || !label.trim()) continue;
     if (!Array.isArray(states) || !states.every((s) => typeof s === "string")) continue;
-    out.push({
-      label,
-      states: states as string[],
-      ...(STAGE_VALUES.includes(stage as WorkStage) ? { stage: stage as WorkStage } : {}),
-    });
+    if (states.length === 0) continue;
+    out.push({ label, states: states as string[] });
   }
   return out.length > 0 ? out : undefined;
 }
@@ -474,20 +494,100 @@ export function deleteSection(views: PanelView[], viewId: string, label: string)
 }
 
 /**
- * The states each lifecycle stage owns, derived from the tabs that declare it.
+ * Drop sections left holding no statuses.
  *
- * This replaces authoring stage lists separately from tab membership. A state
- * was previously classified twice — once for display, once for behaviour — with
- * nothing keeping the two in agreement; in practice they drifted, and a status
- * sitting in a "To do" tab was silently being parked. Deriving one from the
- * other makes that class of bug unrepresentable.
+ * A section is *defined by* the statuses it covers, so one with none can never
+ * match an issue — it is a header that renders forever and classifies nothing.
+ * Moving a status out of a single-status section empties it, so every
+ * assignment path runs through here rather than each remembering to tidy up.
+ *
+ * This is not the "empty section keeps its header" rule, which is about a
+ * section with statuses but no *issues* right now — that one still renders,
+ * because "nothing is blocked" is information.
  */
-export function stagesFromViews(views: PanelView[]): Record<WorkStage, string[]> {
-  const out: Record<WorkStage, string[]> = { idea: [], active: [], parked: [], done: [] };
-  for (const view of views) {
-    for (const section of view.sections ?? []) {
-      if (section.stage) out[section.stage].push(...section.states);
-    }
+export function pruneEmptySections(views: PanelView[]): PanelView[] {
+  return views.map((view) => {
+    if (!view.sections) return view;
+    const kept = view.sections.filter((s) => s.states.length > 0);
+    return kept.length === view.sections.length ? view : { ...view, sections: kept };
+  });
+}
+
+/**
+ * A starting layout for a workspace nobody has configured yet, built from the
+ * tracker's own stable categories rather than from status names — which vary
+ * per workspace and are exactly what a new user has no opinion about yet.
+ *
+ * One section per status, labelled with the status, because that is the shape
+ * the editor produces by hand: a seeded config and a hand-built one are then
+ * indistinguishable, and there is nothing to un-learn.
+ *
+ * No suggested tab parks. Parking removes sessions from the sidebar, so it
+ * stays a decision the user makes deliberately — the same reason
+ * `stageFromStateType` never yields `parked` either.
+ */
+const SUGGESTED_TABS: ReadonlyArray<{ label: string; types: IssueStateType[] }> = [
+  { label: "To do", types: ["triage", "backlog"] },
+  { label: "In progress", types: ["unstarted", "started"] },
+  { label: "Done", types: ["completed", "canceled", "duplicate"] },
+];
+
+export function suggestLayout(
+  states: ReadonlyArray<{ name: string; type: IssueStateType }>,
+  existing: PanelView[] = [],
+): PanelView[] {
+  // listWorkflowStates() unions every team, so the same status name recurs.
+  const seen = new Set<string>();
+  const unique = states.filter((s) => {
+    const key = s.name.trim().toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  // Appended to what is already there, never substituted for it: the tab list
+  // also holds the user's MR tabs, and a suggestion that quietly deleted them
+  // would be the worst kind of first-run surprise. Building on `existing` also
+  // routes id generation through createView's de-duplication.
+  let views: PanelView[] = existing;
+  for (const tab of SUGGESTED_TABS) {
+    const mine = unique.filter((s) => tab.types.includes(s.type));
+    if (mine.length === 0) continue;
+    const sections: PanelViewSection[] = mine.map((s) => ({ label: s.name, states: [s.name] }));
+    views = createView(views, tab.label)
+      .map((v, i, arr) => (i === arr.length - 1 ? { ...v, sections } : v));
   }
-  return out;
+  return views;
+}
+
+/**
+ * Statuses whose sessions park, as a `WorkStage` map.
+ *
+ * Only `parked` is ever populated. The other three stages need no configuration
+ * at all: `projectStage` falls through to the tracker's own category for any
+ * status not listed here, and triage/backlog → idea, unstarted/started →
+ * active, completed/canceled → done is already the right answer everywhere.
+ * Asking a user to restate it was 25 decisions that changed nothing.
+ *
+ * The list is flat and keyed on the status name rather than derived from tab
+ * membership, because the two are orthogonal facts — a status can be work
+ * someone else has whether or not you show it in a tab. They were derived from
+ * each other once, to stop two settings drifting apart; the table that displays
+ * them side by side in adjacent columns is what makes that unnecessary.
+ */
+export function parkedStages(parkedStates: readonly string[]): Record<WorkStage, string[]> {
+  return { idea: [], active: [], parked: [...parkedStates], done: [] };
+}
+
+/** Add or remove a status from the parked list, case-insensitively. */
+export function toggleParkedState(parked: readonly string[], state: string): string[] {
+  const at = parked.findIndex((s) => s.trim().toLowerCase() === state.trim().toLowerCase());
+  if (at < 0) return [...parked, state];
+  const next = [...parked];
+  next.splice(at, 1);
+  return next;
+}
+
+export function isParkedState(parked: readonly string[], state: string): boolean {
+  return parked.some((s) => s.trim().toLowerCase() === state.trim().toLowerCase());
 }
