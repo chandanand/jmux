@@ -64,6 +64,7 @@ import {
   DEFAULT_PARKING,
   UNPARK_TRIGGERS,
   UNPARK_TRIGGER_LABELS,
+  parkingSetupWarning,
   type ParkingConfig,
   type ParkBaseline,
   type ParkContext,
@@ -3465,6 +3466,26 @@ function buildSettingsCategories(): SettingsCategory[] {
             const at = cur.indexOf(id);
             if (at >= 0) cur.splice(at, 1); else cur.push(id);
             configStore.setPipeline("upNext", cur);
+          },
+        },
+        {
+          // Read-only: parking needs Park stages (here) AND Parked states
+          // (under Stages), and having them in two sections makes a
+          // half-finished setup easy to leave behind unnoticed.
+          id: "park-status", label: "Parking status", type: "text" as const,
+          getValue: () => {
+            const cfg = parkingConfig();
+            const counts = { idea: 0, active: 0, parked: 0, done: 0 };
+            for (const stage of STAGE_ORDER) {
+              const field = `${stage}States` as keyof RepoSettings;
+              const names = new Set<string>();
+              for (const tier of [configStore.config.repoDefaults, ...Object.values(configStore.config.repos ?? {})]) {
+                for (const n of (tier?.[field] as string[] | undefined) ?? []) names.add(n.toLowerCase());
+              }
+              counts[stage] = names.size;
+            }
+            return parkingSetupWarning(cfg.parkStages, counts)
+              ?? `active — ${currentSessions.filter((s) => sidebar.isParked(s.name)).length} parked`;
           },
         },
         {

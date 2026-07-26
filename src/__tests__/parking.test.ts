@@ -6,6 +6,7 @@ import {
   type ParkingConfig,
   captureBaseline,
   detectSignals,
+  parkingSetupWarning,
   type SessionParkInput,
 } from "../parking";
 
@@ -189,5 +190,33 @@ describe("signal detection", () => {
       mrs: [{ updatedAt: 1, pipeline: { state: "failed" } }] as any,
     });
     expect(s.has("pipeline-failed")).toBe(false);
+  });
+});
+
+describe("parkingSetupWarning", () => {
+  // Parking needs two settings in two different sections to be useful, and the
+  // half-configured state looks identical to a broken feature. This is what
+  // the Pipeline section reports so the gap is visible rather than mysterious.
+  const none = { idea: 0, active: 0, parked: 0, done: 0 };
+
+  test("warns when no stages are selected", () => {
+    expect(parkingSetupWarning([], { ...none, parked: 5 }))
+      .toMatch(/no stages selected/i);
+  });
+
+  test("warns when Parked is selected but no states map to it", () => {
+    // Nothing reaches the parked stage via stateType, so an empty list means
+    // the stage can never be occupied.
+    expect(parkingSetupWarning(["parked"], none)).toMatch(/no states mapped/i);
+  });
+
+  test("no warning once both halves are set", () => {
+    expect(parkingSetupWarning(["parked"], { ...none, parked: 5 })).toBeNull();
+  });
+
+  test("stages other than Parked are populated by the stateType fallback", () => {
+    // "done" has members even with no explicit names, so selecting it alone is
+    // a valid configuration.
+    expect(parkingSetupWarning(["done"], none)).toBeNull();
   });
 });

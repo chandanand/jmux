@@ -169,3 +169,26 @@ export function detectSignals(baseline: ParkBaseline, ctx: ParkContext): Set<Unp
   if (anyPipelineFailed(ctx) && !baseline.pipelineFailed) fired.add("pipeline-failed");
   return fired;
 }
+
+/**
+ * Why parking isn't doing anything, or null when it is wired up.
+ *
+ * Parking needs two settings that live in two different sections — which
+ * stages park (global) and which tracker states mean "parked" (per-repo) — and
+ * a half-configured setup is indistinguishable from a broken feature. The
+ * Pipeline section reports this so the gap is visible at the point of setup.
+ *
+ * Only the `parked` stage needs explicit state names: every other stage is
+ * populated by the tracker's own stateType fallback, so selecting one of those
+ * is always a valid configuration.
+ */
+export function parkingSetupWarning(
+  parkStages: WorkStage[],
+  namedStatesByStage: Record<WorkStage, number>,
+): string | null {
+  if (parkStages.length === 0) return "inactive — no stages selected";
+  if (parkStages.includes("parked") && (namedStatesByStage.parked ?? 0) === 0) {
+    return "inactive — no states mapped to Parked";
+  }
+  return null;
+}
