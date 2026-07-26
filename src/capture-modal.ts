@@ -39,7 +39,9 @@ export interface CaptureModalConfig {
 type Field = "title" | "team" | "description";
 const FIELD_ORDER: Field[] = ["title", "team", "description"];
 
-const DESCRIPTION_ROWS = 4;
+// Six rows rather than four: with wrapping in place the body is where a real
+// description actually goes, and four rows scrolled away almost immediately.
+const DESCRIPTION_ROWS = 6;
 
 // Row/column geometry, named so getGrid and getCursorPosition cannot drift —
 // a caret drawn one column off from the text it follows is exactly the kind of
@@ -57,6 +59,32 @@ const CARET = "█";
 const TITLE_PLACEHOLDER = "What needs doing?";
 const BODY_PLACEHOLDER = "Context, links, repro steps…";
 
+/**
+ * Soft-wrap text to `width`, preserving explicit newlines.
+ *
+ * Breaks at the last space that fits, and hard-breaks a single word too long
+ * for the field so an unbroken URL or stack frame can't stall the wrap. The
+ * break space is consumed (standard for soft wrapping); every other character,
+ * including trailing spaces, survives — the caret is positioned from this
+ * output, so anything dropped here would desync it from the text.
+ */
+export function wrapText(text: string, width: number): string[] {
+  if (width <= 0) return [text];
+  const out: string[] = [];
+  for (const paragraph of text.split("\n")) {
+    let rest = paragraph;
+    while (rest.length > width) {
+      let cut = rest.lastIndexOf(" ", width);
+      // No space to break on (or it would yield an empty line) — hard break.
+      if (cut <= 0) cut = width;
+      out.push(rest.slice(0, cut));
+      rest = rest.slice(cut === width ? cut : cut + 1);
+    }
+    out.push(rest);
+  }
+  return out;
+}
+
 export class CaptureModal {
   private _open = false;
   private config: CaptureModalConfig;
@@ -64,6 +92,7 @@ export class CaptureModal {
   private title = "";
   private description = "";
   private teamIndex = 0;
+  private lastWidth = 60;
 
   constructor(config: CaptureModalConfig) {
     this.config = config;
@@ -94,14 +123,53 @@ export class CaptureModal {
     return Math.min(Math.max(48, Math.round(termCols * 0.5)), 72);
   }
 
-  getCursorPosition(): { row: number; col: number } | null {
-    if (this.field === "title") return { row: TITLE_ROW, col: VALUE_COL + this.title.length };
-    if (this.field === "team") return { row: TEAM_ROW, col: VALUE_COL + this.currentTeamName().length };
-    const lines = this.description.split("\n").slice(-DESCRIPTION_ROWS);
+  /** Interior widths, derived from the modal width in one place. */
+  private metrics(width: number): { fieldWidth: number; bodyWidth: number } {
     return {
-      row: BODY_ROW + lines.length - 1,
-      col: BODY_COL + lines[lines.length - 1]!.length,
+      fieldWidth: Math.max(1, width - VALUE_COL - 2),
+      bodyWidth: Math.max(1, width - BODY_COL - 2),
     };
+  }
+
+  /**
+   * The body as visual rows, plus the caret's row/column within them. A full
+   * final row gets an extra empty row so the caret has somewhere to sit rather
+   * than hanging one column past the field edge.
+   */
+  private bodyLayout(bodyWidth: number): { lines: string[]; caretRow: number; caretCol: number } {
+    const wrapped = wrapText(this.description, bodyWidth);
+    const last = wrapped[wrapped.length - 1]!;
+    const lines = last.length >= bodyWidth ? [...wrapped, ""] : wrapped;
+    const visible = lines.slice(-DESCRIPTION_ROWS);
+    return {
+      lines: visible,
+      caretRow: visible.length - 1,
+      caretCol: visible[visible.length - 1]!.length,
+    };
+  }
+
+  /**
+   * A window onto a single-line value that keeps its tail visible. Without
+   * this a title longer than the field shows only its opening characters, so
+   * you cannot see what you are typing.
+   */
+  private windowed(value: string, fieldWidth: number): string {
+    return value.length <= fieldWidth - 1 ? value : value.slice(value.length - (fieldWidth - 1));
+  }
+
+  getCursorPosition(): { row: number; col: number } | null {
+    // The renderer asks for the cursor without passing a width, so this mirrors
+    // the last width getGrid was called with — anything else and the caret
+    // desyncs from the wrap it is supposed to follow.
+    const { fieldWidth, bodyWidth } = this.metrics(this.lastWidth);
+    if (this.field === "title") {
+      return { row: TITLE_ROW, col: VALUE_COL + this.windowed(this.title, fieldWidth).length };
+    }
+    if (this.field === "team") {
+      return { row: TEAM_ROW, col: VALUE_COL + this.windowed(this.currentTeamName(), fieldWidth).length };
+    }
+    const body = this.bodyLayout(bodyWidth);
+    return { row: BODY_ROW + body.caretRow, col: BODY_COL + body.caretCol };
   }
 
   handleInput(data: string): ModalAction {
@@ -143,10 +211,26 @@ export class CaptureModal {
       return { type: "consumed" };
     }
 
-    if (data.length === 1 && data >= " " && data <= "~") {
-      if (this.field === "title") this.title += data;
-      else this.description += data;
-      return { type: "consumed" };
+    // Text input accepts a whole chunk, not just single keys: a terminal
+    // coalesces fast typing into one read, and a paste arrives as one large
+    // chunk wrapped in bracketed-paste markers (jmux enables ?2004h). Matching
+    // only single characters silently drops both.
+    const chunk = data.replace(/\x1b\[20[01]~/g, "");
+    if (chunk && !chunk.startsWith("\x1b")) {
+      let text = "";
+      for (const ch of chunk) {
+        if (ch === "\n" || ch === "\r") {
+          // The title is single-line; a pasted newline becomes a space rather
+          // than corrupting it.
+          text += this.field === "description" ? "\n" : " ";
+        } else if (ch >= " " && ch !== "\x7f") {
+          text += ch;
+        }
+      }
+      if (text) {
+        if (this.field === "title") this.title += text;
+        else this.description += text;
+      }
     }
 
     return { type: "consumed" };
@@ -178,6 +262,7 @@ export class CaptureModal {
   }
 
   getGrid(width: number): CellGrid {
+    this.lastWidth = width;
     const height = BODY_ROW + DESCRIPTION_ROWS + 2;
     const grid = createGrid(width, height);
     for (let r = 0; r < height; r++) {
@@ -193,7 +278,7 @@ export class CaptureModal {
 
     writeString(grid, 0, LABEL_COL, "New issue", HEADER_ATTRS);
 
-    const fieldWidth = Math.max(0, width - VALUE_COL - 2);
+    const { fieldWidth, bodyWidth } = this.metrics(width);
 
     /** One labelled single-line field, with its own input surface. */
     const fieldRow = (
@@ -210,7 +295,8 @@ export class CaptureModal {
       // somewhere you can type.
       writeString(grid, row, VALUE_COL, " ".repeat(fieldWidth), fieldBg);
       if (value) {
-        writeString(grid, row, VALUE_COL, value.slice(0, fieldWidth), fieldText);
+        // Windowed onto the tail so a long value stays readable as you type.
+        writeString(grid, row, VALUE_COL, this.windowed(value, fieldWidth), fieldText);
       } else if (placeholder) {
         // An empty focused field still shows its caret, so the placeholder
         // starts past it rather than being clipped by it.
@@ -218,8 +304,7 @@ export class CaptureModal {
         writeString(grid, row, at, placeholder.slice(0, Math.max(0, fieldWidth - (at - VALUE_COL))), fieldHint);
       }
       if (focused) {
-        const caretCol = VALUE_COL + Math.min(value.length, fieldWidth - 1);
-        writeString(grid, row, caretCol, CARET, fieldText);
+        writeString(grid, row, VALUE_COL + this.windowed(value, fieldWidth).length, CARET, fieldText);
       }
       if (suffix) {
         const col = VALUE_COL + fieldWidth - suffix.length;
@@ -241,22 +326,20 @@ export class CaptureModal {
     writeString(grid, BODY_LABEL_ROW, LABEL_COL, bodyFocused ? "▷" : " ", PROMPT_ATTRS);
     writeString(grid, BODY_LABEL_ROW, LABEL_COL + 2, "Description", bodyFocused ? INPUT_ATTRS : SUBHEADER_ATTRS);
 
-    const bodyWidth = Math.max(0, width - BODY_COL - 2);
     for (let i = 0; i < DESCRIPTION_ROWS; i++) {
       writeString(grid, BODY_ROW + i, BODY_COL, " ".repeat(bodyWidth), fieldBg);
     }
-    const lines = this.description.split("\n").slice(-DESCRIPTION_ROWS);
+    const body = this.bodyLayout(bodyWidth);
     if (this.description) {
-      lines.forEach((line, i) => {
-        writeString(grid, BODY_ROW + i, BODY_COL, line.slice(0, bodyWidth), fieldText);
+      body.lines.forEach((line, i) => {
+        writeString(grid, BODY_ROW + i, BODY_COL, line, fieldText);
       });
     } else {
-      writeString(grid, BODY_ROW, BODY_COL, BODY_PLACEHOLDER.slice(0, bodyWidth), fieldHint);
+      const at = bodyFocused ? BODY_COL + 2 : BODY_COL;
+      writeString(grid, BODY_ROW, at, BODY_PLACEHOLDER.slice(0, bodyWidth - (at - BODY_COL)), fieldHint);
     }
     if (bodyFocused) {
-      const last = lines[lines.length - 1] ?? "";
-      const caretCol = BODY_COL + Math.min(last.length, bodyWidth - 1);
-      writeString(grid, BODY_ROW + lines.length - 1, caretCol, CARET, fieldText);
+      writeString(grid, BODY_ROW + body.caretRow, BODY_COL + body.caretCol, CARET, fieldText);
     }
 
     writeString(

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { CaptureModal, type CaptureResult } from "../capture-modal";
+import { CaptureModal, wrapText, type CaptureResult } from "../capture-modal";
 import type { CellGrid } from "../types";
 import { InputRouter } from "../input-router";
 import { computeFrameLayout } from "../frame-layout";
@@ -255,5 +255,143 @@ describe("CaptureModal field affordances", () => {
     const g = modal("t-plat").getGrid(70);
     const all = text(g);
     expect(all).toContain("Context, links, repro steps…");
+  });
+});
+
+// --- Wrapping ---
+//
+// The body used to be `line.slice(0, width)` per logical line, so anything past
+// the field width simply vanished and the caret ran off the edge — you could
+// only ever see the first screenful of the first line you typed.
+
+describe("wrapText", () => {
+  test("returns a single line when it fits", () => {
+    expect(wrapText("hello", 10)).toEqual(["hello"]);
+  });
+
+  test("breaks on the last space before the limit", () => {
+    expect(wrapText("the quick brown fox", 10)).toEqual(["the quick", "brown fox"]);
+  });
+
+  test("hard-breaks a word longer than the field", () => {
+    expect(wrapText("aaaaaaaaaaaa", 5)).toEqual(["aaaaa", "aaaaa", "aa"]);
+  });
+
+  test("preserves explicit newlines, including blank lines", () => {
+    expect(wrapText("a\n\nb", 10)).toEqual(["a", "", "b"]);
+  });
+
+  test("wraps each paragraph independently", () => {
+    expect(wrapText("one two\nthree four", 8)).toEqual(["one two", "three", "four"]);
+  });
+
+  test("a zero or negative width degrades to the raw text", () => {
+    expect(wrapText("abc", 0)).toEqual(["abc"]);
+  });
+});
+
+describe("CaptureModal body wrapping", () => {
+  function withBody(body: string): CaptureModal {
+    const m = new CaptureModal({
+      teams: TEAMS, preselectedTeamId: "t-plat", initialDescription: body,
+    });
+    m.open();
+    m.handleInput("\t");
+    m.handleInput("\t"); // focus the description
+    return m;
+  }
+
+  test("a long body wraps onto multiple rows instead of being clipped", () => {
+    const body = "The auth token expires after ten minutes which breaks every long running job";
+    const g = withBody(body).getGrid(60);
+    const all = text(g);
+    // Words from the far end of the body must be visible somewhere.
+    expect(all).toContain("running job");
+  });
+
+  test("the caret sits at the end of the wrapped text, inside the field", () => {
+    const m = withBody("The auth token expires after ten minutes which breaks jobs");
+    const g = m.getGrid(60);
+    const caretRow = Array.from({ length: g.rows }, (_, r) =>
+      Array.from({ length: g.cols }, (_, c) => g.cells[r][c].char).join(""))
+      .findIndex((l) => l.includes("█"));
+    expect(caretRow).toBeGreaterThan(-1);
+    const pos = m.getCursorPosition()!;
+    expect(pos.row).toBe(caretRow);
+    expect(pos.col).toBeLessThan(60);
+  });
+
+  test("the body scrolls so the newest rows stay visible", () => {
+    // Eight wrapped rows in a four-row field: the tail must win.
+    const m = withBody("alpha\nbravo\ncharlie\ndelta\necho\nfoxtrot\ngolf\nhotel");
+    const all = text(m.getGrid(60));
+    expect(all).toContain("hotel");
+    expect(all).not.toContain("alpha");
+  });
+});
+
+describe("CaptureModal title overflow", () => {
+  test("a title longer than the field shows its tail, not its head", () => {
+    const m = modal("t-plat");
+    type(m, "0123456789".repeat(12)); // 120 chars into a ~50-col field
+    const row = findRow(m.getGrid(60), "Title");
+    expect(row).toContain("6789█");   // the end, where the caret is
+    expect(row).not.toMatch(/Title\s+0123456789012/); // not pinned to the head
+  });
+});
+
+// --- Chunked input and paste ---
+//
+// A terminal does not deliver one keystroke per read. Fast typing coalesces,
+// and a paste arrives as one large chunk wrapped in bracketed-paste markers
+// (jmux enables ?2004h at startup). The first version only accepted
+// `data.length === 1`, so both were silently dropped — pasting repro steps
+// into the description did literally nothing.
+
+describe("CaptureModal chunked input", () => {
+  test("a multi-character chunk is accepted, not dropped", () => {
+    const m = modal("t-plat");
+    m.handleInput("Fix auth timeout");
+    expect((m.handleInput("\r") as { value: CaptureResult }).value.title).toBe("Fix auth timeout");
+  });
+
+  test("bracketed-paste markers are stripped from the payload", () => {
+    const m = modal("t-plat");
+    m.handleInput("x");
+    m.handleInput("\t");
+    m.handleInput("\t");
+    m.handleInput("\x1b[200~pasted body\x1b[201~");
+    expect((m.handleInput("\x13") as { value: CaptureResult }).value.description).toBe("pasted body");
+  });
+
+  test("newlines in a pasted body are kept as newlines", () => {
+    const m = modal("t-plat");
+    m.handleInput("x");
+    m.handleInput("\t");
+    m.handleInput("\t");
+    m.handleInput("\x1b[200~line one\nline two\x1b[201~");
+    expect((m.handleInput("\x13") as { value: CaptureResult }).value.description)
+      .toBe("line one\nline two");
+  });
+
+  test("newlines pasted into the title collapse to spaces", () => {
+    // A title is single-line; embedding a newline would corrupt it.
+    const m = modal("t-plat");
+    m.handleInput("\x1b[200~one\ntwo\x1b[201~");
+    expect((m.handleInput("\r") as { value: CaptureResult }).value.title).toBe("one two");
+  });
+
+  test("control bytes inside a chunk are filtered out", () => {
+    const m = modal("t-plat");
+    m.handleInput("ab\x07cd");
+    expect((m.handleInput("\r") as { value: CaptureResult }).value.title).toBe("abcd");
+  });
+
+  test("escape sequences are never inserted as text", () => {
+    const m = modal("t-plat");
+    m.handleInput("hi");
+    m.handleInput("\x1b[A");  // an arrow key, not text
+    m.handleInput("\x1b[1;5D");
+    expect((m.handleInput("\r") as { value: CaptureResult }).value.title).toBe("hi");
   });
 });
