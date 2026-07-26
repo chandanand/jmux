@@ -2089,9 +2089,44 @@ function resolvePreselectedTeamId(): string | null {
   return null;
 }
 
+/** Explain, rather than no-op, when capture can't run. A key that silently
+ *  does nothing is indistinguishable from a broken one. */
+function explainCaptureUnavailable(reason: string, hint: string): void {
+  const onSurface = { bg: theme.surface, bgMode: 2 as const };
+  const lines: StyledLine[] = [
+    [],
+    [{ text: reason, attrs: { fg: 3, fgMode: 1, ...onSurface } }],
+    [],
+    [{ text: hint, attrs: { ...neutralFg(8), dim: true, ...onSurface } }],
+    [],
+    [{ text: "Press q or Esc to close.", attrs: { ...neutralFg(8), dim: true, ...onSurface } }],
+  ];
+  const modal = new ContentModal({ lines, title: "Can't capture an issue" });
+  modal.setTermRows(process.stdout.rows || 24);
+  modal.open();
+  openModal(modal, () => {});
+  scheduleRender();
+}
+
 function openCreateIssueModal(): void {
-  if (!adapters.issueTracker || adapters.issueTracker.authState !== "ok") return;
-  if (cachedTeams.length === 0) return;
+  if (!adapters.issueTracker || adapters.issueTracker.authState !== "ok") {
+    explainCaptureUnavailable(
+      "No issue tracker is connected.",
+      adapters.issueTracker
+        ? `Authentication failed — check ${adapters.issueTracker.authHint}.`
+        : "Set adapters.issueTracker in ~/.config/jmux/config.json.",
+    );
+    return;
+  }
+  if (cachedTeams.length === 0) {
+    // Teams arrive from an async poll, so this is usually just "too early".
+    refreshTeams();
+    explainCaptureUnavailable(
+      "No teams loaded from the issue tracker yet.",
+      "jmux is fetching them now — try again in a moment.",
+    );
+    return;
+  }
 
   const preselectedTeamId = resolvePreselectedTeamId();
   const modal = new CaptureModal({ teams: cachedTeams, preselectedTeamId });
