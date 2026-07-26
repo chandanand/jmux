@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { parseViews, DEFAULT_VIEWS, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, groupIndexForStatus } from "../panel-view";
+import { parseViews, DEFAULT_VIEWS, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, groupIndexForStatus, stateAssignments, assignStateToGroup, unassignState, type PanelView } from "../panel-view";
 import type { WorkStage } from "../repo-settings";
 
 describe("parseViews", () => {
@@ -284,5 +284,80 @@ describe("parseViews with groups", () => {
 
   test("a view with no groups key stays ungrouped", () => {
     expect(parseViews([base])[0].groups).toBeUndefined();
+  });
+});
+
+// --- State → tab assignment ---
+//
+// The data model is tab → groups → states, but the question a user actually
+// asks is the inverse: "where does this status go?" These helpers present that
+// inverse, and by routing every write through assignStateToGroup they also
+// enforce one home per state — which is what makes the "first group wins"
+// tie-break in groupIndexForStatus unreachable in practice.
+
+const TABS = (): PanelView[] => parseViews([
+  { id: "urgent", label: "Urgent", source: "issues", filter: { scope: "assigned" },
+    groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
+    groups: [{ label: "QA Failed", states: ["QA Failed"] }, { label: "Blockers", states: ["Release Blockers"] }] },
+  { id: "todo", label: "To do", source: "issues", filter: { scope: "assigned" },
+    groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
+    groups: [{ label: "To do", states: ["To do"] }] },
+]);
+
+describe("stateAssignments", () => {
+  test("lists every assigned state with its tab and group", () => {
+    expect(stateAssignments(TABS())).toEqual([
+      { state: "QA Failed", viewId: "urgent", viewLabel: "Urgent", groupLabel: "QA Failed" },
+      { state: "Release Blockers", viewId: "urgent", viewLabel: "Urgent", groupLabel: "Blockers" },
+      { state: "To do", viewId: "todo", viewLabel: "To do", groupLabel: "To do" },
+    ]);
+  });
+
+  test("views without groups contribute nothing", () => {
+    const plain = parseViews([{ id: "all", label: "All", source: "issues",
+      filter: { scope: "assigned" }, groupBy: "none", subGroupBy: "none",
+      sortBy: "priority", sortOrder: "asc" }]);
+    expect(stateAssignments(plain)).toEqual([]);
+  });
+});
+
+describe("assignStateToGroup", () => {
+  test("adds a previously unassigned state", () => {
+    const next = assignStateToGroup(TABS(), "In Progress", "todo", "To do");
+    expect(next.find((v) => v.id === "todo")!.groups![0].states).toEqual(["To do", "In Progress"]);
+  });
+
+  test("moving a state removes it from its old home", () => {
+    // One state, one home — otherwise it would appear in two tabs at once.
+    const next = assignStateToGroup(TABS(), "QA Failed", "todo", "To do");
+    expect(next.find((v) => v.id === "urgent")!.groups![0].states).toEqual([]);
+    expect(next.find((v) => v.id === "todo")!.groups![0].states).toEqual(["To do", "QA Failed"]);
+  });
+
+  test("matching an existing assignment is case-insensitive", () => {
+    const next = assignStateToGroup(TABS(), "qa failed", "todo", "To do");
+    expect(next.find((v) => v.id === "urgent")!.groups![0].states).toEqual([]);
+  });
+
+  test("an unknown tab or group leaves everything untouched", () => {
+    expect(assignStateToGroup(TABS(), "X", "nope", "To do")).toEqual(TABS());
+    expect(assignStateToGroup(TABS(), "X", "todo", "nope")).toEqual(TABS());
+  });
+
+  test("does not mutate the input", () => {
+    const before = TABS();
+    assignStateToGroup(before, "In Progress", "todo", "To do");
+    expect(before.find((v) => v.id === "todo")!.groups![0].states).toEqual(["To do"]);
+  });
+});
+
+describe("unassignState", () => {
+  test("removes a state from wherever it lives", () => {
+    const next = unassignState(TABS(), "Release Blockers");
+    expect(next.find((v) => v.id === "urgent")!.groups![1].states).toEqual([]);
+  });
+
+  test("an unknown state is a no-op", () => {
+    expect(unassignState(TABS(), "Nonexistent")).toEqual(TABS());
   });
 });

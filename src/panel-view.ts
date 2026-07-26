@@ -289,3 +289,73 @@ export function toggleFilterValue(
   else current.push(value);
   return applyFilterPatch(filter, { [key]: current } as Partial<PanelViewFilter>);
 }
+
+/** Where one tracker state currently rolls up to. */
+export interface StateAssignment {
+  state: string;
+  viewId: string;
+  viewLabel: string;
+  groupLabel: string;
+}
+
+/**
+ * The inverse of the config shape: one row per assigned state saying which tab
+ * and group it feeds. The stored model is tab → groups → states because that is
+ * what rendering needs; this is what a human asks for.
+ */
+export function stateAssignments(views: PanelView[]): StateAssignment[] {
+  const out: StateAssignment[] = [];
+  for (const view of views) {
+    for (const group of view.groups ?? []) {
+      for (const state of group.states) {
+        out.push({ state, viewId: view.id, viewLabel: view.label, groupLabel: group.label });
+      }
+    }
+  }
+  return out;
+}
+
+function withoutState(views: PanelView[], state: string): PanelView[] {
+  const want = state.trim().toLowerCase();
+  return views.map((view) => view.groups
+    ? {
+        ...view,
+        groups: view.groups.map((g) => ({
+          ...g,
+          states: g.states.filter((s) => s.trim().toLowerCase() !== want),
+        })),
+      }
+    : view);
+}
+
+/**
+ * Move a state into one tab's group, removing it from anywhere else first.
+ *
+ * Enforcing one home per state is what keeps the model comprehensible: a status
+ * appearing under two tabs would silently resolve via `groupIndexForStatus`'s
+ * first-wins tie-break, which is a safety net, not a feature. Returns the input
+ * unchanged when the target doesn't exist.
+ */
+export function assignStateToGroup(
+  views: PanelView[],
+  state: string,
+  viewId: string,
+  groupLabel: string,
+): PanelView[] {
+  const target = views.find((v) => v.id === viewId);
+  if (!target?.groups?.some((g) => g.label === groupLabel)) return views;
+
+  return withoutState(views, state).map((view) => view.id !== viewId
+    ? view
+    : {
+        ...view,
+        groups: view.groups!.map((g) => g.label === groupLabel
+          ? { ...g, states: [...g.states, state] }
+          : g),
+      });
+}
+
+/** Remove a state from every tab, so it stops appearing in any queue. */
+export function unassignState(views: PanelView[], state: string): PanelView[] {
+  return withoutState(views, state);
+}

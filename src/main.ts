@@ -42,7 +42,7 @@ import { StdinGate } from "./stdin-gate";
 import { TmuxControl, type ControlEvent } from "./tmux-control";
 import { DiffPanel } from "./diff-panel";
 import { InfoPanel, rebuildInfoPanelColors } from "./info-panel";
-import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, type PanelView } from "./panel-view";
+import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, stateAssignments, assignStateToGroup, unassignState, type PanelView } from "./panel-view";
 import { transformIssues, transformMrs, buildViewNodes, renderView, createViewState, filterItems, rebuildPanelViewColors, computeViewLayout, splitRatioForSepRow, DEFAULT_PANEL_SPLIT_RATIO, type ViewState, type ViewNode, type IssueSessionInfo } from "./panel-view-renderer";
 import { createAdapters } from "./adapters/registry";
 import { PollCoordinator } from "./adapters/poll-coordinator";
@@ -3655,6 +3655,53 @@ function buildSettingsCategories(): SettingsCategory[] {
             const n = parseInt(v, 10);
             configStore.setPipeline("autoParkIdleDays", isNaN(n) || n <= 0 ? null : n);
             recomputeParking();
+          },
+        },
+      ],
+    },
+    {
+      // The inverse of how queues are stored: one row per tracker state saying
+      // which tab it feeds. "Where does QA Failed go?" is the question people
+      // actually ask, and answering it by reading four tabs' group lists is not
+      // an answer.
+      label: "Queues",
+      collapsed: false,
+      settings: [
+        {
+          id: "state-tab-map", label: "Linear state → tab", type: "map" as const,
+          getValue: () => {
+            const assigned = stateAssignments(panelViews).length;
+            const total = cachedWorkflowStates.length;
+            if (total === 0) return assigned > 0 ? `${assigned} mapped` : "tracker not connected";
+            return `${assigned} of ${total} mapped`;
+          },
+          getMapEntries: () => stateAssignments(panelViews).map((a) => ({
+            key: a.state,
+            value: `${a.viewLabel} / ${a.groupLabel}`,
+          })),
+          // Offer unmapped states first — those are the ones needing a decision.
+          getMapKeyOptions: () => {
+            const taken = new Set(stateAssignments(panelViews).map((a) => a.state.toLowerCase()));
+            const states = cachedWorkflowStates.map((s) => s.name);
+            const free = states.filter((n) => !taken.has(n.toLowerCase()));
+            return [...free, ...states.filter((n) => taken.has(n.toLowerCase()))]
+              .map((n) => ({ id: n, label: n }));
+          },
+          getMapValueOptions: () => panelViews.flatMap((v) =>
+            (v.groups ?? []).map((g) => ({ id: `${v.id} ${g.label}`, label: `${v.label} / ${g.label}` })),
+          ),
+          onMapSave: (state, target) => {
+            const [viewId, groupLabel] = target.split(" ");
+            panelViews = assignStateToGroup(panelViews, state, viewId!, groupLabel!);
+            configStore.set("panelViews", panelViews);
+            refreshPanelViews();
+            scheduleRender();
+          },
+          onMapRemove: (state) => {
+            panelViews = unassignState(panelViews, state);
+            configStore.set("panelViews", panelViews);
+            refreshPanelViews();
+            scheduleRender();
           },
         },
       ],

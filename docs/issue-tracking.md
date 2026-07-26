@@ -405,6 +405,31 @@ jmux ctl issue create --title "Fix flaky test" --start   # capture and start
 
 ### Queues and Up next (`Ctrl-a u`)
 
+Tabs are a fixed attention model — **Urgent / To do / In Progress / Waiting** —
+and what varies per workspace is which of *your* tracker states roll up into
+each. A tab carries an ordered `groups` list:
+
+```json
+{ "id": "urgent", "label": "Urgent", "source": "issues",
+  "filter": { "scope": "assigned" },
+  "groups": [
+    { "label": "QA Failed",        "states": ["QA Failed"] },
+    { "label": "Release Blockers", "states": ["Release Blockers"] }
+  ] }
+```
+
+When `groups` is present it drives **both** membership and the section headers,
+and `groupBy` is ignored. Config order is priority order — it is rendered
+verbatim rather than sorted. An issue lands in the **first** group claiming its
+status, and a status no group claims is not in that tab at all.
+
+**You don't have to write that by hand.** `Ctrl-a I` → **Queues** →
+**Linear state → tab** lists every state your tracker reports and which tab it
+feeds, with unmapped states offered first. Assigning a state moves it out of
+whatever tab held it, so each state has exactly one home; `d` on a row unmaps it
+entirely. Tabs show live counts (`Urgent 3`), so "is anything urgent?" never
+requires switching tabs.
+
 Panel views can be narrowed into named pull queues:
 
 ```json
