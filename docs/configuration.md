@@ -152,7 +152,7 @@ jmux's own settings (not tmux settings) live in `~/.config/jmux/config.json`. Ed
   },
   "repos": {},
   "pipeline": {
-    "parkStages": [],
+    "parkedStates": [],
     "unparkOn": ["state-regression", "issue-comment", "mr-activity", "pipeline-failed"],
     "autoParkIdleDays": null,
     "transitionConfirm": "undo-toast",
@@ -180,9 +180,15 @@ first launch — the previous `claudeCommand` / `wtmIntegration` top-level keys
 and the `issueWorkflow` workflow keys move to `repoDefaults` automatically.
 
 The settings screen (`Ctrl-a I`) shows both tiers: the global rows under
-**Issue Workflow**, and a **This repo** category for the repo your active
-session lives in, where each row is marked `(inherited)` or `(override)` and
-`d` clears an override back to inherited.
+**Repo**, and a **This repo** category for the repo your active session lives
+in, where each row is marked `(inherited)` or `(override)` and `d` clears an
+override back to inherited.
+
+The transition states (`onSessionStartState`, `onMrOpenState`,
+`onMrMergedState`) are per-repo too, but they are edited on the workflow screen
+(`Ctrl-a W`) alongside everything else the pipeline does. It shows the value in
+force for the repo you are in, with the same `(inherited)` / `(override)`
+markers; `g` switches to the global defaults.
 
 `teamRepoMap` deliberately stays under `issueWorkflow`: it is the cross-repo
 routing index that maps a tracker team *onto* a repo, so it cannot itself be

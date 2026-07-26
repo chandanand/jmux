@@ -191,7 +191,7 @@ gets a worktree; `wtmIntegration` only picks the mechanism. The old
 
 The `teamRepoMap` is what enables the automated flow. Without it, pressing `n` on an issue opens the standard new-session modal where you pick a directory manually.
 
-Configure it in settings (`Ctrl-a I` > **Issue Workflow** > **Team -> repo mappings**) or edit the config file directly. The inline picker shows your project directories for quick selection.
+Configure it in settings (`Ctrl-a I` > **Repo** > **Team → repo mappings**) or edit the config file directly. The inline picker shows your project directories for quick selection.
 
 ### Three-state workflow
 
@@ -340,62 +340,129 @@ The sidebar and panel show auth state. If authentication fails, jmux logs the er
 
 ## The Work Pipeline
 
-jmux projects your tracker's own workflow states onto four **stages**, and
-behaves differently for each. Stages drive behaviour; the raw state name is
-what you actually see on screen.
+Each of your tracker's statuses has two settings, and one screen to set them on:
 
-| Stage | Behaviour |
-|-------|-----------|
-| `idea` | Captured, not started |
-| `active` | Normal sidebar row |
-| `parked` | Handed off — collapsed into one row at the bottom |
-| `done` | Finished |
-
-**A section declares its stage.** A section is the unit of classification: an
-issue's status picks a section, the section says what that means, and the
-section belongs to a tab.
-
-```json
-{ "id": "post-merge", "label": "Post-merge", "sections": [
-    { "label": "Dev Confirm", "stage": "active", "states": ["Dev Confirm"] },
-    { "label": "In QA",       "stage": "parked", "states": ["QA (PROD WEB)"] }
-] }
+```
+which tab it appears in   —  what you see in the info panel
+whether it parks          —  whether its session leaves the sidebar
 ```
 
-Stage sits on the section rather than the tab because behaviour attaches where
-classification happens — a tab is only a container. Keeping it on the tab would
-make the example above impossible: work still yours and work in someone else's
-hands could never share a tab, which forces the layout instead of letting you
-choose it.
+Nothing else. `idea` / `active` / `done` come from your tracker's own state
+categories and are never configured — they used to be, and it was 25 decisions
+where three of the four possible answers behaved identically.
 
-So a status is classified **once** — the section it lands in is what decides
-whether its session parks. Statuses in no tab, or in a tab with no stage, fall back to
-the tracker's own category (`triage`/`backlog` → idea, `unstarted`/`started` →
-active, `completed`/`canceled`/`duplicate` → done). Nothing reaches `parked`
-by fallback, so parking only ever happens because a tab said so.
+### The workflow screen (`Ctrl-a W`)
 
-Everything about queues lives in one place: `Ctrl-a I` → **Queues** →
-**Manage queues…**. Tabs, sections, which statuses belong to each, and what a
-section means are all edited there — there is no second surface to keep in sync.
+Press `Ctrl-a W` (also: `Ctrl-a I` → **Workflow**, or "Configure workflow" in
+the palette). It is two blocks: the tabs, then a table of every status.
+
+```
+Workflow                                   Linear · 25 statuses · 10 not in a tab
+
+  Tabs ───────────────────────────────────────────────────────────────
+    Urgent  ································· 1st up next  2 statuses
+    To do  ·································· 2nd up next  2 statuses
+    Waiting  ······································· ⏸ 9  9 statuses
+    + New tab
+
+  Statuses ───────────────────────────────────────────────────────────
+    Status                   Heading  Tab              Parks   Issues
+    Release Blockers                  Urgent                        0
+    To do                             To do                         4
+    QA (PRE-RELEASE WEB)     In QA    Waiting            ⏸         19
+    QA (RELEASE BR)          In QA    Waiting            ⏸          8
+    MR Review                         Waiting            ⏸          5
+    Backlog                           —                             5
+    Triage                            —                             0
+
+  Parking ────────────────────────────────────────────────────────────
+    Bring a session back when  ······· comment, MR, pipeline, agent…
+    Park issue-less sessions after  ·························  2 days
+
+  Writes to your tracker ──────────── this repo · backend  [g] globals
+    On session start  ······················· In Progress (override)
+    Confirmation  ··································· undo-toast
+
+  QA (RELEASE BR) · 8 issues · Waiting · parks its sessions (3 now)
+  ↑↓ move · ↵ tab · space parks · r heading · d remove · ⇧↑↓ order · esc close
+```
+
+Every row in the table is the same kind of thing and takes the same keys. The
+two settings are independent columns: a status can park while sitting in no tab
+at all, which is the right answer for something like **Done**.
+
+The line above the keys says what the row under the cursor **will actually do**.
+
+| Key | In **Statuses** | In **Tabs** | On a setting |
+|-----|-----------------|-------------|--------------|
+| `↑` `↓` | move the cursor | | |
+| `Enter` | choose its tab | rename the tab | edit |
+| `space` | park / don't park | — | — |
+| `r` | group it under a heading | — | — |
+| `u` | — | add to / drop from the `Ctrl-a u` rotation | — |
+| `d` | take it out of its tab | delete the tab (asks first) | clear a repo override |
+| `⇧↑` `⇧↓` | reorder within its tab | reorder the tab | — |
+| `g` | | | switch between this repo and the global defaults |
+| `Esc` | close | | |
+
+Order is priority order, top to bottom, for both tabs and statuses. The order
+you add tabs with `u` is the order `Ctrl-a u` checks them.
+
+**Starting from scratch?** With nothing configured the first row offers
+**⚑ Suggest a starting layout**, which builds `To do` / `In progress` / `Done`
+from your tracker's own categories and leaves your existing tabs alone. Nothing
+it creates parks; that stays a decision you make.
+
+### Headings
+
+Several statuses can share a heading in the panel — press `r` on a status and
+give it the same name as another. The **Heading** column only exists at all when
+your config actually groups something, so a workspace that has never grouped
+never sees it. A heading is grouping only: it carries no behaviour, so there is
+never a reason to reason about one to predict what jmux will do.
+
+### Stages
+
+Under the hood jmux still projects your tracker's states onto four stages, and
+`panelViews[].filter.stages` can still select on them. You never author them:
+
+| Stage | Where it comes from |
+|-------|---------------------|
+| `parked` | the **Parks** column |
+| `idea` | your tracker's `triage` / `backlog` states |
+| `active` | your tracker's `unstarted` / `started` states |
+| `done` | your tracker's `completed` / `canceled` / `duplicate` states |
+
+Nothing reaches `parked` except a status you ticked, so an unconfigured jmux
+never hides anything.
+
+A tab with statuses is governed entirely by them: a `states` filter set from the
+panel's `F` menu is ignored for it, and `F` says so rather than offering a
+control that does nothing.
 
 ### Parking (the back burner)
 
 Work that is merged and sitting in QA still owns a session you might need
-again, but it should not take up sidebar space. Set **Park stages** to
-`parked` and any session whose issue reaches a parked state collapses into a
-single `Parked (n)` row at the bottom of the sidebar. The session, its
-worktree and its scrollback are all untouched.
+again, but it should not take up sidebar space. Tick the **Parks** column for
+that status, and any session whose issue reaches it collapses into a single
+`Parked (n)` row at the bottom of the sidebar. The session, its worktree and
+its scrollback are all untouched.
+
+One tick, in one place. There used to be a second setting listing "the stages
+that park", which could be switched off independently — so parking could look
+configured and do nothing, and the half-set state was indistinguishable from a
+broken feature.
 
 Parking is only safe because it reverses itself. Any configured signal pulls a
 session straight back out, flagged:
 
 | Trigger | Fires when |
 |---------|-----------|
-| `state-regression` | The issue's stage changes — this is your **QA Failed** case |
-| `issue-comment` | A new comment lands on the issue |
-| `mr-activity` | The MR is touched (comment, push, review) |
-| `pipeline-failed` | A pipeline goes red |
-| `agent-attention` | The agent in that session wants you |
+| the issue moves | Its stage changes — this is your **QA Failed** case |
+| someone comments | A new comment lands on the issue |
+| the MR is touched | Comment, push or review |
+| a pipeline goes red | CI fails |
+| the agent wants you | The agent in that session is waiting on you |
 
 `Ctrl-a p` → **Park session** / **Unpark session** overrides the derived
 answer for sessions with no issue, or when you disagree with your tracker. An
@@ -425,29 +492,29 @@ jmux ctl issue create --title "Fix flaky test" --start   # capture and start
 
 ### Queues and Up next (`Ctrl-a u`)
 
-Tabs are a fixed attention model — **Urgent / To do / In Progress / Waiting** —
-and what varies per workspace is which of *your* tracker states roll up into
-each. A tab carries an ordered `groups` list:
+Tabs are an attention model — **Urgent / To do / In Progress / Waiting** — and
+what varies per workspace is which of *your* tracker states roll up into each. A
+tab carries an ordered `sections` list; which of its statuses park is a separate
+list under `pipeline`:
 
 ```json
-{ "id": "urgent", "label": "Urgent", "source": "issues",
+{ "id": "waiting", "label": "Waiting", "source": "issues",
   "filter": { "scope": "assigned" },
   "sections": [
-    { "label": "QA Failed",        "states": ["QA Failed"] },
-    { "label": "Release Blockers", "states": ["Release Blockers"] }
+    { "label": "In QA",   "states": ["QA (PROD WEB)", "QA (RELEASE BR)"] },
+    { "label": "Blocked", "states": ["Need ANDR Build"] }
   ] }
 ```
 
-When `groups` is present it drives **both** membership and the section headers,
-and `groupBy` is ignored. Config order is priority order — it is rendered
-verbatim rather than sorted. An issue lands in the **first** group claiming its
-status, and a status no group claims is not in that tab at all.
+When `sections` is present it drives **both** membership and the panel's
+headers, and `groupBy` is ignored. Config order is priority order — rendered
+verbatim rather than sorted. An issue lands in the **first** section claiming its
+status, and a status no section claims is not in that tab at all.
 
-**You don't have to write that by hand.** `Ctrl-a I` → **Queues** →
-**Manage queues…** walks tabs → sections → statuses. Assigning a status moves it
-out of whatever section held it, so each status has exactly one home and
-therefore one meaning. Tabs show live counts (`Urgent 3`), so "is anything
-urgent?" never requires switching tabs.
+**You don't have to write that by hand.** `Ctrl-a W` lists every status in a
+table with its tab beside it. Assigning a status moves it out of wherever it
+was, so a status has exactly one home. Tabs show live counts (`Urgent 3`), so
+"is anything urgent?" never requires switching tabs.
 
 Panel views can be narrowed into named pull queues:
 
@@ -469,9 +536,11 @@ Panel views can be narrowed into named pull queues:
 Rather than writing that by hand, shape a view live with the panel's `g` / `G`
 / `/` / `?` keys and then run **Save current view as tab** from the palette.
 
-`pipeline.upNext` is an ordered list of view ids. `Ctrl-a u` takes the first
-item from the first non-empty queue and starts work on it, so the daily ritual
-is one keystroke.
+`pipeline.upNext` is an ordered list of tab ids. `Ctrl-a u` takes the first item
+from the first non-empty tab in that order and starts work on it, so the daily
+ritual is one keystroke. Press `u` on a tab in the workflow screen to add or
+remove it; the order you add them is the order they are checked, and each tab
+shows its place (`1st up next`).
 
 ### Transitions (writes to your tracker)
 
@@ -484,7 +553,9 @@ jmux can move an issue along as a byproduct of what you already did:
 | That MR merges | `onMrMergedState` |
 
 All default to `null` — **jmux never writes to your tracker until you set
-these.** They are per-repo, since they name states. Every transition is an
+these.** They are per-repo, since they name states; the workflow screen shows
+the value in force for the repo you are sitting in, and `g` switches to the
+global defaults. Every transition is an
 *edge*: an MR that was already merged the first time jmux sees it never fires,
 so attaching to an old session cannot replay history into your tracker.
 
@@ -502,7 +573,11 @@ so attaching to an old session cannot replay history into your tracker.
 
 ## Settings Reference
 
-All issue tracking settings are available in the settings screen (`Ctrl-a I` — capital I) under **Integrations**, **Issue Workflow**, **Pipeline**, **Stages**, **Transitions** and **This repo**, or in `~/.config/jmux/config.json`:
+The pipeline — statuses, tabs, meanings, parking, up next and tracker writes —
+is configured on the workflow screen (`Ctrl-a W`). Everything else lives in the
+settings screen (`Ctrl-a I` — capital I) under **Display**, **Integrations**,
+**Repo**, **Project** and **This repo**. Both write to
+`~/.config/jmux/config.json`:
 
 ```json
 {
@@ -518,14 +593,14 @@ All issue tracking settings are available in the settings screen (`Ctrl-a I` —
     "autoLaunchAgent": true,
     "sessionNameTemplate": "{identifier}",
     "claudeCommand": "claude",
-    "parkedStates": ["In Review", "QA"],
     "onMrMergedState": "QA"
   },
   "pipeline": {
-    "parkStages": ["parked"],
+    "parkedStates": ["QA (PROD WEB)", "MR Review"],
     "unparkOn": ["state-regression", "issue-comment", "mr-activity", "pipeline-failed"],
+    "autoParkIdleDays": 2,
     "transitionConfirm": "undo-toast",
-    "upNext": ["release-blockers", "qa-failed", "todo"]
+    "upNext": ["urgent", "todo"]
   },
   "panelViews": []
 }
