@@ -93,10 +93,13 @@ While focused on an issue or MR tab, you can cycle the view's grouping and sorti
 |-----|--------|
 | `g` | Cycle group-by: team, project, status, priority, none |
 | `G` | Cycle sub-group-by: same options |
-| `/` | Cycle sort: priority, updated, created, status |
+| `S` | Cycle sort: priority, updated, created, status |
 | `?` | Toggle sort order: ascending / descending |
+| `/` | Filter the list by typing |
 
-Changes persist to `~/.config/jmux/config.json` automatically.
+Changes persist to `~/.config/jmux/config.json` automatically. Once a view looks
+right, **Save current view as tab** in the command palette (`Ctrl-a p`) clones
+it under a new name — configuring by demonstration rather than by editing JSON.
 
 ---
 
