@@ -114,7 +114,7 @@ Changes here persist until you update jmux. For durable customizations, prefer `
 
 ## jmux Application Config
 
-jmux's own settings (not tmux settings) live in `~/.config/jmux/config.json`. Edit it directly or use the settings screen (`Ctrl-a i`). Changes are hot-reloaded.
+jmux's own settings (not tmux settings) live in `~/.config/jmux/config.json`. Edit it directly or use the settings screen (`Ctrl-a I` — capital I; lowercase `Ctrl-a i` opens the shorter settings palette). Changes are hot-reloaded.
 
 ```json
 {
@@ -179,7 +179,7 @@ resolve to one entry. jmux migrates older configs into this shape once, on
 first launch — the previous `claudeCommand` / `wtmIntegration` top-level keys
 and the `issueWorkflow` workflow keys move to `repoDefaults` automatically.
 
-The settings screen (`Ctrl-a i`) shows both tiers: the global rows under
+The settings screen (`Ctrl-a I`) shows both tiers: the global rows under
 **Issue Workflow**, and a **This repo** category for the repo your active
 session lives in, where each row is marked `(inherited)` or `(override)` and
 `d` clears an override back to inherited.
@@ -233,7 +233,7 @@ breakdown, and the Command Center tile borders. Each value is a named ANSI color
 `bright*` variants (e.g. `brightblue`). Unset or unrecognized names fall back to
 the defaults (`running` green, `waiting` yellow, `complete` blue). The bold/dim
 emphasis per state is fixed; only the hue is configurable. Set these from the
-settings screen (`Ctrl-a i` → Display) or the command palette (`Ctrl-a p`).
+settings screen (`Ctrl-a I` → Display) or the command palette (`Ctrl-a p`).
 
 ### Command Center tabs
 

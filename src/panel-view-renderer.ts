@@ -196,6 +196,7 @@ const STATE_TYPE_RANK: Record<IssueStateType, number> = {
   started: 3,
   completed: 4,
   canceled: 5,
+  duplicate: 6,
 };
 
 // Order group keys by an intrinsic property of the field (alphabetical for

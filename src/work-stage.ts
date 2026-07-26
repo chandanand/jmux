@@ -58,6 +58,7 @@ export function stageFromStateType(t: IssueStateType | undefined): WorkStage {
       return "idea";
     case "completed":
     case "canceled":
+    case "duplicate":
       return "done";
     case "unstarted":
     case "started":

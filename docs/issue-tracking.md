@@ -24,7 +24,7 @@ export GITLAB_PRIVATE_TOKEN="glpat-..."
 
 ### 2. Configure adapters
 
-Add to `~/.config/jmux/config.json` (or press `Ctrl-a i` and navigate to **Integrations**):
+Add to `~/.config/jmux/config.json` (or press `Ctrl-a I` and navigate to **Integrations**):
 
 ```json
 {
@@ -182,7 +182,7 @@ gets a worktree; `wtmIntegration` only picks the mechanism. The old
 
 The `teamRepoMap` is what enables the automated flow. Without it, pressing `n` on an issue opens the standard new-session modal where you pick a directory manually.
 
-Configure it in settings (`Ctrl-a i` > **Issue Workflow** > **Team -> repo mappings**) or edit the config file directly. The inline picker shows your project directories for quick selection.
+Configure it in settings (`Ctrl-a I` > **Issue Workflow** > **Team -> repo mappings**) or edit the config file directly. The inline picker shows your project directories for quick selection.
 
 ### Three-state workflow
 
@@ -449,7 +449,7 @@ so attaching to an old session cannot replay history into your tracker.
 
 ## Settings Reference
 
-All issue tracking settings are available in the settings screen (`Ctrl-a i`) under **Integrations**, **Issue Workflow**, **Pipeline**, **Stages**, **Transitions** and **This repo**, or in `~/.config/jmux/config.json`:
+All issue tracking settings are available in the settings screen (`Ctrl-a I` — capital I) under **Integrations**, **Issue Workflow**, **Pipeline**, **Stages**, **Transitions** and **This repo**, or in `~/.config/jmux/config.json`:
 
 ```json
 {

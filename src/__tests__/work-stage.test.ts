@@ -133,3 +133,12 @@ describe("stageForIssue", () => {
       .toBe("parked");
   });
 });
+
+describe("stageFromStateType — duplicate", () => {
+  // Linear reports a `duplicate` category that jmux's union originally missed,
+  // so those issues arrived with stateType undefined and fell through to
+  // "active" — a closed-as-duplicate issue sat in the working set forever.
+  test("duplicate is a finished state, not an active one", () => {
+    expect(stageFromStateType("duplicate")).toBe("done");
+  });
+});

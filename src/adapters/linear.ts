@@ -8,7 +8,7 @@ const LINEAR_API = "https://api.linear.app/graphql";
 // Shared GraphQL fields for issue queries
 const ISSUE_FIELDS = `id identifier title description branchName state { name type } assignee { name } team { name } project { name } priority updatedAt labels { nodes { name parent { name } } } attachments { nodes { title url sourceType } } comments(first: 20) { nodes { id parent { id } body user { name } createdAt } } url`;
 
-const ISSUE_STATE_TYPES: ReadonlySet<IssueStateType> = new Set(["triage", "backlog", "unstarted", "started", "completed", "canceled"]);
+const ISSUE_STATE_TYPES: ReadonlySet<IssueStateType> = new Set(["triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"]);
 function isIssueStateType(v: unknown): v is IssueStateType {
   return typeof v === "string" && ISSUE_STATE_TYPES.has(v as IssueStateType);
 }

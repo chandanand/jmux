@@ -279,7 +279,7 @@ Adapters authenticate on startup. Once connected, press `Ctrl-a g` and use `[`/`
 
 If you want to create sessions directly from issues (press `n` on an issue), tell jmux which Linear team maps to which local repository:
 
-In settings (`Ctrl-a i` > **Issue Workflow** > **Team -> repo mappings**), add entries like:
+In settings (`Ctrl-a I` > **Issue Workflow** > **Team -> repo mappings**), add entries like:
 - `Platform` → `~/repos/backend`
 - `Frontend` → `~/repos/frontend`
 

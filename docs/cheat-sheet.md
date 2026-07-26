@@ -144,7 +144,8 @@ See [issue-tracking.md](issue-tracking.md) for setup and configuration.
 | `Ctrl-a p` | Command palette (fuzzy search all actions) |
 | `Ctrl-a k` | Clear pane content + scrollback |
 | `Ctrl-a y` | Copy entire pane content to clipboard |
-| `Ctrl-a i` | Settings |
+| `Ctrl-a i` | Settings palette (quick one-shot toggles) |
+| `Ctrl-a I` | Settings screen (all categories, incl. Stages / Pipeline / Transitions) |
 
 ---
 

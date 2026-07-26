@@ -3011,6 +3011,14 @@ function buildPaletteCommands(): PaletteCommand[] {
     label: "Project directories",
     category: "setting",
   });
+  // The palette only lists one-shot setting *commands*; anything with a real
+  // editor (the stage/parking multiselects) lives in the settings screen, so
+  // the palette needs a way through to it rather than being a dead end.
+  commands.push({
+    id: "setting-open-screen",
+    label: "All settings (stages, parking, transitions)…",
+    category: "setting",
+  });
   commands.push({
     id: "setting-cache-timers",
     label: `Cache timers: ${cfg.cacheTimers !== false ? "on" : "off"}`,
@@ -4344,6 +4352,10 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       openModal(modal, async (value) => {
         configStore.setRepoDefault("claudeCommand", value as string);
       });
+      return;
+    }
+    case "setting-open-screen": {
+      toggleSettingsScreen();
       return;
     }
     case "setting-project-dirs": {

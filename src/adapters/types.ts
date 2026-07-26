@@ -18,7 +18,13 @@ export interface MergeRequest {
   updatedAt?: number;  // epoch ms
 }
 
-export type IssueStateType = "triage" | "backlog" | "unstarted" | "started" | "completed" | "canceled";
+/**
+ * Stable workflow position. Mirrors Linear's own state categories — including
+ * `duplicate`, which is easy to miss because it never appears in a default
+ * workflow but is returned for closed-as-duplicate issues.
+ */
+export type IssueStateType =
+  | "triage" | "backlog" | "unstarted" | "started" | "completed" | "canceled" | "duplicate";
 
 export interface Issue {
   id: string;
