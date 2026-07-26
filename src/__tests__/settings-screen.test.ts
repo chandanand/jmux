@@ -449,3 +449,48 @@ describe("SettingsScreen override marker", () => {
     expect(cleared).toBe(0);
   });
 });
+
+// --- action rows ---
+//
+// Some settings aren't values — they open an editor. Without an action type
+// they had to masquerade as text/boolean rows, which put a caret in a field
+// that isn't editable.
+
+describe("SettingsScreen action rows", () => {
+  function actionCategory(onActivate: () => void): SettingsCategory[] {
+    return [{
+      label: "Queues",
+      collapsed: false,
+      settings: [{
+        id: "edit-queues", label: "Edit tabs & groups…", type: "action",
+        getValue: () => "4 tabs · 7 groups",
+        onActivate,
+      }],
+    }];
+  }
+
+  test("Enter runs the action", () => {
+    let ran = 0;
+    const s = new SettingsScreen();
+    s.open(actionCategory(() => { ran++; }));
+    s.handleInput("\x1b[B");
+    s.handleInput("\r");
+    expect(ran).toBe(1);
+  });
+
+  test("an action row does not enter edit mode", () => {
+    const s = new SettingsScreen();
+    s.open(actionCategory(() => {}));
+    s.handleInput("\x1b[B");
+    s.handleInput("\r");
+    expect(s.isEditing).toBe(false);
+  });
+
+  test("its value still renders as a summary", () => {
+    const s = new SettingsScreen();
+    s.open(actionCategory(() => {}));
+    const grid = s.render(100, 24);
+    const { left, right } = expectedBounds(100);
+    expect(rowText(grid, 3, left, right)).toContain("4 tabs · 7 groups");
+  });
+});

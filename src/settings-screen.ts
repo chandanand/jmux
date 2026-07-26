@@ -9,7 +9,7 @@ import { tokens, space, frame } from "./chrome-tokens";
 export interface SettingDef {
   id: string;
   label: string;
-  type: "boolean" | "text" | "list" | "map" | "multiselect";
+  type: "boolean" | "text" | "list" | "map" | "multiselect" | "action";
   getValue: () => string;
   // For boolean: toggle callback
   onToggle?: () => void;
@@ -40,6 +40,11 @@ export interface SettingDef {
   getScope?: () => "inherited" | "override";
   /** Clear this repo's override, falling back to the inherited value. */
   onClearOverride?: () => void;
+  /**
+   * For `action`: run on Enter instead of editing anything. `getValue` still
+   * supplies a right-hand summary, so the row reads like the others.
+   */
+  onActivate?: () => void;
 }
 
 export interface SettingsCategory {
@@ -624,6 +629,11 @@ export class SettingsScreen {
         } else {
           this.expandedMaps.add(setting.id);
         }
+        return { type: "none" };
+      }
+
+      if (setting.type === "action") {
+        setting.onActivate?.();
         return { type: "none" };
       }
 

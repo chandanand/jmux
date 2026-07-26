@@ -42,7 +42,7 @@ import { StdinGate } from "./stdin-gate";
 import { TmuxControl, type ControlEvent } from "./tmux-control";
 import { DiffPanel } from "./diff-panel";
 import { InfoPanel, rebuildInfoPanelColors } from "./info-panel";
-import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, stateAssignments, assignStateToGroup, unassignState, type PanelView } from "./panel-view";
+import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, stateAssignments, assignStateToGroup, unassignState, createView, renameView, moveView, deleteView, createGroup, renameGroup, moveGroup, deleteGroup, type PanelView } from "./panel-view";
 import { transformIssues, transformMrs, buildViewNodes, renderView, createViewState, filterItems, rebuildPanelViewColors, computeViewLayout, splitRatioForSepRow, DEFAULT_PANEL_SPLIT_RATIO, type ViewState, type ViewNode, type IssueSessionInfo } from "./panel-view-renderer";
 import { createAdapters } from "./adapters/registry";
 import { PollCoordinator } from "./adapters/poll-coordinator";
@@ -2221,6 +2221,7 @@ function openViewFilterMenu(view: PanelView): void {
       label: `Priority: ${f.priorityAtMost ? `P1–P${f.priorityAtMost}` : "any"}`,
     },
     { id: "clear", label: "Clear all filters" },
+    { id: "groups", label: "Edit tabs & groups…" },
   ];
 
   const modal = new ListModal({ header: `Filter — ${view.label}`, items });
@@ -2228,6 +2229,7 @@ function openViewFilterMenu(view: PanelView): void {
   openModal(modal, (value) => {
     const picked = (value as ListItem | undefined)?.id;
     if (!picked) return;
+    if (picked === "groups") { openQueueTabMenu(view.id); return; }
     if (picked === "clear") {
       view.filter = { scope: view.filter.scope };
       debouncedViewSave(view);
@@ -2268,6 +2270,162 @@ function openViewFilterMenu(view: PanelView): void {
       selected: () => view.filter.labels ?? [],
       toggle: (id) => toggleInFilterList(view, "labels", id),
     });
+  });
+}
+
+// --- Queue editor ---
+//
+// Tabs and groups, fully editable without touching config.json. Built from the
+// existing ListModal / InputModal / toggle-list rather than a bespoke tree
+// editor: three shallow menus (queues → tab → group) cover create, rename,
+// reorder, delete and state assignment.
+
+/** Swap in an edited view list, keeping derived state consistent, and persist. */
+function persistViews(next: PanelView[]): void {
+  panelViews = next;
+  const ids = new Set(panelViews.map((v) => v.id));
+  for (const v of panelViews) if (!viewStates.has(v.id)) viewStates.set(v.id, createViewState());
+  // A deleted tab must not linger in the up-next rotation, or `Ctrl-a u` would
+  // silently skip a queue that no longer exists.
+  const upNext = configStore.config.pipeline?.upNext ?? [];
+  const pruned = upNext.filter((id) => ids.has(id));
+  configStore.set("panelViews", panelViews);
+  if (pruned.length !== upNext.length) configStore.setPipeline("upNext", pruned);
+  refreshPanelViews();
+  scheduleRender();
+}
+
+function pickList(header: string, items: ListItem[], onPick: (id: string) => void): void {
+  const modal = new ListModal({ header, items });
+  modal.open();
+  openModal(modal, (v) => {
+    const id = (v as ListItem | undefined)?.id;
+    if (id) onPick(id);
+  });
+}
+
+function promptText(header: string, value: string, onCommit: (v: string) => void): void {
+  const modal = new InputModal({ header, value });
+  modal.open();
+  openModal(modal, (v) => onCommit(v as string));
+}
+
+/** Top level: every issues tab, plus "new tab". */
+function openQueueEditor(): void {
+  const views = panelViews.filter((v) => v.source === "issues");
+  const items: ListItem[] = views.map((v) => ({
+    id: v.id,
+    label: v.label,
+    annotation: v.groups ? `${v.groups.length} groups` : "ungrouped",
+  }));
+  items.push({ id: "\x00new", label: "+ New tab" });
+
+  pickList("Queues", items, (id) => {
+    if (id === "\x00new") {
+      promptText("New tab name", "", (label) => {
+        persistViews(createView(panelViews, label));
+        openQueueEditor();
+      });
+      return;
+    }
+    openQueueTabMenu(id);
+  });
+}
+
+/** One tab: its groups, plus tab-level actions. */
+function openQueueTabMenu(viewId: string): void {
+  const view = panelViews.find((v) => v.id === viewId);
+  if (!view) return;
+  const items: ListItem[] = (view.groups ?? []).map((g) => ({
+    id: `g\x00${g.label}`,
+    label: g.label,
+    annotation: `${g.states.length} states`,
+  }));
+  items.push(
+    { id: "\x00newgroup", label: "+ New group" },
+    { id: "\x00rename", label: "Rename tab…" },
+    { id: "\x00up", label: "Move tab up" },
+    { id: "\x00down", label: "Move tab down" },
+    { id: "\x00delete", label: "Delete tab" },
+    { id: "\x00back", label: "← Back to queues" },
+  );
+
+  pickList(view.label, items, (id) => {
+    if (id.startsWith("g\x00")) return openQueueGroupMenu(viewId, id.slice(2));
+    switch (id) {
+      case "\x00newgroup":
+        return promptText("New group name", "", (label) => {
+          persistViews(createGroup(panelViews, viewId, label));
+          openQueueTabMenu(viewId);
+        });
+      case "\x00rename":
+        return promptText("Rename tab", view.label, (label) => {
+          persistViews(renameView(panelViews, viewId, label));
+          openQueueTabMenu(viewId);
+        });
+      case "\x00up":
+        persistViews(moveView(panelViews, viewId, -1));
+        return openQueueTabMenu(viewId);
+      case "\x00down":
+        persistViews(moveView(panelViews, viewId, 1));
+        return openQueueTabMenu(viewId);
+      case "\x00delete":
+        persistViews(deleteView(panelViews, viewId));
+        return openQueueEditor();
+      default:
+        return openQueueEditor();
+    }
+  });
+}
+
+/** One group: assign states, rename, reorder, delete. */
+function openQueueGroupMenu(viewId: string, label: string): void {
+  const view = panelViews.find((v) => v.id === viewId);
+  const group = view?.groups?.find((g) => g.label === label);
+  if (!view || !group) return;
+
+  pickList(`${view.label} / ${label}`, [
+    { id: "states", label: "Edit states…", annotation: `${group.states.length} assigned` },
+    { id: "rename", label: "Rename group…" },
+    { id: "up", label: "Move group up" },
+    { id: "down", label: "Move group down" },
+    { id: "delete", label: "Delete group" },
+    { id: "back", label: "← Back" },
+  ], (id) => {
+    switch (id) {
+      case "states":
+        return openToggleList({
+          header: `States in ${view.label} / ${label}`,
+          options: workflowStateOptions(),
+          selected: () =>
+            panelViews.find((v) => v.id === viewId)?.groups?.find((g) => g.label === label)?.states ?? [],
+          // Assigning moves the state out of any other group, so a status can
+          // only ever have one home.
+          toggle: (state) => {
+            const current = panelViews.find((v) => v.id === viewId)?.groups?.find((g) => g.label === label);
+            const has = current?.states.some((s) => s.toLowerCase() === state.toLowerCase());
+            persistViews(has
+              ? unassignState(panelViews, state)
+              : assignStateToGroup(panelViews, state, viewId, label));
+          },
+        });
+      case "rename":
+        return promptText("Rename group", label, (next) => {
+          persistViews(renameGroup(panelViews, viewId, label, next));
+          openQueueTabMenu(viewId);
+        });
+      case "up":
+        persistViews(moveGroup(panelViews, viewId, label, -1));
+        return openQueueTabMenu(viewId);
+      case "down":
+        persistViews(moveGroup(panelViews, viewId, label, 1));
+        return openQueueTabMenu(viewId);
+      case "delete":
+        persistViews(deleteGroup(panelViews, viewId, label));
+        return openQueueTabMenu(viewId);
+      default:
+        return openQueueTabMenu(viewId);
+    }
   });
 }
 
@@ -3173,6 +3331,11 @@ function buildPaletteCommands(): PaletteCommand[] {
   // editor (the stage/parking multiselects) lives in the settings screen, so
   // the palette needs a way through to it rather than being a dead end.
   commands.push({
+    id: "setting-edit-queues",
+    label: "Edit queue tabs & groups…",
+    category: "setting",
+  });
+  commands.push({
     id: "setting-open-screen",
     label: "All settings (stages, parking, transitions)…",
     category: "setting",
@@ -3667,6 +3830,15 @@ function buildSettingsCategories(): SettingsCategory[] {
       label: "Queues",
       collapsed: false,
       settings: [
+        {
+          id: "edit-queues", label: "Edit tabs & groups…", type: "action" as const,
+          getValue: () => {
+            const tabs = panelViews.filter((v) => v.source === "issues");
+            const groups = tabs.reduce((n, v) => n + (v.groups?.length ?? 0), 0);
+            return `${tabs.length} tabs · ${groups} groups`;
+          },
+          onActivate: () => openQueueEditor(),
+        },
         {
           id: "state-tab-map", label: "Linear state → tab", type: "map" as const,
           getValue: () => {
@@ -4584,6 +4756,10 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       openModal(modal, async (value) => {
         configStore.setRepoDefault("claudeCommand", value as string);
       });
+      return;
+    }
+    case "setting-edit-queues": {
+      openQueueEditor();
       return;
     }
     case "setting-open-screen": {

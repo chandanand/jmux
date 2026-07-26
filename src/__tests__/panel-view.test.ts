@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { parseViews, DEFAULT_VIEWS, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, groupIndexForStatus, stateAssignments, assignStateToGroup, unassignState, type PanelView } from "../panel-view";
+import { parseViews, DEFAULT_VIEWS, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, groupIndexForStatus, stateAssignments, assignStateToGroup, unassignState, createView, renameView, moveView, deleteView, createGroup, renameGroup, moveGroup, deleteGroup, type PanelView } from "../panel-view";
 import type { WorkStage } from "../repo-settings";
 
 describe("parseViews", () => {
@@ -359,5 +359,99 @@ describe("unassignState", () => {
 
   test("an unknown state is a no-op", () => {
     expect(unassignState(TABS(), "Nonexistent")).toEqual(TABS());
+  });
+});
+
+// --- Queue CRUD ---
+//
+// Assigning states covers the thing you do repeatedly; this covers the skeleton
+// itself, so a queue layout never has to be built by hand-editing JSON.
+
+const Q = (): PanelView[] => parseViews([
+  { id: "urgent", label: "Urgent", source: "issues", filter: { scope: "assigned" },
+    groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
+    groups: [{ label: "A", states: ["s1"] }, { label: "B", states: ["s2"] }] },
+  { id: "todo", label: "To do", source: "issues", filter: { scope: "assigned" },
+    groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
+    groups: [{ label: "C", states: ["s3"] }] },
+]);
+
+describe("view CRUD", () => {
+  test("createView appends a grouped issues view with a slugged id", () => {
+    const next = createView(Q(), "Needs Design");
+    expect(next).toHaveLength(3);
+    expect(next[2].id).toBe("needs-design");
+    expect(next[2].label).toBe("Needs Design");
+    expect(next[2].groups).toEqual([]);
+  });
+
+  test("createView disambiguates a colliding id", () => {
+    const next = createView(createView(Q(), "Dup"), "Dup");
+    expect(next.map((v) => v.id)).toContain("dup");
+    expect(next.map((v) => v.id)).toContain("dup-2");
+  });
+
+  test("createView rejects a blank label", () => {
+    expect(createView(Q(), "   ")).toEqual(Q());
+  });
+
+  test("renameView changes only the label", () => {
+    const next = renameView(Q(), "urgent", "Now");
+    expect(next[0].label).toBe("Now");
+    expect(next[0].id).toBe("urgent");
+  });
+
+  test("moveView reorders and clamps at the ends", () => {
+    expect(moveView(Q(), "todo", -1).map((v) => v.id)).toEqual(["todo", "urgent"]);
+    expect(moveView(Q(), "urgent", -1).map((v) => v.id)).toEqual(["urgent", "todo"]);
+    expect(moveView(Q(), "todo", 1).map((v) => v.id)).toEqual(["urgent", "todo"]);
+  });
+
+  test("deleteView removes it", () => {
+    expect(deleteView(Q(), "urgent").map((v) => v.id)).toEqual(["todo"]);
+  });
+});
+
+describe("group CRUD", () => {
+  test("createGroup appends an empty group", () => {
+    const next = createGroup(Q(), "urgent", "C");
+    expect(next[0].groups).toEqual([
+      { label: "A", states: ["s1"] }, { label: "B", states: ["s2"] }, { label: "C", states: [] },
+    ]);
+  });
+
+  test("createGroup rejects a duplicate label in the same tab", () => {
+    // Labels are the node/collapse key, so duplicates would alias each other.
+    expect(createGroup(Q(), "urgent", "A")).toEqual(Q());
+  });
+
+  test("the same label in a different tab is fine", () => {
+    expect(createGroup(Q(), "todo", "A")[1].groups).toHaveLength(2);
+  });
+
+  test("renameGroup keeps its states", () => {
+    const next = renameGroup(Q(), "urgent", "A", "Alpha");
+    expect(next[0].groups![0]).toEqual({ label: "Alpha", states: ["s1"] });
+  });
+
+  test("renameGroup onto an existing label is rejected", () => {
+    expect(renameGroup(Q(), "urgent", "A", "B")).toEqual(Q());
+  });
+
+  test("moveGroup reorders within its tab and clamps", () => {
+    expect(moveGroup(Q(), "urgent", "B", -1)[0].groups!.map((g) => g.label)).toEqual(["B", "A"]);
+    expect(moveGroup(Q(), "urgent", "A", -1)[0].groups!.map((g) => g.label)).toEqual(["A", "B"]);
+  });
+
+  test("deleteGroup drops it and its state assignments", () => {
+    const next = deleteGroup(Q(), "urgent", "A");
+    expect(next[0].groups).toEqual([{ label: "B", states: ["s2"] }]);
+  });
+
+  test("CRUD never mutates the input", () => {
+    const before = Q();
+    createGroup(before, "urgent", "Z");
+    deleteGroup(before, "urgent", "A");
+    expect(before[0].groups!.map((g) => g.label)).toEqual(["A", "B"]);
   });
 });

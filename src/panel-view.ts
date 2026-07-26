@@ -359,3 +359,107 @@ export function assignStateToGroup(
 export function unassignState(views: PanelView[], state: string): PanelView[] {
   return withoutState(views, state);
 }
+
+// --- Queue CRUD ---
+//
+// All pure and non-mutating: the caller swaps in the returned array and
+// persists it. Every operation that can't be satisfied (blank label, duplicate
+// group, unknown target) returns the input unchanged rather than throwing, so
+// a menu can call these blind and simply see nothing happen.
+
+function slugify(label: string): string {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+/** Append a new grouped issues tab. Ids are slugged and de-duplicated. */
+export function createView(views: PanelView[], label: string): PanelView[] {
+  const trimmed = label.trim();
+  if (!trimmed) return views;
+  const base = slugify(trimmed) || "queue";
+  let id = base;
+  for (let n = 2; views.some((v) => v.id === id); n++) id = `${base}-${n}`;
+  return [...views, {
+    id, label: trimmed, source: "issues",
+    filter: { scope: "assigned" },
+    groupBy: "none", subGroupBy: "none",
+    sortBy: "priority", sortOrder: "asc", sessionLinkedFirst: false,
+    groups: [],
+  }];
+}
+
+export function renameView(views: PanelView[], viewId: string, label: string): PanelView[] {
+  const trimmed = label.trim();
+  if (!trimmed) return views;
+  return views.map((v) => (v.id === viewId ? { ...v, label: trimmed } : v));
+}
+
+/** Move a tab by `delta` positions, clamped at both ends. */
+export function moveView(views: PanelView[], viewId: string, delta: number): PanelView[] {
+  const from = views.findIndex((v) => v.id === viewId);
+  if (from < 0) return views;
+  const to = Math.max(0, Math.min(views.length - 1, from + delta));
+  if (to === from) return views;
+  const next = [...views];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved!);
+  return next;
+}
+
+export function deleteView(views: PanelView[], viewId: string): PanelView[] {
+  return views.filter((v) => v.id !== viewId);
+}
+
+function mapGroups(
+  views: PanelView[],
+  viewId: string,
+  fn: (groups: PanelViewGroup[]) => PanelViewGroup[] | null,
+): PanelView[] {
+  const view = views.find((v) => v.id === viewId);
+  if (!view) return views;
+  const next = fn(view.groups ?? []);
+  if (next === null) return views;
+  return views.map((v) => (v.id === viewId ? { ...v, groups: next } : v));
+}
+
+const hasLabel = (groups: PanelViewGroup[], label: string): boolean =>
+  groups.some((g) => g.label.trim().toLowerCase() === label.trim().toLowerCase());
+
+export function createGroup(views: PanelView[], viewId: string, label: string): PanelView[] {
+  const trimmed = label.trim();
+  if (!trimmed) return views;
+  return mapGroups(views, viewId, (groups) =>
+    // Labels key both the render node and the collapse set, so duplicates
+    // within a tab would alias each other.
+    hasLabel(groups, trimmed) ? null : [...groups, { label: trimmed, states: [] }]);
+}
+
+export function renameGroup(
+  views: PanelView[], viewId: string, from: string, to: string,
+): PanelView[] {
+  const trimmed = to.trim();
+  if (!trimmed) return views;
+  return mapGroups(views, viewId, (groups) => {
+    if (hasLabel(groups, trimmed)) return null;
+    if (!hasLabel(groups, from)) return null;
+    return groups.map((g) => (g.label === from ? { ...g, label: trimmed } : g));
+  });
+}
+
+export function moveGroup(
+  views: PanelView[], viewId: string, label: string, delta: number,
+): PanelView[] {
+  return mapGroups(views, viewId, (groups) => {
+    const from = groups.findIndex((g) => g.label === label);
+    if (from < 0) return null;
+    const to = Math.max(0, Math.min(groups.length - 1, from + delta));
+    if (to === from) return null;
+    const next = [...groups];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved!);
+    return next;
+  });
+}
+
+export function deleteGroup(views: PanelView[], viewId: string, label: string): PanelView[] {
+  return mapGroups(views, viewId, (groups) => groups.filter((g) => g.label !== label));
+}
