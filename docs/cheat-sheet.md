@@ -157,6 +157,10 @@ See [issue-tracking.md](issue-tracking.md) for setup and configuration.
 | `Ctrl-a u` | Start the next issue from your queue rotation |
 | `Ctrl-a Z` | Undo the last status write to your tracker |
 
+With the info panel focused (`Shift-Right`), `F` edits the current tab's
+membership filter and the palette's **Save current view as tab** clones it
+under a new name — building a queue without editing config by hand.
+
 ---
 
 ## Claude Code Integration

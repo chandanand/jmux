@@ -42,7 +42,7 @@ import { StdinGate } from "./stdin-gate";
 import { TmuxControl, type ControlEvent } from "./tmux-control";
 import { DiffPanel } from "./diff-panel";
 import { InfoPanel, rebuildInfoPanelColors } from "./info-panel";
-import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, type PanelView } from "./panel-view";
+import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, type PanelView } from "./panel-view";
 import { transformIssues, transformMrs, buildViewNodes, renderView, createViewState, filterItems, rebuildPanelViewColors, computeViewLayout, splitRatioForSepRow, DEFAULT_PANEL_SPLIT_RATIO, type ViewState, type ViewNode, type IssueSessionInfo } from "./panel-view-renderer";
 import { createAdapters } from "./adapters/registry";
 import { PollCoordinator } from "./adapters/poll-coordinator";
@@ -2126,6 +2126,133 @@ function explainCaptureUnavailable(reason: string, hint: string): void {
   scheduleRender();
 }
 
+/**
+ * A checklist built out of ListModal: each Enter toggles an option and reopens
+ * the list, Esc closes. Cheaper than a bespoke multi-select modal and it keeps
+ * the panel's editing surface consistent with every other picker.
+ */
+function openToggleList(opts: {
+  header: string;
+  options: Array<{ id: string; label: string }>;
+  selected: () => string[];
+  toggle: (id: string) => void;
+}): void {
+  const render = (): void => {
+    if (opts.options.length === 0) return;
+    const chosen = new Set(opts.selected().map((s) => s.toLowerCase()));
+    const items = opts.options.map((o) => ({
+      id: o.id,
+      label: `${chosen.has(o.id.toLowerCase()) ? "[x]" : "[ ]"} ${o.label}`,
+    }));
+    const modal = new ListModal({
+      header: opts.header,
+      subheader: "Enter toggles · Esc when done",
+      items,
+    });
+    modal.open();
+    openModal(modal, (value) => {
+      const picked = value as ListItem | undefined;
+      if (!picked) return;
+      opts.toggle(picked.id);
+      render();
+    });
+  };
+  render();
+}
+
+/** Mutate one filter axis of a view and persist it. */
+function updateViewFilter(view: PanelView, patch: Partial<PanelView["filter"]>): void {
+  view.filter = applyFilterPatch(view.filter, patch);
+  debouncedViewSave(view);
+  scheduleRender();
+}
+
+function toggleInFilterList(
+  view: PanelView,
+  key: "states" | "stages" | "labels",
+  id: string,
+): void {
+  view.filter = toggleFilterValue(view.filter, key, id);
+  debouncedViewSave(view);
+  scheduleRender();
+}
+
+const PRIORITY_CHOICES: Array<{ id: string; label: string }> = [
+  { id: "none", label: "Any priority" },
+  { id: "1", label: "Urgent only (P1)" },
+  { id: "2", label: "Urgent + High (P1–P2)" },
+  { id: "3", label: "P1–P3" },
+  { id: "4", label: "P1–P4 (excludes no-priority)" },
+];
+
+/** The filter menu for one issues view: one entry per membership axis. */
+function openViewFilterMenu(view: PanelView): void {
+  const f = view.filter;
+  const count = (k: "states" | "stages" | "labels") => (f[k] ?? []).length;
+  const labelsAvailable = new Set<string>();
+  for (const issue of pollCoordinator.getGlobalIssues()) {
+    for (const l of issue.labels ?? []) labelsAvailable.add(l.name);
+  }
+
+  const items: ListItem[] = [
+    { id: "states", label: `States… (${count("states") || "any"})` },
+    { id: "stages", label: `Stages… (${count("stages") || "any"})` },
+    { id: "labels", label: `Labels… (${count("labels") || "any"})` },
+    {
+      id: "priority",
+      label: `Priority: ${f.priorityAtMost ? `P1–P${f.priorityAtMost}` : "any"}`,
+    },
+    { id: "clear", label: "Clear all filters" },
+  ];
+
+  const modal = new ListModal({ header: `Filter — ${view.label}`, items });
+  modal.open();
+  openModal(modal, (value) => {
+    const picked = (value as ListItem | undefined)?.id;
+    if (!picked) return;
+    if (picked === "clear") {
+      view.filter = { scope: view.filter.scope };
+      debouncedViewSave(view);
+      scheduleRender();
+      return;
+    }
+    if (picked === "priority") {
+      const pick = new ListModal({ header: "Minimum priority", items: PRIORITY_CHOICES });
+      pick.open();
+      openModal(pick, (v) => {
+        const id = (v as ListItem | undefined)?.id;
+        if (!id) return;
+        updateViewFilter(view, { priorityAtMost: id === "none" ? undefined : Number(id) });
+      });
+      return;
+    }
+    if (picked === "states") {
+      openToggleList({
+        header: "States in this queue",
+        options: workflowStateOptions(),
+        selected: () => view.filter.states ?? [],
+        toggle: (id) => toggleInFilterList(view, "states", id),
+      });
+      return;
+    }
+    if (picked === "stages") {
+      openToggleList({
+        header: "Stages in this queue",
+        options: STAGE_ORDER.map((s) => ({ id: s, label: STAGE_LABELS[s] })),
+        selected: () => view.filter.stages ?? [],
+        toggle: (id) => toggleInFilterList(view, "stages", id),
+      });
+      return;
+    }
+    openToggleList({
+      header: "Labels in this queue",
+      options: [...labelsAvailable].sort().map((l) => ({ id: l, label: l })),
+      selected: () => view.filter.labels ?? [],
+      toggle: (id) => toggleInFilterList(view, "labels", id),
+    });
+  });
+}
+
 function openCreateIssueModal(): void {
   if (!adapters.issueTracker || adapters.issueTracker.authState !== "ok") {
     explainCaptureUnavailable(
@@ -2515,6 +2642,18 @@ const inputRouter = new InputRouter(
         }
         scheduleRender();
       }
+    },
+    // Edit the active view's membership filter from the panel itself.
+    //
+    // Without this, `states` / `stages` / `labels` / `priorityAtMost` could only
+    // be set by hand-editing config.json, which makes "build your own queue" a
+    // feature only people willing to write JSON can use. The option lists come
+    // from the tracker (workflow states) or from jmux's own stage set, so this
+    // works in any Linear workspace without knowing a thing about it.
+    onPanelEditFilter: () => {
+      const view = panelViews.find((v) => v.id === infoPanel.activeTab);
+      if (!view || view.source !== "issues") return;
+      openViewFilterMenu(view);
     },
     onPanelCycleGroupBy: () => {
       const view = panelViews.find((v) => v.id === infoPanel.activeTab);

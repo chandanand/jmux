@@ -134,6 +134,7 @@ export interface InputRouterOptions {
   onPanelScroll?: (delta: number, row: number) => void; // wheel scroll in panel area, row relative to content
   onPanelSelectPrev?: () => void;
   onPanelSelectNext?: () => void;
+  onPanelEditFilter?: () => void;
   onPanelCycleGroupBy?: () => void;
   onPanelCycleSubGroupBy?: () => void;
   onPanelCycleSortBy?: () => void;
@@ -780,6 +781,9 @@ export class InputRouter {
         if (data === "/" && this.opts.onPanelFilterStart) { this.panelFilterActive = true; this.opts.onPanelFilterStart(); return; }
         if (data === "S" && this.opts.onPanelCycleSortBy) { this.opts.onPanelCycleSortBy(); return; }
         if (data === "?" && this.opts.onPanelToggleSortOrder) { this.opts.onPanelToggleSortOrder(); return; }
+        // Membership filter (states / stages / labels / priority) — the axes
+        // that turn a generic list into a named pull queue.
+        if (data === "F" && this.opts.onPanelEditFilter) { this.opts.onPanelEditFilter(); return; }
         if (data === "r" && this.opts.onPanelRefresh) { this.opts.onPanelRefresh(); return; }
         if (data === "\r" && this.opts.onPanelToggleCollapse) { this.opts.onPanelToggleCollapse(); return; }
         if (data === "n" && this.opts.onPanelCreateSession) { this.opts.onPanelCreateSession(); return; }

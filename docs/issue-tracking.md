@@ -95,7 +95,13 @@ While focused on an issue or MR tab, you can cycle the view's grouping and sorti
 | `G` | Cycle sub-group-by: same options |
 | `S` | Cycle sort: priority, updated, created, status |
 | `?` | Toggle sort order: ascending / descending |
-| `/` | Filter the list by typing |
+| `F` | Edit the view's membership filter (states / stages / labels / priority) |
+| `/` | Filter the list by typing (transient — not saved) |
+
+`F` is what turns a generic list into a named queue, and it needs no knowledge
+of your workspace: the **States** list is pulled live from your tracker, and
+**Stages** are jmux's own four. `/` is a throwaway search; `F` is the durable
+definition of what belongs in the tab.
 
 Changes persist to `~/.config/jmux/config.json` automatically. Once a view looks
 right, **Save current view as tab** in the command palette (`Ctrl-a p`) clones

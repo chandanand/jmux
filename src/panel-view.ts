@@ -205,3 +205,36 @@ export function pickUpNext<T>(
   }
   return null;
 }
+
+/**
+ * Apply a patch to a view's filter, dropping emptied axes.
+ *
+ * Emptied lists must be *removed*, not left as `[]`: `parseViews` discards
+ * empty arrays on load, so keeping one would make the in-memory view disagree
+ * with the same config after a restart.
+ */
+export function applyFilterPatch(
+  filter: PanelViewFilter,
+  patch: Partial<PanelViewFilter>,
+): PanelViewFilter {
+  const next: PanelViewFilter = { ...filter, ...patch };
+  for (const key of ["states", "stages", "labels"] as const) {
+    const v = next[key];
+    if (Array.isArray(v) && v.length === 0) delete next[key];
+  }
+  if (next.priorityAtMost === undefined) delete next.priorityAtMost;
+  return next;
+}
+
+/** Toggle one value in a list-valued filter axis, case-insensitively. */
+export function toggleFilterValue(
+  filter: PanelViewFilter,
+  key: "states" | "stages" | "labels",
+  value: string,
+): PanelViewFilter {
+  const current = ((filter[key] as string[] | undefined) ?? []).slice();
+  const at = current.findIndex((n) => n.toLowerCase() === value.toLowerCase());
+  if (at >= 0) current.splice(at, 1);
+  else current.push(value);
+  return applyFilterPatch(filter, { [key]: current } as Partial<PanelViewFilter>);
+}

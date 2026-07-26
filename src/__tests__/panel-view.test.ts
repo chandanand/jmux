@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { parseViews, DEFAULT_VIEWS, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext } from "../panel-view";
+import { parseViews, DEFAULT_VIEWS, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue } from "../panel-view";
 import type { WorkStage } from "../repo-settings";
 
 describe("parseViews", () => {
@@ -176,5 +176,43 @@ describe("pickUpNext", () => {
   test("returns null when every queue is empty", () => {
     expect(pickUpNext(["blockers"], items)).toBeNull();
     expect(pickUpNext([], items)).toBeNull();
+  });
+});
+
+describe("filter editing", () => {
+  test("toggling adds then removes a value", () => {
+    let f = toggleFilterValue({ scope: "assigned" }, "states", "QA Failed");
+    expect(f.states).toEqual(["QA Failed"]);
+    f = toggleFilterValue(f, "states", "qa failed"); // case-insensitive
+    expect(f.states).toBeUndefined();
+  });
+
+  test("an emptied axis is removed, not left as []", () => {
+    // parseViews drops empty arrays on load, so leaving one would make the
+    // running view disagree with the same config after a restart.
+    const f = applyFilterPatch({ scope: "assigned", states: ["x"] }, { states: [] });
+    expect("states" in f).toBe(false);
+  });
+
+  test("what the editor writes survives a parseViews round-trip unchanged", () => {
+    const edited = toggleFilterValue(
+      applyFilterPatch({ scope: "assigned" }, { priorityAtMost: 2 }),
+      "stages", "parked",
+    );
+    const [view] = parseViews([{
+      id: "q", label: "Q", source: "issues", filter: edited,
+      groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
+    }]);
+    expect(view.filter).toEqual(edited);
+  });
+
+  test("clearing priority removes the key", () => {
+    const f = applyFilterPatch({ scope: "assigned", priorityAtMost: 2 }, { priorityAtMost: undefined });
+    expect("priorityAtMost" in f).toBe(false);
+  });
+
+  test("scope always survives editing", () => {
+    const f = toggleFilterValue({ scope: "assigned" }, "labels", "bug");
+    expect(f.scope).toBe("assigned");
   });
 });
