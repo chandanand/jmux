@@ -29,10 +29,17 @@ function input(over: Partial<SessionParkInput> = {}): SessionParkInput {
 }
 
 describe("isParked defaults", () => {
-  test("nothing parks with an empty config — parking is opt-in", () => {
-    for (const stage of ["idea", "active", "parked", "done"] as const) {
+  test("the parked stage parks by default; nothing else does", () => {
+    // A tab only declares stage=parked deliberately, so acting on it is the
+    // stated intent — but no other stage is ever hidden without being asked.
+    expect(isParked(input({ stage: "parked" }), cfg(), 0)).toBe(true);
+    for (const stage of ["idea", "active", "done"] as const) {
       expect(isParked(input({ stage }), cfg(), 0)).toBe(false);
     }
+  });
+
+  test("clearing parkStages disables parking entirely", () => {
+    expect(isParked(input({ stage: "parked" }), cfg({ parkStages: [] }), 0)).toBe(false);
   });
 });
 

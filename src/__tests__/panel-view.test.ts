@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { parseViews, DEFAULT_VIEWS, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, groupIndexForStatus, stateAssignments, assignStateToGroup, unassignState, createView, renameView, moveView, deleteView, createGroup, renameGroup, moveGroup, deleteGroup, type PanelView } from "../panel-view";
+import { parseViews, DEFAULT_VIEWS, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, groupIndexForStatus, stateAssignments, assignStateToGroup, unassignState, createView, renameView, moveView, deleteView, createGroup, renameGroup, moveGroup, deleteGroup, stagesFromViews, type PanelView } from "../panel-view";
 import type { WorkStage } from "../repo-settings";
 
 describe("parseViews", () => {
@@ -453,5 +453,50 @@ describe("group CRUD", () => {
     createGroup(before, "urgent", "Z");
     deleteGroup(before, "urgent", "A");
     expect(before[0].groups!.map((g) => g.label)).toEqual(["A", "B"]);
+  });
+});
+
+// --- Tabs own the stage ---
+//
+// One mapping instead of two. Before this, a state was classified once for
+// display (which tab) and again for behaviour (which stage), and nothing kept
+// the two honest — they had already drifted in practice.
+
+describe("stagesFromViews", () => {
+  const V = (over: any = {}) => parseViews([{
+    id: "waiting", label: "Waiting", source: "issues", filter: { scope: "assigned" },
+    groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
+    groups: [{ label: "In QA", states: ["QA", "QA2"] }, { label: "In review", states: ["MR Review"] }],
+    ...over,
+  }]);
+
+  test("a tab's states become its stage's list", () => {
+    expect(stagesFromViews(V({ stage: "parked" })).parked).toEqual(["QA", "QA2", "MR Review"]);
+  });
+
+  test("tabs with no stage contribute nothing", () => {
+    const s = stagesFromViews(V());
+    expect(s.parked).toEqual([]);
+    expect(s.active).toEqual([]);
+  });
+
+  test("several tabs can share one stage", () => {
+    const views = parseViews([
+      { id: "a", label: "A", source: "issues", filter: { scope: "assigned" }, stage: "active",
+        groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
+        groups: [{ label: "g", states: ["s1"] }] },
+      { id: "b", label: "B", source: "issues", filter: { scope: "assigned" }, stage: "active",
+        groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
+        groups: [{ label: "g", states: ["s2"] }] },
+    ]);
+    expect(stagesFromViews(views).active).toEqual(["s1", "s2"]);
+  });
+
+  test("an invalid stage is dropped rather than trusted", () => {
+    expect(V({ stage: "nonsense" })[0].stage).toBeUndefined();
+  });
+
+  test("every stage key is always present, so callers need no guards", () => {
+    expect(Object.keys(stagesFromViews([])).sort()).toEqual(["active", "done", "idea", "parked"]);
   });
 });

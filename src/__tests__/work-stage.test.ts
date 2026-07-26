@@ -7,7 +7,10 @@ import {
   STAGE_ORDER,
   type StageConfig,
 } from "../work-stage";
-import { REPO_SETTING_DEFAULTS } from "../repo-settings";
+import type { WorkStage } from "../repo-settings";
+
+const NO_STAGES: Record<WorkStage, string[]> = { idea: [], active: [], parked: [], done: [] };
+const stages = (o: Partial<Record<WorkStage, string[]>>) => ({ ...NO_STAGES, ...o });
 import type { Issue } from "../adapters/types";
 
 function issue(over: Partial<Issue> = {}): Issue {
@@ -45,7 +48,7 @@ describe("stageFromStateType", () => {
 });
 
 describe("projectStage", () => {
-  const settings = { ...REPO_SETTING_DEFAULTS, parkedStates: ["In Review", "QA"] };
+  const settings = stages({ parked: ["In Review", "QA"] });
 
   test("an explicitly listed state beats the stateType fallback", () => {
     // Linear reports "QA" as `started`; the user says it means parked.
@@ -63,19 +66,14 @@ describe("projectStage", () => {
   });
 
   test("with no lists configured nothing is ever parked", () => {
-    const bare = REPO_SETTING_DEFAULTS;
+    const bare = NO_STAGES;
     for (const t of ["triage", "backlog", "unstarted", "started", "completed", "canceled"] as const) {
       expect(projectStage(issue({ status: "whatever", stateType: t }), bare)).not.toBe("parked");
     }
   });
 
   test("a state listed under several stages resolves in documented order", () => {
-    const messy = {
-      ...REPO_SETTING_DEFAULTS,
-      activeStates: ["QA"],
-      parkedStates: ["QA"],
-      doneStates: ["QA"],
-    };
+    const messy = stages({ active: ["QA"], parked: ["QA"], done: ["QA"] });
     // STAGE_ORDER is the tie-break, so the result is deterministic rather
     // than dependent on object key order: the earliest listed stage wins.
     const expected = STAGE_ORDER.filter((s) => s === "active" || s === "parked" || s === "done")[0];
@@ -104,33 +102,23 @@ describe("resolveIssueRepoDir", () => {
 });
 
 describe("stageForIssue", () => {
-  // The panel is a cross-repo union, so an issue's stage must resolve against
-  // the repo the ISSUE routes to — never the session the user is sitting in.
-  const config: StageConfig = {
-    issueWorkflow: { teamRepoMap: { Platform: "/code/backend", Web: "/code/web" } },
-    repoDefaults: { parkedStates: ["QA"] },
-    repos: {
-      "/code/web/.git": { parkedStates: ["Staging"] },
-    },
-  };
-  const facts = (dir: string) => ({ key: `${dir}/.git`, bare: false });
+  // Stage lists now come from the queue tabs, which are global — so an issue's
+  // stage no longer depends on which repo or session you happen to be in.
+  const s = stages({ parked: ["QA"], active: ["In Progress"] });
 
-  test("uses the issue's own repo override", () => {
-    // Web overrides parked to mean Staging, so QA is no longer parked there.
-    expect(stageForIssue(issue({ team: "Web", status: "Staging", stateType: "started" }), config, facts))
-      .toBe("parked");
-    expect(stageForIssue(issue({ team: "Web", status: "QA", stateType: "started" }), config, facts))
-      .toBe("active");
+  test("an explicitly mapped state wins", () => {
+    expect(stageForIssue(issue({ status: "QA", stateType: "started" }), s)).toBe("parked");
   });
 
-  test("falls back to the global default for a repo with no override", () => {
-    expect(stageForIssue(issue({ team: "Platform", status: "QA", stateType: "started" }), config, facts))
-      .toBe("parked");
+  test("an unmapped state falls back to the tracker category", () => {
+    expect(stageForIssue(issue({ status: "Whatever", stateType: "started" }), s)).toBe("active");
+    expect(stageForIssue(issue({ status: "Whatever", stateType: "completed" }), s)).toBe("done");
   });
 
-  test("an unmapped team still resolves via global defaults", () => {
-    expect(stageForIssue(issue({ team: "Mobile", status: "QA", stateType: "started" }), config, facts))
-      .toBe("parked");
+  test("team no longer influences the answer", () => {
+    for (const team of ["Core Product", "Core Engineering", undefined]) {
+      expect(stageForIssue(issue({ status: "QA", stateType: "started", team }), s)).toBe("parked");
+    }
   });
 });
 

@@ -13,14 +13,7 @@
 // with a stage is global (one sidebar, one set of habits).
 
 import type { Issue, IssueStateType } from "./adapters/types";
-import {
-  resolveRepoSettings,
-  REPO_SETTING_DEFAULTS,
-  type RepoFacts,
-  type RepoSettings,
-  type ResolvedRepoSettings,
-  type WorkStage,
-} from "./repo-settings";
+import type { WorkStage } from "./repo-settings";
 
 export type { WorkStage };
 
@@ -30,14 +23,6 @@ export type { WorkStage };
  * a misconfiguration deterministic instead of dependent on key order.
  */
 export const STAGE_ORDER: readonly WorkStage[] = ["idea", "active", "parked", "done"];
-
-/** The settings field holding each stage's state names. */
-const STAGE_FIELD: Record<WorkStage, keyof ResolvedRepoSettings> = {
-  idea: "ideaStates",
-  active: "activeStates",
-  parked: "parkedStates",
-  done: "doneStates",
-};
 
 export const STAGE_LABELS: Record<WorkStage, string> = {
   idea: "Idea",
@@ -79,13 +64,12 @@ function norm(s: string): string {
  */
 export function projectStage(
   issue: Pick<Issue, "status" | "stateType">,
-  settings: ResolvedRepoSettings,
+  stages: Record<WorkStage, string[]>,
 ): WorkStage {
   const status = norm(issue.status ?? "");
   if (status) {
     for (const stage of STAGE_ORDER) {
-      const names = settings[STAGE_FIELD[stage]] as string[] | undefined;
-      if (names?.some((n) => norm(n) === status)) return stage;
+      if (stages[stage]?.some((n) => norm(n) === status)) return stage;
     }
   }
   return stageFromStateType(issue.stateType);
@@ -93,8 +77,6 @@ export function projectStage(
 
 /** The config slice stage resolution needs. */
 export interface StageConfig {
-  repoDefaults?: RepoSettings;
-  repos?: Record<string, RepoSettings>;
   issueWorkflow?: { teamRepoMap?: Record<string, string> };
 }
 
@@ -114,23 +96,14 @@ export function resolveIssueRepoDir(
 }
 
 /**
- * Stage for an issue, resolved against **the issue's own repo**.
- *
- * This is the subtle part: the issues panel is a union across every team and
- * repo, so "the current repo" is the wrong key — it would make an issue's
- * stage depend on which session the user happened to be attached to. The
- * routing index (`teamRepoMap`) is global precisely so this lookup can work
- * for repos the user is not currently inside.
+ * Stage for an issue. Stage lists are derived from the queue tabs (see
+ * `stagesFromViews`), which are global — so unlike the earlier per-repo model
+ * this needs no repo key, and an issue's stage can no longer depend on which
+ * session the user happens to be attached to.
  */
 export function stageForIssue(
   issue: Pick<Issue, "status" | "stateType" | "team">,
-  config: StageConfig,
-  factsFor: (dir: string) => RepoFacts,
-  home = "",
+  stages: Record<WorkStage, string[]>,
 ): WorkStage {
-  const dir = resolveIssueRepoDir(issue, config, home);
-  const key = dir ? factsFor(dir).key : null;
-  const override = key ? config.repos?.[key] : undefined;
-  const settings = resolveRepoSettings(config.repoDefaults, override, REPO_SETTING_DEFAULTS);
-  return projectStage(issue, settings);
+  return projectStage(issue, stages);
 }

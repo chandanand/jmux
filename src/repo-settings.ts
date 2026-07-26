@@ -35,12 +35,6 @@ export interface RepoSettings {
   sessionNameTemplate?: string;
   claudeCommand?: string;
 
-  // Stage projection: raw tracker state names, matched case-insensitively.
-  // States left unlisted fall back to the tracker's own stateType category.
-  ideaStates?: string[];
-  activeStates?: string[];
-  parkedStates?: string[];
-  doneStates?: string[];
 
   // Status writes. null means "never write on this event" — the default, so
   // jmux touches nobody's tracker until explicitly told to.
@@ -56,10 +50,6 @@ export interface ResolvedRepoSettings {
   autoLaunchAgent: boolean;
   sessionNameTemplate: string;
   claudeCommand: string;
-  ideaStates: string[];
-  activeStates: string[];
-  parkedStates: string[];
-  doneStates: string[];
   onSessionStartState: string | null;
   onMrOpenState: string | null;
   onMrMergedState: string | null;
@@ -71,10 +61,6 @@ export const REPO_SETTING_DEFAULTS: ResolvedRepoSettings = {
   autoLaunchAgent: true,
   sessionNameTemplate: "{identifier}",
   claudeCommand: "claude",
-  ideaStates: [],
-  activeStates: [],
-  parkedStates: [],
-  doneStates: [],
   onSessionStartState: null,
   onMrOpenState: null,
   onMrMergedState: null,
@@ -254,6 +240,25 @@ export function migrateLegacyConfig(raw: any): { config: any; changed: boolean }
     }
   }
 
+  // Stage lists moved onto the queue tabs that now own them (one mapping, not
+  // two). Fold them in, then drop them from every settings tier.
+  const stageKeys = ["ideaStates", "activeStates", "parkedStates", "doneStates"] as const;
+  // `repoDefaults` (the local copy) is what gets written back at the end, so it
+  // must be cleaned alongside the live objects or the keys reappear.
+  const tiers = [repoDefaults, config.repoDefaults, ...Object.values(config.repos ?? {})].filter(Boolean) as any[];
+  const lists: Record<string, string[]> = {};
+  for (const tier of tiers) {
+    for (const key of stageKeys) {
+      if (Array.isArray(tier[key])) lists[key] = [...(lists[key] ?? []), ...tier[key]];
+    }
+  }
+  if (Object.keys(lists).length > 0) {
+    const migrated = migrateStagesIntoViews(config.panelViews ?? [], lists);
+    if (Array.isArray(config.panelViews)) config.panelViews = migrated.views;
+    for (const tier of tiers) for (const key of stageKeys) delete tier[key];
+    changed = true;
+  }
+
   const wf = config.issueWorkflow;
   if (wf && typeof wf === "object") {
     for (const key of RELOCATED_WORKFLOW) {
@@ -272,4 +277,62 @@ export function migrateLegacyConfig(raw: any): { config: any; changed: boolean }
 
   if (Object.keys(repoDefaults).length > 0) config.repoDefaults = repoDefaults;
   return { config, changed };
+}
+
+const STAGE_LIST_KEYS = [
+  ["idea", "ideaStates"],
+  ["active", "activeStates"],
+  ["parked", "parkedStates"],
+  ["done", "doneStates"],
+] as const;
+
+/**
+ * Fold the old per-repo stage lists into the queue tabs that now own them.
+ *
+ * Each tab takes the stage most of its states belonged to; ties go to the
+ * earlier lifecycle stage, which matches how the tabs are named in practice (a
+ * tab called "To do" holding one parked state still means active). States that
+ * had a stage but live in no tab are reported rather than silently dropped —
+ * they lose their mapping and fall back to the tracker's own category.
+ */
+export function migrateStagesIntoViews(
+  views: any[],
+  lists: Record<string, string[] | undefined>,
+): { views: any[]; orphaned: string[] } {
+  const stageOf = new Map<string, WorkStage>();
+  for (const [stage, key] of STAGE_LIST_KEYS) {
+    for (const name of lists[key] ?? []) stageOf.set(name.trim().toLowerCase(), stage);
+  }
+  if (stageOf.size === 0) return { views, orphaned: [] };
+
+  const claimed = new Set<string>();
+  const nextViews = views.map((view) => {
+    const states: string[] = (view.groups ?? []).flatMap((g: any) => g.states ?? []);
+    for (const n of states) if (stageOf.has(n.trim().toLowerCase())) claimed.add(n.trim().toLowerCase());
+    if (view.stage) return view;
+
+    const tally = new Map<WorkStage, number>();
+    for (const n of states) {
+      const stage = stageOf.get(n.trim().toLowerCase());
+      if (stage) tally.set(stage, (tally.get(stage) ?? 0) + 1);
+    }
+    if (tally.size === 0) return view;
+    let best: WorkStage | undefined;
+    for (const [stage] of STAGE_LIST_KEYS) {
+      const n = tally.get(stage) ?? 0;
+      if (n > 0 && (best === undefined || n > (tally.get(best) ?? 0))) best = stage;
+    }
+    return best ? { ...view, stage: best } : view;
+  });
+
+  const orphaned = [...stageOf.keys()]
+    .filter((k) => !claimed.has(k))
+    .map((k) => {
+      for (const [, key] of STAGE_LIST_KEYS) {
+        const hit = (lists[key] ?? []).find((n) => n.trim().toLowerCase() === k);
+        if (hit) return hit;
+      }
+      return k;
+    });
+  return { views: nextViews, orphaned };
 }

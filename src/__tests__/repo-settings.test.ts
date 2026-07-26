@@ -7,6 +7,7 @@ import {
   detectBareRepo,
   buildWorktreeCommand,
   migrateLegacyConfig,
+  migrateStagesIntoViews,
   RepoFactsCache,
   resolveForRepo,
   type GitRun,
@@ -230,17 +231,53 @@ describe("resolveRepoSettings null handling", () => {
     expect(r.onMrOpenState).toBe("In Review");
   });
 
-  test("array fields replace wholesale rather than merging", () => {
-    const r = resolveRepoSettings(
-      { parkedStates: ["In Review", "QA"] },
-      { parkedStates: ["Staging"] },
-    );
-    expect(r.parkedStates).toEqual(["Staging"]);
+  test("unset transition fields default to null, so jmux never writes uninvited", () => {
+    expect(resolveRepoSettings(undefined, undefined).onSessionStartState).toBeNull();
+  });
+});
+
+describe("migrateStagesIntoViews", () => {
+  // The stage lists used to live on repoDefaults, independent of the tabs. This
+  // folds them into the tabs once, so nobody keeps two mappings in sync.
+  const views = [
+    { id: "todo", label: "To do", groups: [{ label: "g", states: ["To do", "Dev Confirm"] }] },
+    { id: "waiting", label: "Waiting", groups: [{ label: "g", states: ["QA", "MR Review"] }] },
+  ];
+
+  test("assigns each tab the stage its states mostly belong to", () => {
+    const { views: next } = migrateStagesIntoViews(views, {
+      activeStates: ["To do", "In Progress"],
+      parkedStates: ["QA", "MR Review", "Dev Confirm"],
+    });
+    expect(next.find((v: any) => v.id === "waiting").stage).toBe("parked");
+    expect(next.find((v: any) => v.id === "todo").stage).toBe("active");
   });
 
-  test("stage lists default to empty, so nothing parks until configured", () => {
-    const r = resolveRepoSettings(undefined, undefined);
-    expect(r.parkedStates).toEqual([]);
-    expect(r.onSessionStartState).toBeNull();
+  test("ties resolve toward the earlier lifecycle stage", () => {
+    // "To do" tab has one active and one parked state; active is earlier, and
+    // is what a tab called To do plainly means.
+    const { views: next } = migrateStagesIntoViews(
+      [{ id: "todo", label: "To do", groups: [{ label: "g", states: ["a", "b"] }] }],
+      { activeStates: ["a"], parkedStates: ["b"] },
+    );
+    expect(next[0].stage).toBe("active");
+  });
+
+  test("a tab whose states match nothing is left unstaged", () => {
+    const { views: next } = migrateStagesIntoViews(
+      [{ id: "x", label: "X", groups: [{ label: "g", states: ["zzz"] }] }],
+      { parkedStates: ["QA"] },
+    );
+    expect(next[0].stage).toBeUndefined();
+  });
+
+  test("reports states that had a stage but no tab to carry it", () => {
+    const { orphaned } = migrateStagesIntoViews(views, { doneStates: ["Shipped"] });
+    expect(orphaned).toEqual(["Shipped"]);
+  });
+
+  test("an already-staged tab is left alone", () => {
+    const staged = [{ id: "w", label: "W", stage: "done", groups: [{ label: "g", states: ["QA"] }] }];
+    expect(migrateStagesIntoViews(staged, { parkedStates: ["QA"] }).views[0].stage).toBe("done");
   });
 });

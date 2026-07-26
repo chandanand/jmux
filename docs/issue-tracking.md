@@ -346,17 +346,26 @@ what you actually see on screen.
 
 | Stage | Behaviour |
 |-------|-----------|
-| `idea` | Captured, not started — absent from the sidebar |
+| `idea` | Captured, not started |
 | `active` | Normal sidebar row |
 | `parked` | Handed off — collapsed into one row at the bottom |
 | `done` | Finished |
 
-With no configuration, stages come from the tracker's own category
-(`triage`/`backlog` → idea, `unstarted`/`started` → active,
-`completed`/`canceled` → done). **Nothing maps to `parked` by default**, so
-parking is inert until you opt in. Name the states that diverge under
-**Settings → Stages** (or `repoDefaults.parkedStates` etc.) — these are
-per-repo, because repos differ in workflow vocabulary.
+**A queue tab declares its stage**, and its states are what that stage covers:
+
+```json
+{ "id": "waiting", "label": "Waiting", "stage": "parked",
+  "groups": [{ "label": "In QA", "states": ["QA (PROD WEB)"] }] }
+```
+
+So a status is classified **once** — putting it in the Waiting tab is what
+parks its session. Statuses in no tab, or in a tab with no stage, fall back to
+the tracker's own category (`triage`/`backlog` → idea, `unstarted`/`started` →
+active, `completed`/`canceled`/`duplicate` → done). Nothing reaches `parked`
+by fallback, so parking only ever happens because a tab said so.
+
+Set a tab's stage in `Ctrl-a I` → **Queues** → **Edit tabs & groups…** →
+*Lifecycle stage…*.
 
 ### Parking (the back burner)
 

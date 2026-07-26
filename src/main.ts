@@ -42,7 +42,7 @@ import { StdinGate } from "./stdin-gate";
 import { TmuxControl, type ControlEvent } from "./tmux-control";
 import { DiffPanel } from "./diff-panel";
 import { InfoPanel, rebuildInfoPanelColors } from "./info-panel";
-import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, stateAssignments, assignStateToGroup, unassignState, createView, renameView, moveView, deleteView, createGroup, renameGroup, moveGroup, deleteGroup, type PanelView } from "./panel-view";
+import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, stagesFromViews, stateAssignments, assignStateToGroup, unassignState, createView, renameView, moveView, deleteView, createGroup, renameGroup, moveGroup, deleteGroup, type PanelView } from "./panel-view";
 import { transformIssues, transformMrs, buildViewNodes, renderView, createViewState, filterItems, rebuildPanelViewColors, computeViewLayout, splitRatioForSepRow, DEFAULT_PANEL_SPLIT_RATIO, type ViewState, type ViewNode, type IssueSessionInfo } from "./panel-view-renderer";
 import { createAdapters } from "./adapters/registry";
 import { PollCoordinator } from "./adapters/poll-coordinator";
@@ -1121,11 +1121,16 @@ function parkingConfig(): ParkingConfig {
   };
 }
 
+/** Stage lists derived from the queue tabs — the single source of truth. */
+function derivedStages(): Record<WorkStage, string[]> {
+  return stagesFromViews(panelViews);
+}
+
 /** Stage of a session's linked issue, or null when it has none. */
 function stageOfSession(name: string): WorkStage | null {
   const issue = pollCoordinator.getContext(name)?.issues[0];
   if (!issue) return null;
-  return stageForIssue(issue, configStore.config, (d) => repoFacts.get(d), homedir());
+  return stageForIssue(issue, derivedStages());
 }
 
 /**
@@ -2342,6 +2347,7 @@ function openQueueTabMenu(viewId: string): void {
     annotation: `${g.states.length} states`,
   }));
   items.push(
+    { id: "\x00stage", label: "Lifecycle stage…", annotation: view.stage ? STAGE_LABELS[view.stage] : "none" },
     { id: "\x00newgroup", label: "+ New group" },
     { id: "\x00rename", label: "Rename tab…" },
     { id: "\x00up", label: "Move tab up" },
@@ -2353,6 +2359,20 @@ function openQueueTabMenu(viewId: string): void {
   pickList(view.label, items, (id) => {
     if (id.startsWith("g\x00")) return openQueueGroupMenu(viewId, id.slice(2));
     switch (id) {
+      case "\x00stage":
+        // The stage is what makes this tab mean something behaviourally —
+        // "Waiting" only parks sessions because it declares stage=parked.
+        return pickList("Lifecycle stage", [
+          ...STAGE_ORDER.map((st) => ({ id: st, label: STAGE_LABELS[st] })),
+          { id: "none", label: "None (fall back to tracker category)" },
+        ], (stage) => {
+          persistViews(panelViews.map((v) => v.id !== viewId
+            ? v
+            : stage === "none"
+              ? { ...v, stage: undefined }
+              : { ...v, stage: stage as WorkStage }));
+          openQueueTabMenu(viewId);
+        });
       case "\x00newgroup":
         return promptText("New group name", "", (label) => {
           persistViews(createGroup(panelViews, viewId, label));
@@ -3460,7 +3480,7 @@ interface RepoRow {
   label: string;
   field: keyof RepoSettings;
   kind: RepoRowKind;
-  group: "workflow" | "stages" | "transitions";
+  group: "workflow" | "transitions";
 }
 
 const REPO_SETTING_ROWS: RepoRow[] = [
@@ -3469,11 +3489,6 @@ const REPO_SETTING_ROWS: RepoRow[] = [
   { id: "claude-command", label: "Claude command", field: "claudeCommand", kind: "text", group: "workflow" },
   { id: "wtm", label: "wtm integration", field: "wtmIntegration", kind: "boolean", group: "workflow" },
   { id: "auto-agent", label: "Auto-launch agent", field: "autoLaunchAgent", kind: "boolean", group: "workflow" },
-
-  { id: "idea-states", label: "Idea states", field: "ideaStates", kind: "multiselect", group: "stages" },
-  { id: "active-states", label: "Active states", field: "activeStates", kind: "multiselect", group: "stages" },
-  { id: "parked-states", label: "Parked states", field: "parkedStates", kind: "multiselect", group: "stages" },
-  { id: "done-states", label: "Done states", field: "doneStates", kind: "multiselect", group: "stages" },
 
   { id: "on-start", label: "On session start", field: "onSessionStartState", kind: "state", group: "transitions" },
   { id: "on-mr-open", label: "On MR opened", field: "onMrOpenState", kind: "state", group: "transitions" },
@@ -3581,7 +3596,6 @@ function currentRepoCategory(): SettingsCategory[] {
     collapsed: false,
     settings: [
       ...buildRepoRows("workflow", tier),
-      ...buildRepoRows("stages", tier),
       ...buildRepoRows("transitions", tier),
     ],
   }];
@@ -3670,7 +3684,7 @@ function buildSettingsCategories(): SettingsCategory[] {
       ],
     },
     {
-      label: "Adapters",
+      label: "Integrations",
       collapsed: false,
       settings: [
         {
@@ -3688,7 +3702,7 @@ function buildSettingsCategories(): SettingsCategory[] {
       ],
     },
     {
-      label: "Issue Workflow",
+      label: "Repo",
       collapsed: false,
       settings: [
         ...repoDefaultSettings(),
@@ -3735,7 +3749,7 @@ function buildSettingsCategories(): SettingsCategory[] {
       ],
     },
     {
-      label: "Pipeline",
+      label: "Automation",
       collapsed: false,
       settings: [
         {
@@ -3769,6 +3783,37 @@ function buildSettingsCategories(): SettingsCategory[] {
             configStore.setPipeline("unparkOn", cur);
             recomputeParking();
           },
+        },
+        {
+          id: "auto-park-idle", label: "Auto-park idle sessions (days)", type: "text" as const,
+          getValue: () => {
+            const d = configStore.config.pipeline?.autoParkIdleDays ?? null;
+            return d === null ? "off" : String(d);
+          },
+          onTextCommit: (v) => {
+            const n = parseInt(v, 10);
+            configStore.setPipeline("autoParkIdleDays", isNaN(n) || n <= 0 ? null : n);
+            recomputeParking();
+          },
+        },
+      ],
+    },
+    {
+      // The inverse of how queues are stored: one row per tracker state saying
+      // which tab it feeds. "Where does QA Failed go?" is the question people
+      // actually ask, and answering it by reading four tabs' group lists is not
+      // an answer.
+      label: "Queues",
+      collapsed: false,
+      settings: [
+        {
+          id: "edit-queues", label: "Edit tabs & groups…", type: "action" as const,
+          getValue: () => {
+            const tabs = panelViews.filter((v) => v.source === "issues");
+            const groups = tabs.reduce((n, v) => n + (v.groups?.length ?? 0), 0);
+            return `${tabs.length} tabs · ${groups} groups`;
+          },
+          onActivate: () => openQueueEditor(),
         },
         {
           id: "up-next-order", label: "Up next queue order", type: "multiselect" as const,
@@ -3807,37 +3852,6 @@ function buildSettingsCategories(): SettingsCategory[] {
             return parkingSetupWarning(cfg.parkStages, counts)
               ?? `active — ${currentSessions.filter((s) => sidebar.isParked(s.name)).length} parked`;
           },
-        },
-        {
-          id: "auto-park-idle", label: "Auto-park idle sessions (days)", type: "text" as const,
-          getValue: () => {
-            const d = configStore.config.pipeline?.autoParkIdleDays ?? null;
-            return d === null ? "off" : String(d);
-          },
-          onTextCommit: (v) => {
-            const n = parseInt(v, 10);
-            configStore.setPipeline("autoParkIdleDays", isNaN(n) || n <= 0 ? null : n);
-            recomputeParking();
-          },
-        },
-      ],
-    },
-    {
-      // The inverse of how queues are stored: one row per tracker state saying
-      // which tab it feeds. "Where does QA Failed go?" is the question people
-      // actually ask, and answering it by reading four tabs' group lists is not
-      // an answer.
-      label: "Queues",
-      collapsed: false,
-      settings: [
-        {
-          id: "edit-queues", label: "Edit tabs & groups…", type: "action" as const,
-          getValue: () => {
-            const tabs = panelViews.filter((v) => v.source === "issues");
-            const groups = tabs.reduce((n, v) => n + (v.groups?.length ?? 0), 0);
-            return `${tabs.length} tabs · ${groups} groups`;
-          },
-          onActivate: () => openQueueEditor(),
         },
         {
           id: "state-tab-map", label: "Linear state → tab", type: "map" as const,
@@ -3879,22 +3893,6 @@ function buildSettingsCategories(): SettingsCategory[] {
       ],
     },
     {
-      label: "Stages",
-      collapsed: false,
-      settings: [
-        ...repoDefaultSettings("stages"),
-        {
-          id: "stage-source", label: "Tracker states available", type: "text" as const,
-          getValue: () => {
-            if (adapters.issueTracker?.authState !== "ok") return "tracker not connected";
-            return cachedWorkflowStates.length > 0
-              ? `${cachedWorkflowStates.length} states`
-              : "none reported";
-          },
-        },
-      ],
-    },
-    {
       // Quarantined from the rest deliberately: this is the only section that
       // WRITES to a shared team tracker, so turning it on should feel like a
       // decision rather than a stray keypress.
@@ -3908,6 +3906,21 @@ function buildSettingsCategories(): SettingsCategory[] {
           options: ["undo-toast", "always", "never"],
           onOptionSelect: (v) =>
             configStore.setPipeline("transitionConfirm", v as "always" | "undo-toast" | "never"),
+        },
+      ],
+    },
+    {
+      label: "Diagnostics",
+      collapsed: false,
+      settings: [
+        {
+          id: "stage-source", label: "Tracker states available", type: "text" as const,
+          getValue: () => {
+            if (adapters.issueTracker?.authState !== "ok") return "tracker not connected";
+            return cachedWorkflowStates.length > 0
+              ? `${cachedWorkflowStates.length} states`
+              : "none reported";
+          },
         },
       ],
     },
@@ -4136,8 +4149,9 @@ function mrsByUrl(): Map<string, import("./adapters/types").MergeRequest> {
 function issuesForView(view: PanelView | undefined): import("./adapters/types").Issue[] {
   const all = pollCoordinator.getGlobalIssues();
   if (!view || view.source !== "issues") return all;
+  const stages = derivedStages();
   const stageOf = (issue: { status: string }) =>
-    stageForIssue(issue as import("./adapters/types").Issue, configStore.config, (d) => repoFacts.get(d), homedir());
+    stageForIssue(issue as import("./adapters/types").Issue, stages);
   return all.filter((issue) => matchesIssueFilter(issue, view.filter, stageOf));
 }
 

@@ -46,7 +46,9 @@ export interface ParkingConfig {
 }
 
 export const DEFAULT_PARKING: ParkingConfig = {
-  parkStages: [],
+  // A tab only declares stage=parked deliberately, so honouring it by default
+  // is the user's stated intent rather than a surprise.
+  parkStages: ["parked"],
   unparkOn: ["state-regression", "issue-comment", "mr-activity", "pipeline-failed"],
   autoParkIdleDays: null,
 };

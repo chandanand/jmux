@@ -98,6 +98,11 @@ export interface PanelView {
    * `filter.states` are ignored for this view.
    */
   groups?: PanelViewGroup[];
+  /**
+   * The lifecycle stage this tab's states occupy. Optional: a tab with no stage
+   * contributes nothing, and its states fall back to the tracker's own category.
+   */
+  stage?: WorkStage;
 }
 
 /**
@@ -181,6 +186,7 @@ export function parseViews(raw: unknown): PanelView[] {
       sortOrder: sortOrder === "desc" ? "desc" : "asc",
       sessionLinkedFirst: sessionLinkedFirst !== false,
       ...(parseGroups((entry as any).groups) ? { groups: parseGroups((entry as any).groups)! } : {}),
+      ...(STAGE_VALUES.includes((entry as any).stage) ? { stage: (entry as any).stage as WorkStage } : {}),
     });
   }
   return views.length > 0 ? views : DEFAULT_VIEWS;
@@ -462,4 +468,24 @@ export function moveGroup(
 
 export function deleteGroup(views: PanelView[], viewId: string, label: string): PanelView[] {
   return mapGroups(views, viewId, (groups) => groups.filter((g) => g.label !== label));
+}
+
+const STAGE_VALUES: readonly WorkStage[] = ["idea", "active", "parked", "done"];
+
+/**
+ * The states each lifecycle stage owns, derived from the tabs that declare it.
+ *
+ * This replaces authoring stage lists separately from tab membership. A state
+ * was previously classified twice — once for display, once for behaviour — with
+ * nothing keeping the two in agreement; in practice they drifted, and a status
+ * sitting in a "To do" tab was silently being parked. Deriving one from the
+ * other makes that class of bug unrepresentable.
+ */
+export function stagesFromViews(views: PanelView[]): Record<WorkStage, string[]> {
+  const out: Record<WorkStage, string[]> = { idea: [], active: [], parked: [], done: [] };
+  for (const view of views) {
+    if (!view.stage) continue;
+    for (const group of view.groups ?? []) out[view.stage].push(...group.states);
+  }
+  return out;
 }
