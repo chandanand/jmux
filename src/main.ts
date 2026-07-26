@@ -2156,7 +2156,7 @@ function explainCaptureUnavailable(reason: string, hint: string): void {
  */
 function openToggleList(opts: {
   header: string;
-  options: Array<{ id: string; label: string }>;
+  options: Array<{ id: string; label: string; annotation?: string }>;
   selected: () => string[];
   toggle: (id: string) => void;
 }): void {
@@ -2166,6 +2166,9 @@ function openToggleList(opts: {
     const items = opts.options.map((o) => ({
       id: o.id,
       label: `${chosen.has(o.id.toLowerCase()) ? "[x]" : "[ ]"} ${o.label}`,
+      // Showing an already-assigned status's current home makes it obvious that
+      // ticking it *moves* it rather than duplicating it.
+      annotation: o.annotation,
     }));
     const modal = new ListModal({
       header: opts.header,
@@ -2338,6 +2341,36 @@ function openQueueEditor(): void {
   });
 }
 
+/**
+ * Every tracker status, unassigned ones first, annotated with where an
+ * already-assigned status currently lives. Sorting the free ones to the top is
+ * the point: those are the ones still needing a decision.
+ */
+function statusPickerItems(): ListItem[] {
+  const assigned = new Map(
+    stateAssignments(panelViews).map((a) => [a.state.toLowerCase(), `${a.viewLabel} / ${a.sectionLabel}`]),
+  );
+  const names = cachedWorkflowStates.map((s) => s.name);
+  const free = names.filter((n) => !assigned.has(n.toLowerCase()));
+  const taken = names.filter((n) => assigned.has(n.toLowerCase()));
+  return [...free, ...taken].map((n) => ({
+    id: n,
+    label: n,
+    annotation: assigned.get(n.toLowerCase()) ?? "",
+  }));
+}
+
+/** A section label derived from a status, disambiguated if the tab has one already. */
+function uniqueSectionLabel(viewId: string, base: string): string {
+  const existing = panelViews.find((v) => v.id === viewId)?.sections ?? [];
+  const taken = new Set(existing.map((sec) => sec.label.toLowerCase()));
+  if (!taken.has(base.toLowerCase())) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${base} ${n}`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+}
+
 /** One tab: the sections it contains, plus tab-level actions. */
 function openQueueTabMenu(viewId: string): void {
   const view = panelViews.find((v) => v.id === viewId);
@@ -2348,7 +2381,7 @@ function openQueueTabMenu(viewId: string): void {
     annotation: `${sec.stage ? STAGE_LABELS[sec.stage] : "no stage"} · ${sec.states.length} statuses`,
   }));
   items.push(
-    { id: "\x00newsection", label: "+ New section" },
+    { id: "\x00newsection", label: "+ Add section from a status…" },
     { id: "\x00rename", label: "Rename tab…" },
     { id: "\x00up", label: "Move tab up" },
     { id: "\x00down", label: "Move tab down" },
@@ -2360,9 +2393,16 @@ function openQueueTabMenu(viewId: string): void {
     if (id.startsWith("s\x00")) return openQueueSectionMenu(viewId, id.slice(2));
     switch (id) {
       case "\x00newsection":
-        return promptText("New section name", "", (label) => {
-          persistViews(createSection(panelViews, viewId, label));
-          openQueueTabMenu(viewId);
+        // A section is *defined by* the statuses it covers, so it is created by
+        // choosing one — not by inventing a name up front. The status becomes
+        // the label, which is right in the common 1:1 case and renameable in
+        // the few places several statuses collapse into one section.
+        return pickList("Add section — pick a status", statusPickerItems(), (state) => {
+          const label = uniqueSectionLabel(viewId, state);
+          let next = createSection(panelViews, viewId, label);
+          next = assignStateToGroup(next, state, viewId, label);
+          persistViews(next);
+          openQueueSectionMenu(viewId, label);
         });
       case "\x00rename":
         return promptText("Rename tab", view.label, (label) => {
@@ -2403,7 +2443,9 @@ function openQueueSectionMenu(viewId: string, label: string): void {
       case "states":
         return openToggleList({
           header: `Statuses in ${view.label} / ${label}`,
-          options: workflowStateOptions(),
+          options: statusPickerItems().map((it) =>
+            // Its own section is where it should be; don't label that a move.
+            it.annotation === `${view.label} / ${label}` ? { ...it, annotation: "" } : it),
           selected: () =>
             panelViews.find((v) => v.id === viewId)?.sections?.find((x) => x.label === label)?.states ?? [],
           // Assigning moves a status out of any other section, so it can only

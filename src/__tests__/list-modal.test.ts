@@ -258,3 +258,32 @@ describe("ListModal", () => {
     expect(grid.cells[2][1].char).toBe("▸");
   });
 });
+
+describe("ListModal annotations", () => {
+  // `annotation` was declared on ListItem but never painted — a field that
+  // promised something the renderer didn't deliver.
+  function grid(items: Array<{ id: string; label: string; annotation?: string }>) {
+    const m = new ListModal({ header: "H", items });
+    m.open();
+    const g = m.getGrid(60);
+    return Array.from({ length: g.rows }, (_, r) =>
+      Array.from({ length: 60 }, (_, c) => g.cells[r][c].char).join("")).join("\n");
+  }
+
+  test("an annotation is rendered right-aligned on its row", () => {
+    const text = grid([{ id: "a", label: "QA Failed", annotation: "Urgent / QA Failed" }]);
+    expect(text).toContain("QA Failed");
+    expect(text).toContain("Urgent / QA Failed");
+  });
+
+  test("items without one render unchanged", () => {
+    expect(grid([{ id: "a", label: "Plain" }])).toContain("Plain");
+  });
+
+  test("the label is truncated rather than overwriting the annotation", () => {
+    const long = "x".repeat(80);
+    const text = grid([{ id: "a", label: long, annotation: "HERE" }]);
+    expect(text).toContain("HERE");
+    expect(text).not.toContain("x".repeat(60));
+  });
+});
