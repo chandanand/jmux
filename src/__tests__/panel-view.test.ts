@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { parseViews, DEFAULT_VIEWS, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue } from "../panel-view";
+import { parseViews, DEFAULT_VIEWS, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, groupIndexForStatus } from "../panel-view";
 import type { WorkStage } from "../repo-settings";
 
 describe("parseViews", () => {
@@ -214,5 +214,75 @@ describe("filter editing", () => {
   test("scope always survives editing", () => {
     const f = toggleFilterValue({ scope: "assigned" }, "labels", "bug");
     expect(f.scope).toBe("assigned");
+  });
+});
+
+// --- Explicit groups ---
+//
+// Tabs are a fixed attention model (Urgent / To do / Waiting); what varies per
+// workspace is which statuses roll up into each tab, and in what order. So a
+// view can carry an explicit ordered group list that drives BOTH membership and
+// the section headers, instead of deriving groups from a field.
+
+describe("groupIndexForStatus", () => {
+  const groups = [
+    { label: "QA Failed", states: ["QA Failed"] },
+    { label: "Release Blockers", states: ["Release Blockers", "Blocked"] },
+  ];
+
+  test("returns the index of the first group claiming the status", () => {
+    expect(groupIndexForStatus("QA Failed", groups)).toBe(0);
+    expect(groupIndexForStatus("Blocked", groups)).toBe(1);
+  });
+
+  test("matches case- and whitespace-insensitively", () => {
+    expect(groupIndexForStatus("  qa failed ", groups)).toBe(0);
+  });
+
+  test("returns -1 for a status no group claims", () => {
+    expect(groupIndexForStatus("In Progress", groups)).toBe(-1);
+  });
+
+  test("first group wins when two claim the same status", () => {
+    // Precedence is explicit rather than ambiguous, so a status listed twice
+    // still lands somewhere predictable.
+    const dupes = [
+      { label: "First", states: ["QA Failed"] },
+      { label: "Second", states: ["QA Failed"] },
+    ];
+    expect(groupIndexForStatus("QA Failed", dupes)).toBe(0);
+  });
+});
+
+describe("parseViews with groups", () => {
+  const base = {
+    id: "urgent", label: "Urgent", source: "issues",
+    filter: { scope: "assigned" },
+    groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
+  };
+
+  test("round-trips an ordered group list", () => {
+    const [v] = parseViews([{ ...base, groups: [
+      { label: "QA Failed", states: ["QA Failed"] },
+      { label: "Blockers", states: ["Release Blockers"] },
+    ] }]);
+    expect(v.groups).toEqual([
+      { label: "QA Failed", states: ["QA Failed"] },
+      { label: "Blockers", states: ["Release Blockers"] },
+    ]);
+  });
+
+  test("drops malformed group entries but keeps the good ones", () => {
+    const [v] = parseViews([{ ...base, groups: [
+      { label: "Good", states: ["A"] },
+      { label: "", states: ["B"] },
+      { label: "No states", states: [] },
+      "nonsense",
+    ] }]);
+    expect(v.groups?.map((g) => g.label)).toEqual(["Good"]);
+  });
+
+  test("a view with no groups key stays ungrouped", () => {
+    expect(parseViews([base])[0].groups).toBeUndefined();
   });
 });

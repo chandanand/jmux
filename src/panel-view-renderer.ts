@@ -2,7 +2,7 @@
 import type { CellGrid } from "./types";
 import { ColorMode } from "./types";
 import { createGrid, writeString, textCols, truncateToCols, type CellAttrs, type StyledLine } from "./cell-grid";
-import type { PanelView, GroupByField } from "./panel-view";
+import { groupIndexForStatus, type PanelView, type GroupByField } from "./panel-view";
 import type { Issue, IssueStateType, MergeRequest } from "./adapters/types";
 import { fuzzyMatch } from "./fuzzy";
 import { renderMarkdownToStyledLines } from "./markdown";
@@ -134,6 +134,27 @@ export function buildViewNodes(
     ordered = [...linked, ...unlinked];
   } else {
     ordered = sortItems(items, view.sortBy, view.sortOrder);
+  }
+
+  // Explicit groups drive both membership and headers: an item belongs to the
+  // first group claiming its status, and anything unclaimed is not in this tab
+  // at all. Config order is priority order, so it is preserved verbatim rather
+  // than sorted — that is the whole point of naming the sections by hand.
+  if (view.groups && view.groups.length > 0) {
+    const buckets: RenderableItem[][] = view.groups.map(() => []);
+    for (const item of ordered) {
+      const idx = groupIndexForStatus(item.status, view.groups);
+      if (idx >= 0) buckets[idx]!.push(item);
+    }
+    const nodes: ViewNode[] = [];
+    view.groups.forEach((group, i) => {
+      const members = buckets[i]!;
+      const collapsed = collapsedGroups.has(group.label);
+      nodes.push({ kind: "group", key: group.label, label: group.label, count: members.length, collapsed, depth: 0 });
+      if (collapsed) return;
+      for (const item of members) nodes.push({ kind: "item", item, depth: 1 });
+    });
+    return nodes;
   }
 
   if (view.groupBy === "none") {

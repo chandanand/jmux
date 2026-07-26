@@ -66,6 +66,19 @@ export function matchesIssueFilter(
   return true;
 }
 
+/**
+ * One named section within a tab, listing the tracker statuses that roll up
+ * into it. Order within a view is priority order, and an issue lands in the
+ * first group that claims its status.
+ *
+ * This is what makes tab *names* static while their *membership* stays
+ * per-workspace configurable: jmux ships the tabs, you map your own statuses in.
+ */
+export interface PanelViewGroup {
+  label: string;
+  states: string[];
+}
+
 export type GroupByField = "team" | "project" | "status" | "priority" | "none";
 export type SortByField = "priority" | "updated" | "created" | "status";
 
@@ -79,6 +92,43 @@ export interface PanelView {
   sortBy: SortByField;
   sortOrder: "asc" | "desc";
   sessionLinkedFirst: boolean;
+  /**
+   * Explicit ordered sections. When present these drive BOTH membership (the
+   * union of every group's states) and the headers, and `groupBy` /
+   * `filter.states` are ignored for this view.
+   */
+  groups?: PanelViewGroup[];
+}
+
+/**
+ * Index of the first group claiming `status`, or -1 if none does.
+ * Case- and whitespace-insensitive, matching every other state comparison.
+ */
+export function groupIndexForStatus(
+  status: string,
+  groups: PanelViewGroup[] | undefined,
+): number {
+  if (!groups) return -1;
+  const want = (status ?? "").trim().toLowerCase();
+  for (let i = 0; i < groups.length; i++) {
+    if (groups[i]!.states.some((s) => s.trim().toLowerCase() === want)) return i;
+  }
+  return -1;
+}
+
+/** Read a view's group list, dropping entries that can't render or match. */
+function parseGroups(raw: unknown): PanelViewGroup[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: PanelViewGroup[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const { label, states } = entry as Record<string, unknown>;
+    if (typeof label !== "string" || !label.trim()) continue;
+    if (!Array.isArray(states) || !states.every((s) => typeof s === "string")) continue;
+    if (states.length === 0) continue;
+    out.push({ label, states: states as string[] });
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 const VALID_COMBOS: Array<{ source: string; scope: string }> = [
@@ -130,6 +180,7 @@ export function parseViews(raw: unknown): PanelView[] {
       sortBy: isSortByField(sortBy) ? sortBy : "priority",
       sortOrder: sortOrder === "desc" ? "desc" : "asc",
       sessionLinkedFirst: sessionLinkedFirst !== false,
+      ...(parseGroups((entry as any).groups) ? { groups: parseGroups((entry as any).groups)! } : {}),
     });
   }
   return views.length > 0 ? views : DEFAULT_VIEWS;

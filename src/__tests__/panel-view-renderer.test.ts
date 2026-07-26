@@ -6,6 +6,7 @@ import {
   renderView,
   createViewState,
   pickSessionIndicator,
+  type RenderableItem,
   computeViewLayout,
   splitRatioForSepRow,
   DEFAULT_PANEL_SPLIT_RATIO,
@@ -328,5 +329,72 @@ describe("splitRatioForSepRow", () => {
   test("stays within 0..1 for out-of-range rows", () => {
     expect(splitRatioForSepRow(40, false, -50)).toBe(0);
     expect(splitRatioForSepRow(40, false, 999)).toBe(1);
+  });
+});
+
+// --- Explicit group buckets ---
+
+describe("buildViewNodes with explicit groups", () => {
+  const view = {
+    id: "urgent", label: "Urgent", source: "issues" as const,
+    filter: { scope: "assigned" as const },
+    groupBy: "none" as const, subGroupBy: "none" as const,
+    sortBy: "priority" as const, sortOrder: "asc" as const,
+    sessionLinkedFirst: false,
+    groups: [
+      { label: "QA Failed", states: ["QA Failed"] },
+      { label: "Blockers", states: ["Release Blockers"] },
+    ],
+  };
+
+  const item = (id: string, status: string, priority = 3): RenderableItem => ({
+    id, type: "issue", primary: id, title: id, status, meta: "",
+    group: "", subGroup: status, sessionLinked: false, priority,
+    updatedAt: 0, raw: {} as any,
+  });
+
+  test("emits configured groups in configured order, not alphabetically", () => {
+    // "Blockers" sorts before "QA Failed" alphabetically; config order wins.
+    const nodes = buildViewNodes(
+      [item("a", "Release Blockers"), item("b", "QA Failed")], view, new Set(),
+    );
+    const labels = nodes.filter((n) => n.kind === "group").map((n: any) => n.label);
+    expect(labels).toEqual(["QA Failed", "Blockers"]);
+  });
+
+  test("items land under the group that claims their status", () => {
+    const nodes = buildViewNodes(
+      [item("a", "Release Blockers"), item("b", "QA Failed")], view, new Set(),
+    );
+    const order = nodes.map((n) => n.kind === "group" ? `#${(n as any).label}` : (n as any).item.id);
+    expect(order).toEqual(["#QA Failed", "b", "#Blockers", "a"]);
+  });
+
+  test("statuses no group claims are excluded entirely", () => {
+    const nodes = buildViewNodes([item("z", "In Progress")], view, new Set());
+    expect(nodes.filter((n) => n.kind === "item")).toHaveLength(0);
+  });
+
+  test("an empty group still shows its header with a zero count", () => {
+    // A queue that is empty is information, not noise — it says "nothing is
+    // blocked" rather than silently disappearing.
+    const nodes = buildViewNodes([item("b", "QA Failed")], view, new Set());
+    const blockers = nodes.find((n) => n.kind === "group" && (n as any).label === "Blockers");
+    expect(blockers).toBeDefined();
+    expect((blockers as any).count).toBe(0);
+  });
+
+  test("collapsing a group hides its items but keeps the header", () => {
+    const nodes = buildViewNodes([item("b", "QA Failed")], view, new Set(["QA Failed"]));
+    expect(nodes.filter((n) => n.kind === "item")).toHaveLength(0);
+    expect(nodes.filter((n) => n.kind === "group")).toHaveLength(2);
+  });
+
+  test("sorting still applies within a group", () => {
+    const nodes = buildViewNodes(
+      [item("low", "QA Failed", 4), item("urgent", "QA Failed", 1)], view, new Set(),
+    );
+    const ids = nodes.filter((n) => n.kind === "item").map((n: any) => n.item.id);
+    expect(ids).toEqual(["urgent", "low"]);
   });
 });
