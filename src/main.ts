@@ -3913,7 +3913,11 @@ function handleSettingsInput(data: string): void {
     // that path does, or the input router keeps classifying clicks against
     // the stale frameless layout until the next resize.
     applyChromeLayout();
-    inputRouter.setModalOpen(false);
+    // ...but an `action` row may have closed settings precisely in order to
+    // hand off to a modal (the queue editor does). That modal has already
+    // claimed input routing; clearing it here would send every subsequent
+    // keystroke to the pty instead, leaving the modal visible but deaf.
+    if (!activeModal?.isOpen()) inputRouter.setModalOpen(false);
   }
 
   scheduleRender();
