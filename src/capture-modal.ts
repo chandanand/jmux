@@ -14,7 +14,9 @@
 // hint row so the fork is discoverable without documentation.
 
 import type { CellGrid } from "./types";
-import { createGrid, writeString } from "./cell-grid";
+import { ColorMode } from "./types";
+import { createGrid, writeString, type CellAttrs } from "./cell-grid";
+import { theme } from "./theme";
 import {
   HEADER_ATTRS, SUBHEADER_ATTRS, PROMPT_ATTRS, INPUT_ATTRS, BG_ATTRS, DIM_ATTRS,
   type ModalAction,
@@ -38,6 +40,22 @@ type Field = "title" | "team" | "description";
 const FIELD_ORDER: Field[] = ["title", "team", "description"];
 
 const DESCRIPTION_ROWS = 4;
+
+// Row/column geometry, named so getGrid and getCursorPosition cannot drift —
+// a caret drawn one column off from the text it follows is exactly the kind of
+// bug that makes a working modal look frozen.
+const TITLE_ROW = 2;
+const TEAM_ROW = 3;
+const BODY_LABEL_ROW = 5;
+const BODY_ROW = 6;
+const LABEL_COL = 2;
+/** Values start past the label gutter, so text never abuts its own label. */
+const VALUE_COL = 15;
+const BODY_COL = 4;
+const CARET = "█";
+
+const TITLE_PLACEHOLDER = "What needs doing?";
+const BODY_PLACEHOLDER = "Context, links, repro steps…";
 
 export class CaptureModal {
   private _open = false;
@@ -77,10 +95,13 @@ export class CaptureModal {
   }
 
   getCursorPosition(): { row: number; col: number } | null {
-    if (this.field === "title") return { row: 2, col: 9 + this.title.length };
-    if (this.field === "team") return { row: 3, col: 9 + this.currentTeamName().length };
-    const lines = this.description.split("\n");
-    return { row: 5 + Math.min(lines.length - 1, DESCRIPTION_ROWS - 1), col: 4 + lines[lines.length - 1]!.length };
+    if (this.field === "title") return { row: TITLE_ROW, col: VALUE_COL + this.title.length };
+    if (this.field === "team") return { row: TEAM_ROW, col: VALUE_COL + this.currentTeamName().length };
+    const lines = this.description.split("\n").slice(-DESCRIPTION_ROWS);
+    return {
+      row: BODY_ROW + lines.length - 1,
+      col: BODY_COL + lines[lines.length - 1]!.length,
+    };
   }
 
   handleInput(data: string): ModalAction {
@@ -157,35 +178,91 @@ export class CaptureModal {
   }
 
   getGrid(width: number): CellGrid {
-    const height = 5 + DESCRIPTION_ROWS + 2;
+    const height = BODY_ROW + DESCRIPTION_ROWS + 2;
     const grid = createGrid(width, height);
     for (let r = 0; r < height; r++) {
       writeString(grid, r, 0, " ".repeat(width), BG_ATTRS);
     }
 
-    writeString(grid, 0, 2, "New issue", HEADER_ATTRS);
+    // Field surfaces are read from `theme` at render time rather than captured
+    // at module load, so a late terminal-background detection re-themes them
+    // without a rebuild hook (cf. rebuildModalAttrs).
+    const fieldBg: CellAttrs = { bg: theme.hover, bgMode: ColorMode.RGB };
+    const fieldText: CellAttrs = { ...INPUT_ATTRS, bg: theme.hover, bgMode: ColorMode.RGB };
+    const fieldHint: CellAttrs = { ...SUBHEADER_ATTRS, bg: theme.hover, bgMode: ColorMode.RGB };
 
-    const fieldRow = (label: string, row: number, value: string, focused: boolean): void => {
-      writeString(grid, row, 2, focused ? "▷" : " ", PROMPT_ATTRS);
-      writeString(grid, row, 4, label.padEnd(5), focused ? INPUT_ATTRS : SUBHEADER_ATTRS);
-      writeString(grid, row, 9, value.slice(0, Math.max(0, width - 11)), focused ? INPUT_ATTRS : SUBHEADER_ATTRS);
+    writeString(grid, 0, LABEL_COL, "New issue", HEADER_ATTRS);
+
+    const fieldWidth = Math.max(0, width - VALUE_COL - 2);
+
+    /** One labelled single-line field, with its own input surface. */
+    const fieldRow = (
+      label: string,
+      row: number,
+      value: string,
+      focused: boolean,
+      placeholder = "",
+      suffix = "",
+    ): void => {
+      writeString(grid, row, LABEL_COL, focused ? "▷" : " ", PROMPT_ATTRS);
+      writeString(grid, row, LABEL_COL + 2, label, focused ? INPUT_ATTRS : SUBHEADER_ATTRS);
+      // The field surface is always painted, so an empty field still looks like
+      // somewhere you can type.
+      writeString(grid, row, VALUE_COL, " ".repeat(fieldWidth), fieldBg);
+      if (value) {
+        writeString(grid, row, VALUE_COL, value.slice(0, fieldWidth), fieldText);
+      } else if (placeholder) {
+        // An empty focused field still shows its caret, so the placeholder
+        // starts past it rather than being clipped by it.
+        const at = focused ? VALUE_COL + 2 : VALUE_COL;
+        writeString(grid, row, at, placeholder.slice(0, Math.max(0, fieldWidth - (at - VALUE_COL))), fieldHint);
+      }
+      if (focused) {
+        const caretCol = VALUE_COL + Math.min(value.length, fieldWidth - 1);
+        writeString(grid, row, caretCol, CARET, fieldText);
+      }
+      if (suffix) {
+        const col = VALUE_COL + fieldWidth - suffix.length;
+        if (col > VALUE_COL) writeString(grid, row, col, suffix, fieldHint);
+      }
     };
 
-    fieldRow("Title", 2, this.title, this.field === "title");
-    fieldRow("Team", 3, this.currentTeamName() + (this.field === "team" ? "  ◂ ▸" : ""), this.field === "team");
+    fieldRow("Title", TITLE_ROW, this.title, this.field === "title", TITLE_PLACEHOLDER);
+    fieldRow(
+      "Team",
+      TEAM_ROW,
+      this.currentTeamName(),
+      this.field === "team",
+      "",
+      this.field === "team" ? "◂ ▸" : "",
+    );
 
-    writeString(grid, 4, 2, this.field === "description" ? "▷" : " ", PROMPT_ATTRS);
-    writeString(grid, 4, 4, "Description", this.field === "description" ? INPUT_ATTRS : SUBHEADER_ATTRS);
+    const bodyFocused = this.field === "description";
+    writeString(grid, BODY_LABEL_ROW, LABEL_COL, bodyFocused ? "▷" : " ", PROMPT_ATTRS);
+    writeString(grid, BODY_LABEL_ROW, LABEL_COL + 2, "Description", bodyFocused ? INPUT_ATTRS : SUBHEADER_ATTRS);
 
+    const bodyWidth = Math.max(0, width - BODY_COL - 2);
+    for (let i = 0; i < DESCRIPTION_ROWS; i++) {
+      writeString(grid, BODY_ROW + i, BODY_COL, " ".repeat(bodyWidth), fieldBg);
+    }
     const lines = this.description.split("\n").slice(-DESCRIPTION_ROWS);
-    lines.forEach((line, i) => {
-      writeString(grid, 5 + i, 4, line.slice(0, Math.max(0, width - 6)), INPUT_ATTRS);
-    });
+    if (this.description) {
+      lines.forEach((line, i) => {
+        writeString(grid, BODY_ROW + i, BODY_COL, line.slice(0, bodyWidth), fieldText);
+      });
+    } else {
+      writeString(grid, BODY_ROW, BODY_COL, BODY_PLACEHOLDER.slice(0, bodyWidth), fieldHint);
+    }
+    if (bodyFocused) {
+      const last = lines[lines.length - 1] ?? "";
+      const caretCol = BODY_COL + Math.min(last.length, bodyWidth - 1);
+      writeString(grid, BODY_ROW + lines.length - 1, caretCol, CARET, fieldText);
+    }
 
     writeString(
       grid,
       height - 1,
-      2,
+      LABEL_COL,
       "↵ capture  ·  ^S capture & start  ·  tab field  ·  esc cancel",
       DIM_ATTRS,
     );

@@ -1,6 +1,8 @@
 import { describe, test, expect } from "bun:test";
 import { CaptureModal, type CaptureResult } from "../capture-modal";
 import type { CellGrid } from "../types";
+import { InputRouter } from "../input-router";
+import { computeFrameLayout } from "../frame-layout";
 
 const TEAMS = [
   { id: "t-plat", name: "Platform" },
@@ -133,5 +135,125 @@ describe("CaptureModal prefill and rendering", () => {
     expect(t).toContain("Title");
     expect(t).toContain("Team");
     expect(t).toContain("Web");
+  });
+});
+
+// --- Production wiring ---
+//
+// The unit tests above call modal.handleInput directly. This one goes through
+// the real InputRouter exactly as main.ts wires it (setModalOpen + onModalInput
+// delegating to the active modal), so a routing regression that leaves the
+// modal visible but inert is caught here rather than by hand.
+
+describe("CaptureModal through InputRouter", () => {
+  function wired() {
+    const m = modal("t-plat");
+    const pty: string[] = [];
+    const router = new InputRouter(
+      {
+        onPtyData: (d) => { pty.push(d); },
+        onSidebarClick: () => {},
+        onModalInput: (d) => { m.handleInput(d); },
+      },
+      computeFrameLayout({
+        termCols: 120, termRows: 40, sidebarWidth: 24, borderWidth: 1,
+        toolbarRows: 1, diffState: "off", requestedPanelCols: 0,
+        frameRulesEnabled: false, footerEnabled: false,
+      }),
+    );
+    router.setModalOpen(true);
+    return { m, router, pty };
+  }
+
+  test("typed characters reach the modal and appear in its grid", () => {
+    const { m, router, pty } = wired();
+    for (const ch of "Fix auth") router.handleInput(ch);
+    expect(text(m.getGrid(70))).toContain("Fix auth");
+    expect(pty.join("")).toBe(""); // nothing leaked to the pty
+  });
+
+  test("Tab moves fields through the router", () => {
+    const { m, router } = wired();
+    router.handleInput("\t");
+    router.handleInput("\x1b[C");
+    expect(m.currentTeamId()).toBe("t-web");
+  });
+
+  test("Escape closes through the router", () => {
+    const { m, router } = wired();
+    router.handleInput("\x1b");
+    expect(m.isOpen()).toBe(false);
+  });
+});
+
+// --- Field affordances ---
+//
+// The first version rendered `TitleHi` — label and value jammed together with
+// no gap, no field, and no caret. Typing worked, but nothing on screen said so,
+// which is indistinguishable from a frozen modal. These pin the affordances
+// that make the composer legible.
+
+function rowText(grid: CellGrid, row: number): string {
+  return Array.from({ length: grid.cols }, (_, c) => grid.cells[row][c].char).join("");
+}
+
+function findRow(grid: CellGrid, needle: string): string {
+  for (let r = 0; r < grid.rows; r++) {
+    const line = rowText(grid, r);
+    if (line.includes(needle)) return line;
+  }
+  return "";
+}
+
+describe("CaptureModal field affordances", () => {
+  test("the value is separated from its label, not jammed against it", () => {
+    const m = modal("t-plat");
+    type(m, "Hi");
+    expect(findRow(m.getGrid(70), "Title")).toMatch(/Title\s{2,}Hi/);
+  });
+
+  test("an empty title shows a placeholder", () => {
+    expect(findRow(modal("t-plat").getGrid(70), "Title")).toContain("What needs doing?");
+  });
+
+  test("the placeholder disappears once you type", () => {
+    const m = modal("t-plat");
+    type(m, "Hi");
+    expect(findRow(m.getGrid(70), "Title")).not.toContain("What needs doing?");
+  });
+
+  test("the focused field carries a caret", () => {
+    const m = modal("t-plat");
+    type(m, "Hi");
+    // Caret sits just past the text on the focused row.
+    const row = findRow(m.getGrid(70), "Title");
+    expect(row).toMatch(/Hi█/);
+  });
+
+  test("the caret follows focus to the description", () => {
+    const m = modal("t-plat");
+    type(m, "t");
+    m.handleInput("\t");
+    m.handleInput("\t");
+    type(m, "body");
+    const g = m.getGrid(70);
+    expect(findRow(g, "body")).toMatch(/body█/);
+    // ...and leaves the title row
+    expect(findRow(g, "Title")).not.toContain("█");
+  });
+
+  test("the team field shows its cycle affordance only when focused", () => {
+    const m = modal("t-plat");
+    expect(findRow(m.getGrid(70), "Team")).not.toContain("◂");
+    m.handleInput("\t");
+    expect(findRow(m.getGrid(70), "Team")).toContain("◂");
+  });
+
+  test("an empty description shows a placeholder", () => {
+    expect(findRow(modal("t-plat").getGrid(70), "Description"))
+      .toBeTruthy();
+    const g = modal("t-plat").getGrid(70);
+    const all = text(g);
+    expect(all).toContain("Context, links, repro steps…");
   });
 });
