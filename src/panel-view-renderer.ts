@@ -2,7 +2,7 @@
 import type { CellGrid } from "./types";
 import { ColorMode } from "./types";
 import { createGrid, writeString, textCols, truncateToCols, type CellAttrs, type StyledLine } from "./cell-grid";
-import { groupIndexForStatus, type PanelView, type GroupByField } from "./panel-view";
+import { sectionIndexForStatus, type PanelView, type GroupByField } from "./panel-view";
 import type { Issue, IssueStateType, MergeRequest, PipelineStatus } from "./adapters/types";
 import { fuzzyMatch } from "./fuzzy";
 import { renderMarkdownToStyledLines } from "./markdown";
@@ -181,14 +181,14 @@ export function buildViewNodes(
   // first group claiming its status, and anything unclaimed is not in this tab
   // at all. Config order is priority order, so it is preserved verbatim rather
   // than sorted — that is the whole point of naming the sections by hand.
-  if (view.groups && view.groups.length > 0) {
-    const buckets: RenderableItem[][] = view.groups.map(() => []);
+  if (view.sections && view.sections.length > 0) {
+    const buckets: RenderableItem[][] = view.sections.map(() => []);
     for (const item of ordered) {
-      const idx = groupIndexForStatus(item.status, view.groups);
+      const idx = sectionIndexForStatus(item.status, view.sections);
       if (idx >= 0) buckets[idx]!.push(item);
     }
     const nodes: ViewNode[] = [];
-    view.groups.forEach((group, i) => {
+    view.sections.forEach((group, i) => {
       const members = buckets[i]!;
       const collapsed = collapsedGroups.has(group.label);
       nodes.push({ kind: "group", key: group.label, label: group.label, count: members.length, collapsed, depth: 0 });
@@ -202,15 +202,15 @@ export function buildViewNodes(
     return ordered.map((item) => ({ kind: "item" as const, item, depth: 0 }));
   }
 
-  // Group
-  const groups = new Map<string, RenderableItem[]>();
+  // Derived grouping (groupBy) — only reached when a view defines no sections.
+  const derived = new Map<string, RenderableItem[]>();
   for (const item of ordered) {
     const key = getField(item, view.groupBy);
-    const list = groups.get(key) ?? [];
+    const list = derived.get(key) ?? [];
     list.push(item);
-    groups.set(key, list);
+    derived.set(key, list);
   }
-  const sortedGroups = sortGroupEntries([...groups.entries()], view.groupBy);
+  const sortedGroups = sortGroupEntries([...derived.entries()], view.groupBy);
 
   const nodes: ViewNode[] = [];
   for (const [label, groupItems] of sortedGroups) {

@@ -42,7 +42,7 @@ import { StdinGate } from "./stdin-gate";
 import { TmuxControl, type ControlEvent } from "./tmux-control";
 import { DiffPanel } from "./diff-panel";
 import { InfoPanel, rebuildInfoPanelColors } from "./info-panel";
-import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, stagesFromViews, stateAssignments, assignStateToGroup, unassignState, createView, renameView, moveView, deleteView, createGroup, renameGroup, moveGroup, deleteGroup, type PanelView } from "./panel-view";
+import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, stagesFromViews, stateAssignments, assignStateToGroup, unassignState, createView, renameView, moveView, deleteView, createSection, renameSection, moveSection, deleteSection, type PanelView } from "./panel-view";
 import { transformIssues, transformMrs, buildViewNodes, renderView, createViewState, filterItems, rebuildPanelViewColors, computeViewLayout, splitRatioForSepRow, DEFAULT_PANEL_SPLIT_RATIO, type ViewState, type ViewNode, type IssueSessionInfo } from "./panel-view-renderer";
 import { createAdapters } from "./adapters/registry";
 import { PollCoordinator } from "./adapters/poll-coordinator";
@@ -2321,34 +2321,34 @@ function openQueueEditor(): void {
   const items: ListItem[] = views.map((v) => ({
     id: v.id,
     label: v.label,
-    annotation: v.groups ? `${v.groups.length} groups` : "ungrouped",
+    annotation: v.sections
+      ? `${v.sections.length} sections · ${v.sections.reduce((n, x) => n + x.states.length, 0)} statuses`
+      : "no sections",
   }));
   items.push({ id: "\x00new", label: "+ New tab" });
 
   pickList("Queues", items, (id) => {
     if (id === "\x00new") {
-      promptText("New tab name", "", (label) => {
+      return promptText("New tab name", "", (label) => {
         persistViews(createView(panelViews, label));
         openQueueEditor();
       });
-      return;
     }
     openQueueTabMenu(id);
   });
 }
 
-/** One tab: its groups, plus tab-level actions. */
+/** One tab: the sections it contains, plus tab-level actions. */
 function openQueueTabMenu(viewId: string): void {
   const view = panelViews.find((v) => v.id === viewId);
   if (!view) return;
-  const items: ListItem[] = (view.groups ?? []).map((g) => ({
-    id: `g\x00${g.label}`,
-    label: g.label,
-    annotation: `${g.states.length} states`,
+  const items: ListItem[] = (view.sections ?? []).map((sec) => ({
+    id: `s\x00${sec.label}`,
+    label: sec.label,
+    annotation: `${sec.stage ? STAGE_LABELS[sec.stage] : "no stage"} · ${sec.states.length} statuses`,
   }));
   items.push(
-    { id: "\x00stage", label: "Lifecycle stage…", annotation: view.stage ? STAGE_LABELS[view.stage] : "none" },
-    { id: "\x00newgroup", label: "+ New group" },
+    { id: "\x00newsection", label: "+ New section" },
     { id: "\x00rename", label: "Rename tab…" },
     { id: "\x00up", label: "Move tab up" },
     { id: "\x00down", label: "Move tab down" },
@@ -2357,25 +2357,11 @@ function openQueueTabMenu(viewId: string): void {
   );
 
   pickList(view.label, items, (id) => {
-    if (id.startsWith("g\x00")) return openQueueGroupMenu(viewId, id.slice(2));
+    if (id.startsWith("s\x00")) return openQueueSectionMenu(viewId, id.slice(2));
     switch (id) {
-      case "\x00stage":
-        // The stage is what makes this tab mean something behaviourally —
-        // "Waiting" only parks sessions because it declares stage=parked.
-        return pickList("Lifecycle stage", [
-          ...STAGE_ORDER.map((st) => ({ id: st, label: STAGE_LABELS[st] })),
-          { id: "none", label: "None (fall back to tracker category)" },
-        ], (stage) => {
-          persistViews(panelViews.map((v) => v.id !== viewId
-            ? v
-            : stage === "none"
-              ? { ...v, stage: undefined }
-              : { ...v, stage: stage as WorkStage }));
-          openQueueTabMenu(viewId);
-        });
-      case "\x00newgroup":
-        return promptText("New group name", "", (label) => {
-          persistViews(createGroup(panelViews, viewId, label));
+      case "\x00newsection":
+        return promptText("New section name", "", (label) => {
+          persistViews(createSection(panelViews, viewId, label));
           openQueueTabMenu(viewId);
         });
       case "\x00rename":
@@ -2398,50 +2384,67 @@ function openQueueTabMenu(viewId: string): void {
   });
 }
 
-/** One group: assign states, rename, reorder, delete. */
-function openQueueGroupMenu(viewId: string, label: string): void {
+/** One section: its statuses, what it means, and where it sits. */
+function openQueueSectionMenu(viewId: string, label: string): void {
   const view = panelViews.find((v) => v.id === viewId);
-  const group = view?.groups?.find((g) => g.label === label);
-  if (!view || !group) return;
+  const section = view?.sections?.find((sec) => sec.label === label);
+  if (!view || !section) return;
 
   pickList(`${view.label} / ${label}`, [
-    { id: "states", label: "Edit states…", annotation: `${group.states.length} assigned` },
-    { id: "rename", label: "Rename group…" },
-    { id: "up", label: "Move group up" },
-    { id: "down", label: "Move group down" },
-    { id: "delete", label: "Delete group" },
+    { id: "states", label: "Statuses…", annotation: `${section.states.length} selected` },
+    { id: "stage", label: "Means…", annotation: section.stage ? STAGE_LABELS[section.stage] : "nothing (tracker default)" },
+    { id: "rename", label: "Rename section…" },
+    { id: "up", label: "Move section up" },
+    { id: "down", label: "Move section down" },
+    { id: "delete", label: "Delete section" },
     { id: "back", label: "← Back" },
   ], (id) => {
     switch (id) {
       case "states":
         return openToggleList({
-          header: `States in ${view.label} / ${label}`,
+          header: `Statuses in ${view.label} / ${label}`,
           options: workflowStateOptions(),
           selected: () =>
-            panelViews.find((v) => v.id === viewId)?.groups?.find((g) => g.label === label)?.states ?? [],
-          // Assigning moves the state out of any other group, so a status can
-          // only ever have one home.
+            panelViews.find((v) => v.id === viewId)?.sections?.find((x) => x.label === label)?.states ?? [],
+          // Assigning moves a status out of any other section, so it can only
+          // ever have one home — and therefore one meaning.
           toggle: (state) => {
-            const current = panelViews.find((v) => v.id === viewId)?.groups?.find((g) => g.label === label);
-            const has = current?.states.some((s) => s.toLowerCase() === state.toLowerCase());
+            const cur = panelViews.find((v) => v.id === viewId)?.sections?.find((x) => x.label === label);
+            const has = cur?.states.some((x) => x.toLowerCase() === state.toLowerCase());
             persistViews(has
               ? unassignState(panelViews, state)
               : assignStateToGroup(panelViews, state, viewId, label));
           },
         });
+      case "stage":
+        // Stage sits on the section, not the tab: a section is the unit of
+        // classification, so one tab can mix "still mine" with "someone else's".
+        return pickList("This section means", [
+          ...STAGE_ORDER.map((st) => ({ id: st, label: STAGE_LABELS[st] })),
+          { id: "none", label: "Nothing — use the tracker's own category" },
+        ], (stage) => {
+          persistViews(panelViews.map((v) => v.id !== viewId ? v : {
+            ...v,
+            sections: (v.sections ?? []).map((sec) => sec.label !== label ? sec : {
+              ...sec,
+              ...(stage === "none" ? { stage: undefined } : { stage: stage as WorkStage }),
+            }),
+          }));
+          openQueueSectionMenu(viewId, label);
+        });
       case "rename":
-        return promptText("Rename group", label, (next) => {
-          persistViews(renameGroup(panelViews, viewId, label, next));
+        return promptText("Rename section", label, (next) => {
+          persistViews(renameSection(panelViews, viewId, label, next));
           openQueueTabMenu(viewId);
         });
       case "up":
-        persistViews(moveGroup(panelViews, viewId, label, -1));
+        persistViews(moveSection(panelViews, viewId, label, -1));
         return openQueueTabMenu(viewId);
       case "down":
-        persistViews(moveGroup(panelViews, viewId, label, 1));
+        persistViews(moveSection(panelViews, viewId, label, 1));
         return openQueueTabMenu(viewId);
       case "delete":
-        persistViews(deleteGroup(panelViews, viewId, label));
+        persistViews(deleteSection(panelViews, viewId, label));
         return openQueueTabMenu(viewId);
       default:
         return openQueueTabMenu(viewId);
@@ -3749,6 +3752,29 @@ function buildSettingsCategories(): SettingsCategory[] {
       ],
     },
     {
+      // Exactly one entry. Creating tabs, naming them, choosing which statuses
+      // land in each section and what those sections mean — all of it happens
+      // inside one editor. Splitting it across settings rows is what made this
+      // confusing in the first place.
+      label: "Queues",
+      collapsed: false,
+      settings: [
+        {
+          id: "edit-queues", label: "Manage queues…", type: "action" as const,
+          getValue: () => {
+            const tabs = panelViews.filter((v) => v.source === "issues");
+            const statuses = tabs.reduce(
+              (n, v) => n + (v.sections ?? []).reduce((m, sec) => m + sec.states.length, 0), 0);
+            return `${tabs.length} tabs · ${statuses} statuses`;
+          },
+          // The settings screen consumes every keystroke while it is open, so a
+          // modal opened from here would paint nothing and never receive input.
+          // Hand off instead: close settings, then open the editor.
+          onActivate: () => { toggleSettingsScreen(); openQueueEditor(); },
+        },
+      ],
+    },
+    {
       label: "Automation",
       collapsed: false,
       settings: [
@@ -3785,37 +3811,6 @@ function buildSettingsCategories(): SettingsCategory[] {
           },
         },
         {
-          id: "auto-park-idle", label: "Auto-park idle sessions (days)", type: "text" as const,
-          getValue: () => {
-            const d = configStore.config.pipeline?.autoParkIdleDays ?? null;
-            return d === null ? "off" : String(d);
-          },
-          onTextCommit: (v) => {
-            const n = parseInt(v, 10);
-            configStore.setPipeline("autoParkIdleDays", isNaN(n) || n <= 0 ? null : n);
-            recomputeParking();
-          },
-        },
-      ],
-    },
-    {
-      // The inverse of how queues are stored: one row per tracker state saying
-      // which tab it feeds. "Where does QA Failed go?" is the question people
-      // actually ask, and answering it by reading four tabs' group lists is not
-      // an answer.
-      label: "Queues",
-      collapsed: false,
-      settings: [
-        {
-          id: "edit-queues", label: "Edit tabs & groups…", type: "action" as const,
-          getValue: () => {
-            const tabs = panelViews.filter((v) => v.source === "issues");
-            const groups = tabs.reduce((n, v) => n + (v.groups?.length ?? 0), 0);
-            return `${tabs.length} tabs · ${groups} groups`;
-          },
-          onActivate: () => openQueueEditor(),
-        },
-        {
           id: "up-next-order", label: "Up next queue order", type: "multiselect" as const,
           getValue: () => {
             const ids = configStore.config.pipeline?.upNext ?? [];
@@ -3834,60 +3829,15 @@ function buildSettingsCategories(): SettingsCategory[] {
           },
         },
         {
-          // Read-only: parking needs Park stages (here) AND Parked states
-          // (under Stages), and having them in two sections makes a
-          // half-finished setup easy to leave behind unnoticed.
-          id: "park-status", label: "Parking status", type: "text" as const,
+          id: "auto-park-idle", label: "Auto-park idle sessions (days)", type: "text" as const,
           getValue: () => {
-            const cfg = parkingConfig();
-            const counts = { idea: 0, active: 0, parked: 0, done: 0 };
-            for (const stage of STAGE_ORDER) {
-              const field = `${stage}States` as keyof RepoSettings;
-              const names = new Set<string>();
-              for (const tier of [configStore.config.repoDefaults, ...Object.values(configStore.config.repos ?? {})]) {
-                for (const n of (tier?.[field] as string[] | undefined) ?? []) names.add(n.toLowerCase());
-              }
-              counts[stage] = names.size;
-            }
-            return parkingSetupWarning(cfg.parkStages, counts)
-              ?? `active — ${currentSessions.filter((s) => sidebar.isParked(s.name)).length} parked`;
+            const d = configStore.config.pipeline?.autoParkIdleDays ?? null;
+            return d === null ? "off" : String(d);
           },
-        },
-        {
-          id: "state-tab-map", label: "Linear state → tab", type: "map" as const,
-          getValue: () => {
-            const assigned = stateAssignments(panelViews).length;
-            const total = cachedWorkflowStates.length;
-            if (total === 0) return assigned > 0 ? `${assigned} mapped` : "tracker not connected";
-            return `${assigned} of ${total} mapped`;
-          },
-          getMapEntries: () => stateAssignments(panelViews).map((a) => ({
-            key: a.state,
-            value: `${a.viewLabel} / ${a.groupLabel}`,
-          })),
-          // Offer unmapped states first — those are the ones needing a decision.
-          getMapKeyOptions: () => {
-            const taken = new Set(stateAssignments(panelViews).map((a) => a.state.toLowerCase()));
-            const states = cachedWorkflowStates.map((s) => s.name);
-            const free = states.filter((n) => !taken.has(n.toLowerCase()));
-            return [...free, ...states.filter((n) => taken.has(n.toLowerCase()))]
-              .map((n) => ({ id: n, label: n }));
-          },
-          getMapValueOptions: () => panelViews.flatMap((v) =>
-            (v.groups ?? []).map((g) => ({ id: `${v.id} ${g.label}`, label: `${v.label} / ${g.label}` })),
-          ),
-          onMapSave: (state, target) => {
-            const [viewId, groupLabel] = target.split(" ");
-            panelViews = assignStateToGroup(panelViews, state, viewId!, groupLabel!);
-            configStore.set("panelViews", panelViews);
-            refreshPanelViews();
-            scheduleRender();
-          },
-          onMapRemove: (state) => {
-            panelViews = unassignState(panelViews, state);
-            configStore.set("panelViews", panelViews);
-            refreshPanelViews();
-            scheduleRender();
+          onTextCommit: (v) => {
+            const n = parseInt(v, 10);
+            configStore.setPipeline("autoParkIdleDays", isNaN(n) || n <= 0 ? null : n);
+            recomputeParking();
           },
         },
       ],
@@ -3913,6 +3863,16 @@ function buildSettingsCategories(): SettingsCategory[] {
       label: "Diagnostics",
       collapsed: false,
       settings: [
+        {
+          id: "park-status", label: "Parking status", type: "text" as const,
+          getValue: () => {
+            const st = derivedStages();
+            return parkingSetupWarning(parkingConfig().parkStages, {
+              idea: st.idea.length, active: st.active.length,
+              parked: st.parked.length, done: st.done.length,
+            }) ?? `active — ${currentSessions.filter((x) => sidebar.isParked(x.name)).length} parked`;
+          },
+        },
         {
           id: "stage-source", label: "Tracker states available", type: "text" as const,
           getValue: () => {

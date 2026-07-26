@@ -1,5 +1,7 @@
 import type { WorkStage } from "./repo-settings";
 
+export const STAGE_VALUES: readonly WorkStage[] = ["idea", "active", "parked", "done"];
+
 /**
  * Which items a view shows. `scope` picks the data source; everything else
  * narrows it, which is what turns a generic "my issues" tab into a named pull
@@ -67,16 +69,20 @@ export function matchesIssueFilter(
 }
 
 /**
- * One named section within a tab, listing the tracker statuses that roll up
- * into it. Order within a view is priority order, and an issue lands in the
- * first group that claims its status.
+ * A section: the unit of classification. An issue's status picks a section, the
+ * section says what that means (`stage`), and the section belongs to a tab.
  *
- * This is what makes tab *names* static while their *membership* stays
- * per-workspace configurable: jmux ships the tabs, you map your own statuses in.
+ * Stage lives here rather than on the tab because behaviour attaches where
+ * classification happens — a tab is only a container. Keeping it on the tab
+ * would make a mixed tab impossible: "Dev Confirm" (yours, active) and "In QA"
+ * (theirs, parked) could never share one tab, which forces the layout instead
+ * of letting the user choose it.
  */
-export interface PanelViewGroup {
+export interface PanelViewSection {
   label: string;
   states: string[];
+  /** What this section means. Unset = fall back to the tracker's own category. */
+  stage?: WorkStage;
 }
 
 export type GroupByField = "team" | "project" | "status" | "priority" | "none";
@@ -97,41 +103,39 @@ export interface PanelView {
    * union of every group's states) and the headers, and `groupBy` /
    * `filter.states` are ignored for this view.
    */
-  groups?: PanelViewGroup[];
-  /**
-   * The lifecycle stage this tab's states occupy. Optional: a tab with no stage
-   * contributes nothing, and its states fall back to the tracker's own category.
-   */
-  stage?: WorkStage;
+  sections?: PanelViewSection[];
 }
 
 /**
  * Index of the first group claiming `status`, or -1 if none does.
  * Case- and whitespace-insensitive, matching every other state comparison.
  */
-export function groupIndexForStatus(
+export function sectionIndexForStatus(
   status: string,
-  groups: PanelViewGroup[] | undefined,
+  sections: PanelViewSection[] | undefined,
 ): number {
-  if (!groups) return -1;
+  if (!sections) return -1;
   const want = (status ?? "").trim().toLowerCase();
-  for (let i = 0; i < groups.length; i++) {
-    if (groups[i]!.states.some((s) => s.trim().toLowerCase() === want)) return i;
+  for (let i = 0; i < sections.length; i++) {
+    if (sections[i]!.states.some((s) => s.trim().toLowerCase() === want)) return i;
   }
   return -1;
 }
 
-/** Read a view's group list, dropping entries that can't render or match. */
-function parseGroups(raw: unknown): PanelViewGroup[] | undefined {
+/** Read a view's section list, dropping entries that can't render or match. */
+function parseSections(raw: unknown): PanelViewSection[] | undefined {
   if (!Array.isArray(raw)) return undefined;
-  const out: PanelViewGroup[] = [];
+  const out: PanelViewSection[] = [];
   for (const entry of raw) {
     if (!entry || typeof entry !== "object") continue;
-    const { label, states } = entry as Record<string, unknown>;
+    const { label, states, stage } = entry as Record<string, unknown>;
     if (typeof label !== "string" || !label.trim()) continue;
     if (!Array.isArray(states) || !states.every((s) => typeof s === "string")) continue;
-    if (states.length === 0) continue;
-    out.push({ label, states: states as string[] });
+    out.push({
+      label,
+      states: states as string[],
+      ...(STAGE_VALUES.includes(stage as WorkStage) ? { stage: stage as WorkStage } : {}),
+    });
   }
   return out.length > 0 ? out : undefined;
 }
@@ -185,8 +189,7 @@ export function parseViews(raw: unknown): PanelView[] {
       sortBy: isSortByField(sortBy) ? sortBy : "priority",
       sortOrder: sortOrder === "desc" ? "desc" : "asc",
       sessionLinkedFirst: sessionLinkedFirst !== false,
-      ...(parseGroups((entry as any).groups) ? { groups: parseGroups((entry as any).groups)! } : {}),
-      ...(STAGE_VALUES.includes((entry as any).stage) ? { stage: (entry as any).stage as WorkStage } : {}),
+      ...(parseSections((entry as any).sections) ? { sections: parseSections((entry as any).sections)! } : {}),
     });
   }
   return views.length > 0 ? views : DEFAULT_VIEWS;
@@ -301,20 +304,20 @@ export interface StateAssignment {
   state: string;
   viewId: string;
   viewLabel: string;
-  groupLabel: string;
+  sectionLabel: string;
 }
 
 /**
  * The inverse of the config shape: one row per assigned state saying which tab
- * and group it feeds. The stored model is tab → groups → states because that is
+ * and section it feeds. The stored model is tab → sections → states because that is
  * what rendering needs; this is what a human asks for.
  */
 export function stateAssignments(views: PanelView[]): StateAssignment[] {
   const out: StateAssignment[] = [];
   for (const view of views) {
-    for (const group of view.groups ?? []) {
+    for (const group of view.sections ?? []) {
       for (const state of group.states) {
-        out.push({ state, viewId: view.id, viewLabel: view.label, groupLabel: group.label });
+        out.push({ state, viewId: view.id, viewLabel: view.label, sectionLabel: group.label });
       }
     }
   }
@@ -323,10 +326,10 @@ export function stateAssignments(views: PanelView[]): StateAssignment[] {
 
 function withoutState(views: PanelView[], state: string): PanelView[] {
   const want = state.trim().toLowerCase();
-  return views.map((view) => view.groups
+  return views.map((view) => view.sections
     ? {
         ...view,
-        groups: view.groups.map((g) => ({
+        sections: view.sections.map((g) => ({
           ...g,
           states: g.states.filter((s) => s.trim().toLowerCase() !== want),
         })),
@@ -338,7 +341,7 @@ function withoutState(views: PanelView[], state: string): PanelView[] {
  * Move a state into one tab's group, removing it from anywhere else first.
  *
  * Enforcing one home per state is what keeps the model comprehensible: a status
- * appearing under two tabs would silently resolve via `groupIndexForStatus`'s
+ * appearing under two tabs would silently resolve via `sectionIndexForStatus`'s
  * first-wins tie-break, which is a safety net, not a feature. Returns the input
  * unchanged when the target doesn't exist.
  */
@@ -346,16 +349,16 @@ export function assignStateToGroup(
   views: PanelView[],
   state: string,
   viewId: string,
-  groupLabel: string,
+  sectionLabel: string,
 ): PanelView[] {
   const target = views.find((v) => v.id === viewId);
-  if (!target?.groups?.some((g) => g.label === groupLabel)) return views;
+  if (!target?.sections?.some((g) => g.label === sectionLabel)) return views;
 
   return withoutState(views, state).map((view) => view.id !== viewId
     ? view
     : {
         ...view,
-        groups: view.groups!.map((g) => g.label === groupLabel
+        sections: view.sections!.map((g) => g.label === sectionLabel
           ? { ...g, states: [...g.states, state] }
           : g),
       });
@@ -389,7 +392,7 @@ export function createView(views: PanelView[], label: string): PanelView[] {
     filter: { scope: "assigned" },
     groupBy: "none", subGroupBy: "none",
     sortBy: "priority", sortOrder: "asc", sessionLinkedFirst: false,
-    groups: [],
+    sections: [],
   }];
 }
 
@@ -415,62 +418,60 @@ export function deleteView(views: PanelView[], viewId: string): PanelView[] {
   return views.filter((v) => v.id !== viewId);
 }
 
-function mapGroups(
+function mapSections(
   views: PanelView[],
   viewId: string,
-  fn: (groups: PanelViewGroup[]) => PanelViewGroup[] | null,
+  fn: (sections: PanelViewSection[]) => PanelViewSection[] | null,
 ): PanelView[] {
   const view = views.find((v) => v.id === viewId);
   if (!view) return views;
-  const next = fn(view.groups ?? []);
+  const next = fn(view.sections ?? []);
   if (next === null) return views;
-  return views.map((v) => (v.id === viewId ? { ...v, groups: next } : v));
+  return views.map((v) => (v.id === viewId ? { ...v, sections: next } : v));
 }
 
-const hasLabel = (groups: PanelViewGroup[], label: string): boolean =>
-  groups.some((g) => g.label.trim().toLowerCase() === label.trim().toLowerCase());
+const hasLabel = (sections: PanelViewSection[], label: string): boolean =>
+  sections.some((g) => g.label.trim().toLowerCase() === label.trim().toLowerCase());
 
-export function createGroup(views: PanelView[], viewId: string, label: string): PanelView[] {
+export function createSection(views: PanelView[], viewId: string, label: string): PanelView[] {
   const trimmed = label.trim();
   if (!trimmed) return views;
-  return mapGroups(views, viewId, (groups) =>
+  return mapSections(views, viewId, (sections) =>
     // Labels key both the render node and the collapse set, so duplicates
     // within a tab would alias each other.
-    hasLabel(groups, trimmed) ? null : [...groups, { label: trimmed, states: [] }]);
+    hasLabel(sections, trimmed) ? null : [...sections, { label: trimmed, states: [] }]);
 }
 
-export function renameGroup(
+export function renameSection(
   views: PanelView[], viewId: string, from: string, to: string,
 ): PanelView[] {
   const trimmed = to.trim();
   if (!trimmed) return views;
-  return mapGroups(views, viewId, (groups) => {
-    if (hasLabel(groups, trimmed)) return null;
-    if (!hasLabel(groups, from)) return null;
-    return groups.map((g) => (g.label === from ? { ...g, label: trimmed } : g));
+  return mapSections(views, viewId, (sections) => {
+    if (hasLabel(sections, trimmed)) return null;
+    if (!hasLabel(sections, from)) return null;
+    return sections.map((g) => (g.label === from ? { ...g, label: trimmed } : g));
   });
 }
 
-export function moveGroup(
+export function moveSection(
   views: PanelView[], viewId: string, label: string, delta: number,
 ): PanelView[] {
-  return mapGroups(views, viewId, (groups) => {
-    const from = groups.findIndex((g) => g.label === label);
+  return mapSections(views, viewId, (sections) => {
+    const from = sections.findIndex((g) => g.label === label);
     if (from < 0) return null;
-    const to = Math.max(0, Math.min(groups.length - 1, from + delta));
+    const to = Math.max(0, Math.min(sections.length - 1, from + delta));
     if (to === from) return null;
-    const next = [...groups];
+    const next = [...sections];
     const [moved] = next.splice(from, 1);
     next.splice(to, 0, moved!);
     return next;
   });
 }
 
-export function deleteGroup(views: PanelView[], viewId: string, label: string): PanelView[] {
-  return mapGroups(views, viewId, (groups) => groups.filter((g) => g.label !== label));
+export function deleteSection(views: PanelView[], viewId: string, label: string): PanelView[] {
+  return mapSections(views, viewId, (sections) => sections.filter((g) => g.label !== label));
 }
-
-const STAGE_VALUES: readonly WorkStage[] = ["idea", "active", "parked", "done"];
 
 /**
  * The states each lifecycle stage owns, derived from the tabs that declare it.
@@ -484,8 +485,9 @@ const STAGE_VALUES: readonly WorkStage[] = ["idea", "active", "parked", "done"];
 export function stagesFromViews(views: PanelView[]): Record<WorkStage, string[]> {
   const out: Record<WorkStage, string[]> = { idea: [], active: [], parked: [], done: [] };
   for (const view of views) {
-    if (!view.stage) continue;
-    for (const group of view.groups ?? []) out[view.stage].push(...group.states);
+    for (const section of view.sections ?? []) {
+      if (section.stage) out[section.stage].push(...section.states);
+    }
   }
   return out;
 }

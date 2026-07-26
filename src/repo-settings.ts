@@ -259,6 +259,24 @@ export function migrateLegacyConfig(raw: any): { config: any; changed: boolean }
     changed = true;
   }
 
+  // `groups` became `sections`, and the lifecycle stage moved from the tab down
+  // onto each section — a section is the unit of classification, so one tab can
+  // legitimately mix "still mine" with "someone else's".
+  for (const view of (Array.isArray(config.panelViews) ? config.panelViews : []) as any[]) {
+    if (Array.isArray(view.groups) && !Array.isArray(view.sections)) {
+      view.sections = view.groups;
+      delete view.groups;
+      changed = true;
+    }
+    if (view.stage) {
+      for (const section of view.sections ?? []) {
+        if (!section.stage) section.stage = view.stage;
+      }
+      delete view.stage;
+      changed = true;
+    }
+  }
+
   const wf = config.issueWorkflow;
   if (wf && typeof wf === "object") {
     for (const key of RELOCATED_WORKFLOW) {

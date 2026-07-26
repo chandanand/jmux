@@ -351,21 +351,32 @@ what you actually see on screen.
 | `parked` | Handed off — collapsed into one row at the bottom |
 | `done` | Finished |
 
-**A queue tab declares its stage**, and its states are what that stage covers:
+**A section declares its stage.** A section is the unit of classification: an
+issue's status picks a section, the section says what that means, and the
+section belongs to a tab.
 
 ```json
-{ "id": "waiting", "label": "Waiting", "stage": "parked",
-  "groups": [{ "label": "In QA", "states": ["QA (PROD WEB)"] }] }
+{ "id": "post-merge", "label": "Post-merge", "sections": [
+    { "label": "Dev Confirm", "stage": "active", "states": ["Dev Confirm"] },
+    { "label": "In QA",       "stage": "parked", "states": ["QA (PROD WEB)"] }
+] }
 ```
 
-So a status is classified **once** — putting it in the Waiting tab is what
-parks its session. Statuses in no tab, or in a tab with no stage, fall back to
+Stage sits on the section rather than the tab because behaviour attaches where
+classification happens — a tab is only a container. Keeping it on the tab would
+make the example above impossible: work still yours and work in someone else's
+hands could never share a tab, which forces the layout instead of letting you
+choose it.
+
+So a status is classified **once** — the section it lands in is what decides
+whether its session parks. Statuses in no tab, or in a tab with no stage, fall back to
 the tracker's own category (`triage`/`backlog` → idea, `unstarted`/`started` →
 active, `completed`/`canceled`/`duplicate` → done). Nothing reaches `parked`
 by fallback, so parking only ever happens because a tab said so.
 
-Set a tab's stage in `Ctrl-a I` → **Queues** → **Edit tabs & groups…** →
-*Lifecycle stage…*.
+Everything about queues lives in one place: `Ctrl-a I` → **Queues** →
+**Manage queues…**. Tabs, sections, which statuses belong to each, and what a
+section means are all edited there — there is no second surface to keep in sync.
 
 ### Parking (the back burner)
 
@@ -421,7 +432,7 @@ each. A tab carries an ordered `groups` list:
 ```json
 { "id": "urgent", "label": "Urgent", "source": "issues",
   "filter": { "scope": "assigned" },
-  "groups": [
+  "sections": [
     { "label": "QA Failed",        "states": ["QA Failed"] },
     { "label": "Release Blockers", "states": ["Release Blockers"] }
   ] }
@@ -433,11 +444,10 @@ verbatim rather than sorted. An issue lands in the **first** group claiming its
 status, and a status no group claims is not in that tab at all.
 
 **You don't have to write that by hand.** `Ctrl-a I` → **Queues** →
-**Linear state → tab** lists every state your tracker reports and which tab it
-feeds, with unmapped states offered first. Assigning a state moves it out of
-whatever tab held it, so each state has exactly one home; `d` on a row unmaps it
-entirely. Tabs show live counts (`Urgent 3`), so "is anything urgent?" never
-requires switching tabs.
+**Manage queues…** walks tabs → sections → statuses. Assigning a status moves it
+out of whatever section held it, so each status has exactly one home and
+therefore one meaning. Tabs show live counts (`Urgent 3`), so "is anything
+urgent?" never requires switching tabs.
 
 Panel views can be narrowed into named pull queues:
 

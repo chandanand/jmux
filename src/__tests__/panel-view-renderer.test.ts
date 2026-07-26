@@ -342,7 +342,7 @@ describe("buildViewNodes with explicit groups", () => {
     groupBy: "none" as const, subGroupBy: "none" as const,
     sortBy: "priority" as const, sortOrder: "asc" as const,
     sessionLinkedFirst: false,
-    groups: [
+    sections: [
       { label: "QA Failed", states: ["QA Failed"] },
       { label: "Blockers", states: ["Release Blockers"] },
     ],

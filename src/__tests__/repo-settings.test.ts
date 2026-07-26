@@ -281,3 +281,35 @@ describe("migrateStagesIntoViews", () => {
     expect(migrateStagesIntoViews(staged, { parkedStates: ["QA"] }).views[0].stage).toBe("done");
   });
 });
+
+describe("sections migration", () => {
+  test("groups become sections and the tab's stage moves onto each", () => {
+    const { config, changed } = migrateLegacyConfig({
+      panelViews: [{ id: "w", label: "W", stage: "parked",
+        groups: [{ label: "In QA", states: ["QA"] }, { label: "In review", states: ["MR"] }] }],
+    });
+    expect(changed).toBe(true);
+    const v = config.panelViews[0];
+    expect(v.groups).toBeUndefined();
+    expect(v.stage).toBeUndefined();
+    expect(v.sections).toEqual([
+      { label: "In QA", states: ["QA"], stage: "parked" },
+      { label: "In review", states: ["MR"], stage: "parked" },
+    ]);
+  });
+
+  test("a section's own stage is not overwritten by the tab's", () => {
+    const { config } = migrateLegacyConfig({
+      panelViews: [{ id: "pm", label: "PM", stage: "parked",
+        groups: [{ label: "Mine", states: ["a"], stage: "active" }, { label: "Theirs", states: ["b"] }] }],
+    });
+    expect(config.panelViews[0].sections.map((s: any) => s.stage)).toEqual(["active", "parked"]);
+  });
+
+  test("already-migrated views report no change", () => {
+    const { changed } = migrateLegacyConfig({
+      panelViews: [{ id: "w", label: "W", sections: [{ label: "s", states: ["a"], stage: "parked" }] }],
+    });
+    expect(changed).toBe(false);
+  });
+});
