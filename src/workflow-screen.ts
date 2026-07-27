@@ -1,26 +1,32 @@
 // The workflow screen: the one place the issue pipeline is configured.
 //
+// It is about defining **your own workflow stages** — Urgent, To do,
+// In Progress, Waiting — each sitting on top of one or many of your tracker's
+// statuses. A tracker gives you 25 states shared across every team; your own
+// ladder has four rungs. A stage renders as a tab in the info panel, but that
+// is how it shows up, not what it is.
+//
+// Every status then has two settings and no more:
+//
+//     which stage it belongs to  — where it shows in the panel
+//     whether it parks           — whether its session leaves the sidebar
+//
 // Configuring this used to mean holding seven concepts at once — tabs,
 // sections, statuses, stages, park-stages, unpark-triggers, transitions.
-// Successive rounds removed most of them rather than rearranging them. What is
-// left is two settings per tracker status:
-//
-//     which tab it appears in   — what you see in the panel
-//     whether it parks          — whether its session leaves the sidebar
-//
-// Everything else is derived. `idea` / `active` / `done` come from the
-// tracker's own state categories and are never configured, because nothing
-// branches on them: they were four buckets where three were indistinguishable
-// in behaviour. And there is no second "these stages park" switch to confirm
-// the first — that tautology, with its own off switch, is how parking came to
-// look configured while doing nothing.
+// Successive rounds removed most of them rather than rearranging them. The
+// four lifecycle values (`idea`/`active`/`parked`/`done`) survive internally
+// but are never authored: they come from the tracker's own state categories,
+// because nothing branches on the distinction between three of them. And there
+// is no second "these stages park" switch to confirm the first — that
+// tautology, with its own off switch, is how parking came to look configured
+// while doing nothing.
 //
 // The screen is two blocks, because it edits two different kinds of thing and
 // interleaving them made every key contextual:
 //
-//   TABS      — a short list. Create, rename, reorder, delete, up-next.
-//   STATUSES  — a table, one row per tracker status, one row type, columns for
-//               the two settings. Every row does exactly the same thing.
+//   YOUR WORKFLOW — your stages. Create, rename, reorder, delete, up-next.
+//   STATUSES      — a table, one row per tracker status, one row type, a column
+//                   per setting. Every row does exactly the same thing.
 //
 // Two rules hold the rest together:
 //
@@ -133,7 +139,7 @@ export interface WorkflowPort {
   getParkedStates(): readonly string[];
   /** Add a status to the parked list, or take it out. */
   toggleParked(state: string): void;
-  /** Ordered view ids in the `Ctrl-a u` rotation. */
+  /** Ordered stage ids in the `Ctrl-a u` rotation. */
   getUpNext(): readonly string[];
   /** Add a tab to the rotation, or drop it. Appending is what sets priority. */
   toggleUpNext(viewId: string): void;
@@ -195,7 +201,10 @@ export function buildRows(port: WorkflowPort, tier: SettingsTier, _collapsed: Re
     rows.push({ kind: "seed", tabs: suggestLayout(statuses).length, statuses: statuses.length });
   }
 
-  rows.push({ kind: "band", label: "Tabs", hint: "The tabs in the info panel, top to bottom in priority order." });
+  rows.push({
+    kind: "band", label: "Your workflow",
+    hint: "The stages you work in, top to bottom in priority order. Each is a tab in the info panel.",
+  });
   for (const view of views) {
     const states = (view.sections ?? []).flatMap((s) => s.states);
     const rank = upNext.indexOf(view.id);
@@ -242,7 +251,7 @@ export function buildRows(port: WorkflowPort, tier: SettingsTier, _collapsed: Re
     kind: "band", label: "Statuses",
     hint: statuses.length === 0
       ? "Connect an issue tracker under Settings → Integrations to map your statuses."
-      : "Two settings each: which tab it appears in, and whether its work parks.",
+      : "Two settings each: which stage of your workflow it belongs to, and whether its work parks.",
   });
   if (placed.length > 0) rows.push({ kind: "columns" });
   rows.push(...placed);
@@ -273,7 +282,7 @@ export function explainRow(row: WorkflowRow | undefined): string {
       return `Builds ${row.tabs} tabs from your tracker's own categories. Nothing is set to park.`;
 
     case "tab": {
-      if (row.source === "mrs") return `${row.label} · merge requests — no statuses to map.`;
+      if (row.source === "mrs") return `${row.label} · a merge-request tab, not a workflow stage.`;
       const parts = [row.label, plural(row.statuses, "status", "statuses"), plural(row.issues, "issue")];
       if (row.parks > 0) parts.push(`${row.parks} of them park`);
       parts.push(row.upNextRank !== null
@@ -286,7 +295,7 @@ export function explainRow(row: WorkflowRow | undefined): string {
       const parts = [row.state, plural(row.issues, "issue")];
       if (!row.known) parts.push("no longer in your tracker");
       parts.push(row.viewLabel === null
-        ? "in no tab — it never shows in the panel"
+        ? "in none of your stages — it never shows in the panel"
         : row.heading ? `${row.viewLabel}, under "${row.heading}"` : row.viewLabel);
       parts.push(row.parks
         ? (row.parked > 0 ? `parks its sessions (${row.parked} now)` : "parks its sessions")
@@ -295,7 +304,7 @@ export function explainRow(row: WorkflowRow | undefined): string {
     }
 
     case "new-tab":
-      return "A tab is what you see in the panel. Statuses give it contents.";
+      return "A stage is one step in your own workflow, covering one or more of your tracker's statuses.";
 
     case "band":
       return row.hint ?? "";
@@ -347,7 +356,7 @@ export function destinationsFor(views: PanelView[], state: string): Destination[
       });
     }
   }
-  out.push({ id: "u", label: "Unassigned", annotation: "no tab" });
+  out.push({ id: "u", label: "No stage", annotation: "never shown" });
   return out;
 }
 
@@ -573,7 +582,7 @@ export class WorkflowScreen {
 
       case "status": {
         const state = row.state;
-        this.openPicker(`Where does "${state}" go?`, destinationsFor(port.getViews(), state), (id) => {
+        this.openPicker(`Which stage is "${state}"?`, destinationsFor(port.getViews(), state), (id) => {
           port.setViews(applyDestination(port.getViews(), state, id));
           this.followState(state);
         });
@@ -581,7 +590,7 @@ export class WorkflowScreen {
       }
 
       case "new-tab":
-        this.openPrompt("New tab name", "", (label) => {
+        this.openPrompt("Name this stage", "", (label) => {
           port.setViews(createView(port.getViews(), label));
         });
         return;
@@ -636,7 +645,7 @@ export class WorkflowScreen {
   }
 
   /**
-   * Add or remove this tab from the `Ctrl-a u` rotation. A marker on the row it
+   * Add or remove this stage from the `Ctrl-a u` rotation. A marker on the row it
    * describes rather than a separate ordered multiselect listing tab names back
    * at you — the order you add them is the order they are checked.
    */
@@ -650,7 +659,7 @@ export class WorkflowScreen {
     if (row.kind === "tab") {
       if (row.source !== "issues") return;
       const viewId = row.viewId;
-      this.openPrompt("Rename tab", row.label, (label) => {
+      this.openPrompt("Rename stage", row.label, (label) => {
         port.setViews(renameView(port.getViews(), viewId, label));
       });
       return;
@@ -680,7 +689,7 @@ export class WorkflowScreen {
       const { viewId, label, statuses } = row;
       this.overlay = {
         kind: "confirm",
-        message: `Delete "${label}" and unassign its ${statuses} ${statuses === 1 ? "status" : "statuses"}?`,
+        message: `Delete the "${label}" stage and unmap its ${statuses} ${statuses === 1 ? "status" : "statuses"}?`,
         onYes: () => { port.setViews(deleteView(port.getViews(), viewId)); this.clampSelection(); },
       };
       return;
@@ -837,8 +846,7 @@ export class WorkflowScreen {
     if (!tracker) return "no issue tracker connected";
     const total = this.port?.getStatuses().length ?? 0;
     const free = model.filter((r) => r.kind === "status" && r.viewId === null).length;
-    // Same words as the band below, so there is one name for one thing.
-    return `${tracker} · ${total} statuses · ${free} not in a tab`;
+    return `${tracker} · ${total} statuses · ${free} unmapped`;
   }
 
   private renderRow(
@@ -863,7 +871,7 @@ export class WorkflowScreen {
 
       case "tab": {
         const value: Array<{ text: string; attrs: CellAttrs }> = model.source !== "issues"
-          ? [{ text: `${model.source} · not mapped here`, attrs: DIM_ATTRS }]
+          ? [{ text: "merge requests · not a stage", attrs: DIM_ATTRS }]
           : [
               ...(model.upNextRank !== null
                 ? [{ text: `${ordinal(model.upNextRank + 1)} up next  `, attrs: VALUE_ATTRS }]
@@ -886,7 +894,7 @@ export class WorkflowScreen {
         const col = left + 4;
         writeString(grid, row, col + t.status, "Status", DIM_ATTRS);
         if (t.heading !== null) writeString(grid, row, col + t.heading, "Heading", DIM_ATTRS);
-        writeString(grid, row, col + t.tab, "Tab", DIM_ATTRS);
+        writeString(grid, row, col + t.tab, "Stage", DIM_ATTRS);
         writeString(grid, row, col + t.parks, "Parks", DIM_ATTRS);
         writeString(grid, row, col + t.issues - 1, "Issues", DIM_ATTRS);
         return;
@@ -921,7 +929,7 @@ export class WorkflowScreen {
 
       case "new-tab":
         drawSettingRow(grid, row, bounds, {
-          label: "+ New tab",
+          label: "+ New stage",
           labelAttrs: selected ? LABEL_ACTIVE : ADD_ATTRS,
           value: [],
           selected,
@@ -982,7 +990,7 @@ export class WorkflowScreen {
       case "status":
         // Every row in the table takes the same two keys; the rest only apply
         // once a status is actually in a tab.
-        segments.push({ key: "↵", label: "tab" }, { key: "space", label: "parks" });
+        segments.push({ key: "↵", label: "stage" }, { key: "space", label: "parks" });
         if (selected.viewId !== null) {
           segments.push({ key: "r", label: "heading" },
             { key: "d", label: "remove" }, { key: "⇧↑↓", label: "order" });

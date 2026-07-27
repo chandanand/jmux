@@ -2245,7 +2245,7 @@ function openViewFilterMenu(view: PanelView): void {
     for (const l of issue.labels ?? []) labelsAvailable.add(l.name);
   }
 
-  // A tab with sections is governed by them, and `effectiveFilter` drops
+  // A stage's statuses govern its membership, and `effectiveFilter` drops
   // `filter.states` for it — so offering a States axis here would be a control
   // that silently does nothing. The workflow screen is where its statuses live.
   const sectioned = (view.sections?.length ?? 0) > 0;
@@ -3247,7 +3247,7 @@ function buildPaletteCommands(): PaletteCommand[] {
   // the palette needs a way through to it rather than being a dead end.
   commands.push({
     id: "setting-edit-workflow",
-    label: "Configure workflow (statuses, queues, parking, tracker writes)…",
+    label: "Configure workflow (your stages, statuses, parking, tracker writes)…",
     category: "setting",
   });
   commands.push({
@@ -3662,7 +3662,7 @@ function buildSettingsCategories(): SettingsCategory[] {
                 sec.states.some((x) => x.trim().toLowerCase() === st.name.trim().toLowerCase())))).length;
             const parks = parkedStates().length;
             const tail = parks > 0 ? `${parks} park` : "nothing parks";
-            return free > 0 ? `${free} statuses not in a tab · ${tail}` : `${mapped} statuses · ${tail}`;
+            return free > 0 ? `${free} statuses unmapped · ${tail}` : `${mapped} statuses · ${tail}`;
           },
           // The settings screen consumes every keystroke while it is open, so a
           // surface opened from here has to take routing over rather than

@@ -205,9 +205,9 @@ describe("explainRow", () => {
   const explain = (state: string, over: Partial<WorkflowPort> = {}, v = views(), parked?: string[]) =>
     explainRow(statusRow(rowsOf(harness(over, v, parked)), state));
 
-  test("an unassigned status says it is simply not shown", () => {
+  test("a status in none of your stages says it is simply not shown", () => {
     expect(explain("Triage"))
-      .toBe("Triage · 2 issues · in no tab — it never shows in the panel · its sessions stay in the sidebar");
+      .toBe("Triage · 2 issues · in none of your stages — it never shows in the panel · its sessions stay in the sidebar");
   });
 
   test("a status that does not park says its session stays put", () => {
@@ -223,7 +223,7 @@ describe("explainRow", () => {
     // The two settings are orthogonal: where it shows, and whether it hides
     // the session. Deriving one from the other would make this unsayable.
     expect(explain("Triage", {}, views(), ["Triage"]))
-      .toContain("in no tab — it never shows in the panel · parks its sessions");
+      .toContain("in none of your stages — it never shows in the panel · parks its sessions");
   });
 
   test("a shared heading is named, so grouping is never a surprise", () => {
@@ -269,9 +269,9 @@ describe("explainRow", () => {
 // --- Assignment ---
 
 describe("destinations", () => {
-  test("offers every issues tab, plus Unassigned, and never an MR tab", () => {
+  test("offers every stage, plus No stage, and never an MR tab", () => {
     expect(destinationsFor(views(), "Triage").map((d) => d.label))
-      .toEqual(["Urgent", "Post-merge", "Unassigned"]);
+      .toEqual(["Urgent", "Post-merge", "No stage"]);
   });
 
   test("marks the tab a status is already in rather than hiding it", () => {
@@ -289,7 +289,7 @@ describe("destinations", () => {
       ],
     }]);
     expect(destinationsFor(shared, "Backlog").map((d) => d.label))
-      .toEqual(["T", "T › Blocked", "Unassigned"]);
+      .toEqual(["T", "T › Blocked", "No stage"]);
   });
 });
 
@@ -444,7 +444,7 @@ describe("WorkflowScreen rendering", () => {
   test("titles itself and summarises the workspace", () => {
     const grid = open().screen.render(80, 40);
     expect(text(grid, 0)).toContain("Workflow");
-    expect(text(grid, 0)).toContain("Linear · 6 statuses · 3 not in a tab");
+    expect(text(grid, 0)).toContain("Linear · 6 statuses · 3 unmapped");
   });
 
   test("says the tracker is missing rather than showing an empty mapping", () => {
@@ -466,9 +466,9 @@ describe("WorkflowScreen rendering", () => {
     // this park?" is a question you answer by scanning down a column.
     const grid = open().screen.render(100, 40);
     const header = text(grid, findRow(grid, "Parks"));
-    expect(header).toContain("Tab");
+    expect(header).toContain("Stage");
     expect(header).toContain("Parks");
-    const tabCol = header.indexOf("Tab");
+    const tabCol = header.indexOf("Stage");
     expect(text(grid, findRow(grid, "QA Failed")).indexOf("Urgent")).toBe(tabCol);
     expect(text(grid, findRow(grid, "QA (PROD WEB)")).indexOf("Post-merge")).toBe(tabCol);
   });
@@ -535,11 +535,11 @@ describe("WorkflowScreen rendering", () => {
 });
 
 describe("WorkflowScreen editing", () => {
-  test("Enter on a status asks where it goes, and the pick assigns it", () => {
+  test("Enter on a status asks which stage it is, and the pick assigns it", () => {
     const { screen, h } = open();
     selectRow(screen, "Triage");
     screen.handleInput("\r");
-    expect(text(screen.render(80, 40), 0)).toContain('Where does "Triage" go?');
+    expect(text(screen.render(80, 40), 0)).toContain('Which stage is "Triage"?');
 
     screen.handleInput("\r"); // first destination: Urgent
     expect(h.current().find((v) => v.id === "urgent")!.sections!.map((s) => s.label))
@@ -608,7 +608,7 @@ describe("WorkflowScreen editing", () => {
   });
 });
 
-describe("WorkflowScreen tabs", () => {
+describe("WorkflowScreen stages", () => {
   test("Enter folds a tab away and back", () => {
     const { screen } = open();
     selectRow(screen, "Post-merge");
@@ -618,11 +618,11 @@ describe("WorkflowScreen tabs", () => {
     expect(findRow(screen.render(80, 40), "Dev Confirm")).toBeGreaterThan(0);
   });
 
-  test("+ New tab prompts for a name and creates it", () => {
+  test("+ New stage prompts for a name and creates it", () => {
     const { screen, h } = open();
-    selectRow(screen, "+ New tab");
+    selectRow(screen, "+ New stage");
     screen.handleInput("\r");
-    expect(text(screen.render(80, 40), 0)).toContain("New tab name");
+    expect(text(screen.render(80, 40), 0)).toContain("Name this stage");
     for (const ch of "Waiting") screen.handleInput(ch);
     screen.handleInput("\r");
     expect(h.current().map((v) => v.label)).toContain("Waiting");
@@ -632,7 +632,7 @@ describe("WorkflowScreen tabs", () => {
     const { screen, h } = open();
     selectRow(screen, "Urgent");
     screen.handleInput("d");
-    expect(text(screen.render(80, 40), 39)).toContain("Delete \"Urgent\"");
+    expect(text(screen.render(80, 40), 39)).toContain("Delete the \"Urgent\" stage");
     screen.handleInput("n");
     expect(h.writes).toBe(0);
     expect(h.current().some((v) => v.id === "urgent")).toBe(true);
@@ -803,7 +803,7 @@ describe("WorkflowScreen — regressions found by running it", () => {
       .toEqual(["Issues", "My MRs", "To do", "In progress", "Done"]);
   });
 
-  test("the Unassigned band disappears once every status is mapped", () => {
+  test("the header stops reporting unmapped statuses once every one is mapped", () => {
     // An empty band header with nothing under it reads as a rendering fault.
     const { screen, h } = open();
     for (const state of ["Triage", "Backlog", "Done"]) {
@@ -812,7 +812,7 @@ describe("WorkflowScreen — regressions found by running it", () => {
     const grid = screen.render(100, 40);
     // Every status now names a tab, so the em dash placeholder is gone.
     expect(text(grid, findRow(grid, "Triage"))).toContain("Urgent");
-    expect(text(grid, 0)).toContain("0 not in a tab");
+    expect(text(grid, 0)).toContain("0 unmapped");
   });
 
   test("the last band survives an unconnected tracker, to explain the emptiness", () => {
@@ -870,13 +870,13 @@ describe("WorkflowScreen — moving a status keeps its meaning and the cursor", 
     expect(text(grid, 38)).toContain("Urgent");
   });
 
-  test("the cursor follows a status out to Unassigned when it is dropped", () => {
+  test("the cursor follows a status out of its stage when it is dropped", () => {
     const { screen } = open();
     selectRow(screen, "QA Failed");
     screen.handleInput("d");
     const grid = screen.render(80, 40);
     expect(text(grid, findRow(grid, "QA Failed"))).toContain("▸");
-    expect(text(grid, 38)).toContain("in no tab");
+    expect(text(grid, 38)).toContain("in none of your stages");
   });
 });
 
@@ -887,7 +887,7 @@ describe("WorkflowScreen hints", () => {
     const { screen } = open();
     selectRow(screen, "Triage");
     const hint = text(screen.render(100, 40), 39);
-    expect(hint).toContain("tab");
+    expect(hint).toContain("stage");
     expect(hint).toContain("parks");
     expect(hint).not.toContain("heading");
     expect(hint).not.toContain("remove");
