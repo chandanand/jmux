@@ -342,7 +342,7 @@ function repoSettingsFor(dir: string | null | undefined): ResolvedRepoSettings {
 /** The directory a live session is rooted in, or null if we don't know it yet. */
 function sessionDir(name: string): string | null {
   const session = currentSessions.find((s) => s.name === name);
-  return session ? (sessionDetailsCache.get(session.id)?.directory ?? null) : null;
+  return session ? (sessionDetailsCache.get(session.id)?.path ?? null) : null;
 }
 
 /** Effective settings for the session the user is currently attached to. */
@@ -1063,7 +1063,7 @@ const pollCoordinator = new PollCoordinator({
   },
   getSessionDir: (name) => {
     const session = currentSessions.find((s) => s.name === name);
-    return session ? (sessionDetailsCache.get(session.id)?.directory ?? null) : null;
+    return session ? (sessionDetailsCache.get(session.id)?.path ?? null) : null;
   },
   sessionState,
 });
@@ -1400,7 +1400,50 @@ let controlChannelLost = false;
 
 sidebar.setVersion(VERSION);
 const lastViewedTimestamps = new Map<string, number>();
-const sessionDetailsCache = new Map<string, { directory?: string; gitBranch?: string; project?: string }>();
+/**
+ * Per-session git facts, with the two forms of a session's location kept
+ * deliberately apart:
+ *
+ *   * `directory` — the **display** string, tilde-abbreviated (`~/Code/x`).
+ *     The sidebar shows it and derives group labels from it, and its grouping
+ *     treats a leading `~` specially, so it must stay abbreviated.
+ *   * `path` — the **filesystem** path, absolute (`/Users/me/Code/x`).
+ *     Anything that runs a command or resolves a repo needs this one.
+ *
+ * They were one field. Nothing expands `~` on the way to a subprocess, so
+ * `git -C ~/Code/x` ran in a directory that does not exist: every session's
+ * branch came back null and branch-derived issues silently vanished from the
+ * sidebar. Two names is what keeps a display string out of a `cwd`.
+ */
+const sessionDetailsCache = new Map<string, {
+  directory?: string;
+  path?: string;
+  gitBranch?: string;
+  project?: string;
+}>();
+
+/**
+ * Tell the poll coordinator where each session lives, so it can resolve the
+ * session's issue and MR context.
+ *
+ * Called from both `fetchSessions` and `lookupSessionDetails` because a session
+ * only becomes registerable once its path is cached, and the two run in the
+ * wrong order to do it once: `fetchSessions` fires the (async) lookup *after*
+ * this point, so on the first pass every path is still unknown. Registering
+ * only there meant a session that existed at startup was never handed over at
+ * all — no context, and so no issue on its sidebar row — until something
+ * created or destroyed a session and forced a second pass.
+ *
+ * `addSession` is idempotent, so calling it from both places costs nothing.
+ */
+function registerSessionsWithPoller(sessions: SessionInfo[]): void {
+  for (const session of sessions) {
+    // The absolute path, never the display string: this becomes the `cwd` of
+    // the git commands that discover the session's branch.
+    const dir = sessionDetailsCache.get(session.id)?.path;
+    if (dir) pollCoordinator.addSession(session.name, dir);
+  }
+}
 
 let cacheTimerInterval: ReturnType<typeof setInterval> | null = null;
 let themeRequeryInterval: ReturnType<typeof setInterval> | null = null;
@@ -1833,9 +1876,8 @@ async function fetchSessions(): Promise<void> {
     const knownSessions = new Set<string>();
     for (const session of sessions) {
       knownSessions.add(session.name);
-      const dir = sessionDetailsCache.get(session.id)?.directory;
-      if (dir) pollCoordinator.addSession(session.name, dir);
     }
+    registerSessionsWithPoller(sessions);
     for (const [name] of pollCoordinator.getAllContexts()) {
       if (!knownSessions.has(name)) pollCoordinator.removeSession(name);
     }
@@ -2142,7 +2184,8 @@ function clearSessionIndicators(): void {
 function resolvePreselectedTeamId(): string | null {
   const workflow = configStore.config.issueWorkflow;
   if (!workflow?.teamRepoMap) return null;
-  const sessionDir = sessionDetailsCache.get(currentSessionId ?? "")?.directory ?? null;
+  // Absolute, so it is comparable to the expanded teamRepoMap paths below.
+  const sessionDir = sessionDetailsCache.get(currentSessionId ?? "")?.path ?? null;
   if (!sessionDir) return null;
 
   for (const [teamName, repoDir] of Object.entries(workflow.teamRepoMap)) {
@@ -5428,7 +5471,7 @@ async function lookupSessionDetails(sessions: SessionInfo[]): Promise<void> {
       }
 
       // Write to persistent cache
-      sessionDetailsCache.set(session.id, { directory, gitBranch, project });
+      sessionDetailsCache.set(session.id, { directory, path: cwd, gitBranch, project });
       session.directory = directory;
       session.gitBranch = gitBranch;
       session.project = project;
@@ -5442,6 +5485,9 @@ async function lookupSessionDetails(sessions: SessionInfo[]): Promise<void> {
     return cached ? { ...s, ...cached } : s;
   });
   sidebar.updateSessions(currentSessions);
+  // Paths are known only now, so this is where sessions that existed at
+  // startup first become resolvable.
+  registerSessionsWithPoller(currentSessions);
   renderFrame();
 }
 
