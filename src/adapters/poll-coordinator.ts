@@ -17,6 +17,17 @@ const BACKGROUND_INTERVAL_MS = 180_000;
 const RATE_LIMITED_ACTIVE_MS = 60_000;
 const GLOBAL_INTERVAL_MS = 300_000; // 5 minutes
 
+/**
+ * How many sessions resolve their context at once during backfill.
+ *
+ * Resolving is several API calls per session (branch MR, branch issue, one per
+ * manual link, forward and transitive links), and a restart backfills every
+ * session at once — so this is what keeps "jmux started" from becoming a
+ * hundred-request burst. Low enough to be polite, high enough that a dozen
+ * sessions fill in within a few seconds.
+ */
+const BACKFILL_CONCURRENCY = 3;
+
 export type RateLimitState = "normal" | "rate_limited" | "hard_limited";
 
 export interface PollCoordinatorOptions {
@@ -39,6 +50,25 @@ export class PollCoordinator {
   private globalIssues: Issue[] = [];
   private globalMrs: MergeRequest[] = [];
   private globalReviewMrs: MergeRequest[] = [];
+
+  // --- Context backfill ---
+  //
+  // `contexts` is in-memory only, so every session starts a run unresolved —
+  // including ones whose links are sitting in state.json. Resolution used to be
+  // reachable only through the *active* session, which meant a persisted link
+  // came back only for whichever session you happened to be attached to, and a
+  // newly created session stayed unlinked until you first visited it.
+  //
+  // So a session is resolved when jmux first learns of it, not when you first
+  // look at it. `pending` is the queue, `inFlight` bounds concurrency, and
+  // `degradedSessions` holds the ones whose resolution hit a failing API and
+  // should be retried on the next background sweep — retrying them inline would
+  // spin against a network that is down.
+  private pending = new Set<string>();
+  private inFlight = new Set<string>();
+  private degradedSessions = new Set<string>();
+  /** Backfill waits for start(), which main.ts calls once adapter auth settles. */
+  private started = false;
 
   get rateLimitState(): RateLimitState {
     return this._rateLimitState;
@@ -114,12 +144,19 @@ export class PollCoordinator {
   }
 
   start(): void {
+    // Backfill is gated on this rather than on addSession, because the session
+    // list is discovered before adapter auth finishes. Resolving early would
+    // see authState !== "ok", skip every API call, and cache a context with no
+    // links in it — the exact failure this backfill exists to prevent.
+    this.started = true;
+    void this.drainBackfill();
     this.startActivePolling();
     this.startBackgroundPolling();
     this.startGlobalPolling();
   }
 
   stop(): void {
+    this.started = false;
     if (this.activeTimer) { clearInterval(this.activeTimer); this.activeTimer = null; }
     if (this.backgroundTimer) { clearInterval(this.backgroundTimer); this.backgroundTimer = null; }
     if (this.globalTimer) { clearInterval(this.globalTimer); this.globalTimer = null; }
@@ -191,11 +228,49 @@ export class PollCoordinator {
 
   addSession(name: string, dir: string): void {
     this.sessionDirs.set(name, dir);
+    // Called for every session on every session-list refresh, so this has to be
+    // idempotent: already-resolved sessions are skipped, and the queue is a set.
+    this.enqueueBackfill(name);
   }
 
   removeSession(name: string): void {
     this.sessionDirs.delete(name);
     this.contexts.delete(name);
+    this.pending.delete(name);
+    this.degradedSessions.delete(name);
+  }
+
+  /** Queue a session for context resolution unless it already has a good one. */
+  private enqueueBackfill(name: string): void {
+    if (this.inFlight.has(name)) return;
+    if (this.contexts.has(name) && !this.degradedSessions.has(name)) return;
+    this.pending.add(name);
+    void this.drainBackfill();
+  }
+
+  /**
+   * Resolve queued sessions, at most BACKFILL_CONCURRENCY at a time.
+   *
+   * Deliberately does not re-queue on failure: `resolveContext` records a
+   * degraded result instead, and the background sweep retries it on its own
+   * cadence. Retrying here would busy-loop against an unreachable tracker.
+   */
+  private async drainBackfill(): Promise<void> {
+    // Backs off on any rate limit, matching the background pass — backfill is
+    // the most request-hungry thing here and the worst to run while throttled.
+    // Queued names survive; reportRateLimit("normal") restarts and drains them.
+    if (!this.started || this._rateLimitState !== "normal") return;
+    while (this.pending.size > 0 && this.inFlight.size < BACKFILL_CONCURRENCY) {
+      const name: string = this.pending.values().next().value!;
+      this.pending.delete(name);
+      if (!this.sessionDirs.has(name)) continue;      // died while queued
+      if (this.contexts.has(name) && !this.degradedSessions.has(name)) continue;
+      this.inFlight.add(name);
+      void this.resolveContext(name).finally(() => {
+        this.inFlight.delete(name);
+        void this.drainBackfill();
+      });
+    }
   }
 
   async setActiveSession(name: string): Promise<void> {
@@ -243,9 +318,15 @@ export class PollCoordinator {
         manualMrIds,
       });
       this.contexts.set(name, ctx);
+      // Cache it either way — a partial context still shows whatever resolved —
+      // but remember an incomplete one so the background sweep tries again.
+      // Without this a single blip blanks a session's links for the whole run.
+      if (ctx.degraded) this.degradedSessions.add(name);
+      else this.degradedSessions.delete(name);
       this.opts.onUpdate(name);
     } catch (e) {
       logError("PollCoordinator", `resolve session "${name}" failed: ${(e as Error).message}`);
+      this.degradedSessions.add(name);
     }
   }
 
@@ -320,6 +401,16 @@ export class PollCoordinator {
   private async pollBackgroundSessions(): Promise<void> {
     if (this._rateLimitState !== "normal") return;
     const { codeHost, issueTracker } = this.opts;
+
+    // Sweep for anything still unresolved or resolved incompletely — sessions
+    // added while rate-limited, and retries for tracker failures. The batches
+    // below only refresh contexts that already exist, so without this a session
+    // that missed its backfill would never get one.
+    for (const name of this.sessionDirs.keys()) {
+      if (!this.contexts.has(name) || this.degradedSessions.has(name)) {
+        this.enqueueBackfill(name);
+      }
+    }
 
     const branchContexts: BranchContext[] = [];
     const nonBranchMrIds: string[] = [];

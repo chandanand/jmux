@@ -231,4 +231,157 @@ describe("PollCoordinator", () => {
       coord.stop();
     });
   });
+
+  // --- Context backfill ---
+  //
+  // Contexts are in-memory, so every session starts a run unresolved. These
+  // cover the guarantee that a persisted link comes back for EVERY session
+  // after a restart, not just whichever one you happen to be attached to.
+
+  describe("context backfill", () => {
+    const ISSUE = {
+      id: "i1", identifier: "TRA-1", title: "x", status: "Todo",
+      assignee: null, linkedMrUrls: [], webUrl: "",
+    };
+
+    // Dirs that aren't git repos, so branch discovery is inert and resolution
+    // exercises exactly the persisted-link path this backfill exists for.
+    function harness(opts: {
+      pollIssue?: () => Promise<any>;
+      links?: string[];
+    } = {}) {
+      const calls: string[] = [];
+      const issueTracker = {
+        type: "linear", authState: "ok" as AdapterAuthState, authHint: "",
+        authenticate: mock(() => Promise.resolve()),
+        getLinkedIssue: mock(() => Promise.resolve(null)),
+        getIssueByBranch: mock(() => Promise.resolve(null)),
+        pollIssue: mock((id: string) => {
+          calls.push(id);
+          return opts.pollIssue ? opts.pollIssue() : Promise.resolve({ ...ISSUE });
+        }),
+        pollAllIssues: mock(() => Promise.resolve(new Map())),
+        getAvailableStatuses: mock(() => Promise.resolve([])),
+        listWorkflowStates: mock(() => Promise.resolve([])),
+        openInBrowser: mock(() => {}),
+        updateStatus: mock(() => Promise.resolve()),
+        createIssue: mock(() => Promise.resolve({ ...ISSUE })),
+        searchIssues: mock(() => Promise.resolve([])),
+        getMyIssues: mock(() => Promise.resolve([])),
+        getTeams: mock(() => Promise.resolve([])),
+        buildPrompt: mock(() => ""),
+      } as unknown as IssueTrackerAdapter;
+
+      const coord = new PollCoordinator({
+        codeHost: null,
+        issueTracker,
+        onUpdate: () => {},
+        getSessionDir: () => "/nonexistent",
+        sessionState: {
+          getLinkedIssueIds: () => opts.links ?? ["i1"],
+          getLinkedMrIds: () => [],
+        } as any,
+      });
+      return { coord, issueTracker, calls };
+    }
+
+    const settle = () => new Promise((r) => setTimeout(r, 10));
+
+    test("a discovered session resolves without ever being made active", async () => {
+      // The bug this replaces: resolveContext was reachable only through the
+      // active session, so a restart left every other session unlinked.
+      const { coord, calls } = harness();
+      coord.start();
+      coord.addSession("tra-1", "/nonexistent/tra-1");
+      await settle();
+      expect(calls).toEqual(["i1"]);
+      expect(coord.getContext("tra-1")?.issues[0]?.id).toBe("i1");
+      coord.stop();
+    });
+
+    test("backfill waits for start(), so auth can settle first", async () => {
+      // Sessions are discovered before adapters finish authenticating.
+      // Resolving early would skip every API call and cache a link-less
+      // context — the exact state this backfill exists to prevent.
+      const { coord, calls } = harness();
+      coord.addSession("tra-1", "/nonexistent/tra-1");
+      await settle();
+      expect(calls).toEqual([]);
+      expect(coord.getContext("tra-1")).toBeNull();
+
+      coord.start();
+      await settle();
+      expect(calls).toEqual(["i1"]);
+      coord.stop();
+    });
+
+    test("resolves at most 3 sessions concurrently", async () => {
+      let inFlight = 0;
+      let peak = 0;
+      const { coord } = harness({
+        pollIssue: async () => {
+          inFlight++;
+          peak = Math.max(peak, inFlight);
+          await new Promise((r) => setTimeout(r, 5));
+          inFlight--;
+          return { ...ISSUE };
+        },
+      });
+      coord.start();
+      for (let i = 0; i < 10; i++) coord.addSession(`s${i}`, `/nonexistent/s${i}`);
+      await new Promise((r) => setTimeout(r, 150));
+      expect(peak).toBe(3);
+      // All ten still finish — the cap throttles, it does not drop work.
+      expect(coord.getAllContexts().size).toBe(10);
+      coord.stop();
+    });
+
+    test("a resolved session is not re-resolved when rediscovered", async () => {
+      // addSession fires for every session on every session-list refresh.
+      const { coord, calls } = harness();
+      coord.start();
+      coord.addSession("tra-1", "/nonexistent/tra-1");
+      await settle();
+      coord.addSession("tra-1", "/nonexistent/tra-1");
+      await settle();
+      expect(calls).toEqual(["i1"]);
+      coord.stop();
+    });
+
+    test("a context degraded by a failing tracker is retried, not cached forever", async () => {
+      // One network blip during resolution used to blank a session's links for
+      // the rest of the run: the empty context cached and nothing re-resolved.
+      let fail = true;
+      const { coord, calls } = harness({
+        pollIssue: async () => {
+          if (fail) throw new Error("Unable to connect");
+          return { ...ISSUE };
+        },
+      });
+      coord.start();
+      coord.addSession("tra-1", "/nonexistent/tra-1");
+      await settle();
+      expect(coord.getContext("tra-1")?.issues).toEqual([]);
+      expect(coord.getContext("tra-1")?.degraded).toBe(true);
+
+      // Rediscovery retries it, and the recovered link lands.
+      fail = false;
+      coord.addSession("tra-1", "/nonexistent/tra-1");
+      await settle();
+      expect(calls).toEqual(["i1", "i1"]);
+      expect(coord.getContext("tra-1")?.issues[0]?.id).toBe("i1");
+      expect(coord.getContext("tra-1")?.degraded).toBeUndefined();
+      coord.stop();
+    });
+
+    test("removeSession drops a queued session instead of resolving it", async () => {
+      const { coord, calls } = harness();
+      coord.addSession("gone", "/nonexistent/gone");
+      coord.removeSession("gone");
+      coord.start();
+      await settle();
+      expect(calls).toEqual([]);
+      coord.stop();
+    });
+  });
 });

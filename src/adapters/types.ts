@@ -78,6 +78,15 @@ export interface SessionContext {
   mrs: Array<MergeRequest & { source: LinkSource }>;
   issues: Array<Issue & { source: LinkSource }>;
   resolvedAt: number;
+  /**
+   * An API call this resolution attempted threw, so the context is incomplete —
+   * a persisted link may be missing purely because the tracker was unreachable.
+   *
+   * Load-bearing: contexts are cached, so without this a single network blip
+   * during resolution would blank a session's links until the process restarts.
+   * The background pass re-resolves anything flagged here.
+   */
+  degraded?: boolean;
 }
 
 export type AdapterAuthState = "ok" | "failed" | "unauthenticated";

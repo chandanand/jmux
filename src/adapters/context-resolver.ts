@@ -1,3 +1,4 @@
+import { homedir } from "os";
 import type {
   CodeHostAdapter,
   IssueTrackerAdapter,
@@ -17,11 +18,25 @@ const HOSTNAME_MAP: Record<string, string[]> = {
   github: ["github.com"],
 };
 
+/**
+ * Expand a leading `~`, because nothing downstream will.
+ *
+ * A subprocess `cwd` is not shell-expanded, so a tilde path silently runs
+ * nowhere: git exits non-zero and the caller reads that as "not a git repo".
+ * That is exactly how every session's branch came back null once, with no
+ * error anywhere. Callers should pass absolute paths; this makes the failure
+ * impossible rather than merely unlikely.
+ */
+function expandTilde(dir: string): string {
+  if (dir === "~") return homedir();
+  return dir.startsWith("~/") ? homedir() + dir.slice(1) : dir;
+}
+
 export async function getGitBranch(dir: string): Promise<string | null> {
   try {
     const proc = Bun.spawnSync(
       ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-      { cwd: dir, stdout: "pipe", stderr: "pipe" },
+      { cwd: expandTilde(dir), stdout: "pipe", stderr: "pipe" },
     );
     if (proc.exitCode !== 0) return null;
     const branch = proc.stdout.toString().trim();
@@ -35,7 +50,7 @@ export async function getGitRemotes(dir: string): Promise<GitRemote[]> {
   try {
     const proc = Bun.spawnSync(
       ["git", "remote", "-v"],
-      { cwd: dir, stdout: "pipe", stderr: "pipe" },
+      { cwd: expandTilde(dir), stdout: "pipe", stderr: "pipe" },
     );
     if (proc.exitCode !== 0) return [];
     const lines = proc.stdout.toString().trim().split("\n");
@@ -129,6 +144,13 @@ export async function resolveSessionContext(
   const mrs: TaggedMr[] = [];
   const issues: TaggedIssue[] = [];
 
+  // Set by any call that threw. Each step below swallows its own failure so one
+  // dead endpoint can't lose the whole context — but the *caller* has to know
+  // the result is incomplete, or it caches a link-less context permanently. A
+  // skipped step (adapter absent or unauthenticated) is not degraded: retrying
+  // it would skip it again.
+  let degraded = false;
+
   // Step 1-2: Git state + branch auto-discovery
   const branch = await getGitBranch(dir);
   const remotes = branch ? await getGitRemotes(dir) : [];
@@ -138,14 +160,14 @@ export async function resolveSessionContext(
     try {
       const mr = await codeHost.getMergeRequest(remote.url, branch);
       if (mr) mrs.push({ ...mr, source: "branch" });
-    } catch {}
+    } catch { degraded = true; }
   }
 
   if (branch && issueTracker && issueTracker.authState === "ok") {
     try {
       const issue = await issueTracker.getIssueByBranch(branch);
       if (issue) issues.push({ ...issue, source: "branch" });
-    } catch {}
+    } catch { degraded = true; }
   }
 
   // Step 3: Resolve manual issue links
@@ -155,7 +177,7 @@ export async function resolveSessionContext(
       try {
         const issue = await issueTracker.pollIssue(id);
         if (issue) issues.push({ ...issue, source: "manual" });
-      } catch {}
+      } catch { degraded = true; }
     }
   }
 
@@ -167,7 +189,7 @@ export async function resolveSessionContext(
         if (mrs.length >= MAX_MRS) break;
         mrs.push({ ...mr, source: "manual" });
       }
-    } catch {}
+    } catch { degraded = true; }
   }
 
   // Step 5: Forward links — MR → linked issues
@@ -178,7 +200,7 @@ export async function resolveSessionContext(
       try {
         const linked = await issueTracker.getLinkedIssue(mr.webUrl);
         if (linked) issues.push({ ...linked, source: "mr-link" });
-      } catch {}
+      } catch { degraded = true; }
     }
   }
 
@@ -194,7 +216,7 @@ export async function resolveSessionContext(
         try {
           const mr = await codeHost.pollMergeRequest(mrId);
           if (mr) mrs.push({ ...mr, source: "transitive" });
-        } catch {}
+        } catch { degraded = true; }
       }
     }
   }
@@ -207,5 +229,6 @@ export async function resolveSessionContext(
     mrs: deduplicateMrs(mrs),
     issues: deduplicateIssues(issues),
     resolvedAt: Date.now(),
+    ...(degraded ? { degraded: true } : {}),
   };
 }
