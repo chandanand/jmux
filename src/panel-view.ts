@@ -77,7 +77,7 @@ export function matchesIssueFilter(
  * axis (labels, priority, categories) narrows a stage as normal.
  */
 export function effectiveFilter(view: PanelView): PanelViewFilter {
-  if (!view.states?.length || view.filter.states === undefined) return view.filter;
+  if (view.states === undefined || view.filter.states === undefined) return view.filter;
   const { states, ...rest } = view.filter;
   return rest;
 }
@@ -121,6 +121,12 @@ export function stateIndexInView(status: string, states: string[] | undefined): 
 /**
  * Read a stage's status list, dropping blanks and duplicates. A status listed
  * twice could only ever match once, so the second entry is dead config.
+ *
+ * An **empty** list is preserved, not discarded. Presence of the key is what
+ * makes a view status-driven; the length only says how many statuses it holds.
+ * Collapsing `[]` to "absent" made a stage you had just created — or had just
+ * removed the last status from — fall back to its `filter` and list *every*
+ * assigned issue, which is the opposite of what an empty stage should show.
  */
 function parseStates(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) return undefined;
@@ -133,7 +139,7 @@ function parseStates(raw: unknown): string[] | undefined {
     seen.add(key);
     out.push(entry);
   }
-  return out.length > 0 ? out : undefined;
+  return out;
 }
 
 const VALID_COMBOS: Array<{ source: string; scope: string }> = [

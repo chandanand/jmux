@@ -185,7 +185,11 @@ export function buildViewNodes(
   // more than one — a single-status stage is already named by its tab, so a
   // heading repeating it would be a row that says nothing. There used to be a
   // separate heading you named by hand; it only ever restated the status.
-  if (view.states && view.states.length > 0) {
+  //
+  // Presence of the list, not its length, is what makes a view status-driven:
+  // a stage holding no statuses shows no issues. Testing the length let a
+  // freshly created stage fall through to `groupBy` and list everything.
+  if (view.states !== undefined) {
     if (view.states.length === 1) {
       return ordered
         .filter((item) => stateIndexInView(item.status, view.states) >= 0)

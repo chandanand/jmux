@@ -2248,7 +2248,7 @@ function openViewFilterMenu(view: PanelView): void {
   // A stage's statuses govern its membership, and `effectiveFilter` drops
   // `filter.states` for it — so offering a States axis here would be a control
   // that silently does nothing. The workflow screen is where its statuses live.
-  const sectioned = (view.states?.length ?? 0) > 0;
+  const sectioned = view.states !== undefined;
 
   const items: ListItem[] = [
     ...(sectioned

@@ -441,3 +441,35 @@ describe("issue row extras", () => {
     expect(transformIssues([issue], new Set(), undefined, new Map()).pop()!.pipeline).toBeUndefined();
   });
 });
+
+describe("buildViewNodes for a stage with no statuses", () => {
+  const view = {
+    id: "urgent", label: "Urgent", source: "issues" as const,
+    filter: { scope: "assigned" as const },
+    groupBy: "none" as const, subGroupBy: "none" as const,
+    sortBy: "priority" as const, sortOrder: "asc" as const,
+    sessionLinkedFirst: false,
+    states: [] as string[],
+  };
+  const item = (id: string, status: string): RenderableItem => ({
+    id, type: "issue", primary: id, title: id, status, meta: "",
+    group: "", subGroup: status, sessionLinked: false, priority: 3,
+    updatedAt: 0, raw: {} as any,
+  });
+
+  test("shows nothing, rather than falling through to every assigned issue", () => {
+    // `createView` seeds `states: []`, and removing a stage's last status
+    // leaves it there. Testing the list's *length* let both cases fall through
+    // to the groupBy branch, so a stage you had just made listed everything.
+    const nodes = buildViewNodes([item("a", "Anything"), item("b", "Other")], view, new Set());
+    expect(nodes).toEqual([]);
+  });
+
+  test("a view with no states key at all is still governed by its filter", () => {
+    // The default "Issues" tab has no states key and must keep showing
+    // everything assigned — that is the distinction being preserved.
+    const { states, ...plain } = view;
+    const nodes = buildViewNodes([item("a", "Anything")], plain, new Set());
+    expect(nodes.filter((n) => n.kind === "item")).toHaveLength(1);
+  });
+});

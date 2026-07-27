@@ -264,8 +264,16 @@ describe("parseViews with a stage's status list", () => {
     expect(v.states).toEqual(["A", "B"]);
   });
 
-  test("an empty list reads as no list at all", () => {
-    expect(parseViews([{ ...base, states: [] }])[0].states).toBeUndefined();
+  test("an empty list is preserved — it means the stage holds nothing", () => {
+    // Collapsing [] to "absent" made a stage you had just created fall back to
+    // its filter and list every assigned issue. Presence of the key is what
+    // makes a view status-driven; the length says how many it holds.
+    expect(parseViews([{ ...base, states: [] }])[0].states).toEqual([]);
+  });
+
+  test("a missing key still reads as not status-driven", () => {
+    expect(parseViews([base])[0].states).toBeUndefined();
+    expect(parseViews([{ ...base, states: "nonsense" }])[0].states).toBeUndefined();
   });
 
   test("a view with no status list stays ungrouped", () => {
@@ -496,12 +504,12 @@ describe("effectiveFilter", () => {
     expect(effectiveFilter(view).states).toEqual(["Doing"]);
   });
 
-  test("an empty status list does not count as mapped", () => {
-    // createView() seeds `states: []`; until a status lands there the tab is
-    // still governed by its filter, so a states filter must survive.
+  test("an empty status list still counts as mapped", () => {
+    // createView() seeds `states: []`. Treating that as unmapped let the
+    // filter take over, so a brand-new stage listed everything assigned.
     const view = mapped(["Doing"]);
     view.states = [];
-    expect(effectiveFilter(view).states).toEqual(["Doing"]);
+    expect(effectiveFilter(view).states).toBeUndefined();
   });
 
   test("returns the same object identity when nothing needs stripping", () => {
