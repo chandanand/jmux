@@ -44,7 +44,6 @@ import { createGrid, writeString, writeStyledLine, textCols, truncateToCols, typ
 import { tokens, space, frame } from "./chrome-tokens";
 import { layoutFooter, type FooterSegment } from "./footer";
 import { drawSettingRow, type SettingDef } from "./settings-screen";
-import { stageFromStateType } from "./work-stage";
 import {
   assignStateToView, createView, deleteView, moveStateInView, moveView,
   renameView, stateIndexInView, suggestLayout, unassignState, isParkedState,
@@ -167,7 +166,6 @@ export type WorkflowRow =
   | {
       kind: "status"; state: string; viewId: string | null; viewLabel: string | null;
       parks: boolean; issues: number; parked: number; known: boolean;
-      trackerStage: WorkStage;
     }
   | { kind: "setting"; def: SettingDef };
 
@@ -228,7 +226,7 @@ export function buildRows(port: WorkflowPort, tier: SettingsTier): WorkflowRow[]
         kind: "status", state, viewId: view.id, viewLabel: view.label,
         parks: isParkedState(parkedStates, state),
         issues: count(state), parked: parkedCounts.get(norm(state)) ?? 0,
-        known: known.has(norm(state)), trackerStage: "active",
+        known: known.has(norm(state)),
       });
     }
   }
@@ -238,7 +236,7 @@ export function buildRows(port: WorkflowPort, tier: SettingsTier): WorkflowRow[]
       kind: "status", state: s.name, viewId: null, viewLabel: null,
       parks: isParkedState(parkedStates, s.name),
       issues: count(s.name), parked: parkedCounts.get(norm(s.name)) ?? 0,
-      known: true, trackerStage: stageFromStateType(s.type),
+      known: true,
     });
   }
 
@@ -679,6 +677,8 @@ export class WorkflowScreen {
     const row = this.rows()[this.selectedIndex];
     if (!row) return;
     if (row.kind === "tab") {
+      // Same guard as rename/delete/up-next: an MR tab is not a stage.
+      if (row.source !== "issues") return;
       port.setViews(moveView(port.getViews(), row.viewId, delta));
     } else if (row.kind === "status" && row.viewId) {
       // Order within a stage is priority order.

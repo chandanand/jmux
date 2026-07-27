@@ -105,10 +105,10 @@ describe("buildRows", () => {
     expect(isSelectable(rows[band + 1]!)).toBe(false);
   });
 
-  test("an unassigned status is classified by the tracker, with nothing to configure", () => {
+  test("a status in no stage carries no stage label", () => {
     const rows = rowsOf(harness());
-    expect(statusRow(rows, "Triage")).toMatchObject({ viewId: null, trackerStage: "idea" });
-    expect(statusRow(rows, "Done")).toMatchObject({ viewId: null, trackerStage: "done" });
+    expect(statusRow(rows, "Triage")).toMatchObject({ viewId: null, viewLabel: null });
+    expect(statusRow(rows, "Done")).toMatchObject({ viewId: null, viewLabel: null });
   });
 
   test("parking is the status's own setting, independent of its stage", () => {
