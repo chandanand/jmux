@@ -2,7 +2,7 @@
 import type { CellGrid } from "./types";
 import { ColorMode } from "./types";
 import { createGrid, writeString, textCols, truncateToCols, type CellAttrs, type StyledLine } from "./cell-grid";
-import { sectionIndexForStatus, type PanelView, type GroupByField } from "./panel-view";
+import { stateIndexInView, type PanelView, type GroupByField } from "./panel-view";
 import type { Issue, IssueStateType, MergeRequest, PipelineStatus } from "./adapters/types";
 import { fuzzyMatch } from "./fuzzy";
 import { renderMarkdownToStyledLines } from "./markdown";
@@ -177,21 +177,30 @@ export function buildViewNodes(
     ordered = sortItems(items, view.sortBy, view.sortOrder);
   }
 
-  // Explicit groups drive both membership and headers: an item belongs to the
-  // first group claiming its status, and anything unclaimed is not in this tab
-  // at all. Config order is priority order, so it is preserved verbatim rather
-  // than sorted — that is the whole point of naming the sections by hand.
-  if (view.sections && view.sections.length > 0) {
-    const buckets: RenderableItem[][] = view.sections.map(() => []);
+  // A stage's own status list drives membership: an item belongs if its status
+  // is on the list, and anything unlisted is not in this stage at all. Config
+  // order is priority order, so it is preserved verbatim rather than sorted.
+  //
+  // Subheadings are the status names themselves, and only when the stage holds
+  // more than one — a single-status stage is already named by its tab, so a
+  // heading repeating it would be a row that says nothing. There used to be a
+  // separate heading you named by hand; it only ever restated the status.
+  if (view.states && view.states.length > 0) {
+    if (view.states.length === 1) {
+      return ordered
+        .filter((item) => stateIndexInView(item.status, view.states) >= 0)
+        .map((item) => ({ kind: "item" as const, item, depth: 0 }));
+    }
+    const buckets: RenderableItem[][] = view.states.map(() => []);
     for (const item of ordered) {
-      const idx = sectionIndexForStatus(item.status, view.sections);
+      const idx = stateIndexInView(item.status, view.states);
       if (idx >= 0) buckets[idx]!.push(item);
     }
     const nodes: ViewNode[] = [];
-    view.sections.forEach((group, i) => {
+    view.states.forEach((state, i) => {
       const members = buckets[i]!;
-      const collapsed = collapsedGroups.has(group.label);
-      nodes.push({ kind: "group", key: group.label, label: group.label, count: members.length, collapsed, depth: 0 });
+      const collapsed = collapsedGroups.has(state);
+      nodes.push({ kind: "group", key: state, label: state, count: members.length, collapsed, depth: 0 });
       if (collapsed) return;
       for (const item of members) nodes.push({ kind: "item", item, depth: 1 });
     });

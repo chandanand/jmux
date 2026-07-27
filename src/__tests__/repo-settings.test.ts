@@ -282,12 +282,13 @@ describe("migrateStagesIntoViews", () => {
   });
 });
 
-describe("sections migration", () => {
-  // Three hops, in one pass. `groups` became `sections`; the tab's stage moved
-  // down onto each section; then parking left the tabs entirely for one flat
-  // list of the statuses that park — because only `parked` ever did anything,
-  // and where a status shows is a separate question from whether it hides.
-  test("groups become sections, and a parked tab's states become parked states", () => {
+describe("panel view migration", () => {
+  // Four hops, in one pass. `groups` became `sections`; the tab's stage moved
+  // down onto each section; parking left the tabs entirely for one flat list of
+  // the statuses that park; and finally the sections themselves flattened into
+  // an ordered status list, because a section's name only ever restated the
+  // status inside it.
+  test("groups flatten into a stage's status list, and a parked tab's states park", () => {
     const { config, changed } = migrateLegacyConfig({
       panelViews: [{ id: "w", label: "W", stage: "parked",
         groups: [{ label: "In QA", states: ["QA"] }, { label: "In review", states: ["MR"] }] }],
@@ -297,10 +298,8 @@ describe("sections migration", () => {
     expect(v.groups).toBeUndefined();
     expect(v.stage).toBeUndefined();
     expect(v.parks).toBeUndefined();
-    expect(v.sections).toEqual([
-      { label: "In QA", states: ["QA"] },
-      { label: "In review", states: ["MR"] },
-    ]);
+    expect(v.sections).toBeUndefined();
+    expect(v.states).toEqual(["QA", "MR"]);
     expect(config.pipeline.parkedStates).toEqual(["QA", "MR"]);
   });
 
@@ -313,10 +312,8 @@ describe("sections migration", () => {
                    { label: "Theirs", states: ["b"], stage: "parked" }] }],
     });
     expect(config.pipeline.parkedStates).toEqual(["b"]);
-    expect(config.panelViews[0].sections).toEqual([
-      { label: "Mine", states: ["a"] },
-      { label: "Theirs", states: ["b"] },
-    ]);
+    expect(config.panelViews[0].sections).toBeUndefined();
+    expect(config.panelViews[0].states).toEqual(["a", "b"]);
   });
 
   test("the intermediate per-tab flag migrates too", () => {
@@ -354,7 +351,7 @@ describe("sections migration", () => {
   test("already-migrated views report no change", () => {
     const { changed } = migrateLegacyConfig({
       pipeline: { parkedStates: ["a"] },
-      panelViews: [{ id: "w", label: "W", sections: [{ label: "s", states: ["a"] }] }],
+      panelViews: [{ id: "w", label: "W", states: ["a"] }],
     });
     expect(changed).toBe(false);
   });

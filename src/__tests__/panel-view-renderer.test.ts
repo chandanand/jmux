@@ -335,17 +335,14 @@ describe("splitRatioForSepRow", () => {
 
 // --- Explicit group buckets ---
 
-describe("buildViewNodes with explicit groups", () => {
+describe("buildViewNodes with a stage's status list", () => {
   const view = {
     id: "urgent", label: "Urgent", source: "issues" as const,
     filter: { scope: "assigned" as const },
     groupBy: "none" as const, subGroupBy: "none" as const,
     sortBy: "priority" as const, sortOrder: "asc" as const,
     sessionLinkedFirst: false,
-    sections: [
-      { label: "QA Failed", states: ["QA Failed"] },
-      { label: "Blockers", states: ["Release Blockers"] },
-    ],
+    states: ["QA Failed", "Release Blockers"],
   };
 
   const item = (id: string, status: string, priority = 3): RenderableItem => ({
@@ -354,33 +351,42 @@ describe("buildViewNodes with explicit groups", () => {
     updatedAt: 0, raw: {} as any,
   });
 
-  test("emits configured groups in configured order, not alphabetically", () => {
-    // "Blockers" sorts before "QA Failed" alphabetically; config order wins.
+  test("subheadings are the status names, in configured order not alphabetical", () => {
+    // "Release Blockers" sorts before "QA Failed" alphabetically; the stage's
+    // own order is priority order, so it wins.
     const nodes = buildViewNodes(
       [item("a", "Release Blockers"), item("b", "QA Failed")], view, new Set(),
     );
     const labels = nodes.filter((n) => n.kind === "group").map((n: any) => n.label);
-    expect(labels).toEqual(["QA Failed", "Blockers"]);
+    expect(labels).toEqual(["QA Failed", "Release Blockers"]);
   });
 
-  test("items land under the group that claims their status", () => {
+  test("items land under their own status", () => {
     const nodes = buildViewNodes(
       [item("a", "Release Blockers"), item("b", "QA Failed")], view, new Set(),
     );
     const order = nodes.map((n) => n.kind === "group" ? `#${(n as any).label}` : (n as any).item.id);
-    expect(order).toEqual(["#QA Failed", "b", "#Blockers", "a"]);
+    expect(order).toEqual(["#QA Failed", "b", "#Release Blockers", "a"]);
   });
 
-  test("statuses no group claims are excluded entirely", () => {
+  test("a stage holding one status draws no subheading at all", () => {
+    // The tab already names it; a heading repeating it would say nothing.
+    const solo = { ...view, states: ["QA Failed"] };
+    const nodes = buildViewNodes([item("b", "QA Failed")], solo, new Set());
+    expect(nodes.filter((n) => n.kind === "group")).toHaveLength(0);
+    expect(nodes.filter((n) => n.kind === "item")).toHaveLength(1);
+  });
+
+  test("statuses the stage does not list are excluded entirely", () => {
     const nodes = buildViewNodes([item("z", "In Progress")], view, new Set());
     expect(nodes.filter((n) => n.kind === "item")).toHaveLength(0);
   });
 
-  test("an empty group still shows its header with a zero count", () => {
-    // A queue that is empty is information, not noise — it says "nothing is
-    // blocked" rather than silently disappearing.
+  test("a status with no issues still shows its header with a zero count", () => {
+    // An empty queue is information, not noise — it says "nothing is blocked"
+    // rather than silently disappearing.
     const nodes = buildViewNodes([item("b", "QA Failed")], view, new Set());
-    const blockers = nodes.find((n) => n.kind === "group" && (n as any).label === "Blockers");
+    const blockers = nodes.find((n) => n.kind === "group" && (n as any).label === "Release Blockers");
     expect(blockers).toBeDefined();
     expect((blockers as any).count).toBe(0);
   });

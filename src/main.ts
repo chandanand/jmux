@@ -2248,7 +2248,7 @@ function openViewFilterMenu(view: PanelView): void {
   // A stage's statuses govern its membership, and `effectiveFilter` drops
   // `filter.states` for it — so offering a States axis here would be a control
   // that silently does nothing. The workflow screen is where its statuses live.
-  const sectioned = (view.sections?.length ?? 0) > 0;
+  const sectioned = (view.states?.length ?? 0) > 0;
 
   const items: ListItem[] = [
     ...(sectioned
@@ -3655,11 +3655,10 @@ function buildSettingsCategories(): SettingsCategory[] {
           id: "edit-workflow", label: "Configure workflow…", type: "action" as const,
           getValue: () => {
             const tabs = panelViews.filter((v) => v.source === "issues");
-            const mapped = tabs.reduce(
-              (n, v) => n + (v.sections ?? []).reduce((m, sec) => m + sec.states.length, 0), 0);
+            const mapped = tabs.reduce((n, v) => n + (v.states ?? []).length, 0);
             const free = cachedWorkflowStates.filter(
-              (st) => !tabs.some((v) => (v.sections ?? []).some((sec) =>
-                sec.states.some((x) => x.trim().toLowerCase() === st.name.trim().toLowerCase())))).length;
+              (st) => !tabs.some((v) => (v.states ?? []).some(
+                (x) => x.trim().toLowerCase() === st.name.trim().toLowerCase()))).length;
             const parks = parkedStates().length;
             const tail = parks > 0 ? `${parks} park` : "nothing parks";
             return free > 0 ? `${free} statuses unmapped · ${tail}` : `${mapped} statuses · ${tail}`;

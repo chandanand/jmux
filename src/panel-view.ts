@@ -70,34 +70,16 @@ export function matchesIssueFilter(
 /**
  * The filter that actually governs membership.
  *
- * `sections` and `filter.states` are two ways of saying "these statuses belong
+ * A stage's own list and `filter.states` are two ways of saying "these belong
  * here", and a view carrying both used to apply them as an AND — so a states
  * filter set from the panel's `F` menu silently hid issues its section claimed.
- * Sections win, per the settled model: they are the unit of classification and
- * the only one that also carries meaning. Every other axis (labels, priority,
- * stages) narrows a sectioned view as normal.
+ * The stage's own list wins: it is what the workflow screen edits. Every other
+ * axis (labels, priority, categories) narrows a stage as normal.
  */
 export function effectiveFilter(view: PanelView): PanelViewFilter {
-  if (!view.sections?.length || view.filter.states === undefined) return view.filter;
+  if (!view.states?.length || view.filter.states === undefined) return view.filter;
   const { states, ...rest } = view.filter;
   return rest;
-}
-
-/**
- * A section: an ordered bucket of statuses inside a tab, and the header they
- * render under in the panel. Nothing more — a section carries no behaviour.
- *
- * It used to carry a `stage`, so classifying a status meant choosing between
- * four values of which only one (`parked`) did anything observable. That made
- * every status a four-way decision with a 3-in-4 chance of being a no-op. The
- * decision that actually matters — does this work leave my sidebar — is now one
- * column in the workflow screen's status table (`pipeline.parkedStates`), and
- * idea/active/done come from the tracker's own categories with nothing to
- * configure.
- */
-export interface PanelViewSection {
-  label: string;
-  states: string[];
 }
 
 export type GroupByField = "team" | "project" | "status" | "priority" | "none";
@@ -114,48 +96,42 @@ export interface PanelView {
   sortOrder: "asc" | "desc";
   sessionLinkedFirst: boolean;
   /**
-   * Explicit ordered sections. When present these drive BOTH membership (the
-   * union of every group's states) and the headers, and `groupBy` /
-   * `filter.states` are ignored for this view.
+   * The tracker statuses this stage sits on top of, in priority order. When
+   * present this drives BOTH membership and the panel's subheadings, and
+   * `groupBy` / `filter.states` are ignored for this view.
+   *
+   * A flat list rather than named buckets: a heading was a third thing to name
+   * and maintain, and in practice it only ever restated the status. The panel
+   * groups by status name when a stage holds more than one, which is the same
+   * result with nothing to configure.
    */
-  sections?: PanelViewSection[];
+  states?: string[];
 }
 
 /**
- * Index of the first group claiming `status`, or -1 if none does.
- * Case- and whitespace-insensitive, matching every other state comparison.
+ * Position of `status` in a stage's ordered list, or -1. Case- and
+ * whitespace-insensitive, matching every other state comparison.
  */
-export function sectionIndexForStatus(
-  status: string,
-  sections: PanelViewSection[] | undefined,
-): number {
-  if (!sections) return -1;
+export function stateIndexInView(status: string, states: string[] | undefined): number {
+  if (!states) return -1;
   const want = (status ?? "").trim().toLowerCase();
-  for (let i = 0; i < sections.length; i++) {
-    if (sections[i]!.states.some((s) => s.trim().toLowerCase() === want)) return i;
-  }
-  return -1;
+  return states.findIndex((s) => s.trim().toLowerCase() === want);
 }
 
 /**
- * Read a view's section list, dropping entries that can't render or match.
- *
- * That includes sections holding no statuses: a section is *defined by* the
- * statuses it covers, so an empty one is a header that can never claim an issue
- * — invisible dead config the editor gives you no way to see or remove. Live
- * edits prune the same case through `pruneEmptySections`; this catches the ones
- * already written to disk.
+ * Read a stage's status list, dropping blanks and duplicates. A status listed
+ * twice could only ever match once, so the second entry is dead config.
  */
-function parseSections(raw: unknown): PanelViewSection[] | undefined {
+function parseStates(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) return undefined;
-  const out: PanelViewSection[] = [];
+  const out: string[] = [];
+  const seen = new Set<string>();
   for (const entry of raw) {
-    if (!entry || typeof entry !== "object") continue;
-    const { label, states } = entry as Record<string, unknown>;
-    if (typeof label !== "string" || !label.trim()) continue;
-    if (!Array.isArray(states) || !states.every((s) => typeof s === "string")) continue;
-    if (states.length === 0) continue;
-    out.push({ label, states: states as string[] });
+    if (typeof entry !== "string" || !entry.trim()) continue;
+    const key = entry.trim().toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(entry);
   }
   return out.length > 0 ? out : undefined;
 }
@@ -209,7 +185,7 @@ export function parseViews(raw: unknown): PanelView[] {
       sortBy: isSortByField(sortBy) ? sortBy : "priority",
       sortOrder: sortOrder === "desc" ? "desc" : "asc",
       sessionLinkedFirst: sessionLinkedFirst !== false,
-      ...(parseSections((entry as any).sections) ? { sections: parseSections((entry as any).sections)! } : {}),
+      ...(parseStates((entry as any).states) ? { states: parseStates((entry as any).states)! } : {}),
     });
   }
   return views.length > 0 ? views : DEFAULT_VIEWS;
@@ -319,76 +295,66 @@ export function toggleFilterValue(
   return applyFilterPatch(filter, { [key]: current } as Partial<PanelViewFilter>);
 }
 
-/** Where one tracker state currently rolls up to. */
+/** Where one tracker status currently rolls up to. */
 export interface StateAssignment {
   state: string;
   viewId: string;
   viewLabel: string;
-  sectionLabel: string;
 }
 
 /**
- * The inverse of the config shape: one row per assigned state saying which tab
- * and section it feeds. The stored model is tab → sections → states because that is
- * what rendering needs; this is what a human asks for.
+ * The inverse of the config shape: one row per mapped status saying which stage
+ * it feeds. The stored model is stage → statuses because that is what rendering
+ * needs; this is what a human asks for.
  */
 export function stateAssignments(views: PanelView[]): StateAssignment[] {
-  const out: StateAssignment[] = [];
-  for (const view of views) {
-    for (const group of view.sections ?? []) {
-      for (const state of group.states) {
-        out.push({ state, viewId: view.id, viewLabel: view.label, sectionLabel: group.label });
-      }
-    }
-  }
-  return out;
+  return views.flatMap((view) =>
+    (view.states ?? []).map((state) => ({ state, viewId: view.id, viewLabel: view.label })));
 }
 
 function withoutState(views: PanelView[], state: string): PanelView[] {
   const want = state.trim().toLowerCase();
-  return views.map((view) => view.sections
-    ? {
-        ...view,
-        sections: view.sections.map((g) => ({
-          ...g,
-          states: g.states.filter((s) => s.trim().toLowerCase() !== want),
-        })),
-      }
+  return views.map((view) => view.states
+    ? { ...view, states: view.states.filter((s) => s.trim().toLowerCase() !== want) }
     : view);
 }
 
 /**
- * Move a state into one tab's group, removing it from anywhere else first.
+ * Move a status into one stage, removing it from anywhere else first.
  *
- * Enforcing one home per state is what keeps the model comprehensible: a status
- * appearing under two tabs would silently resolve via `sectionIndexForStatus`'s
- * first-wins tie-break, which is a safety net, not a feature. Returns the input
- * unchanged when the target doesn't exist.
+ * Enforcing one home per status is what keeps the model comprehensible: a
+ * status appearing under two stages would silently resolve via a first-wins
+ * tie-break, which is a safety net, not a feature. Returns the input unchanged
+ * when the target doesn't exist.
  */
-export function assignStateToGroup(
-  views: PanelView[],
-  state: string,
-  viewId: string,
-  sectionLabel: string,
-): PanelView[] {
-  const target = views.find((v) => v.id === viewId);
-  if (!target?.sections?.some((g) => g.label === sectionLabel)) return views;
-
+export function assignStateToView(views: PanelView[], state: string, viewId: string): PanelView[] {
+  if (!views.some((v) => v.id === viewId && v.source === "issues")) return views;
   return withoutState(views, state).map((view) => view.id !== viewId
     ? view
-    : {
-        ...view,
-        sections: view.sections!.map((g) => g.label === sectionLabel
-          ? { ...g, states: [...g.states, state] }
-          : g),
-      });
+    : { ...view, states: [...(view.states ?? []), state] });
 }
 
-/** Remove a state from every tab, so it stops appearing in any queue. */
+/** Remove a status from every stage, so it stops appearing in the panel. */
 export function unassignState(views: PanelView[], state: string): PanelView[] {
   return withoutState(views, state);
 }
 
+/** Move a status by `delta` places within its own stage, clamped at both ends. */
+export function moveStateInView(views: PanelView[], viewId: string, state: string, delta: number): PanelView[] {
+  return views.map((view) => {
+    if (view.id !== viewId || !view.states) return view;
+    const from = stateIndexInView(state, view.states);
+    if (from < 0) return view;
+    const to = Math.max(0, Math.min(view.states.length - 1, from + delta));
+    if (to === from) return view;
+    const next = [...view.states];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved!);
+    return { ...view, states: next };
+  });
+}
+
+// --- Stage CRUD ---
 // --- Queue CRUD ---
 //
 // All pure and non-mutating: the caller swaps in the returned array and
@@ -412,7 +378,7 @@ export function createView(views: PanelView[], label: string): PanelView[] {
     filter: { scope: "assigned" },
     groupBy: "none", subGroupBy: "none",
     sortBy: "priority", sortOrder: "asc", sessionLinkedFirst: false,
-    sections: [],
+    states: [],
   }];
 }
 
@@ -438,91 +404,15 @@ export function deleteView(views: PanelView[], viewId: string): PanelView[] {
   return views.filter((v) => v.id !== viewId);
 }
 
-function mapSections(
-  views: PanelView[],
-  viewId: string,
-  fn: (sections: PanelViewSection[]) => PanelViewSection[] | null,
-): PanelView[] {
-  const view = views.find((v) => v.id === viewId);
-  if (!view) return views;
-  const next = fn(view.sections ?? []);
-  if (next === null) return views;
-  return views.map((v) => (v.id === viewId ? { ...v, sections: next } : v));
-}
-
-const hasLabel = (sections: PanelViewSection[], label: string): boolean =>
-  sections.some((g) => g.label.trim().toLowerCase() === label.trim().toLowerCase());
-
-export function createSection(views: PanelView[], viewId: string, label: string): PanelView[] {
-  const trimmed = label.trim();
-  if (!trimmed) return views;
-  return mapSections(views, viewId, (sections) =>
-    // Labels key both the render node and the collapse set, so duplicates
-    // within a tab would alias each other.
-    hasLabel(sections, trimmed) ? null : [...sections, { label: trimmed, states: [] }]);
-}
-
-export function renameSection(
-  views: PanelView[], viewId: string, from: string, to: string,
-): PanelView[] {
-  const trimmed = to.trim();
-  if (!trimmed) return views;
-  return mapSections(views, viewId, (sections) => {
-    if (hasLabel(sections, trimmed)) return null;
-    if (!hasLabel(sections, from)) return null;
-    return sections.map((g) => (g.label === from ? { ...g, label: trimmed } : g));
-  });
-}
-
-export function moveSection(
-  views: PanelView[], viewId: string, label: string, delta: number,
-): PanelView[] {
-  return mapSections(views, viewId, (sections) => {
-    const from = sections.findIndex((g) => g.label === label);
-    if (from < 0) return null;
-    const to = Math.max(0, Math.min(sections.length - 1, from + delta));
-    if (to === from) return null;
-    const next = [...sections];
-    const [moved] = next.splice(from, 1);
-    next.splice(to, 0, moved!);
-    return next;
-  });
-}
-
-export function deleteSection(views: PanelView[], viewId: string, label: string): PanelView[] {
-  return mapSections(views, viewId, (sections) => sections.filter((g) => g.label !== label));
-}
-
-/**
- * Drop sections left holding no statuses.
- *
- * A section is *defined by* the statuses it covers, so one with none can never
- * match an issue — it is a header that renders forever and classifies nothing.
- * Moving a status out of a single-status section empties it, so every
- * assignment path runs through here rather than each remembering to tidy up.
- *
- * This is not the "empty section keeps its header" rule, which is about a
- * section with statuses but no *issues* right now — that one still renders,
- * because "nothing is blocked" is information.
- */
-export function pruneEmptySections(views: PanelView[]): PanelView[] {
-  return views.map((view) => {
-    if (!view.sections) return view;
-    const kept = view.sections.filter((s) => s.states.length > 0);
-    return kept.length === view.sections.length ? view : { ...view, sections: kept };
-  });
-}
-
 /**
  * A starting layout for a workspace nobody has configured yet, built from the
  * tracker's own stable categories rather than from status names — which vary
  * per workspace and are exactly what a new user has no opinion about yet.
  *
- * One section per status, labelled with the status, because that is the shape
- * the editor produces by hand: a seeded config and a hand-built one are then
- * indistinguishable, and there is nothing to un-learn.
+ * The statuses go in verbatim, in the tracker's own order — a seeded config and
+ * a hand-built one are then indistinguishable, and there is nothing to un-learn.
  *
- * No suggested tab parks. Parking removes sessions from the sidebar, so it
+ * No suggested stage parks. Parking removes sessions from the sidebar, so it
  * stays a decision the user makes deliberately — the same reason
  * `stageFromStateType` never yields `parked` either.
  */
@@ -545,7 +435,7 @@ export function suggestLayout(
     return true;
   });
 
-  // Appended to what is already there, never substituted for it: the tab list
+  // Appended to what is already there, never substituted for it: the stage list
   // also holds the user's MR tabs, and a suggestion that quietly deleted them
   // would be the worst kind of first-run surprise. Building on `existing` also
   // routes id generation through createView's de-duplication.
@@ -553,9 +443,9 @@ export function suggestLayout(
   for (const tab of SUGGESTED_TABS) {
     const mine = unique.filter((s) => tab.types.includes(s.type));
     if (mine.length === 0) continue;
-    const sections: PanelViewSection[] = mine.map((s) => ({ label: s.name, states: [s.name] }));
+    const stageStates = mine.map((s) => s.name);
     views = createView(views, tab.label)
-      .map((v, i, arr) => (i === arr.length - 1 ? { ...v, sections } : v));
+      .map((v, i, arr) => (i === arr.length - 1 ? { ...v, states: stageStates } : v));
   }
   return views;
 }

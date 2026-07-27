@@ -297,6 +297,27 @@ export function migrateLegacyConfig(raw: any): { config: any; changed: boolean }
       delete view.parks;
       changed = true;
     }
+
+    // Sections collapse to a flat, ordered status list. A section was a named
+    // bucket you maintained by hand, and in practice its name only ever
+    // restated the status inside it; where one genuinely held several, the
+    // panel now groups by status name instead, which reads the same with
+    // nothing to configure. Order is priority order, so it is preserved.
+    if (Array.isArray(view.sections)) {
+      const flat: string[] = [];
+      const seen = new Set<string>();
+      for (const section of view.sections) {
+        for (const state of section?.states ?? []) {
+          const key = String(state).trim().toLowerCase();
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          flat.push(state);
+        }
+      }
+      if (flat.length > 0) view.states = [...(view.states ?? []), ...flat];
+      delete view.sections;
+      changed = true;
+    }
   }
 
   if (parked.length > 0) {

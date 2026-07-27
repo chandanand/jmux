@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import {
   WorkflowScreen, buildRows, explainRow, destinationsFor, applyDestination,
-  uniqueSectionLabel, isSelectable, tableLayout,
+  isSelectable, tableLayout,
   type WorkflowPort, type WorkflowRow, type WorkflowBand,
 } from "../workflow-screen";
 import { parseViews, type PanelView } from "../panel-view";
@@ -25,15 +25,12 @@ function views(): PanelView[] {
     {
       id: "urgent", label: "Urgent", source: "issues", filter: { scope: "assigned" },
       groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
-      sections: [{ label: "QA Failed", states: ["QA Failed"] }],
+      states: ["QA Failed"],
     },
     {
       id: "post-merge", label: "Post-merge", source: "issues", filter: { scope: "assigned" },
       groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
-      sections: [
-        { label: "Dev Confirm", states: ["Dev Confirm"] },
-        { label: "In QA", states: ["QA (PROD WEB)"] },
-      ],
+      states: ["Dev Confirm", "QA (PROD WEB)"],
     },
     {
       id: "my-mrs", label: "My MRs", source: "mrs", filter: { scope: "authored" },
@@ -139,7 +136,7 @@ describe("buildRows", () => {
     const stale = parseViews([{
       id: "t", label: "T", source: "issues", filter: { scope: "assigned" },
       groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
-      sections: [{ label: "Old Name", states: ["Old Name"] }],
+      states: ["Old Name"],
     }]);
     expect(statusRow(rowsOf(harness({}, stale)), "Old Name")).toMatchObject({ known: false });
   });
@@ -226,20 +223,20 @@ describe("explainRow", () => {
       .toContain("in none of your stages — it never shows in the panel · parks its sessions");
   });
 
-  test("a shared heading is named, so grouping is never a surprise", () => {
+  test("a status names its stage and nothing below it", () => {
     const shared = parseViews([{
       id: "t", label: "T", source: "issues", filter: { scope: "assigned" },
       groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
-      sections: [{ label: "Blocked", states: ["QA Failed", "Triage"] }],
+      states: ["QA Failed", "Triage"],
     }]);
-    expect(explain("QA Failed", {}, shared)).toContain('T, under "Blocked"');
+    expect(explain("QA Failed", {}, shared)).toBe("QA Failed · 4 issues · T · its sessions stay in the sidebar");
   });
 
   test("a status the tracker no longer has is called out", () => {
     const stale = parseViews([{
       id: "t", label: "T", source: "issues", filter: { scope: "assigned" },
       groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
-      sections: [{ label: "Old", states: ["Old"] }],
+      states: ["Old"],
     }]);
     expect(explain("Old", {}, stale)).toContain("no longer in your tracker");
   });
@@ -274,65 +271,42 @@ describe("destinations", () => {
       .toEqual(["Urgent", "Post-merge", "No stage"]);
   });
 
-  test("marks the tab a status is already in rather than hiding it", () => {
+  test("marks the stage a status is already in rather than hiding it", () => {
     const d = destinationsFor(views(), "QA Failed").find((x) => x.label === "Urgent");
     expect(d!.annotation).toBe("already here");
   });
 
-  test("offers a shared section only where one already exists", () => {
-    const shared = parseViews([{
-      id: "t", label: "T", source: "issues", filter: { scope: "assigned" },
-      groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
-      sections: [
-        { label: "Blocked", states: ["QA Failed", "Triage"] },
-        { label: "Solo", states: ["Done"] },
-      ],
-    }]);
-    expect(destinationsFor(shared, "Backlog").map((d) => d.label))
-      .toEqual(["T", "T › Blocked", "No stage"]);
+  test("offers nothing below a stage — the panel derives its subheadings", () => {
+    // There used to be extra entries for named sub-headings inside a stage.
+    // The panel groups by status name when a stage holds more than one, so
+    // there is nothing further to choose.
+    expect(destinationsFor(views(), "Triage")).toHaveLength(3);
   });
 });
 
 describe("applyDestination", () => {
-  test("picking a tab makes a section named after the status", () => {
-    const next = applyDestination(views(), "Triage", "v\x00urgent");
-    const urgent = next.find((v) => v.id === "urgent")!;
-    expect(urgent.sections!.map((s) => [s.label, s.states])).toEqual([
-      ["QA Failed", ["QA Failed"]],
-      ["Triage", ["Triage"]],
-    ]);
+  test("picking a stage appends the status to it", () => {
+    const next = applyDestination(views(), "Triage", "urgent");
+    expect(next.find((v) => v.id === "urgent")!.states).toEqual(["QA Failed", "Triage"]);
   });
 
   test("moving a status removes it from wherever it was", () => {
     // One home per status is what keeps the model comprehensible — two homes
-    // would resolve by a first-wins tie-break nobody chose.
-    const next = applyDestination(views(), "QA Failed", "v\x00post-merge");
-    // ...and takes the header it emptied with it: a section with no statuses
-    // classifies nothing, so leaving it would be a permanent dead row.
-    expect(next.find((v) => v.id === "urgent")!.sections).toEqual([]);
-    expect(next.find((v) => v.id === "post-merge")!.sections!.map((s) => s.label))
-      .toEqual(["Dev Confirm", "In QA", "QA Failed"]);
+    // would resolve by a first-wins scan nobody chose.
+    const next = applyDestination(views(), "QA Failed", "post-merge");
+    expect(next.find((v) => v.id === "urgent")!.states).toEqual([]);
+    expect(next.find((v) => v.id === "post-merge")!.states)
+      .toEqual(["Dev Confirm", "QA (PROD WEB)", "QA Failed"]);
   });
 
-  test("picking the tab a status is already in changes nothing", () => {
-    // Otherwise it would split into a second, duplicate section.
-    expect(applyDestination(views(), "QA Failed", "v\x00urgent")).toEqual(views());
+  test("picking the stage a status is already in leaves it in place", () => {
+    const next = applyDestination(views(), "QA Failed", "urgent");
+    expect(next.find((v) => v.id === "urgent")!.states).toEqual(["QA Failed"]);
   });
 
-  test("picking a shared section joins it instead of making a new one", () => {
-    const next = applyDestination(views(), "Triage", "s\x00post-merge\x00In QA");
-    expect(next.find((v) => v.id === "post-merge")!.sections!.find((s) => s.label === "In QA")!.states)
-      .toEqual(["QA (PROD WEB)", "Triage"]);
-  });
-
-  test("Unassigned strips it from every tab", () => {
-    const next = applyDestination(views(), "QA Failed", "u");
-    expect(next.find((v) => v.id === "urgent")!.sections).toEqual([]);
-  });
-
-  test("a section label collides safely with one already in the tab", () => {
-    expect(uniqueSectionLabel(views(), "urgent", "QA Failed")).toBe("QA Failed 2");
-    expect(uniqueSectionLabel(views(), "urgent", "Triage")).toBe("Triage");
+  test("No stage strips it from every stage", () => {
+    const next = applyDestination(views(), "QA Failed", "\x00none");
+    expect(next.find((v) => v.id === "urgent")!.states).toEqual([]);
   });
 });
 
@@ -487,20 +461,11 @@ describe("WorkflowScreen rendering", () => {
     expect(text(grid, findRow(grid, "Triage"))).toContain("—");
   });
 
-  test("the Heading column exists only when the config actually groups something", () => {
-    const plain = open().screen.render(100, 40);
-    expect(text(plain, findRow(plain, "Parks"))).not.toContain("Heading");
-
-    const shared = parseViews([{
-      id: "t", label: "T", source: "issues", filter: { scope: "assigned" },
-      groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
-      sections: [{ label: "Blocked", states: ["QA Failed", "Triage"] }, { label: "Solo", states: ["Done"] }],
-    }]);
-    const grid = open({}, shared).screen.render(100, 40);
-    expect(text(grid, findRow(grid, "Parks"))).toContain("Heading");
-    expect(text(grid, findRow(grid, "QA Failed"))).toContain("Blocked");
-    // A heading over one status is just that status — nothing to show.
-    expect(text(grid, findRow(grid, "Done"))).not.toContain("Solo");
+  test("the table is four columns — there is no heading to name", () => {
+    const grid = open().screen.render(100, 40);
+    const header = text(grid, findRow(grid, "Parks"));
+    expect(header).not.toContain("Heading");
+    expect(header.replace(/\s+/g, " ").trim()).toBe("Status Stage Parks Issues");
   });
 
   test("the explain line describes the selected row", () => {
@@ -518,7 +483,7 @@ describe("WorkflowScreen rendering", () => {
     const wide = parseViews([{
       id: "t", label: "Handed off", source: "issues", filter: { scope: "assigned" },
       groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
-      parks: true, sections: [{ label: long, states: [long] }],
+      states: [long],
     }]);
     const { screen } = open({ getStatuses: () => [{ name: long, type: "started" }] }, wide);
     // Search on a prefix: the label column truncates long names, which is
@@ -542,7 +507,7 @@ describe("WorkflowScreen editing", () => {
     expect(text(screen.render(80, 40), 0)).toContain('Which stage is "Triage"?');
 
     screen.handleInput("\r"); // first destination: Urgent
-    expect(h.current().find((v) => v.id === "urgent")!.sections!.map((s) => s.label))
+    expect(h.current().find((v) => v.id === "urgent")!.states)
       .toEqual(["QA Failed", "Triage"]);
   });
 
@@ -552,8 +517,8 @@ describe("WorkflowScreen editing", () => {
     screen.handleInput("\r");
     for (const ch of "post") screen.handleInput(ch);
     screen.handleInput("\r");
-    expect(h.current().find((v) => v.id === "post-merge")!.sections!.map((s) => s.label))
-      .toEqual(["Dev Confirm", "In QA", "Triage"]);
+    expect(h.current().find((v) => v.id === "post-merge")!.states)
+      .toEqual(["Dev Confirm", "QA (PROD WEB)", "Triage"]);
   });
 
   test("Escape in a picker changes nothing", () => {
@@ -565,57 +530,31 @@ describe("WorkflowScreen editing", () => {
     expect(screen.isOpen).toBe(true);
   });
 
-  test("d unassigns a status and takes its now-empty section with it", () => {
+  test("d takes a status out of its stage", () => {
     const { screen, h } = open();
     selectRow(screen, "QA Failed");
     screen.handleInput("d");
-    expect(h.current().find((v) => v.id === "urgent")!.sections).toEqual([]);
+    expect(h.current().find((v) => v.id === "urgent")!.states).toEqual([]);
   });
 
-  test("d on a status in a shared header leaves the header for the others", () => {
-    const shared = parseViews([{
-      id: "t", label: "T", source: "issues", filter: { scope: "assigned" },
-      groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
-      sections: [{ label: "Blocked", states: ["QA Failed", "Triage"] }],
-    }]);
-    const { screen, h } = open({}, shared);
-    selectRow(screen, "QA Failed");
-    screen.handleInput("d");
-    expect(h.current()[0]!.sections).toEqual([{ label: "Blocked", states: ["Triage"] }]);
-  });
-
-  test("r on a status renames the heading it appears under", () => {
-    const { screen, h } = open();
-    selectRow(screen, "QA Failed");
-    screen.handleInput("r");
-    expect(text(screen.render(80, 40), 0)).toContain("Heading this status appears under");
-    screen.handleInput("\x15"); // clear
-    for (const ch of "Blocked") screen.handleInput(ch);
-    screen.handleInput("\r");
-    expect(h.current().find((v) => v.id === "urgent")!.sections![0]!.label).toBe("Blocked");
-  });
-
-  test("renaming a header onto an existing one merges the two into one section", () => {
-    // This is the whole multi-status-section feature, expressed as a rename.
+  test("d leaves the other statuses in that stage alone", () => {
     const { screen, h } = open();
     selectRow(screen, "Dev Confirm");
-    screen.handleInput("r");
-    screen.handleInput("\x15");
-    for (const ch of "In QA") screen.handleInput(ch);
-    screen.handleInput("\r");
-    expect(h.current().find((v) => v.id === "post-merge")!.sections)
-      .toEqual([{ label: "In QA", states: ["QA (PROD WEB)", "Dev Confirm"] }]);
+    screen.handleInput("d");
+    expect(h.current().find((v) => v.id === "post-merge")!.states).toEqual(["QA (PROD WEB)"]);
   });
 });
 
 describe("WorkflowScreen stages", () => {
-  test("Enter folds a tab away and back", () => {
-    const { screen } = open();
-    selectRow(screen, "Post-merge");
+  test("Enter on a stage renames it", () => {
+    const { screen, h } = open();
+    selectRow(screen, "Urgent");
     screen.handleInput("\r");
-    expect(findRow(screen.render(80, 40), "Dev Confirm")).toBe(-1);
+    expect(text(screen.render(80, 40), 0)).toContain("Rename stage");
+    screen.handleInput("\x15");
+    for (const ch of "Blocked") screen.handleInput(ch);
     screen.handleInput("\r");
-    expect(findRow(screen.render(80, 40), "Dev Confirm")).toBeGreaterThan(0);
+    expect(h.current().find((v) => v.id === "urgent")!.label).toBe("Blocked");
   });
 
   test("+ New stage prompts for a name and creates it", () => {
@@ -655,12 +594,12 @@ describe("WorkflowScreen stages", () => {
     expect(text(grid, findRow(grid, "Urgent"))).toContain("▸");
   });
 
-  test("Shift-Up reorders a status within its tab", () => {
+  test("Shift-Up reorders a status within its stage", () => {
     const { screen, h } = open();
     selectRow(screen, "QA (PROD WEB)");
     screen.handleInput("\x1b[1;2A");
-    expect(h.current().find((v) => v.id === "post-merge")!.sections!.map((s) => s.label))
-      .toEqual(["In QA", "Dev Confirm"]);
+    expect(h.current().find((v) => v.id === "post-merge")!.states)
+      .toEqual(["QA (PROD WEB)", "Dev Confirm"]);
   });
 
   test("an MR tab cannot be renamed, deleted or expanded from here", () => {
@@ -807,7 +746,7 @@ describe("WorkflowScreen — regressions found by running it", () => {
     // An empty band header with nothing under it reads as a rendering fault.
     const { screen, h } = open();
     for (const state of ["Triage", "Backlog", "Done"]) {
-      h.port.setViews(applyDestination(h.current(), state, "v\x00urgent"));
+      h.port.setViews(applyDestination(h.current(), state, "urgent"));
     }
     const grid = screen.render(100, 40);
     // Every status now names a tab, so the em dash placeholder is gone.
@@ -825,7 +764,7 @@ describe("WorkflowScreen — regressions found by running it", () => {
     const one = parseViews([{
       id: "t", label: "Solo", source: "issues", filter: { scope: "assigned" },
       groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
-      sections: [{ label: "Triage", states: ["Triage"] }],
+      states: ["Triage"],
     }]);
     const { screen } = open({}, one);
     selectRow(screen, "Solo");
@@ -834,33 +773,16 @@ describe("WorkflowScreen — regressions found by running it", () => {
   });
 });
 
-describe("WorkflowScreen — moving a status keeps its meaning and the cursor", () => {
-  test("a move carries the meaning the user set for that status", () => {
-    // Stage lives on the section, but the *decision* is about the status.
-    // Dropping it on a move silently switches parking off for it.
-    const next = applyDestination(views(), "QA (PROD WEB)", "v\x00urgent");
-    expect(next.find((v) => v.id === "urgent")!.sections!.find((s) => s.label === "QA (PROD WEB)"))
-      .toEqual({ label: "QA (PROD WEB)", states: ["QA (PROD WEB)"] });
+describe("WorkflowScreen — moving a status", () => {
+  test("a move says what it does purely by where it lands", () => {
+    // Nothing travels with the status: whether it parks is its own column, and
+    // where it shows is the stage it lands in.
+    const next = applyDestination(views(), "QA (PROD WEB)", "urgent");
+    expect(next.find((v) => v.id === "urgent")!.states).toEqual(["QA Failed", "QA (PROD WEB)"]);
+    expect(next.find((v) => v.id === "post-merge")!.states).toEqual(["Dev Confirm"]);
   });
 
-  test("a status with no meaning set stays that way rather than inventing one", () => {
-    const noStage = parseViews([{
-      id: "t", label: "T", source: "issues", filter: { scope: "assigned" },
-      groupBy: "none", subGroupBy: "none", sortBy: "priority", sortOrder: "asc",
-      sections: [{ label: "Triage", states: ["Triage"] }],
-    }]);
-    const moved = applyDestination([...noStage, ...views()], "Triage", "v\x00urgent");
-    expect("stage" in moved.find((v) => v.id === "urgent")!.sections!.find((s) => s.label === "Triage")!)
-      .toBe(false);
-  });
-
-  test("joining a shared section takes that section's meaning, not the old one", () => {
-    const next = applyDestination(views(), "QA Failed", "s\x00post-merge\x00In QA");
-    const section = next.find((v) => v.id === "post-merge")!.sections!.find((s) => s.label === "In QA")!;
-    expect(section).toEqual({ label: "In QA", states: ["QA (PROD WEB)", "QA Failed"] });
-  });
-
-  test("the cursor follows a status to its new tab", () => {
+  test("the cursor follows a status to its new stage", () => {
     const { screen } = open();
     selectRow(screen, "Triage");
     screen.handleInput("\r");
@@ -874,7 +796,7 @@ describe("WorkflowScreen — moving a status keeps its meaning and the cursor", 
     const { screen } = open();
     selectRow(screen, "QA Failed");
     screen.handleInput("d");
-    const grid = screen.render(80, 40);
+    const grid = screen.render(100, 40);
     expect(text(grid, findRow(grid, "QA Failed"))).toContain("▸");
     expect(text(grid, 38)).toContain("in none of your stages");
   });
@@ -889,7 +811,6 @@ describe("WorkflowScreen hints", () => {
     const hint = text(screen.render(100, 40), 39);
     expect(hint).toContain("stage");
     expect(hint).toContain("parks");
-    expect(hint).not.toContain("heading");
     expect(hint).not.toContain("remove");
   });
 
@@ -898,7 +819,6 @@ describe("WorkflowScreen hints", () => {
     selectRow(screen, "QA Failed");
     const hint = text(screen.render(100, 40), 39);
     expect(hint).toContain("parks");
-    expect(hint).toContain("heading");
     expect(hint).toContain("remove");
   });
 });

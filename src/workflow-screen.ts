@@ -45,9 +45,8 @@ import { layoutFooter, type FooterSegment } from "./footer";
 import { drawSettingRow, type SettingDef } from "./settings-screen";
 import { stageFromStateType } from "./work-stage";
 import {
-  assignStateToGroup, createSection, createView, deleteView,
-  moveSection, moveView, pruneEmptySections, renameSection, renameView,
-  sectionIndexForStatus, suggestLayout, unassignState, isParkedState,
+  assignStateToView, createView, deleteView, moveStateInView, moveView,
+  renameView, stateIndexInView, suggestLayout, unassignState, isParkedState,
   type PanelView,
 } from "./panel-view";
 import type { WorkStage } from "./repo-settings";
@@ -166,8 +165,6 @@ export type WorkflowRow =
   | { kind: "columns" }
   | {
       kind: "status"; state: string; viewId: string | null; viewLabel: string | null;
-      /** Heading it renders under in the panel, when that groups several. */
-      heading: string | null;
       parks: boolean; issues: number; parked: number; known: boolean;
       trackerStage: WorkStage;
     }
@@ -196,7 +193,7 @@ export function buildRows(port: WorkflowPort, tier: SettingsTier, _collapsed: Re
   const count = (state: string): number => issueCounts.get(norm(state)) ?? 0;
 
   const rows: WorkflowRow[] = [];
-  const configured = views.some((v) => v.source === "issues" && (v.sections?.length ?? 0) > 0);
+  const configured = views.some((v) => v.source === "issues" && (v.states?.length ?? 0) > 0);
   if (!configured && statuses.length > 0) {
     rows.push({ kind: "seed", tabs: suggestLayout(statuses).length, statuses: statuses.length });
   }
@@ -206,7 +203,7 @@ export function buildRows(port: WorkflowPort, tier: SettingsTier, _collapsed: Re
     hint: "The stages you work in, top to bottom in priority order. Each is a tab in the info panel.",
   });
   for (const view of views) {
-    const states = (view.sections ?? []).flatMap((s) => s.states);
+    const states = view.states ?? [];
     const rank = upNext.indexOf(view.id);
     rows.push({
       kind: "tab", viewId: view.id, label: view.label, source: view.source,
@@ -224,23 +221,20 @@ export function buildRows(port: WorkflowPort, tier: SettingsTier, _collapsed: Re
   const claimed = new Set<string>();
   for (const view of views) {
     if (view.source !== "issues") continue;
-    for (const section of view.sections ?? []) {
-      const heading = section.states.length > 1 ? section.label : null;
-      for (const state of section.states) {
-        claimed.add(norm(state));
-        placed.push({
-          kind: "status", state, viewId: view.id, viewLabel: view.label, heading,
-          parks: isParkedState(parkedStates, state),
-          issues: count(state), parked: parkedCounts.get(norm(state)) ?? 0,
-          known: known.has(norm(state)), trackerStage: "active",
-        });
-      }
+    for (const state of view.states ?? []) {
+      claimed.add(norm(state));
+      placed.push({
+        kind: "status", state, viewId: view.id, viewLabel: view.label,
+        parks: isParkedState(parkedStates, state),
+        issues: count(state), parked: parkedCounts.get(norm(state)) ?? 0,
+        known: known.has(norm(state)), trackerStage: "active",
+      });
     }
   }
   for (const s of statuses) {
     if (claimed.has(norm(s.name))) continue;
     placed.push({
-      kind: "status", state: s.name, viewId: null, viewLabel: null, heading: null,
+      kind: "status", state: s.name, viewId: null, viewLabel: null,
       parks: isParkedState(parkedStates, s.name),
       issues: count(s.name), parked: parkedCounts.get(norm(s.name)) ?? 0,
       known: true, trackerStage: stageFromStateType(s.type),
@@ -296,7 +290,7 @@ export function explainRow(row: WorkflowRow | undefined): string {
       if (!row.known) parts.push("no longer in your tracker");
       parts.push(row.viewLabel === null
         ? "in none of your stages — it never shows in the panel"
-        : row.heading ? `${row.viewLabel}, under "${row.heading}"` : row.viewLabel);
+        : row.viewLabel);
       parts.push(row.parks
         ? (row.parked > 0 ? `parks its sessions (${row.parked} now)` : "parks its sessions")
         : "its sessions stay in the sidebar");
@@ -332,74 +326,32 @@ export interface Destination {
 }
 
 /**
- * Where a status can go. Tabs are always offered — picking one makes a section
- * from the status, which is the common case and the only one most workspaces
- * ever need. A tab's existing *shared* sections are offered alongside it, so
- * the extra choice only appears where shared sections already exist.
+ * Where a status can go: one entry per stage, plus "no stage". There used to be
+ * extra entries for named sub-headings inside a stage; the panel derives those
+ * from the status names now, so there is nothing further to choose.
  */
 export function destinationsFor(views: PanelView[], state: string): Destination[] {
   const out: Destination[] = [];
   for (const view of views) {
     if (view.source !== "issues") continue;
-    const holdsIt = sectionIndexForStatus(state, view.sections) >= 0;
     out.push({
-      id: `v\x00${view.id}`,
+      id: view.id,
       label: view.label,
-      annotation: holdsIt ? "already here" : "",
+      annotation: stateIndexInView(state, view.states) >= 0 ? "already here" : "",
     });
-    for (const section of view.sections ?? []) {
-      if (section.states.length < 2) continue;
-      out.push({
-        id: `s\x00${view.id}\x00${section.label}`,
-        label: `${view.label} › ${section.label}`,
-        annotation: `${section.states.length} statuses`,
-      });
-    }
   }
-  out.push({ id: "u", label: "No stage", annotation: "never shown" });
+  out.push({ id: "\x00none", label: "No stage", annotation: "never shown" });
   return out;
-}
-
-/** The section inside `viewId` that currently holds `state`, if any. */
-export function sectionLabelFor(views: PanelView[], viewId: string, state: string): string | null {
-  const view = views.find((v) => v.id === viewId);
-  const at = sectionIndexForStatus(state, view?.sections);
-  return at >= 0 ? view!.sections![at]!.label : null;
-}
-
-/** A section label derived from a status, disambiguated within its tab. */
-export function uniqueSectionLabel(views: PanelView[], viewId: string, base: string): string {
-  const taken = new Set((views.find((v) => v.id === viewId)?.sections ?? []).map((s) => norm(s.label)));
-  if (!taken.has(norm(base))) return base;
-  for (let n = 2; ; n++) {
-    const candidate = `${base} ${n}`;
-    if (!taken.has(norm(candidate))) return candidate;
-  }
 }
 
 /**
  * Apply a chosen destination. Assignment always removes the status from
- * wherever it was (`assignStateToGroup`), so one status has exactly one home
- * and therefore exactly one meaning.
+ * wherever it was, so one status has exactly one home and therefore one place
+ * in the panel.
  */
 export function applyDestination(views: PanelView[], state: string, destId: string): PanelView[] {
-  if (destId === "u") return pruneEmptySections(unassignState(views, state));
-
-  const [kind, viewId, sectionLabel] = destId.split("\x00");
-  if (kind === "s" && sectionLabel) {
-    return pruneEmptySections(assignStateToGroup(views, state, viewId!, sectionLabel));
-  }
-  if (kind !== "v" || !viewId) return views;
-
-  // Already in this tab: re-adding would split it into a second section.
-  const target = views.find((v) => v.id === viewId);
-  if (sectionIndexForStatus(state, target?.sections) >= 0) return views;
-
-  // Nothing to carry across: whether the work parks is the destination tab's
-  // property now, so a move says what it does simply by where it lands.
-  const label = uniqueSectionLabel(views, viewId, state);
-  return pruneEmptySections(
-    assignStateToGroup(createSection(views, viewId, label), state, viewId, label));
+  if (destId === "\x00none") return unassignState(views, state);
+  return assignStateToView(views, state, destId);
 }
 
 // --- Overlays ---
@@ -423,31 +375,22 @@ type RenderRow = { kind: "blank" } | { kind: "row"; index: number; row: Workflow
 /**
  * Column x-offsets for the STATUSES table, measured from the block's indent.
  *
- * Real columns rather than dot leaders: with four fields per row the eye needs
- * a vertical rule to follow, and "does this one park?" is a question you answer
- * by scanning down a column. The Heading column only exists when the config
- * actually groups something, so a workspace that has never grouped never sees it.
+ * Real columns rather than dot leaders: the eye needs a vertical rule to follow,
+ * and "does this one park?" is a question you answer by scanning down a column.
  */
-interface TableLayout { status: number; heading: number | null; tab: number; parks: number; issues: number }
+interface TableLayout { status: number; stage: number; parks: number; issues: number }
 
 export function tableLayout(rows: WorkflowRow[], width: number): TableLayout {
   const statuses = rows.filter((r): r is Extract<WorkflowRow, { kind: "status" }> => r.kind === "status");
-  const anyHeading = statuses.some((r) => r.heading !== null);
-  const statusCol = 0;
   const nameWidth = Math.min(
     Math.max(6, ...statuses.map((r) => textCols(r.state))),
-    Math.max(10, Math.floor(width * 0.4)),
+    Math.max(10, Math.floor(width * 0.45)),
   );
-  const headingWidth = anyHeading
-    ? Math.min(Math.max(7, ...statuses.map((r) => textCols(r.heading ?? ""))), 18)
-    : 0;
-  const heading = anyHeading ? statusCol + nameWidth + 2 : null;
-  const tab = (heading ?? statusCol + nameWidth) + (anyHeading ? headingWidth + 2 : 2);
-  // Parks and Issues are right-anchored so the two numeric-ish columns line up
+  // Parks and Issues are right-anchored so the two narrow columns line up
   // against the block's right edge whatever the terminal width.
   const issues = width - 6;
   const parks = issues - 8;
-  return { status: statusCol, heading, tab, parks, issues };
+  return { status: 0, stage: nameWidth + 2, parks, issues };
 }
 
 export class WorkflowScreen {
@@ -664,22 +607,6 @@ export class WorkflowScreen {
       });
       return;
     }
-    // Grouping: give two statuses the same heading and they render under one
-    // in the panel. Purely display — the section carries no behaviour.
-    if (row.kind === "status" && row.viewId) {
-      const { viewId } = row;
-      const section = sectionLabelFor(port.getViews(), viewId, row.state);
-      if (!section) return;
-      this.openPrompt("Heading this status appears under", section, (label) => {
-        const views = port.getViews();
-        const existing = (views.find((v) => v.id === viewId)?.sections ?? [])
-          .find((s) => norm(s.label) === norm(label) && s.label !== section);
-        port.setViews(existing
-          ? applyDestination(views, row.state, `s\x00${viewId}\x00${existing.label}`)
-          : renameSection(views, viewId, section, label));
-        this.followState(row.state);
-      });
-    }
   }
 
   private remove(row: WorkflowRow): void {
@@ -695,8 +622,7 @@ export class WorkflowScreen {
       return;
     }
     if (row.kind === "status" && row.viewId) {
-      // pruneEmptySections drops a heading this leaves with nothing under it.
-      port.setViews(applyDestination(port.getViews(), row.state, "u"));
+      port.setViews(applyDestination(port.getViews(), row.state, "\x00none"));
       this.followState(row.state);
       return;
     }
@@ -712,11 +638,8 @@ export class WorkflowScreen {
     if (row.kind === "tab") {
       port.setViews(moveView(port.getViews(), row.viewId, delta));
     } else if (row.kind === "status" && row.viewId) {
-      // Order within a tab is priority order, and a section is the unit that
-      // carries it — moving a shared heading moves its statuses together.
-      const section = sectionLabelFor(port.getViews(), row.viewId, row.state);
-      if (!section) return;
-      port.setViews(moveSection(port.getViews(), row.viewId, section, delta));
+      // Order within a stage is priority order.
+      port.setViews(moveStateInView(port.getViews(), row.viewId, row.state, delta));
     } else {
       return;
     }
@@ -893,8 +816,7 @@ export class WorkflowScreen {
         const t = this.table(bounds);
         const col = left + 4;
         writeString(grid, row, col + t.status, "Status", DIM_ATTRS);
-        if (t.heading !== null) writeString(grid, row, col + t.heading, "Heading", DIM_ATTRS);
-        writeString(grid, row, col + t.tab, "Stage", DIM_ATTRS);
+        writeString(grid, row, col + t.stage, "Stage", DIM_ATTRS);
         writeString(grid, row, col + t.parks, "Parks", DIM_ATTRS);
         writeString(grid, row, col + t.issues - 1, "Issues", DIM_ATTRS);
         return;
@@ -905,16 +827,10 @@ export class WorkflowScreen {
         const col = left + 4;
         if (selected) writeString(grid, row, col - 2, "▸", CURSOR_ATTRS);
 
-        const nameWidth = (t.heading ?? t.tab) - t.status - 2;
-        writeString(grid, row, col + t.status, truncateToCols(model.state, nameWidth),
+        writeString(grid, row, col + t.status, truncateToCols(model.state, t.stage - 2),
           selected ? LABEL_ACTIVE : model.known ? LABEL_ATTRS : LABEL_MUTED);
-
-        if (t.heading !== null && model.heading) {
-          writeString(grid, row, col + t.heading,
-            truncateToCols(model.heading, t.tab - t.heading - 2), DIM_ATTRS);
-        }
-        writeString(grid, row, col + t.tab,
-          truncateToCols(model.viewLabel ?? "—", t.parks - t.tab - 2),
+        writeString(grid, row, col + t.stage,
+          truncateToCols(model.viewLabel ?? "—", t.parks - t.stage - 2),
           model.viewLabel ? VALUE_ATTRS : DIM_ATTRS);
 
         // A glyph, not a checkbox: the column reads as "these ones park", and
@@ -992,8 +908,7 @@ export class WorkflowScreen {
         // once a status is actually in a tab.
         segments.push({ key: "↵", label: "stage" }, { key: "space", label: "parks" });
         if (selected.viewId !== null) {
-          segments.push({ key: "r", label: "heading" },
-            { key: "d", label: "remove" }, { key: "⇧↑↓", label: "order" });
+          segments.push({ key: "d", label: "remove" }, { key: "⇧↑↓", label: "order" });
         }
         break;
       case "tab":
