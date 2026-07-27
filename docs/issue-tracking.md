@@ -95,7 +95,7 @@ While focused on an issue or MR tab, you can cycle the view's grouping and sorti
 | `G` | Cycle sub-group-by: same options |
 | `S` | Cycle sort: priority, updated, created, status |
 | `?` | Toggle sort order: ascending / descending |
-| `F` | Edit the view's membership filter (states / stages / labels / priority) |
+| `F` | Edit the view's membership filter (states / categories / labels / priority) |
 | `/` | Filter the list by typing (transient — not saved) |
 
 `F` is what turns a generic list into a named queue, and it needs no knowledge
@@ -340,104 +340,127 @@ The sidebar and panel show auth state. If authentication fails, jmux logs the er
 
 ## The Work Pipeline
 
-Each of your tracker's statuses has two settings, and one screen to set them on:
+Your tracker has a lot of statuses. Ours has 25 — `QA (PRE-RELEASE WEB)`,
+`Promote (RELEASE BR)`, `Need ANDR Build` — most of them shared across teams and
+named for someone else's process. You do not think in 25 states. You think in
+four or five.
+
+So jmux has you **define your own workflow stages**, and sit each one on top of
+one or many of your tracker's statuses:
 
 ```
-which tab it appears in   —  what you see in the info panel
-whether it parks          —  whether its session leaves the sidebar
+        your stages                    your tracker's statuses
+
+        Urgent        ───────────────  Release Blockers, QA Failed
+        To do         ───────────────  To do, Dev Confirm (PRE-RELEASE)
+        In Progress   ───────────────  In Progress, In Review, MR Review
+        Waiting       ───────────────  QA (PRE-RELEASE WEB), QA (RELEASE BR),
+                                       QA PASS, Need ANDR Build,  …
 ```
 
-Nothing else. `idea` / `active` / `done` come from your tracker's own state
-categories and are never configured — they used to be, and it was 25 decisions
-where three of the four possible answers behaved identically.
+A stage shows up as a tab in the info panel, but that is how it *appears*, not
+what it *is*. It is one rung on the ladder you actually work by, and its order
+in the list is its priority.
+
+Every status then has exactly two settings and no more:
+
+```
+which stage it belongs to  —  where it shows in the panel
+whether it parks           —  whether its session leaves the sidebar
+```
+
+Both are independent, so a status can park while belonging to no stage at all —
+which is the right answer for something like **Done**.
 
 ### The workflow screen (`Ctrl-a W`)
 
 Press `Ctrl-a W` (also: `Ctrl-a I` → **Workflow**, or "Configure workflow" in
-the palette). It is two blocks: the tabs, then a table of every status.
+the palette). It is two blocks: your stages, then a table of every status your
+tracker offers.
 
 ```
-Workflow                                   Linear · 25 statuses · 10 not in a tab
+Workflow                                    Linear · 25 statuses · 9 unmapped
 
-  Tabs ───────────────────────────────────────────────────────────────
-    Urgent  ································· 1st up next  2 statuses
-    To do  ·································· 2nd up next  2 statuses
-    Waiting  ······································· ⏸ 9  9 statuses
-    + New tab
+  Your workflow ────────────────────────────────────────────────────────
+    Urgent ····································· 1st up next  2 statuses
+    To do ······································ 2nd up next  3 statuses
+    In Progress ············································· 3 statuses
+    Waiting ············································ ⏸ 8  8 statuses
+    + New stage
 
-  Statuses ───────────────────────────────────────────────────────────
-    Status                   Heading  Tab              Parks   Issues
-    Release Blockers                  Urgent                        0
-    To do                             To do                         4
-    QA (PRE-RELEASE WEB)     In QA    Waiting            ⏸         19
-    QA (RELEASE BR)          In QA    Waiting            ⏸          8
-    MR Review                         Waiting            ⏸          5
-    Backlog                           —                             5
-    Triage                            —                             0
-
-  Parking ────────────────────────────────────────────────────────────
-    Bring a session back when  ······· comment, MR, pipeline, agent…
-    Park issue-less sessions after  ·························  2 days
-
-  Writes to your tracker ──────────── this repo · backend  [g] globals
-    On session start  ······················· In Progress (override)
-    Confirmation  ··································· undo-toast
+  Statuses ─────────────────────────────────────────────────────────────
+    Status                     Heading  Stage            Parks  Issues
+    Release Blockers                    Urgent                       0
+    To do                               To do                        5
+    In Progress                         In Progress                  9
+    QA (PRE-RELEASE WEB)       In QA    Waiting            ⏸        19
+    QA (RELEASE BR)            In QA    Waiting            ⏸         8
+    Backlog                             —                            5
 
   QA (RELEASE BR) · 8 issues · Waiting · parks its sessions (3 now)
-  ↑↓ move · ↵ tab · space parks · r heading · d remove · ⇧↑↓ order · esc close
+  ↑↓ move · ↵ stage · space parks · r heading · d remove · ⇧↑↓ order · esc close
 ```
 
 Every row in the table is the same kind of thing and takes the same keys. The
-two settings are independent columns: a status can park while sitting in no tab
-at all, which is the right answer for something like **Done**.
+line above the keys says what the row under the cursor **will actually do**,
+including when it will do nothing.
 
-The line above the keys says what the row under the cursor **will actually do**.
-
-| Key | In **Statuses** | In **Tabs** | On a setting |
-|-----|-----------------|-------------|--------------|
+| Key | In **Statuses** | In **Your workflow** | On a setting |
+|-----|-----------------|----------------------|--------------|
 | `↑` `↓` | move the cursor | | |
-| `Enter` | choose its tab | rename the tab | edit |
+| `Enter` | choose its stage | rename the stage | edit |
 | `space` | park / don't park | — | — |
 | `r` | group it under a heading | — | — |
 | `u` | — | add to / drop from the `Ctrl-a u` rotation | — |
-| `d` | take it out of its tab | delete the tab (asks first) | clear a repo override |
-| `⇧↑` `⇧↓` | reorder within its tab | reorder the tab | — |
+| `d` | take it out of its stage | delete the stage (asks first) | clear a repo override |
+| `⇧↑` `⇧↓` | reorder within its stage | reorder the stage | — |
 | `g` | | | switch between this repo and the global defaults |
 | `Esc` | close | | |
 
-Order is priority order, top to bottom, for both tabs and statuses. The order
-you add tabs with `u` is the order `Ctrl-a u` checks them.
+Order is priority order, top to bottom, for both stages and the statuses inside
+one. The order you add stages with `u` is the order `Ctrl-a u` checks them.
 
 **Starting from scratch?** With nothing configured the first row offers
 **⚑ Suggest a starting layout**, which builds `To do` / `In progress` / `Done`
-from your tracker's own categories and leaves your existing tabs alone. Nothing
-it creates parks; that stays a decision you make.
+stages from your tracker's own categories and leaves anything you already have
+alone. Nothing it creates parks; that stays a decision you make.
+
+Merge-request tabs (`source: "mrs"`) are listed in the first block too, marked
+*not a stage* — they are panel tabs with no statuses to map. The screen shows
+them so it matches the panel's tab bar rather than pretending they don't exist.
 
 ### Headings
 
-Several statuses can share a heading in the panel — press `r` on a status and
-give it the same name as another. The **Heading** column only exists at all when
+Several statuses can share a heading inside a stage — press `r` on a status and
+give it the same name as another. In the panel they then render under one
+subheading instead of one each. The **Heading** column only appears at all when
 your config actually groups something, so a workspace that has never grouped
 never sees it. A heading is grouping only: it carries no behaviour, so there is
 never a reason to reason about one to predict what jmux will do.
 
-### Stages
+### Tracker categories
 
-Under the hood jmux still projects your tracker's states onto four stages, and
-`panelViews[].filter.stages` can still select on them. You never author them:
+Separately from your stages, jmux keeps a four-value view of where a status sits
+in *any* tracker's lifecycle. You never author it — it is read from your
+tracker's own state types:
 
-| Stage | Where it comes from |
-|-------|---------------------|
-| `parked` | the **Parks** column |
+| Category | Where it comes from |
+|----------|---------------------|
 | `idea` | your tracker's `triage` / `backlog` states |
 | `active` | your tracker's `unstarted` / `started` states |
 | `done` | your tracker's `completed` / `canceled` / `duplicate` states |
+| `parked` | the **Parks** column — the one you do control |
 
-Nothing reaches `parked` except a status you ticked, so an unconfigured jmux
-never hides anything.
+This is what makes a shipped default mean something in a workspace jmux has
+never seen. Nothing reaches `parked` except a status you ticked, so an
+unconfigured jmux never hides anything.
 
-A tab with statuses is governed entirely by them: a `states` filter set from the
-panel's `F` menu is ignored for it, and `F` says so rather than offering a
+> **Naming wart:** the config key for this is `panelViews[].filter.stages`, from
+> before "stage" came to mean *your* workflow stages. The key is unchanged so
+> existing configs keep working; read it as "categories".
+
+A stage with statuses is governed entirely by them: a `states` filter set from
+the panel's `F` menu is ignored for it, and `F` says so rather than offering a
 control that does nothing.
 
 ### Parking (the back burner)
@@ -494,8 +517,8 @@ jmux ctl issue create --title "Fix flaky test" --start   # capture and start
 
 Tabs are an attention model — **Urgent / To do / In Progress / Waiting** — and
 what varies per workspace is which of *your* tracker states roll up into each. A
-tab carries an ordered `sections` list; which of its statuses park is a separate
-list under `pipeline`:
+stage carries an ordered `sections` list; which of its statuses park is a
+separate list under `pipeline`:
 
 ```json
 { "id": "waiting", "label": "Waiting", "source": "issues",
@@ -509,11 +532,11 @@ list under `pipeline`:
 When `sections` is present it drives **both** membership and the panel's
 headers, and `groupBy` is ignored. Config order is priority order — rendered
 verbatim rather than sorted. An issue lands in the **first** section claiming its
-status, and a status no section claims is not in that tab at all.
+status, and a status no section claims is not in that stage at all.
 
 **You don't have to write that by hand.** `Ctrl-a W` lists every status in a
-table with its tab beside it. Assigning a status moves it out of wherever it
-was, so a status has exactly one home. Tabs show live counts (`Urgent 3`), so
+table with its stage beside it. Assigning a status moves it out of wherever it
+was, so a status has exactly one home. Stages show live counts (`Urgent 3`), so
 "is anything urgent?" never requires switching tabs.
 
 Panel views can be narrowed into named pull queues:
@@ -529,17 +552,17 @@ Panel views can be narrowed into named pull queues:
 | Filter key | Meaning |
 |-----------|---------|
 | `states` | Raw tracker state names (case-insensitive) |
-| `stages` | Lifecycle stages — tracker-agnostic |
+| `stages` | Tracker categories (`idea`/`active`/`parked`/`done`) — tracker-agnostic |
 | `labels` | Any matching label name |
 | `priorityAtMost` | Keep issues at least this urgent (1=urgent … 4=low) |
 
 Rather than writing that by hand, shape a view live with the panel's `g` / `G`
 / `/` / `?` keys and then run **Save current view as tab** from the palette.
 
-`pipeline.upNext` is an ordered list of tab ids. `Ctrl-a u` takes the first item
-from the first non-empty tab in that order and starts work on it, so the daily
-ritual is one keystroke. Press `u` on a tab in the workflow screen to add or
-remove it; the order you add them is the order they are checked, and each tab
+`pipeline.upNext` is an ordered list of stage ids. `Ctrl-a u` takes the first item
+from the first non-empty stage in that order and starts work on it, so the daily
+ritual is one keystroke. Press `u` on a stage in the workflow screen to add or
+remove it; the order you add them is the order they are checked, and each stage
 shows its place (`1st up next`).
 
 ### Transitions (writes to your tracker)
@@ -573,7 +596,7 @@ so attaching to an old session cannot replay history into your tracker.
 
 ## Settings Reference
 
-The pipeline — statuses, tabs, meanings, parking, up next and tracker writes —
+The pipeline — your stages, their statuses, parking, up next and tracker writes —
 is configured on the workflow screen (`Ctrl-a W`). Everything else lives in the
 settings screen (`Ctrl-a I` — capital I) under **Display**, **Integrations**,
 **Repo**, **Project** and **This repo**. Both write to

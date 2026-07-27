@@ -285,16 +285,19 @@ In settings (`Ctrl-a I` > **Repo** > **Team → repo mappings**), add entries li
 
 Now selecting an issue and pressing `n` will create a worktree, open a session, and optionally launch Claude Code with the issue context — all in one step.
 
-### 5. Set up the work pipeline (optional)
+### 5. Define your workflow (optional)
 
-Press `Ctrl-a W`. If you've configured nothing yet, the first row offers
-**⚑ Suggest a starting layout**, which builds `To do` / `In progress` / `Done`
-tabs from your tracker's own categories. Press `Enter` on it and you have a
-working setup.
+Your tracker probably has more statuses than you have steps. Press `Ctrl-a W` and
+define **your own stages** — Urgent, To do, In Progress, Waiting — each covering
+one or many of your tracker's statuses.
+
+If you've configured nothing yet, the first row offers **⚑ Suggest a starting
+layout**, which builds `To do` / `In progress` / `Done` stages from your
+tracker's own categories. Press `Enter` on it and you have a working setup.
 
 From there, each status in the table has two settings:
 
-- **`Enter`** — which tab it appears in.
+- **`Enter`** — which stage it belongs to.
 - **`space`** — whether it **parks**. Tick the statuses that mean "someone else
   has this now" (merged, in QA, awaiting review). Sessions whose issue reaches
   one collapse into a single `Parked (n)` row at the bottom of the sidebar,
@@ -305,7 +308,7 @@ Two keystrokes worth knowing once that's set up:
 
 | Key | Action |
 |-----|--------|
-| `Ctrl-a u` | Start the next issue from your queue rotation (press `u` on a tab to add it) |
+| `Ctrl-a u` | Start the next issue from your stage rotation (press `u` on a stage to add it) |
 | `Ctrl-a a` | Capture a new issue — `Enter` files it, `Ctrl-S` files it *and* starts work |
 
 See [issue-tracking.md](issue-tracking.md) for the full reference including custom views, pipeline glyphs, status writes back to your tracker, and manual linking.
@@ -322,10 +325,9 @@ Press `Ctrl-a` then `I` (capital) to open the settings screen:
 - **Project** — project directories for session creation
 - **Workflow** — opens the workflow screen (below)
 
-The issue pipeline has a screen of its own: `Ctrl-a W` shows your tabs, then a
-table of every tracker status with two settings each — which tab it appears in,
-and whether it parks — plus the up-next order and status writes back to your
-tracker.
+The issue pipeline has a screen of its own: `Ctrl-a W` is where you define your
+own workflow stages and map your tracker's statuses onto them — two settings per
+status, plus parking and status writes back to your tracker.
 
 Settings are saved to `~/.config/jmux/config.json` and most take effect immediately.
 

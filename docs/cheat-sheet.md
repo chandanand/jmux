@@ -179,7 +179,7 @@ See [issue-tracking.md](issue-tracking.md) for setup and configuration.
 | `Ctrl-a y` | Copy entire pane content to clipboard |
 | `Ctrl-a i` | Settings palette (quick one-shot toggles) |
 | `Ctrl-a I` | Settings screen (display, integrations, repo, project) |
-| `Ctrl-a W` | Workflow screen (tabs, and a table of statuses → tab + parks) |
+| `Ctrl-a W` | Workflow screen (your stages, and a table of statuses → stage + parks) |
 
 ---
 
@@ -187,17 +187,19 @@ See [issue-tracking.md](issue-tracking.md) for setup and configuration.
 
 | Key | Action |
 |-----|--------|
-| `Ctrl-a W` | Configure the whole pipeline on one screen |
+| `Ctrl-a W` | Define your workflow stages and map statuses onto them |
 | `Ctrl-a a` | Capture a new issue (`Enter` files it, `Ctrl-S` files it and starts work) |
-| `Ctrl-a u` | Start the next issue from your queue rotation |
+| `Ctrl-a u` | Start the next issue from your stage rotation |
 | `Ctrl-a Z` | Undo the last status write to your tracker |
 
-`Ctrl-a W` is two blocks: your tabs, then a table of every tracker status. Each
-status has two settings — which tab it appears in (`↵`) and whether it parks
-(`space`). `u` puts a tab in the `Ctrl-a u` rotation, `⇧↑↓` reorders, `d`
-removes. The line above the keys says what the selected row will actually do.
+`Ctrl-a W` is where you define **your own workflow stages** — Urgent, To do,
+In Progress, Waiting — each sitting on top of one or many of your tracker's
+statuses. Two blocks: your stages, then a table of every status. Each status has
+two settings: which stage it belongs to (`↵`) and whether it parks (`space`).
+`u` puts a stage in the `Ctrl-a u` rotation, `⇧↑↓` reorders, `d` removes. The
+line above the keys says what the selected row will actually do.
 
-With the info panel focused (`Shift-Right`), `F` narrows the current tab by
+With the info panel focused (`Shift-Right`), `F` narrows the focused tab by
 label or priority, and the palette's **Save current view as tab** clones it
 under a new name.
 

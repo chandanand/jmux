@@ -64,15 +64,28 @@ Then flip to the **MRs tab** — approve, undraft, or update status without open
 
 Each agent gets its own isolated branch via **[wtm](https://github.com/jarredkenny/worktree-manager)** — no stashing, no conflicts, no switching. `Ctrl-a n` → pick a project → **+ new worktree**.
 
-### The work pipeline
+### Define your own workflow
 
-Running ten agents means ten sessions, and most of them aren't your problem right now. The pipeline keeps your working set to the things that actually want you.
+Your tracker has a lot of statuses. Ours has 25 — `QA (PRE-RELEASE WEB)`, `Promote (RELEASE BR)`, `Need ANDR Build` — most named for someone else's process. You don't think in 25 states. You think in four.
 
-- **Park what you've handed off.** Mark the statuses that mean "someone else has this" — merged, in QA, waiting on review. Sessions whose issue reaches one collapse into a single `Parked (n)` row at the bottom of the sidebar. Nothing is killed: the session, its worktree and its scrollback are untouched.
-- **Parking reverses itself.** Any signal you pick pulls a session straight back out, flagged — the issue moves, someone comments, the MR is touched, a pipeline goes red, or the agent wants you. That's what makes it safe to trust.
-- **Pull the next thing** with `Ctrl-a u`. Order your tabs once; jmux takes the top item from the first non-empty one and does the whole ticket-to-session dance for you. The daily ritual is one keystroke.
-- **Capture without losing your place** — `Ctrl-a a` files a Linear issue from wherever you are. `Enter` files it and returns you to what you were doing; `Ctrl-S` files it *and* starts work on it.
-- **Status updates as a byproduct.** Optionally move an issue along when you start a session on it, when an MR appears on its branch, and when that MR merges — with `TRA-123 → QA  ^a Z undo` in the toolbar for twenty seconds. Every write is an edge, so attaching to an old session can't replay history into your tracker. All of it defaults to off: **jmux never writes to your tracker until you say so.**
+So jmux has you define **your own workflow stages** and sit each one on top of one or many of your tracker's statuses:
+
+```
+Urgent       ──  Release Blockers, QA Failed
+To do        ──  To do, Dev Confirm (PRE-RELEASE)
+In Progress  ──  In Progress, In Review, MR Review
+Waiting      ──  QA (PRE-RELEASE WEB), QA (RELEASE BR), QA PASS, Need ANDR Build, …
+```
+
+A stage shows up as a tab in the info panel, but that's how it *appears*, not what it *is* — it's one rung on the ladder you actually work by, and its place in the list is its priority. Every status then has exactly two settings: **which stage it belongs to**, and **whether it parks**.
+
+That second one is what keeps a fleet manageable:
+
+- **Park what you've handed off.** A teammate has it in review, QA has it, it's blocked on someone else — that session collapses into a single `Parked (n)` row at the bottom of the sidebar. Nothing is killed: the session, its worktree and its scrollback are untouched.
+- **Parking reverses itself.** The issue moves, someone comments, the MR is touched, a pipeline goes red, or the agent wants you — it comes straight back out, flagged. That's what makes it safe to trust.
+- **Pull the next thing** with `Ctrl-a u`. It takes the top item from your first non-empty stage and does the whole ticket-to-worktree-to-agent dance. The daily ritual is one keystroke.
+- **Capture without losing your place** — `Ctrl-a a` files a Linear issue from wherever you are. `Enter` files it and returns you; `Ctrl-S` files it *and* starts work on it.
+- **Status updates as a byproduct.** Optionally move an issue along when you start a session on it, when an MR appears on its branch, and when that MR merges — with `TRA-123 → QA  ^a Z undo` in the toolbar for twenty seconds. All of it defaults to off: **jmux never writes to your tracker until you say so.**
 
 <details>
 <summary><b>Setup</b> — one screen, <code>Ctrl-a W</code></summary>
@@ -80,25 +93,26 @@ Running ten agents means ten sessions, and most of them aren't your problem righ
 Everything above is configured on one screen. It's two blocks: your panel tabs, then a table of every status your tracker offers.
 
 ```
-Workflow                                Linear · 25 statuses · 10 not in a tab
+Workflow                                    Linear · 25 statuses · 9 unmapped
 
-  Tabs ───────────────────────────────────────────────────────────
-    Urgent  ····························· 1st up next  2 statuses
-    Waiting  ··································· ⏸ 9  9 statuses
-    + New tab
+  Your workflow ──────────────────────────────────────────────────────
+    Urgent ····································· 1st up next  2 statuses
+    To do ······································ 2nd up next  3 statuses
+    Waiting ············································ ⏸ 8  8 statuses
+    + New stage
 
-  Statuses ───────────────────────────────────────────────────────
-    Status                   Heading  Tab              Parks  Issues
-    Release Blockers                  Urgent                       0
-    QA (PRE-RELEASE WEB)     In QA    Waiting            ⏸        19
-    MR Review                         Waiting            ⏸         5
-    Backlog                           —                            5
+  Statuses ───────────────────────────────────────────────────────────
+    Status                     Heading  Stage            Parks  Issues
+    Release Blockers                    Urgent                       0
+    To do                               To do                        5
+    QA (PRE-RELEASE WEB)       In QA    Waiting            ⏸        19
+    Backlog                             —                            5
 
   QA (PRE-RELEASE WEB) · 19 issues · Waiting · parks its sessions (3 now)
-  ↑↓ move · ↵ tab · space parks · r heading · d remove · ⇧↑↓ order · esc close
+  ↑↓ move · ↵ stage · space parks · r heading · d remove · ⇧↑↓ order · esc close
 ```
 
-Each status has exactly two settings — which tab it appears in (`Enter`) and whether it parks (`space`) — and they're independent, so a status can park while sitting in no tab at all. The line above the keys tells you what the selected row will actually do, including when it will do nothing.
+Two blocks: your stages, then a table of every status your tracker offers. Each status has exactly two settings — which stage it belongs to (`Enter`) and whether it parks (`space`) — and they're independent, so a status can park while belonging to no stage at all. The line above the keys tells you what the selected row will actually do, including when it will do nothing.
 
 Full guide: [docs/issue-tracking.md](docs/issue-tracking.md).
 </details>
@@ -157,7 +171,7 @@ Use any editor. Any Git tool. Any AI agent. Any shell. No Electron. No proprieta
 - **Command palette** (`Ctrl-a p`) — fuzzy-search sessions, windows, pane actions, settings, and issue/MR commands. ([screenshot](docs/screenshots/command-palette.webp))
 - **Diff panel zoom** (`Ctrl-a z`) — blow the diff up to full-screen; the sidebar stays for session switching. ([screenshot](docs/screenshots/diff-panel-full.webp))
 - **Settings screen** (`Ctrl-a I`) — themes and state colors, code-host/issue-tracker adapters, per-repo defaults. `Ctrl-a i` is a shorter palette of one-shot toggles. ([screenshot](docs/screenshots/settings.webp))
-- **Workflow screen** (`Ctrl-a W`) — every tracker status in one table: which tab it shows in, and whether it parks.
+- **Workflow screen** (`Ctrl-a W`) — define your own workflow stages, then map every tracker status onto one in a single table.
 
 ---
 
@@ -172,8 +186,8 @@ Use any editor. Any Git tool. Any AI agent. Any shell. No Electron. No proprieta
 | `Ctrl-a p` | Command palette |
 | `Ctrl-a g` | Toggle info panel (Diff / Issues / MRs / Review) |
 | `Ctrl-a a` | Capture a new issue (`Ctrl-S` files it *and* starts work) |
-| `Ctrl-a u` | Start the next issue from your queue rotation |
-| `Ctrl-a W` | Workflow screen — statuses, tabs, parking |
+| `Ctrl-a u` | Start the next issue from your stage rotation |
+| `Ctrl-a W` | Workflow screen — your stages, their statuses, parking |
 | `Ctrl-a \|` / `Ctrl-a -` | Split pane horizontal / vertical |
 | `Ctrl-a z` | Zoom pane or diff panel |
 
