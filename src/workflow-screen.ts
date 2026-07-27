@@ -353,6 +353,43 @@ export function applyDestination(views: PanelView[], state: string, destId: stri
   return assignStateToView(views, state, destId);
 }
 
+// --- Text entry ---
+//
+// The prompts and the picker filter take arbitrary text, which means they take
+// whatever the terminal hands over: a paste arrives as one multi-character
+// chunk, and anything outside the BMP (emoji, and plenty of CJK) arrives as a
+// two-unit surrogate pair. Testing `data.length === 1` rejected both, so paste
+// silently did nothing and an emoji in a stage name was impossible to type.
+//
+// Cursor movement then has to step whole code points, not UTF-16 units, or
+// backspace and the arrow keys can land inside a surrogate pair and split it —
+// leaving half a character in the buffer and rendering a replacement glyph.
+
+/** The typeable text in a raw input chunk: no controls, no escape sequences. */
+export function printableText(data: string): string {
+  // An escape sequence is a key, not text — and its tail is printable ASCII.
+  if (data.startsWith("\x1b")) return "";
+  let out = "";
+  for (const ch of data) {
+    const cp = ch.codePointAt(0)!;
+    if (cp >= 32 && cp !== 127) out += ch;
+  }
+  return out;
+}
+
+/** The index one whole code point before `i`. */
+export function prevBoundary(s: string, i: number): number {
+  if (i <= 0) return 0;
+  const cps = Array.from(s.slice(0, i));
+  return i - (cps[cps.length - 1]?.length ?? 1);
+}
+
+/** The index one whole code point after `i`. */
+export function nextBoundary(s: string, i: number): number {
+  if (i >= s.length) return s.length;
+  return i + String.fromCodePoint(s.codePointAt(i)!).length;
+}
+
 // --- Overlays ---
 
 interface PickerItem { id: string; label: string; annotation?: string }
@@ -505,17 +542,19 @@ export class WorkflowScreen {
       }
       if (data === "\x7f" || data === "\b") {
         if (overlay.cursor > 0) {
-          overlay.buffer = overlay.buffer.slice(0, overlay.cursor - 1) + overlay.buffer.slice(overlay.cursor);
-          overlay.cursor--;
+          const at = prevBoundary(overlay.buffer, overlay.cursor);
+          overlay.buffer = overlay.buffer.slice(0, at) + overlay.buffer.slice(overlay.cursor);
+          overlay.cursor = at;
         }
         return;
       }
-      if (data === "\x1b[D") { overlay.cursor = Math.max(0, overlay.cursor - 1); return; }
-      if (data === "\x1b[C") { overlay.cursor = Math.min(overlay.buffer.length, overlay.cursor + 1); return; }
+      if (data === "\x1b[D") { overlay.cursor = prevBoundary(overlay.buffer, overlay.cursor); return; }
+      if (data === "\x1b[C") { overlay.cursor = nextBoundary(overlay.buffer, overlay.cursor); return; }
       if (data === "\x15") { overlay.buffer = ""; overlay.cursor = 0; return; }
-      if (data.length === 1 && data.charCodeAt(0) >= 32) {
-        overlay.buffer = overlay.buffer.slice(0, overlay.cursor) + data + overlay.buffer.slice(overlay.cursor);
-        overlay.cursor++;
+      const typed = printableText(data);
+      if (typed) {
+        overlay.buffer = overlay.buffer.slice(0, overlay.cursor) + typed + overlay.buffer.slice(overlay.cursor);
+        overlay.cursor += typed.length;
       }
       return;
     }
@@ -532,12 +571,13 @@ export class WorkflowScreen {
       return;
     }
     if (data === "\x7f" || data === "\b") {
-      overlay.filter = overlay.filter.slice(0, -1);
+      overlay.filter = overlay.filter.slice(0, prevBoundary(overlay.filter, overlay.filter.length));
       this.refilter(overlay);
       return;
     }
-    if (data.length === 1 && data.charCodeAt(0) >= 32) {
-      overlay.filter += data;
+    const typed = printableText(data);
+    if (typed) {
+      overlay.filter += typed;
       this.refilter(overlay);
     }
   }
@@ -784,12 +824,18 @@ export class WorkflowScreen {
     const explainRowIdx = rows - 2;
     const hintRowIdx = rows - 1;
 
+    // Once per frame, from the model already in hand. This used to be computed
+    // inside renderRow, so every visible status row rebuilt the entire row
+    // model — and buildRows walks every global issue, every session and every
+    // setting closure. Thirty rows meant thirty full rebuilds per repaint.
+    const table = tableLayout(model, bounds.right - bounds.left - 4);
+
     for (let r = 0; r < plan.length; r++) {
       const screenRow = CONTENT_START_ROW + r - this.scrollOffset;
       if (screenRow < CONTENT_START_ROW || screenRow >= explainRowIdx) continue;
       const entry = plan[r]!;
       if (entry.kind === "blank") continue;
-      this.renderRow(grid, screenRow, bounds, entry.row, entry.index === this.selectedIndex);
+      this.renderRow(grid, screenRow, bounds, entry.row, entry.index === this.selectedIndex, table);
     }
 
     // The explain line and hints are prose, not `label ···· value` rows, so
@@ -817,7 +863,7 @@ export class WorkflowScreen {
 
   private renderRow(
     grid: CellGrid, row: number, bounds: { left: number; right: number },
-    model: WorkflowRow, selected: boolean,
+    model: WorkflowRow, selected: boolean, t: TableLayout,
   ): void {
     const { left, right } = bounds;
 
@@ -856,7 +902,6 @@ export class WorkflowScreen {
       }
 
       case "columns": {
-        const t = this.table(bounds);
         const col = left + 4;
         writeString(grid, row, col + t.status, truncateToCols("Status", t.statusWidth), DIM_ATTRS);
         if (t.stage !== null) {
@@ -868,7 +913,6 @@ export class WorkflowScreen {
       }
 
       case "status": {
-        const t = this.table(bounds);
         const col = left + 4;
         if (selected) writeString(grid, row, col - 2, "▸", CURSOR_ATTRS);
 
@@ -917,11 +961,6 @@ export class WorkflowScreen {
         return;
       }
     }
-  }
-
-  /** Column geometry for the current frame, from the rows actually on screen. */
-  private table(bounds: { left: number; right: number }): TableLayout {
-    return tableLayout(this.rows(), bounds.right - bounds.left - 4);
   }
 
   private renderBand(grid: CellGrid, row: number, bounds: { left: number; right: number }, label: string): void {
@@ -1023,8 +1062,13 @@ export class WorkflowScreen {
     writeString(grid, 0, pad, truncateToCols(overlay.title, cols - pad * 2), TITLE_ATTRS);
     writeString(grid, 2, pad, "▷ ", CURSOR_ATTRS);
     writeString(grid, 2, pad + 2, overlay.buffer, EDIT_TEXT);
+    // The character under the caret, taken whole — indexing by UTF-16 unit
+    // would paint half a surrogate pair.
+    const under = overlay.cursor < overlay.buffer.length
+      ? String.fromCodePoint(overlay.buffer.codePointAt(overlay.cursor)!)
+      : " ";
     writeString(grid, 2, pad + 2 + textCols(overlay.buffer.slice(0, overlay.cursor)),
-      overlay.buffer[overlay.cursor] ?? " ", EDIT_CURSOR);
+      under, EDIT_CURSOR);
     writeString(grid, rows - 1, pad, "↵ confirm  ·  esc cancel", DIM_ATTRS);
     return grid;
   }

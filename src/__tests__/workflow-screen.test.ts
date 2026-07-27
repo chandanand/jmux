@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import {
   WorkflowScreen, buildRows, explainRow, destinationsFor, applyDestination,
-  isSelectable, tableLayout,
+  isSelectable, tableLayout, printableText, prevBoundary, nextBoundary,
   type WorkflowPort, type WorkflowRow, type WorkflowBand,
 } from "../workflow-screen";
 import { parseViews, type PanelView } from "../panel-view";
@@ -881,5 +881,69 @@ describe("WorkflowScreen table at narrow widths", () => {
     for (let w = 1; w <= 40; w++) {
       expect(() => open().screen.render(w, 24)).not.toThrow();
     }
+  });
+});
+
+
+describe("text entry — paste and astral characters", () => {
+  // `data.length === 1` rejected both a pasted chunk and any character outside
+  // the BMP, which arrives as a two-unit surrogate pair. Paste silently did
+  // nothing; an emoji in a stage name was impossible to type.
+
+  test("printableText keeps a pasted run and drops control bytes", () => {
+    expect(printableText("Release Blockers")).toBe("Release Blockers");
+    expect(printableText("a\u0000b\u0007c")).toBe("abc");
+    expect(printableText("\u007f")).toBe("");
+  });
+
+  test("printableText rejects escape sequences, whose tails are printable", () => {
+    // "\x1b[D" would otherwise type "[D" into the buffer.
+    expect(printableText("\x1b[D")).toBe("");
+    expect(printableText("\x1b[1;2A")).toBe("");
+  });
+
+  test("printableText keeps astral characters whole", () => {
+    expect(printableText("🚀")).toBe("🚀");
+    expect(printableText("QA 🚀 done")).toBe("QA 🚀 done");
+  });
+
+  test("boundaries step whole code points, never half a surrogate", () => {
+    const s = "a🚀b";           // 'a' 1 unit, '🚀' 2 units, 'b' 1 unit
+    expect(nextBoundary(s, 0)).toBe(1);
+    expect(nextBoundary(s, 1)).toBe(3);
+    expect(prevBoundary(s, 3)).toBe(1);
+    expect(prevBoundary(s, 4)).toBe(3);
+    expect(prevBoundary(s, 0)).toBe(0);
+    expect(nextBoundary(s, s.length)).toBe(s.length);
+  });
+
+  test("a pasted stage name lands in the prompt intact", () => {
+    const { screen, h } = open();
+    selectRow(screen, "+ New stage");
+    screen.handleInput("\r");
+    screen.handleInput("Waiting on QA");        // one paste, one chunk
+    screen.handleInput("\r");
+    expect(h.current().map((v) => v.label)).toContain("Waiting on QA");
+  });
+
+  test("an emoji survives typing and backspace", () => {
+    const { screen, h } = open();
+    selectRow(screen, "+ New stage");
+    screen.handleInput("\r");
+    screen.handleInput("🚀x");
+    screen.handleInput("\x7f");                 // deletes 'x'
+    screen.handleInput("\x7f");                 // deletes the whole emoji
+    screen.handleInput("ok");
+    screen.handleInput("\r");
+    expect(h.current().map((v) => v.label)).toContain("ok");
+  });
+
+  test("the picker filter takes a pasted query", () => {
+    const { screen, h } = open();
+    selectRow(screen, "Triage");
+    screen.handleInput("\r");
+    screen.handleInput("Post-merge");            // paste, not 10 keystrokes
+    screen.handleInput("\r");
+    expect(h.current().find((v) => v.id === "post-merge")!.states).toContain("Triage");
   });
 });
