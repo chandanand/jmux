@@ -46,10 +46,14 @@ export class LinearAdapter implements IssueTrackerAdapter {
   async getIssueByBranch(branch: string): Promise<Issue | null> {
     const identifier = extractIssueIdFromBranch(branch);
     if (!identifier) return null;
-    const query = `query($identifier: String!) { issueSearch(query: $identifier, first: 1) { nodes { ${ISSUE_FIELDS} } } }`;
+    // Search rather than `issue(id: $identifier)`: a direct lookup answers an
+    // unknown identifier with "Entity not found" and no data, and most branches
+    // legitimately carry no issue at all. Search returns loose matches instead,
+    // which the identifier check below rejects — no error path for the common case.
+    const query = `query($identifier: String!) { searchIssues(term: $identifier, first: 1) { nodes { ${ISSUE_FIELDS} } } }`;
     const resp = await this.graphql(query, { identifier });
     if (!resp) return null;
-    const nodes = resp.data?.issueSearch?.nodes;
+    const nodes = resp.data?.searchIssues?.nodes;
     if (!nodes || nodes.length === 0) return null;
     const issue = nodes[0];
     if (issue.identifier?.toUpperCase() !== identifier) return null;
@@ -104,14 +108,14 @@ export class LinearAdapter implements IssueTrackerAdapter {
     if (this.authState !== "ok") return [];
     const gql = `
       query($query: String!) {
-        issueSearch(query: $query, first: 20) {
+        searchIssues(term: $query, first: 20) {
           nodes { ${ISSUE_FIELDS} }
         }
       }
     `;
     const resp = await this.graphql(gql, { query });
-    if (!resp?.data?.issueSearch?.nodes) return [];
-    return resp.data.issueSearch.nodes.map((n: any) => this.mapIssue(n));
+    if (!resp?.data?.searchIssues?.nodes) return [];
+    return resp.data.searchIssues.nodes.map((n: any) => this.mapIssue(n));
   }
 
   async getMyIssues(): Promise<Issue[]> {
@@ -236,7 +240,25 @@ export class LinearAdapter implements IssueTrackerAdapter {
         if (resp.status === 401 || resp.status === 403) this.authState = "failed";
         throw new HttpError(`Linear API error: ${resp.status}`, resp.status);
       }
-      return await resp.json();
+      const body = await resp.json();
+
+      // A GraphQL error arrives as HTTP 200 with an `errors` array, so the
+      // status check above cannot see it. Returning the body regardless is how
+      // a *deprecated field* came to look exactly like "no results": every
+      // branch-derived issue silently vanished from the sidebar with nothing
+      // logged. Surfacing it means the next deprecation announces itself.
+      const errors = body?.errors;
+      if (Array.isArray(errors) && errors.length > 0) {
+        const message = errors.map((e: any) => e?.message ?? "unknown").join("; ");
+        if (body.data == null) {
+          const notFound = errors.some((e: any) => /entity not found/i.test(e?.message ?? ""));
+          throw new HttpError(`Linear GraphQL error: ${message}`, notFound ? 404 : 400);
+        }
+        // Partial data — one alias of a batched query failed (a stale link,
+        // say). Keep the rows that did resolve rather than losing the batch.
+        logError("Linear", `partial GraphQL error: ${message}`);
+      }
+      return body;
     } catch (e) {
       if (e instanceof HttpError) throw e;
       logError("Linear", `request failed: ${(e as Error).message}`);

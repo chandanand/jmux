@@ -124,3 +124,85 @@ describe("listWorkflowStates", () => {
     expect(await adapter.listWorkflowStates()).toEqual([]);
   });
 });
+
+// A GraphQL error arrives as HTTP 200 with an `errors` array. Treating that as
+// data is how the deprecation of `issueSearch` silently emptied every
+// branch-derived issue out of the sidebar, with nothing logged.
+describe("GraphQL error handling", () => {
+  const ISSUE = (identifier: string) => ({
+    id: "u1", identifier, title: "T", url: "https://linear.app/x",
+    state: { name: "Todo", type: "unstarted" }, assignee: null,
+    labels: { nodes: [] }, attachments: { nodes: [] }, priority: 0,
+  });
+
+  async function withFetch<T>(
+    handler: (body: any) => unknown,
+    run: (a: LinearAdapter) => Promise<T>,
+  ): Promise<{ result?: T; error?: Error; queries: string[] }> {
+    const real = globalThis.fetch;
+    const prevToken = process.env.LINEAR_TOKEN;
+    const prevKey = process.env.LINEAR_API_KEY;
+    const queries: string[] = [];
+    process.env.LINEAR_TOKEN = "lin_test";
+    delete process.env.LINEAR_API_KEY;
+    globalThis.fetch = (async (_url: string, init: any) => {
+      const body = JSON.parse(init.body);
+      queries.push(body.query);
+      return { ok: true, status: 200, json: async () => handler(body) };
+    }) as any;
+    try {
+      const adapter = new LinearAdapter({ type: "linear" });
+      await adapter.authenticate();
+      return { result: await run(adapter), queries };
+    } catch (e) {
+      return { error: e as Error, queries };
+    } finally {
+      globalThis.fetch = real;
+      if (prevToken === undefined) delete process.env.LINEAR_TOKEN;
+      else process.env.LINEAR_TOKEN = prevToken;
+      if (prevKey !== undefined) process.env.LINEAR_API_KEY = prevKey;
+    }
+  }
+
+  test("an error with no data throws rather than reading as 'no results'", async () => {
+    const { error } = await withFetch(
+      () => ({ errors: [{ message: "deprecated" }], data: null }),
+      (a) => a.pollIssue("u1"),
+    );
+    expect(error).toBeDefined();
+    expect(error!.message).toContain("deprecated");
+  });
+
+  test("partial data survives an error on one alias of a batch", async () => {
+    // A stale link failing must not cost the batch every other session's issue.
+    const { result } = await withFetch(
+      () => ({
+        errors: [{ message: "Entity not found: Issue" }],
+        data: { issue0: ISSUE("ENG-1"), issue1: null },
+      }),
+      (a) => a.pollAllIssues(["u1", "gone"]),
+    );
+    expect(result!.size).toBe(1);
+    expect(result!.get("u1")?.identifier).toBe("ENG-1");
+  });
+
+  test("branch lookup uses the supported search field, not deprecated issueSearch", async () => {
+    const { result, queries } = await withFetch(
+      () => ({ data: { searchIssues: { nodes: [ISSUE("ENG-1234")] } } }),
+      (a) => a.getIssueByBranch("eng-1234-fix-auth"),
+    );
+    expect(queries[0]).toContain("searchIssues");
+    expect(queries[0]).not.toContain("issueSearch");
+    expect(result?.identifier).toBe("ENG-1234");
+  });
+
+  test("branch lookup rejects a loose search hit for another issue", async () => {
+    // Search answers an unknown identifier with unrelated matches rather than
+    // an error, so the identifier check is what keeps them out.
+    const { result } = await withFetch(
+      () => ({ data: { searchIssues: { nodes: [ISSUE("ENG-999")] } } }),
+      (a) => a.getIssueByBranch("eng-1234-fix-auth"),
+    );
+    expect(result).toBeNull();
+  });
+});
