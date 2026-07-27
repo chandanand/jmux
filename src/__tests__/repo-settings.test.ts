@@ -348,11 +348,60 @@ describe("panel view migration", () => {
     expect(config.pipeline).toEqual({ upNext: ["a"] });
   });
 
+  test("a config already on the sections shape keeps its parked states", () => {
+    // migrateStagesIntoViews runs BEFORE the groups -> sections rename, and it
+    // only read `view.groups`. A config on the sections shape therefore looked
+    // like it had no states, no stage was inferred, and the per-tier stage
+    // lists were deleted immediately afterwards — parking vanished silently.
+    const { config } = migrateLegacyConfig({
+      repoDefaults: { parkedStates: ["Blocked"] },
+      panelViews: [{ id: "todo", label: "To do", sections: [{ label: "Blocked", states: ["Blocked"] }] }],
+    });
+    expect(config.panelViews[0].states).toEqual(["Blocked"]);
+    expect(config.pipeline.parkedStates).toEqual(["Blocked"]);
+  });
+
+  test("parkStages naming a stage other than `parked` still carries over", () => {
+    // The harvest hard-coded `stage === "parked"` while parkStages was deleted
+    // unconditionally, so a config that also parked `done` lost those statuses.
+    const { config } = migrateLegacyConfig({
+      pipeline: { parkStages: ["parked", "done"] },
+      panelViews: [{ id: "t", label: "T", sections: [
+        { label: "B", states: ["Blocked"], stage: "parked" },
+        { label: "M", states: ["Merged"], stage: "done" },
+      ] }],
+    });
+    expect(config.pipeline.parkedStates).toEqual(["Blocked", "Merged"]);
+  });
+
+  test("a stage listed in both a section and `states` is not duplicated on disk", () => {
+    const { config } = migrateLegacyConfig({
+      panelViews: [{ id: "t", label: "T", states: ["Done"], sections: [{ label: "d", states: ["done"] }] }],
+    });
+    expect(config.panelViews[0].states).toEqual(["Done"]);
+  });
+
   test("already-migrated views report no change", () => {
     const { changed } = migrateLegacyConfig({
       pipeline: { parkedStates: ["a"] },
       panelViews: [{ id: "w", label: "W", states: ["a"] }],
     });
     expect(changed).toBe(false);
+  });
+});
+
+describe("panel view migration — one status, one stage", () => {
+  test("a status repeated across two old tabs lands in the first only", () => {
+    // assignStateToView enforces one home per status, and the workflow screen
+    // only renders the first stage claiming one — a second mapping would be
+    // invisible on the screen while the panel showed the issue in both tabs.
+    const { config } = migrateLegacyConfig({
+      panelViews: [
+        { id: "a", label: "A", sections: [{ label: "s", states: ["Done", "Todo"] }] },
+        { id: "b", label: "B", sections: [{ label: "s", states: ["done"] }] },
+      ],
+    });
+    expect(config.panelViews[0].states).toEqual(["Done", "Todo"]);
+    expect(config.panelViews[1].states).toBeUndefined();
   });
 });

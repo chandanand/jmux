@@ -264,6 +264,18 @@ export function migrateLegacyConfig(raw: any): { config: any; changed: boolean }
   // legitimately mix "still mine" with "someone else's".
   // Statuses collected on the way through, from every shape parking has had.
   const parked: string[] = [];
+  // One status has exactly one home — `assignStateToView` enforces it, and the
+  // workflow screen only ever shows the first stage claiming a status, so a
+  // second mapping would be invisible and unremovable. Scoped across all views,
+  // not per view, because the old sections could repeat a status between tabs.
+  const seen = new Set<string>();
+  // Which stages actually parked under the old two-setting model. Defaulting to
+  // ["parked"] matches DEFAULT_PARKING; reading it here matters because the key
+  // is deleted below, and a config that parked `done` as well would otherwise
+  // lose those statuses without a word.
+  const legacyParkStages: string[] = Array.isArray(config.pipeline?.parkStages)
+    ? config.pipeline.parkStages
+    : ["parked"];
   for (const view of (Array.isArray(config.panelViews) ? config.panelViews : []) as any[]) {
     if (Array.isArray(view.groups) && !Array.isArray(view.sections)) {
       view.sections = view.groups;
@@ -287,7 +299,7 @@ export function migrateLegacyConfig(raw: any): { config: any; changed: boolean }
     const sections = Array.isArray(view.sections) ? view.sections : [];
     for (const section of sections) {
       if (section?.stage === undefined) continue;
-      if (section.stage === "parked") parked.push(...(section.states ?? []));
+      if (legacyParkStages.includes(section.stage)) parked.push(...(section.states ?? []));
       delete section.stage;
       changed = true;
     }
@@ -304,8 +316,8 @@ export function migrateLegacyConfig(raw: any): { config: any; changed: boolean }
     // panel now groups by status name instead, which reads the same with
     // nothing to configure. Order is priority order, so it is preserved.
     if (Array.isArray(view.sections)) {
+      for (const state of view.states ?? []) seen.add(String(state).trim().toLowerCase());
       const flat: string[] = [];
-      const seen = new Set<string>();
       for (const section of view.sections) {
         for (const state of section?.states ?? []) {
           const key = String(state).trim().toLowerCase();
@@ -392,7 +404,12 @@ export function migrateStagesIntoViews(
 
   const claimed = new Set<string>();
   const nextViews = views.map((view) => {
-    const states: string[] = (view.groups ?? []).flatMap((g: any) => g.states ?? []);
+    // Reads both spellings: this runs *before* the groups -> sections rename
+    // below, so a config already on the `sections` shape would otherwise look
+    // like it had no states at all — and the per-tier stage lists are deleted
+    // straight afterwards, taking the parking configuration with them.
+    const buckets: any[] = view.groups ?? view.sections ?? [];
+    const states: string[] = buckets.flatMap((g: any) => g.states ?? []);
     for (const n of states) if (stageOf.has(n.trim().toLowerCase())) claimed.add(n.trim().toLowerCase());
     if (view.stage) return view;
 
