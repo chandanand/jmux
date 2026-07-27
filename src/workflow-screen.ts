@@ -30,9 +30,10 @@
 //
 // Two rules hold the rest together:
 //
-//   * **A heading is not a decision.** Several statuses can share a heading in
-//     the panel. It carries no behaviour, so the column only exists at all when
-//     the config actually has one.
+//   * **Subheadings are derived, not configured.** A stage holding more than
+//     one status groups its issues under those status names in the panel; a
+//     stage holding one draws no subheading at all. There used to be a heading
+//     you named by hand — it only ever restated the status inside it.
 //   * **Nothing hands off to a Modal.** Pickers, prompts and confirms are
 //     painted into this screen's own grid. A full-screen surface consumes every
 //     keystroke while open, so a modal opened from one renders nothing and
@@ -182,7 +183,7 @@ const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n =
  * mentions. A status renamed in Linear must stay visible and fixable rather
  * than silently vanishing into config nobody can see.
  */
-export function buildRows(port: WorkflowPort, tier: SettingsTier, _collapsed: ReadonlySet<string>): WorkflowRow[] {
+export function buildRows(port: WorkflowPort, tier: SettingsTier): WorkflowRow[] {
   const views = port.getViews();
   const statuses = port.getStatuses();
   const issueCounts = port.getIssueCounts();
@@ -373,24 +374,67 @@ type Overlay =
 type RenderRow = { kind: "blank" } | { kind: "row"; index: number; row: WorkflowRow };
 
 /**
- * Column x-offsets for the STATUSES table, measured from the block's indent.
+ * Column geometry for the STATUSES table, measured from the block's indent.
  *
  * Real columns rather than dot leaders: the eye needs a vertical rule to follow,
  * and "does this one park?" is a question you answer by scanning down a column.
+ *
+ * Columns are **dropped right to left** as the width shrinks — Issues first,
+ * then Parks, then Stage — rather than being allowed to overlap. Overlap was
+ * not cosmetic: the header was written at a fixed offset with no truncation
+ * while the value beneath it was truncated to a width that had gone negative,
+ * so a ~34-column terminal rendered `SParks` as a heading over a column whose
+ * data had silently become the empty string. A column that cannot fit is
+ * better absent than present and lying.
+ *
+ * A `null` offset means that column is not drawn at all at this width.
  */
-interface TableLayout { status: number; stage: number; parks: number; issues: number }
+interface TableLayout {
+  status: number;
+  statusWidth: number;
+  stage: number | null;
+  stageWidth: number;
+  parks: number | null;
+  issues: number | null;
+}
+
+const ISSUES_W = 6;
+const PARKS_W = 8;
+const STAGE_MIN = 6;
+const STATUS_MIN = 8;
+const COL_GAP = 2;
 
 export function tableLayout(rows: WorkflowRow[], width: number): TableLayout {
   const statuses = rows.filter((r): r is Extract<WorkflowRow, { kind: "status" }> => r.kind === "status");
-  const nameWidth = Math.min(
-    Math.max(6, ...statuses.map((r) => textCols(r.state))),
-    Math.max(10, Math.floor(width * 0.45)),
-  );
+  const longest = Math.max(STATUS_MIN, ...statuses.map((r) => textCols(r.state)));
+
+  const showIssues = width >= STATUS_MIN + COL_GAP + STAGE_MIN + PARKS_W + ISSUES_W;
+  const showParks = width >= STATUS_MIN + COL_GAP + STAGE_MIN + PARKS_W;
+  const showStage = width >= STATUS_MIN + COL_GAP + STAGE_MIN;
+
   // Parks and Issues are right-anchored so the two narrow columns line up
   // against the block's right edge whatever the terminal width.
-  const issues = width - 6;
-  const parks = issues - 8;
-  return { status: 0, stage: nameWidth + 2, parks, issues };
+  const issues = showIssues ? width - ISSUES_W : null;
+  const parks = showParks ? (issues ?? width) - PARKS_W : null;
+  // Where the Stage column has to stop.
+  const rightEdge = parks ?? issues ?? width;
+
+  if (!showStage) {
+    return { status: 0, statusWidth: width, stage: null, stageWidth: 0, parks, issues };
+  }
+
+  // A long status name must not eat the row, and must leave Stage its minimum.
+  // The thresholds above guarantee the lower and upper bounds here can't cross.
+  const statusWidth = Math.max(
+    STATUS_MIN,
+    Math.min(longest, Math.floor(width * 0.45), rightEdge - COL_GAP - STAGE_MIN),
+  );
+  const stage = statusWidth + COL_GAP;
+  return {
+    status: 0, statusWidth,
+    stage, stageWidth: Math.max(0, rightEdge - stage - 1),
+    parks, issues,
+  };
 }
 
 export class WorkflowScreen {
@@ -399,7 +443,6 @@ export class WorkflowScreen {
   private scrollOffset = 0;
   private _open = false;
   private lastRenderRows = 24;
-  private collapsed = new Set<string>();
   private tier: SettingsTier = "global";
   private overlay: Overlay = null;
 
@@ -440,7 +483,6 @@ export class WorkflowScreen {
     if (data === "\r") { this.activate(row); return; }
     if (data === " ") { this.toggleParks(row); return; }
     if (data === "u") { this.toggleUpNext(row); return; }
-    if (data === "r") { this.rename(row); return; }
     if (data === "d" || data === "\x7f") { this.remove(row); return; }
     if (data === "g") { this.switchTier(); return; }
   }
@@ -597,6 +639,7 @@ export class WorkflowScreen {
     this.port!.toggleUpNext(row.viewId);
   }
 
+  /** Reached from Enter on a stage row — stages hold no rows to fold open. */
   private rename(row: WorkflowRow): void {
     const port = this.port!;
     if (row.kind === "tab") {
@@ -673,7 +716,7 @@ export class WorkflowScreen {
   // --- Selection ---
 
   private rows(): WorkflowRow[] {
-    return this.port ? buildRows(this.port, this.tier, this.collapsed) : [];
+    return this.port ? buildRows(this.port, this.tier) : [];
   }
 
   private move(delta: number): void {
@@ -815,10 +858,12 @@ export class WorkflowScreen {
       case "columns": {
         const t = this.table(bounds);
         const col = left + 4;
-        writeString(grid, row, col + t.status, "Status", DIM_ATTRS);
-        writeString(grid, row, col + t.stage, "Stage", DIM_ATTRS);
-        writeString(grid, row, col + t.parks, "Parks", DIM_ATTRS);
-        writeString(grid, row, col + t.issues - 1, "Issues", DIM_ATTRS);
+        writeString(grid, row, col + t.status, truncateToCols("Status", t.statusWidth), DIM_ATTRS);
+        if (t.stage !== null) {
+          writeString(grid, row, col + t.stage, truncateToCols("Stage", t.stageWidth), DIM_ATTRS);
+        }
+        if (t.parks !== null) writeString(grid, row, col + t.parks, "Parks", DIM_ATTRS);
+        if (t.issues !== null) writeString(grid, row, col + t.issues - 1, "Issues", DIM_ATTRS);
         return;
       }
 
@@ -827,19 +872,23 @@ export class WorkflowScreen {
         const col = left + 4;
         if (selected) writeString(grid, row, col - 2, "▸", CURSOR_ATTRS);
 
-        writeString(grid, row, col + t.status, truncateToCols(model.state, t.stage - 2),
+        writeString(grid, row, col + t.status, truncateToCols(model.state, t.statusWidth),
           selected ? LABEL_ACTIVE : model.known ? LABEL_ATTRS : LABEL_MUTED);
-        writeString(grid, row, col + t.stage,
-          truncateToCols(model.viewLabel ?? "—", t.parks - t.stage - 2),
-          model.viewLabel ? VALUE_ATTRS : DIM_ATTRS);
+        if (t.stage !== null) {
+          writeString(grid, row, col + t.stage, truncateToCols(model.viewLabel ?? "—", t.stageWidth),
+            model.viewLabel ? VALUE_ATTRS : DIM_ATTRS);
+        }
 
         // A glyph, not a checkbox: the column reads as "these ones park", and
         // an empty cell is the answer for most statuses in most workspaces.
-        if (model.parks) writeString(grid, row, col + t.parks + 1, "⏸", PARK_ATTRS);
-        if (!model.known) writeString(grid, row, col + t.parks - 4, "stale", WARN_ATTRS);
-
-        const issues = String(model.issues);
-        writeString(grid, row, col + t.issues + 5 - textCols(issues), issues, DIM_ATTRS);
+        if (t.parks !== null) {
+          if (model.parks) writeString(grid, row, col + t.parks + 1, "⏸", PARK_ATTRS);
+          if (!model.known) writeString(grid, row, col + t.parks - 4, "stale", WARN_ATTRS);
+        }
+        if (t.issues !== null) {
+          const issues = String(model.issues);
+          writeString(grid, row, col + t.issues + 5 - textCols(issues), issues, DIM_ATTRS);
+        }
         return;
       }
 

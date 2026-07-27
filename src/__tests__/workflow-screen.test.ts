@@ -74,8 +74,7 @@ function harness(over: Partial<WorkflowPort> = {}, initial: PanelView[] = views(
   return h;
 }
 
-const rowsOf = (h: Harness, collapsed = new Set<string>()): WorkflowRow[] =>
-  buildRows(h.port, "global", collapsed);
+const rowsOf = (h: Harness): WorkflowRow[] => buildRows(h.port, "global");
 
 const statusRow = (rows: WorkflowRow[], state: string) =>
   rows.find((r): r is Extract<WorkflowRow, { kind: "status" }> => r.kind === "status" && r.state === state)!;
@@ -83,7 +82,7 @@ const statusRow = (rows: WorkflowRow[], state: string) =>
 // --- Row model ---
 
 describe("buildRows", () => {
-  test("lists tabs first, then every status in tab-then-config order", () => {
+  test("lists stages first, then every status in stage-then-config order", () => {
     // Two blocks, because they edit two different kinds of thing. Interleaving
     // them is what made every key mean something different per row.
     const rows = rowsOf(harness());
@@ -93,7 +92,7 @@ describe("buildRows", () => {
       .toEqual(["QA Failed", "Dev Confirm", "QA (PROD WEB)", "Triage", "Backlog", "Done"]);
   });
 
-  test("statuses in no tab sort last, where they read as the work still to do", () => {
+  test("statuses in no stage sort last, where they read as the work still to do", () => {
     const rows = rowsOf(harness()).filter((r) => r.kind === "status") as any[];
     expect(rows.slice(-3).map((r) => r.state)).toEqual(["Triage", "Backlog", "Done"]);
     expect(rows.slice(-3).every((r) => r.viewId === null)).toBe(true);
@@ -112,12 +111,17 @@ describe("buildRows", () => {
     expect(statusRow(rows, "Done")).toMatchObject({ viewId: null, trackerStage: "done" });
   });
 
-  test("a status inherits parking from the tab it is in, not from itself", () => {
-    // One flag on "Post-merge" covers every status in it. There is no
-    // per-status meaning to set, and so none to get wrong.
+  test("parking is the status's own setting, independent of its stage", () => {
+    // Both of these sit in a stage; only the one on the parked list parks.
     expect(statusRow(rowsOf(harness()), "QA (PROD WEB)"))
       .toMatchObject({ viewId: "post-merge", parks: true, parked: 3 });
-    expect(statusRow(rowsOf(harness()), "QA Failed")).toMatchObject({ parks: false });
+    expect(statusRow(rowsOf(harness()), "Dev Confirm"))
+      .toMatchObject({ viewId: "post-merge", parks: false });
+  });
+
+  test("a status can park while belonging to no stage", () => {
+    const rows = buildRows(harness({}, views(), ["Triage"]).port, "global");
+    expect(statusRow(rows, "Triage")).toMatchObject({ viewId: null, parks: true });
   });
 
   test("live issue counts ride along on the row", () => {
@@ -126,7 +130,7 @@ describe("buildRows", () => {
     expect(statusRow(rows, "Backlog").issues).toBe(0);
   });
 
-  test("a tab sums the issues of every status it claims", () => {
+  test("a stage sums the issues of every status it claims", () => {
     const tab = rowsOf(harness()).find((r) => r.kind === "tab" && r.viewId === "post-merge");
     expect(tab).toMatchObject({ statuses: 2, issues: 6, parks: 1 });
   });
@@ -148,7 +152,7 @@ describe("buildRows", () => {
     expect(rows[at + 1]!.kind).toBe("new-tab");
   });
 
-  test("up-next rank is on the tab row, so priority is visible where order is edited", () => {
+  test("up-next rank is on the stage row, so priority is visible where order is edited", () => {
     const rows = rowsOf(harness());
     expect((rows.find((r) => r.kind === "tab" && r.viewId === "urgent") as any).upNextRank).toBe(0);
     expect((rows.find((r) => r.kind === "tab" && r.viewId === "post-merge") as any).upNextRank).toBeNull();
@@ -174,7 +178,7 @@ describe("buildRows — the seed row", () => {
     expect(rowsOf(harness({}, bare))[0]).toMatchObject({ kind: "seed", statuses: 6 });
   });
 
-  test("disappears as soon as one section exists", () => {
+  test("disappears as soon as one stage maps a status", () => {
     expect(rowsOf(harness()).some((r) => r.kind === "seed")).toBe(false);
   });
 
@@ -397,7 +401,7 @@ describe("WorkflowScreen navigation", () => {
   });
 
   test("the cursor skips band headers, which are labels and not targets", () => {
-    const rows = buildRows(open().h.port, "global", new Set());
+    const rows = buildRows(open().h.port, "global");
     expect(rows.filter(isSelectable).some((r) => r.kind === "band")).toBe(false);
   });
 
@@ -606,7 +610,6 @@ describe("WorkflowScreen stages", () => {
     const { screen, h } = open();
     selectRow(screen, "My MRs");
     screen.handleInput("\r");
-    screen.handleInput("r");
     screen.handleInput("d");
     expect(h.writes).toBe(0);
     expect(screen.isOpen).toBe(true);
@@ -820,5 +823,63 @@ describe("WorkflowScreen hints", () => {
     const hint = text(screen.render(100, 40), 39);
     expect(hint).toContain("parks");
     expect(hint).toContain("remove");
+  });
+});
+
+describe("WorkflowScreen table at narrow widths", () => {
+  // A ~34-column content area used to render `SParks` as a heading: the Stage
+  // header was written at a fixed offset with no truncation, while the value
+  // beneath it was truncated to a width that had gone negative and so rendered
+  // as "". The table showed a heading over a column that had lost its data,
+  // which reads as "this status belongs to no stage" — the opposite of true.
+  const layoutAt = (width: number) =>
+    tableLayout(buildRows(harness().port, "global"), width);
+
+  test("columns never overlap, at any width", () => {
+    for (let w = 1; w <= 140; w++) {
+      const t = layoutAt(w);
+      if (t.stage !== null) {
+        expect(t.status + t.statusWidth).toBeLessThanOrEqual(t.stage);
+        if (t.parks !== null) expect(t.stage + t.stageWidth).toBeLessThanOrEqual(t.parks);
+      }
+      if (t.parks !== null && t.issues !== null) expect(t.parks).toBeLessThan(t.issues);
+    }
+  });
+
+  test("a Stage column is never present without room for its values", () => {
+    for (let w = 1; w <= 140; w++) {
+      const t = layoutAt(w);
+      if (t.stage !== null) expect(t.stageWidth).toBeGreaterThan(0);
+    }
+  });
+
+  test("columns drop right to left as the width shrinks", () => {
+    expect(layoutAt(120)).toMatchObject({ stage: expect.any(Number) });
+    expect(layoutAt(120).parks).not.toBeNull();
+    expect(layoutAt(120).issues).not.toBeNull();
+
+    expect(layoutAt(24).issues).toBeNull();      // Issues goes first
+    expect(layoutAt(24).stage).not.toBeNull();
+
+    expect(layoutAt(14).parks).toBeNull();       // then Parks
+    expect(layoutAt(14).stage).toBeNull();       // then Stage
+    expect(layoutAt(14).statusWidth).toBe(14);   // Status keeps the whole row
+  });
+
+  test("the rendered header never runs one column into the next", () => {
+    for (const width of [120, 80, 60, 46, 40, 34, 30, 26, 24, 20, 18, 14, 10, 6]) {
+      const grid = open().screen.render(width, 30);
+      const at = findRow(grid, "Status");
+      if (at < 0) continue;
+      const header = text(grid, at);
+      expect(header).not.toContain("SParks");
+      expect(header).not.toMatch(/Stag[^e]|Park[^s]|Issue[^s]/);
+    }
+  });
+
+  test("renders without throwing at any width, down to one column", () => {
+    for (let w = 1; w <= 40; w++) {
+      expect(() => open().screen.render(w, 24)).not.toThrow();
+    }
   });
 });
