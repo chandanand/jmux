@@ -80,7 +80,7 @@ export interface JmuxConfig {
   /** Per-state indicator colors (ANSI color names). */
   stateColors?: StateColorConfig;
   /** Sidebar grouping axis. Persists across restarts (filter deliberately does not). */
-  sidebarGroupBy?: "none" | "project" | "status";
+  sidebarGroupBy?: "none" | "project" | "status" | "stage";
   /** Sidebar member-sort axis. Persists across restarts. */
   sidebarSortBy?: "name" | "activity" | "status";
   /** @deprecated Pre-split single sort axis; read once to migrate onto

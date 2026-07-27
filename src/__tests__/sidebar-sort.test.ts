@@ -21,7 +21,8 @@ describe("cycle", () => {
   test("group wraps around the mode list", () => {
     expect(cycleGroup("none")).toBe("project");
     expect(cycleGroup("project")).toBe("status");
-    expect(cycleGroup("status")).toBe("none"); // wraps
+    expect(cycleGroup("status")).toBe("stage");
+    expect(cycleGroup("stage")).toBe("none"); // wraps
     for (const m of GROUP_MODES) expect(GROUP_MODES).toContain(cycleGroup(m));
   });
 
@@ -45,6 +46,7 @@ describe("cycle", () => {
     const sortLabels = SORT_MODES.map(sortModeLabel);
     expect(new Set(sortLabels).size).toBe(sortLabels.length);
     expect(groupModeLabel("status")).toBe("by status");
+    expect(groupModeLabel("stage")).toBe("by workflow stage");
     expect(sortModeLabel("name")).toBe("by name");
     expect(filterModeLabel("attention")).toBe("needs you");
   });

@@ -22,6 +22,7 @@ import {
   type FilterMode,
   type SessionStatus,
   type SessionSortInfo,
+  type StageBucket,
 } from "./sidebar-sort";
 
 export interface PinnedPaneEntry {
@@ -278,9 +279,11 @@ function getSubdirectory(dir: string, groupLabel: string): string | null {
 
 type RenderItem =
   // `key` is the axis-namespaced collapse identity ("pinned", "project:<label>",
-  // "status:<status>"); `label` is what the header renders. They differ so a
-  // project literally named "Running" can't share collapse state with the
-  // status group, and collapse memory is kept per axis across mode switches.
+  // "status:<status>", "stage:<id>"); `label` is what the header renders. They
+  // differ so a project literally named "Running" can't share collapse state
+  // with the status group, and collapse memory is kept per axis across mode
+  // switches. The stage axis keys on the stage *id* rather than its label, so
+  // renaming a stage doesn't silently expand a group the user had collapsed.
   | { type: "group-header"; key: string; label: string; collapsed: boolean; sessionCount: number }
   | { type: "session"; sessionIndex: number; grouped: boolean; groupLabel?: string; pinnedCount?: number }
   | { type: "spacer" }
@@ -303,8 +306,9 @@ function projectLabelOf(session: SessionInfo): string | null {
   return dir ? getGroupLabel(dir) : null;
 }
 
-// A group awaiting emission. `rank` orders status groups (needs-you first);
-// project groups ignore it and order alphabetically by label.
+// A group awaiting emission. `rank` orders status groups (needs-you first) and
+// stage groups (the user's own priority order); project groups ignore it and
+// order alphabetically by label.
 interface GroupBucket {
   key: string;
   label: string;
@@ -322,6 +326,7 @@ function buildRenderPlan(
   sortMode: SortMode,
   filterMode: FilterMode,
   parkedNames: Set<string> = new Set(),
+  stageByName: Map<string, StageBucket> = new Map(),
 ): {
   items: RenderItem[];
   displayOrder: number[];
@@ -380,6 +385,21 @@ function buildRenderPlan(
       bucket(`project:${label}`, label, 0, i);
       continue;
     }
+    if (groupMode === "stage") {
+      // A session has a stage only when it has a linked issue whose status one
+      // of the user's stages claims. Everything else — no issue, or a status
+      // mapped to no stage — falls to the flat remainder, exactly as a
+      // project-less session does under group=project. Making those a "No
+      // stage" group would give the sessions you have *not* classified a
+      // header of their own, above ones you have.
+      const stage = stageByName.get(sessions[i].name);
+      if (!stage) {
+        ungrouped.push(i);
+        continue;
+      }
+      bucket(`stage:${stage.id}`, stage.label, stage.rank, i);
+      continue;
+    }
     // groupMode === "status" — every session has a status, so none are ungrouped.
     const st = sortInfos[i]!.status;
     bucket(`status:${st}`, statusGroupLabel(st), statusRank(st), i);
@@ -393,10 +413,11 @@ function buildRenderPlan(
   const sortedUngrouped = sortIndices(ungrouped, info, sortMode);
 
   // Group-header order is fixed by axis, NOT by sortMode: project → alphabetical,
-  // status → status rank (needs-you group on top).
+  // status → status rank (needs-you group on top), stage → the order the user
+  // arranged their own workflow in.
   const buckets = [...bucketMap.values()];
   buckets.sort(
-    groupMode === "status"
+    groupMode === "status" || groupMode === "stage"
       ? (a, b) => a.rank - b.rank
       : (a, b) => a.label.localeCompare(b.label),
   );
@@ -516,6 +537,7 @@ export class Sidebar {
   private collapsedGroups = new Set<string>();
   private pinnedSessions = new Set<string>();
   private parkedSessions = new Set<string>();
+  private sessionStages = new Map<string, StageBucket>();
   private pinnedPanes: PinnedPaneEntry[] = [];
   private rowToSelection = new Map<number, SidebarSelection>();
   private currentVersion: string = "";
@@ -581,6 +603,16 @@ export class Sidebar {
 
   isParked(sessionName: string): boolean {
     return this.parkedSessions.has(sessionName);
+  }
+
+  /**
+   * Which workflow stage each session sits in, for group=stage. Resolved by the
+   * caller from the linked issue + the user's stage definitions; sessions absent
+   * from the map have no stage and stay in the flat remainder.
+   */
+  setSessionStages(stages: Map<string, StageBucket>): void {
+    this.sessionStages = new Map(stages);
+    this.rebuildPlan();
   }
 
   /**
@@ -684,6 +716,7 @@ export class Sidebar {
       this.sortMode,
       this.filterMode,
       this.parkedSessions,
+      this.sessionStages,
     );
     this.items = items;
     this.displayOrder = displayOrder;

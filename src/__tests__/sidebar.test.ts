@@ -1849,6 +1849,95 @@ describe("Sidebar — sort & filter", () => {
     expect(sb.getFilterMode()).toBe("attention");
   });
 
+  // --- group=stage: the user's own workflow stages as sidebar groups ---
+  //
+  // Stage membership is resolved by the caller (main.ts, from the linked issue
+  // + panelViews) and handed over pre-resolved, so these tests set it directly.
+
+  const stage = (id: string, label: string, rank: number) => ({ id, label, rank });
+
+  test("group=stage emits headers in the user's stage order, not alphabetical", () => {
+    const sb = seeded();
+    sb.setGroupMode("stage");
+    // "To do" is rank 0 and "In review" rank 1 — alphabetically the reverse, so
+    // this only passes if header order follows the workflow, not the label.
+    sb.setSessionStages(new Map([
+      ["alpha", stage("todo", "To do", 0)],
+      ["bravo", stage("review", "In review", 1)],
+      ["charlie", stage("review", "In review", 1)],
+      ["delta", stage("todo", "To do", 0)],
+    ]));
+    const todo = linesWith(sb, "To do");
+    const review = linesWith(sb, "In review");
+    expect(todo).toBeGreaterThan(-1);
+    expect(review).toBeGreaterThan(-1);
+    expect(todo).toBeLessThan(review);
+    // Members sit under their own stage's header.
+    expect(todo).toBeLessThan(linesWith(sb, "alpha"));
+    expect(linesWith(sb, "alpha")).toBeLessThan(review);
+    expect(review).toBeLessThan(linesWith(sb, "charlie"));
+  });
+
+  test("a session with no stage falls to the flat remainder, not a group of its own", () => {
+    const sb = seeded();
+    sb.setGroupMode("stage");
+    // charlie/delta have no linked issue, or a status no stage claims.
+    sb.setSessionStages(new Map([
+      ["alpha", stage("todo", "To do", 0)],
+      ["bravo", stage("todo", "To do", 0)],
+    ]));
+    const g = sb.getGrid();
+    const all = Array.from({ length: g.rows }, (_, r) =>
+      Array.from({ length: WIDTH }, (_, i) => g.cells[r][i].char).join("")).join("\n");
+    expect(all).toContain("To do");
+    expect(all).not.toContain("No stage");
+    // Stageless sessions still render — below every stage group.
+    expect(linesWith(sb, "To do")).toBeLessThan(linesWith(sb, "charlie"));
+    expect(linesWith(sb, "alpha")).toBeLessThan(linesWith(sb, "charlie"));
+  });
+
+  test("with no stages resolved at all, group=stage degrades to a flat list", () => {
+    const sb = seeded();
+    sb.setGroupMode("stage");
+    sb.setSessionStages(new Map());
+    const g = sb.getGrid();
+    const all = Array.from({ length: g.rows }, (_, r) =>
+      Array.from({ length: WIDTH }, (_, i) => g.cells[r][i].char).join("")).join("\n");
+    for (const name of ["alpha", "bravo", "charlie", "delta"]) expect(all).toContain(name);
+    expect(all).not.toContain("proj-a"); // no project headers leak in either
+  });
+
+  test("collapse is keyed on stage id, so a rename keeps the group folded", () => {
+    const sb = seeded();
+    sb.setGroupMode("stage");
+    sb.setSessionStages(new Map([["alpha", stage("todo", "To do", 0)]]));
+    sb.toggleGroup("stage:todo");
+    expect(linesWith(sb, "alpha")).toBe(-1); // folded away
+    // Rename the stage; the id is unchanged, so it must still be folded.
+    sb.setSessionStages(new Map([["alpha", stage("todo", "Next up", 0)]]));
+    expect(linesWith(sb, "Next up")).toBeGreaterThan(-1);
+    expect(linesWith(sb, "alpha")).toBe(-1);
+  });
+
+  test("pins outrank a stage — an explicit signal beats a derived one", () => {
+    const sb = seeded();
+    sb.setGroupMode("stage");
+    sb.setSessionStages(new Map([
+      ["alpha", stage("todo", "To do", 0)],
+      ["charlie", stage("todo", "To do", 0)],
+    ]));
+    sb.setPinnedSessions(new Set(["charlie"]));
+    expect(linesWith(sb, "Pinned")).toBeLessThan(linesWith(sb, "charlie"));
+    expect(linesWith(sb, "charlie")).toBeLessThan(linesWith(sb, "To do"));
+  });
+
+  test("header chip names the stage axis", () => {
+    const sb = seeded();
+    sb.setGroupMode("stage");
+    const header = Array.from({ length: WIDTH }, (_, i) => sb.getGrid().cells[0][i].char).join("");
+    expect(header).toContain("⊞ Stage");
+  });
+
   test("header shows clickable group + sort chips, each its own hit target", () => {
     const sb = seeded();
     const header = () => Array.from({ length: WIDTH }, (_, i) => sb.getGrid().cells[0][i].char).join("");

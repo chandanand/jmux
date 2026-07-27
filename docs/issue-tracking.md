@@ -360,12 +360,14 @@ one or many of your tracker's statuses:
 
 A stage shows up as a tab in the info panel, but that is how it *appears*, not
 what it *is*. It is one rung on the ladder you actually work by, and its order
-in the list is its priority.
+in the list is its priority — which is why the same stages also group your
+*sessions* in the sidebar (`Ctrl-a G` → `Stage`), not just your issues.
 
 Every status then has exactly two settings and no more:
 
 ```
-which stage it belongs to  —  where it shows in the panel
+which stage it belongs to  —  where it shows in the panel, and which
+                              sidebar group its session lands in
 whether it parks           —  whether its session leaves the sidebar
 ```
 
@@ -448,6 +450,40 @@ There is nothing to configure here. There used to be a **Heading** you named by
 hand, so that several statuses could share one; in practice its name only ever
 restated the status inside it, which is one more thing to name, maintain and get
 wrong for a result the status names already give you.
+
+### Your stages in the sidebar
+
+The panel groups your *issues* by stage. `Ctrl-a G` cycles the sidebar's
+grouping axis on to `Stage` and groups your *sessions* the same way — so the
+left rail reads as your pipeline, with the work in progress under `In Progress`
+and the handed-off work under `Waiting`:
+
+```
+  ⊞ Stage  ⇅ Name
+
+  URGENT (1)
+    TRA-1387 · payment-retry
+
+  IN PROGRESS (2)
+    TRA-1402 · search-index
+    TRA-1399 · session-replay
+
+  jmux
+  dotfiles
+```
+
+A session lands in the stage that claims its linked issue's status. Headers come
+out in your own stage order, not alphabetically — `Urgent` is above `In Progress`
+because that is where you put it in `Ctrl-a W`.
+
+Sessions with no linked issue (`jmux`, `dotfiles` above), or whose status no
+stage claims, list flat below the groups rather than under a "no stage" header:
+grouping should not give the work you have *not* classified a heading of its own,
+above the work you have. Pinned sessions still float to the top and parked ones
+still sink to the bottom band, in this mode as in every other.
+
+With no tracker connected, or before the first poll returns, no session resolves
+to a stage and the mode is simply a flat list.
 
 ### Tracker categories
 

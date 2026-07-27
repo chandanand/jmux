@@ -318,6 +318,24 @@ export function stateAssignments(views: PanelView[]): StateAssignment[] {
     (view.states ?? []).map((state) => ({ state, viewId: view.id, viewLabel: view.label })));
 }
 
+/**
+ * The stage that claims `status`, or null when no stage lists it.
+ *
+ * The inverse lookup of `view.states`, and the one place anything outside the
+ * panel asks "which stage of my workflow is this issue in?" — which is what
+ * lets the sidebar group sessions by stage without knowing what a tab is.
+ *
+ * First match wins, matching `assignStateToView`'s one-home-per-status
+ * invariant: a status under two stages is a misconfiguration, and resolving it
+ * deterministically beats picking arbitrarily. MR tabs carry no `states`, so
+ * they never claim anything.
+ */
+export function stageForState(views: PanelView[], status: string): PanelView | null {
+  const want = (status ?? "").trim().toLowerCase();
+  if (!want) return null;
+  return views.find((v) => stateIndexInView(want, v.states) >= 0) ?? null;
+}
+
 function withoutState(views: PanelView[], state: string): PanelView[] {
   const want = state.trim().toLowerCase();
   return views.map((view) => view.states

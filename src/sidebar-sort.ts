@@ -7,9 +7,29 @@
 
 import type { AgentState } from "./types";
 
-export type GroupMode = "none" | "project" | "status";
+export type GroupMode = "none" | "project" | "status" | "stage";
 export type SortMode = "name" | "activity" | "status";
 export type FilterMode = "all" | "attention" | "active";
+
+/**
+ * The stage bucket a session belongs to under group=stage — one of the user's
+ * own workflow stages, resolved from its linked issue's status.
+ *
+ * Pre-resolved by the caller rather than derived here: stage membership needs
+ * the tracker poll and the panel-view config, neither of which the sidebar
+ * has. Carrying `rank` (the stage's position in the user's own priority order)
+ * means header order is the order they arranged their workflow in, not
+ * alphabetical — "To do" belongs above "In review" because they said so.
+ *
+ * Note this is NOT the four-rung `WorkStage` lifecycle (see work-stage.ts);
+ * that drives parking, this is the user's own named ladder.
+ */
+export interface StageBucket {
+  /** Stage (panel view) id — the collapse identity, stable across renames. */
+  id: string;
+  label: string;
+  rank: number;
+}
 
 // A session's status for ordering/filtering: the three promoted agent states,
 // plus "activity" (tmux saw output but no promoted state) and "idle" (nothing).
@@ -24,7 +44,7 @@ export interface SessionSortInfo {
   lastActivity: number;
 }
 
-export const GROUP_MODES: readonly GroupMode[] = ["none", "project", "status"];
+export const GROUP_MODES: readonly GroupMode[] = ["none", "project", "status", "stage"];
 export const SORT_MODES: readonly SortMode[] = ["name", "activity", "status"];
 export const FILTER_MODES: readonly FilterMode[] = ["all", "attention", "active"];
 
@@ -61,6 +81,7 @@ const GROUP_LABELS: Record<GroupMode, string> = {
   none: "no grouping",
   project: "by project",
   status: "by status",
+  stage: "by workflow stage",
 };
 const SORT_LABELS: Record<SortMode, string> = {
   name: "by name",
@@ -88,6 +109,7 @@ const GROUP_SHORT: Record<GroupMode, string> = {
   none: "Flat",
   project: "Project",
   status: "Status",
+  stage: "Stage",
 };
 const SORT_SHORT: Record<SortMode, string> = {
   name: "Name",

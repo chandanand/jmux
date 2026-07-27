@@ -26,13 +26,18 @@ bucket into headers, sorting decides the order *within* a bucket.
 
 | Key | Action | Cycles through |
 |-----|--------|----------------|
-| `Ctrl-a G` | Cycle grouping | `Flat` → `Project` → `Status` |
+| `Ctrl-a G` | Cycle grouping | `Flat` → `Project` → `Status` → `Stage` |
 | `Ctrl-a s` | Cycle sort within a group | `Name` → `Activity` → `Status` |
 | `Ctrl-a f` | Cycle filter | `All` → `Needs you` → `Active` |
 
 The current modes show as chips at the top of the sidebar (`⊞ Status  ⇅ Activity`),
 alongside a count of sessions wanting your attention. `Ctrl-a s` deliberately
 shadows tmux's `choose-session`, which the sidebar already replaces.
+
+`Stage` groups sessions by the workflow stages you defined in `Ctrl-a W` — a
+session sits under the stage that claims its linked issue's status, with headers
+in your own stage order. Sessions with no linked issue, or whose status no stage
+claims, list flat below the stage groups. See [Issue tracking](issue-tracking.md).
 
 | Mode | Meaning |
 |------|---------|

@@ -9,6 +9,7 @@ import {
   GROUP_MODES, SORT_MODES, FILTER_MODES,
   groupModeLabel, sortModeLabel, filterModeLabel, migrateLegacySort,
   type GroupMode, type SortMode, type FilterMode, type LegacySortMode,
+  type StageBucket,
 } from "./sidebar-sort";
 import { buildFooter, layoutFooter, type FooterModel } from "./footer";
 import { CommandPalette } from "./command-palette";
@@ -42,7 +43,7 @@ import { StdinGate } from "./stdin-gate";
 import { TmuxControl, type ControlEvent } from "./tmux-control";
 import { DiffPanel } from "./diff-panel";
 import { InfoPanel, rebuildInfoPanelColors } from "./info-panel";
-import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, parkedStages, toggleParkedState, effectiveFilter, type PanelView } from "./panel-view";
+import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, parkedStages, toggleParkedState, effectiveFilter, stageForState, type PanelView } from "./panel-view";
 import { transformIssues, transformMrs, buildViewNodes, renderView, createViewState, filterItems, rebuildPanelViewColors, computeViewLayout, splitRatioForSepRow, DEFAULT_PANEL_SPLIT_RATIO, type ViewState, type ViewNode, type IssueSessionInfo } from "./panel-view-renderer";
 import { createAdapters } from "./adapters/registry";
 import { PollCoordinator } from "./adapters/poll-coordinator";
@@ -909,7 +910,7 @@ agentStateTracker.onChange((sessionId) => {
   sidebar.setAgentStateRecord(sessionId, record);
   // "Agent needs attention" is an unpark trigger, so a state change can pull a
   // session back out of the band.
-  recomputeParking();
+  recomputeSessionBands();
 
   // Mirror to snapshot if snapshotter is up.
   const sessionName = currentSessions.find((s) => s.id === sessionId)?.name;
@@ -1054,8 +1055,8 @@ const pollCoordinator = new PollCoordinator({
   onUpdate: (sessionName) => {
     sidebar.setSessionContexts(pollCoordinator.getAllContexts());
     // A poll is the main way a stage changes (and the only way an unpark
-    // signal arrives), so parking is re-derived on every one.
-    recomputeParking();
+    // signal arrives), so both bands are re-derived on every one.
+    recomputeSessionBands();
     checkMrTransitions();
     refreshPanelViews();
     if (sessionName === "__global__") refreshTeams();
@@ -1141,14 +1142,20 @@ function stageOfSession(name: string): WorkStage | null {
 }
 
 /**
- * Recompute which sessions belong in the Parked band. Cheap and idempotent, so
- * it can run on any signal that might change the answer (session list changes,
- * poll updates, agent-state changes, config edits).
+ * Recompute where each session sits in the sidebar: the Parked band, and the
+ * workflow stage it groups under. Cheap and idempotent, so it can run on any
+ * signal that might change the answer (session list changes, poll updates,
+ * agent-state changes, config edits).
+ *
+ * Both bands are derived from the same fact — the session's linked issue — so
+ * they are computed in one pass. Splitting them would mean two functions that
+ * always have to be called together, from every one of these call sites.
  */
-function recomputeParking(): void {
+function recomputeSessionBands(): void {
   const config = parkingConfig();
   const now = Date.now();
   const parked = new Set<string>();
+  const stages = new Map<string, StageBucket>();
   const live = new Set(currentSessions.map((s) => s.name));
 
   for (const session of currentSessions) {
@@ -1162,6 +1169,21 @@ function recomputeParking(): void {
     if (stored && !fresh) sessionState.setParkOverride(name, null);
 
     const ctx = pollCoordinator.getContext(name);
+
+    // The stage band: the session's linked issue, projected through the user's
+    // own stage definitions. Rank is the stage's position in `panelViews`,
+    // which is the priority order the workflow screen reorders — so the sidebar
+    // headers read top-to-bottom in the order they arranged their workflow.
+    const issue = ctx?.issues[0];
+    const stageView = issue ? stageForState(panelViews, issue.status) : null;
+    if (stageView) {
+      stages.set(name, {
+        id: stageView.id,
+        label: stageView.label,
+        rank: panelViews.indexOf(stageView),
+      });
+    }
+
     const baseline = parkBaselines.get(name);
     const parkCtx: ParkContext = {
       stage,
@@ -1199,6 +1221,7 @@ function recomputeParking(): void {
   }
 
   sidebar.setParkedSessions(parked);
+  sidebar.setSessionStages(stages);
 }
 
 // --- Status transitions ---
@@ -1360,7 +1383,7 @@ function toggleParked(name: string): void {
   } else {
     sessionState.setParkOverride(name, { manual: nowParked ? "unpark" : "park", atStage: stage });
   }
-  recomputeParking();
+  recomputeSessionBands();
   scheduleRender();
 }
 
@@ -1882,7 +1905,7 @@ async function fetchSessions(): Promise<void> {
       if (!knownSessions.has(name)) pollCoordinator.removeSession(name);
     }
     sidebar.setSessionContexts(pollCoordinator.getAllContexts());
-    recomputeParking();
+    recomputeSessionBands();
 
     // Prune state for dead sessions
     const liveNames = sessions.map((s) => s.name);
@@ -2374,11 +2397,13 @@ function persistViews(next: PanelView[]): void {
   configStore.set("panelViews", panelViews);
   if (pruned.length !== upNext.length) configStore.setPipeline("upNext", pruned);
   refreshPanelViews();
-  // Which statuses park is independent of tab membership, but a tab edit can
-  // still change what a session's issue resolves to. Cheap and idempotent, so
-  // it runs on any edit — and the workflow screen, which reports "parks its
-  // sessions (n now)" while you edit, would otherwise be quoting a stale n.
-  recomputeParking();
+  // A tab edit moves statuses between stages, which is exactly what the stage
+  // band groups on — and though which statuses *park* is independent of tab
+  // membership, an edit can still change what a session's issue resolves to.
+  // Cheap and idempotent, so it runs on any edit — and the workflow screen,
+  // which reports "parks its sessions (n now)" while you edit, would otherwise
+  // be quoting a stale n.
+  recomputeSessionBands();
   scheduleRender();
 }
 
@@ -3833,7 +3858,7 @@ function workflowBands(tier: SettingsTier): WorkflowBand[] {
             const at = cur.indexOf(id as UnparkTrigger);
             if (at >= 0) cur.splice(at, 1); else cur.push(id as UnparkTrigger);
             configStore.setPipeline("unparkOn", cur);
-            recomputeParking();
+            recomputeSessionBands();
           },
         },
         {
@@ -3846,7 +3871,7 @@ function workflowBands(tier: SettingsTier): WorkflowBand[] {
           onTextCommit: (v: string) => {
             const n = parseInt(v, 10);
             configStore.setPipeline("autoParkIdleDays", isNaN(n) || n <= 0 ? null : n);
-            recomputeParking();
+            recomputeSessionBands();
           },
         },
       ],
@@ -3879,7 +3904,7 @@ function buildWorkflowPort(): WorkflowPort {
     getParkedStates: parkedStates,
     toggleParked: (state) => {
       configStore.setPipeline("parkedStates", toggleParkedState(parkedStates(), state));
-      recomputeParking();
+      recomputeSessionBands();
     },
     getUpNext: () => configStore.config.pipeline?.upNext ?? [],
     toggleUpNext: (viewId) => {
@@ -4520,6 +4545,9 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       panelViews = parseViews(configStore.config.panelViews);
       viewStates.set(id, createViewState());
       refreshPanelViews();
+      // A saved view is a new stage as far as the sidebar is concerned, so the
+      // stage band has to be re-derived against it.
+      recomputeSessionBands();
       scheduleRender();
     });
     return;

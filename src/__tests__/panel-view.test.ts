@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { parseViews, DEFAULT_VIEWS, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, stateIndexInView, stateAssignments, assignStateToView, moveStateInView, unassignState, createView, renameView, moveView, deleteView, parkedStages, toggleParkedState, isParkedState, effectiveFilter, suggestLayout, type PanelView } from "../panel-view";
+import { parseViews, DEFAULT_VIEWS, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, stateIndexInView, stateAssignments, stageForState, assignStateToView, moveStateInView, unassignState, createView, renameView, moveView, deleteView, parkedStages, toggleParkedState, isParkedState, effectiveFilter, suggestLayout, type PanelView } from "../panel-view";
 import type { WorkStage } from "../repo-settings";
 
 describe("parseViews", () => {
@@ -319,6 +319,50 @@ describe("stateAssignments", () => {
 
   test("a stage with no statuses contributes nothing", () => {
     expect(stateAssignments(DEFAULT_VIEWS)).toEqual([]);
+  });
+});
+
+describe("stageForState", () => {
+  const views = () => parseViews([
+    { id: "todo", label: "To do", source: "issues", filter: { scope: "assigned" },
+      states: ["Todo", "Backlog"] },
+    { id: "review", label: "In review", source: "issues", filter: { scope: "assigned" },
+      states: ["In Review"] },
+    { id: "my-mrs", label: "My MRs", source: "mrs", filter: { scope: "authored" } },
+  ]);
+
+  test("finds the stage that lists the status", () => {
+    expect(stageForState(views(), "In Review")?.id).toBe("review");
+    expect(stageForState(views(), "Backlog")?.id).toBe("todo");
+  });
+
+  test("matches case- and whitespace-insensitively, like every other state compare", () => {
+    expect(stageForState(views(), "  in review  ")?.id).toBe("review");
+    expect(stageForState(views(), "TODO")?.id).toBe("todo");
+  });
+
+  test("returns null for a status no stage lists", () => {
+    expect(stageForState(views(), "Duplicate")).toBeNull();
+  });
+
+  test("returns null for a blank status rather than matching an empty entry", () => {
+    expect(stageForState(views(), "")).toBeNull();
+    expect(stageForState(views(), "   ")).toBeNull();
+  });
+
+  test("MR tabs carry no statuses, so they never claim one", () => {
+    expect(stageForState(views(), "My MRs")).toBeNull();
+    expect(stageForState(DEFAULT_VIEWS, "Todo")).toBeNull();
+  });
+
+  test("first stage wins when a status is listed twice — deterministic, not arbitrary", () => {
+    // assignStateToView enforces one home per status; this only keeps a
+    // hand-edited config resolving the same way every time.
+    const dupes = parseViews([
+      { id: "a", label: "A", source: "issues", filter: { scope: "assigned" }, states: ["Todo"] },
+      { id: "b", label: "B", source: "issues", filter: { scope: "assigned" }, states: ["Todo"] },
+    ]);
+    expect(stageForState(dupes, "Todo")?.id).toBe("a");
   });
 });
 
