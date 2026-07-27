@@ -199,6 +199,9 @@ two settings: which stage it belongs to (`↵`) and whether it parks (`space`).
 `u` puts a stage in the `Ctrl-a u` rotation, `⇧↑↓` reorders, `d` removes. The
 line above the keys says what the selected row will actually do.
 
+A stage holding more than one status groups its issues under those status names
+in the panel; a stage holding one draws no subheading. Nothing to configure.
+
 With the info panel focused (`Shift-Right`), `F` narrows the focused tab by
 label or priority, and the palette's **Save current view as tab** clones it
 under a new name.

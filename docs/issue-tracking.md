@@ -389,16 +389,16 @@ Workflow                                    Linear · 25 statuses · 9 unmapped
     + New stage
 
   Statuses ─────────────────────────────────────────────────────────────
-    Status                     Heading  Stage            Parks  Issues
-    Release Blockers                    Urgent                       0
-    To do                               To do                        5
-    In Progress                         In Progress                  9
-    QA (PRE-RELEASE WEB)       In QA    Waiting            ⏸        19
-    QA (RELEASE BR)            In QA    Waiting            ⏸         8
-    Backlog                             —                            5
+    Status                     Stage                     Parks  Issues
+    Release Blockers           Urgent                                0
+    To do                      To do                                 5
+    In Progress                In Progress                           9
+    QA (PRE-RELEASE WEB)       Waiting                     ⏸        19
+    QA (RELEASE BR)            Waiting                     ⏸         8
+    Backlog                    —                                     5
 
   QA (RELEASE BR) · 8 issues · Waiting · parks its sessions (3 now)
-  ↑↓ move · ↵ stage · space parks · r heading · d remove · ⇧↑↓ order · esc close
+  ↑↓ move · ↵ stage · space parks · d remove · ⇧↑↓ order · esc close
 ```
 
 Every row in the table is the same kind of thing and takes the same keys. The
@@ -410,7 +410,6 @@ including when it will do nothing.
 | `↑` `↓` | move the cursor | | |
 | `Enter` | choose its stage | rename the stage | edit |
 | `space` | park / don't park | — | — |
-| `r` | group it under a heading | — | — |
 | `u` | — | add to / drop from the `Ctrl-a u` rotation | — |
 | `d` | take it out of its stage | delete the stage (asks first) | clear a repo override |
 | `⇧↑` `⇧↓` | reorder within its stage | reorder the stage | — |
@@ -429,14 +428,26 @@ Merge-request tabs (`source: "mrs"`) are listed in the first block too, marked
 *not a stage* — they are panel tabs with no statuses to map. The screen shows
 them so it matches the panel's tab bar rather than pretending they don't exist.
 
-### Headings
+### Subheadings in the panel
 
-Several statuses can share a heading inside a stage — press `r` on a status and
-give it the same name as another. In the panel they then render under one
-subheading instead of one each. The **Heading** column only appears at all when
-your config actually groups something, so a workspace that has never grouped
-never sees it. A heading is grouping only: it carries no behaviour, so there is
-never a reason to reason about one to predict what jmux will do.
+A stage holding more than one status groups its issues under those status names,
+with a count each:
+
+```
+▾ QA (PRE-RELEASE WEB) (19)
+    TRA-1241  Dashboard POC (baseline qa Diana)
+    …
+▾ QA (RELEASE BR) (8)
+    …
+```
+
+A stage holding a single status draws no subheading at all — the tab already
+names it, and a heading repeating it would be a row that says nothing.
+
+There is nothing to configure here. There used to be a **Heading** you named by
+hand, so that several statuses could share one; in practice its name only ever
+restated the status inside it, which is one more thing to name, maintain and get
+wrong for a result the status names already give you.
 
 ### Tracker categories
 
@@ -517,22 +528,18 @@ jmux ctl issue create --title "Fix flaky test" --start   # capture and start
 
 Tabs are an attention model — **Urgent / To do / In Progress / Waiting** — and
 what varies per workspace is which of *your* tracker states roll up into each. A
-stage carries an ordered `sections` list; which of its statuses park is a
-separate list under `pipeline`:
+stage carries an ordered `states` list; which of its statuses park is a separate
+list under `pipeline`:
 
 ```json
 { "id": "waiting", "label": "Waiting", "source": "issues",
   "filter": { "scope": "assigned" },
-  "sections": [
-    { "label": "In QA",   "states": ["QA (PROD WEB)", "QA (RELEASE BR)"] },
-    { "label": "Blocked", "states": ["Need ANDR Build"] }
-  ] }
+  "states": ["QA (PROD WEB)", "QA (RELEASE BR)", "Need ANDR Build"] }
 ```
 
-When `sections` is present it drives **both** membership and the panel's
-headers, and `groupBy` is ignored. Config order is priority order — rendered
-verbatim rather than sorted. An issue lands in the **first** section claiming its
-status, and a status no section claims is not in that stage at all.
+When `states` is present it drives **both** membership and the panel's
+subheadings, and `groupBy` is ignored. Config order is priority order — rendered
+verbatim rather than sorted. A status the stage does not list is not in it at all.
 
 **You don't have to write that by hand.** `Ctrl-a W` lists every status in a
 table with its stage beside it. Assigning a status moves it out of wherever it

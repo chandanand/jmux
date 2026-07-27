@@ -102,14 +102,14 @@ Workflow                                    Linear · 25 statuses · 9 unmapped
     + New stage
 
   Statuses ───────────────────────────────────────────────────────────
-    Status                     Heading  Stage            Parks  Issues
-    Release Blockers                    Urgent                       0
-    To do                               To do                        5
-    QA (PRE-RELEASE WEB)       In QA    Waiting            ⏸        19
-    Backlog                             —                            5
+    Status                     Stage                     Parks  Issues
+    Release Blockers           Urgent                                0
+    To do                      To do                                 5
+    QA (PRE-RELEASE WEB)       Waiting                     ⏸        19
+    Backlog                    —                                     5
 
   QA (PRE-RELEASE WEB) · 19 issues · Waiting · parks its sessions (3 now)
-  ↑↓ move · ↵ stage · space parks · r heading · d remove · ⇧↑↓ order · esc close
+  ↑↓ move · ↵ stage · space parks · d remove · ⇧↑↓ order · esc close
 ```
 
 Two blocks: your stages, then a table of every status your tracker offers. Each status has exactly two settings — which stage it belongs to (`Enter`) and whether it parks (`space`) — and they're independent, so a status can park while belonging to no stage at all. The line above the keys tells you what the selected row will actually do, including when it will do nothing.
