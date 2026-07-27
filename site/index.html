@@ -604,38 +604,34 @@
   <div class="wrap">
     <div class="animate-in"><div class="eyebrow">Team workflow orchestration <span class="new">NEW</span></div>
     <h2>The workflow is your team's.<br><em>The orchestration</em> is jmux's.</h2>
-    <p class="lead" style="margin:20px auto 0;max-width:600px">Your team already keeps Linear current. jmux reads those same statuses and runs your terminal from them — what stays in your working set, what drops out of the way, what you pick up next. <strong style="color:var(--ink)">No second list to maintain.</strong></p></div>
+    <p class="lead" style="margin:20px auto 0;max-width:650px">Your tracker has 25 statuses named for someone else's process. You think in four. So you <strong style="color:var(--ink)">define your own workflow stages</strong> — Urgent, To do, In Progress, Waiting — and sit each one on top of one or many of your tracker's statuses. jmux runs your terminal from your ladder, not theirs.</p></div>
     <div class="term screen">
       <div class="bar"><span class="d" style="background:#ff5f56"></span><span class="d" style="background:#ffbd2e"></span><span class="d" style="background:#27c93f"></span><small>workflow</small></div>
-      <div class="body"><span class="hd">Workflow</span>                   <span class="dim">Linear · 25 statuses · 10 not in a tab</span>
+      <div class="body"><span class="hd">Workflow</span>                        <span class="dim">Linear · 25 statuses · 9 unmapped</span>
 
-<span class="dim">Tabs ────────────────────────────────────────────────────────────</span>
+<span class="dim">Your workflow ───────────────────────────────────────────────────</span>
     Urgent ······························ 1st up next  2 statuses
-    To do ······························· 2nd up next  2 statuses
-    Waiting ····································· <span class="pk">&#x23F8;&#xFE0E;</span> 9  9 statuses
-    <span class="dim">+ New tab</span>
+    To do ······························· 2nd up next  3 statuses
+    Waiting ····································· <span class="pk">&#x23F8;&#xFE0E;</span> 8  8 statuses
+    <span class="dim">+ New stage</span>
 
 <span class="dim">Statuses ────────────────────────────────────────────────────────</span>
-    <span class="dim">Status                Heading  Tab             Parks   Issues</span>
+    <span class="dim">Status                Heading  Stage           Parks   Issues</span>
     Release Blockers               Urgent                       0
-    To do                          To do                        4
+    To do                          To do                        5
   <span class="sel">▸</span> QA (PRE-RELEASE WEB)  In QA    Waiting           <span class="pk">&#x23F8;&#xFE0E;</span>         19
     QA (RELEASE BR)       In QA    Waiting           <span class="pk">&#x23F8;&#xFE0E;</span>          8
-    MR Review                      Waiting           <span class="pk">&#x23F8;&#xFE0E;</span>          5
     Backlog                        —                            5
 
-<span class="dim">Parking ─────────────────────────────────────────────────────────</span>
-    Bring a session back when ······ comment, MR, pipeline, agent
-
 <span class="sel">QA (PRE-RELEASE WEB) · 19 issues · Waiting · parks its sessions (3 now)</span>
-<span class="dim">↑↓ move · ↵ tab · space parks · r heading · d remove · esc close</span></div>
+<span class="dim">↑↓ move · ↵ stage · space parks · r heading · d remove · esc close</span></div>
     </div>
-    <p class="termcap"><span class="kbd">Ctrl-a W</span> — your tabs, then every status your tracker offers, with two settings each: which tab it appears in, and whether work in it has left your hands.</p>
+    <p class="termcap"><span class="kbd">Ctrl-a W</span> — your stages, then every status your tracker offers. Two settings each: which stage it belongs to, and whether its work has left your hands.</p>
     <p class="termcap" style="margin-top:22px"><a href="https://github.com/jarredkenny/jmux/blob/main/docs/issue-tracking.md#the-work-pipeline" target="_blank" rel="noopener" class="link-u">Read the work-pipeline guide →</a></p>
     <div class="ecogrid" style="margin-top:48px">
       <div class="ecocard animate-in"><div class="nm">Handed-off work parks</div><div class="tg">automatic</div><p>In review, in QA, blocked on a teammate — that session drops into one <span class="mono">Parked (n)</span> row. Nothing is killed.</p></div>
       <div class="ecocard animate-in"><div class="nm">And comes back</div><div class="tg">reversible</div><p>The issue moves, someone comments, the MR is touched, a pipeline goes red. It returns flagged, without you watching.</p></div>
-      <div class="ecocard animate-in"><div class="nm">Pull the next thing</div><div class="tg">on demand</div><p><span class="mono">Ctrl-a u</span> takes the top of your queue and does the whole ticket-to-worktree-to-agent dance.</p></div>
+      <div class="ecocard animate-in"><div class="nm">Pull the next thing</div><div class="tg">on demand</div><p><span class="mono">Ctrl-a u</span> takes the top of your first non-empty stage and does the whole ticket-to-worktree-to-agent dance.</p></div>
       <div class="ecocard animate-in"><div class="nm">Progress, reported for you</div><div class="tg">opt-in</div><p>Move an issue along when work starts, an MR opens, or it merges — with <span class="mono">^a Z</span> to undo. Off until you say so.</p></div>
     </div>
   </div>
@@ -650,7 +646,7 @@
       <p class="lead">Two signals meet in one list. Agent state comes from Claude Code's hooks and telemetry; parked comes from your team's tracker. The sidebar sorts by both — so the thing waiting on a human is at the top, and the thing waiting on someone else is out of sight.</p>
       <ul class="points">
         <li><strong>Headers rank by urgency, not alphabet</strong> — <span class="kbd">Ctrl-a G</span> groups by state and the bands land in a fixed order: Needs you, Running, Active, Done, Idle. No hunting.</li>
-        <li><strong>Handed-off work sinks to the bottom</strong> — one collapsed <span class="mono" style="color:var(--ink)">Parked (9)</span> band, fed by the statuses you ticked on the workflow screen. Still one keypress from open.</li>
+        <li><strong>Handed-off work sinks to the bottom</strong> — one collapsed <span class="mono" style="color:var(--ink)">Parked (8)</span> band, fed by the statuses you ticked on the workflow screen. Still one keypress from open.</li>
         <li><strong>Or group by project</strong> — every worktree of a repo under one header. Sort within any group by name, activity, or state with <span class="kbd">Ctrl-a s</span>.</li>
         <li><strong>Narrow to the live ones</strong> — <span class="kbd">Ctrl-a f</span> filters to <em>Needs you</em> or <em>Active</em> when a twenty-session day gets loud.</li>
       </ul>
