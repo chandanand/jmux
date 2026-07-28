@@ -6,6 +6,7 @@ import type { PanelView } from "./panel-view";
 import type { TabEntry } from "./glass/tabs";
 import type { RepoSettings } from "./repo-settings";
 import type { UnparkTrigger } from "./parking";
+import type { ScreenSignature } from "./agent-screen";
 import { migrateLegacyConfig } from "./repo-settings";
 import { logError } from "./log";
 
@@ -68,6 +69,17 @@ export interface JmuxConfig {
   autoPinAgentPanes?: boolean;
   /** Case-insensitive regex matched against pane_current_command for auto-pin (e.g. Codex). */
   agentPaneCommandRegex?: string;
+  /**
+   * Derive agent state by reading pane text, for agents with no hook or
+   * extension integration. Off by default: a screen signature can be
+   * confidently wrong in a way a hook cannot, so it is opt-in.
+   */
+  agentScreenDetection?: boolean;
+  /**
+   * Extra screen signatures, merged ahead of the built-in table so a user entry
+   * wins for the same command. Patterns are case-insensitive regex sources.
+   */
+  agentScreenSignatures?: ScreenSignature[];
   projectDirs?: string[];
   diffPanel?: {
     splitRatio?: number;

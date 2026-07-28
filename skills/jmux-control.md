@@ -248,9 +248,11 @@ jmux ctl pane capture --target %12 --raw
 
 ### agent state
 ```json
-{"agents": [{"session": "TRA-123", "sessionId": "$1", "state": "running", "since": 1781480000, "ageSeconds": 123, "agentPane": "%12", "activePane": "%12", "path": "/repo/worktree"}]}
+{"agents": [{"session": "TRA-123", "sessionId": "$1", "state": "running", "since": 1781480000, "ageSeconds": 123, "agentPane": "%12", "activePane": "%12", "path": "/repo/worktree", "kind": "claude"}]}
 ```
-`agentPane` is the pane actually running Claude (set by the hooks) — target it for `pane send-keys`. It is `null` if the hooks predate this option (re-run `jmux --install-agent-hooks`); fall back to `activePane`, which is the session's active pane and can drift after splits.
+`agentPane` is the pane actually running the agent (set by its emitter) — target it for `pane send-keys`. It is `null` if no agent has reported yet (re-run `jmux --install-agent-hooks`); fall back to `activePane`, which is the session's active pane and can drift after splits.
+
+`state` is rolled up across the session's panes: `waiting` beats `running` beats `complete`, so a session running two agents reports the one that most needs attention. `kind` (`claude` / `codex` / `pi`, or `null` for an unrecognised reporter) tells you which agent produced that state. Note pi never reports `waiting` — its API exposes no permission event, so a pi pane blocked on you still shows `running`.
 
 ### agent watch (one JSON line per change)
 ```json

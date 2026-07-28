@@ -6,6 +6,7 @@ import { INTERNAL_SESSION_FILTER } from "../glass/internal-sessions";
 import { SessionState, type SessionLink } from "../session-state";
 import { type CtlAgentState } from "./agent";
 import { US, splitFields } from "../tmux-fields";
+import { outranks } from "../agent-state-rollup";
 import type { CliContext } from "./context";
 import type { ParsedCtlArgs } from "../cli";
 
@@ -24,8 +25,16 @@ export interface StatusSessionRow {
   attentionReason: string;
   linearIssue: string;
   path: string;
+  /** True for the session's active pane, whose path represents the session. */
+  active: boolean;
 }
 
+/**
+ * Queried per pane, not per session: agent state is a pane option now. Every
+ * other field here is a session option (or the active pane's path), and a
+ * pane-context read of a session option inherits, so all panes of a session
+ * agree on them — {@link collapseStatusRows} keeps whichever it needs.
+ */
 const STATUS_FORMAT = [
   "#{session_id}",
   "#{session_name}",
@@ -35,11 +44,12 @@ const STATUS_FORMAT = [
   "#{@jmux-attention-reason}",
   "#{@jmux-linear-issue}",
   "#{pane_current_path}",
+  "#{pane_active}",
 ].join(US);
 
 export function parseStatusLine(line: string): StatusSessionRow | null {
   const p = splitFields(line);
-  if (p.length < 8) return null;
+  if (p.length < 9) return null;
   return {
     id: p[0],
     name: p[1],
@@ -49,7 +59,49 @@ export function parseStatusLine(line: string): StatusSessionRow | null {
     attentionReason: p[5],
     linearIssue: p[6],
     path: p[7],
+    active: p[8] === "1",
   };
+}
+
+function parseSince(raw: string): number | null {
+  const seconds = Number(raw);
+  if (!raw || !Number.isFinite(seconds) || seconds <= 0) return null;
+  return Math.floor(seconds);
+}
+
+/**
+ * Collapse pane rows to one row per session, with the most urgent agent state
+ * winning and the active pane supplying the session's path.
+ */
+export function collapseStatusRows(rows: StatusSessionRow[]): StatusSessionRow[] {
+  const bySession = new Map<string, StatusSessionRow>();
+
+  for (const row of rows) {
+    const existing = bySession.get(row.id);
+    if (!existing) {
+      // Seed with no agent state; the loop below re-applies this row's own
+      // state through the same precedence check as every sibling.
+      bySession.set(row.id, { ...row, agentState: "", agentSince: "" });
+    } else if (row.active) {
+      existing.path = row.path;
+      existing.active = true;
+    }
+
+    const target = bySession.get(row.id)!;
+    if (!VALID_AGENT_STATES.has(row.agentState)) continue;
+    const candidate = {
+      state: row.agentState as CtlAgentState,
+      since: parseSince(row.agentSince),
+    };
+    const best = VALID_AGENT_STATES.has(target.agentState)
+      ? { state: target.agentState as CtlAgentState, since: parseSince(target.agentSince) }
+      : null;
+    if (!outranks(candidate, best)) continue;
+    target.agentState = row.agentState;
+    target.agentSince = row.agentSince;
+  }
+
+  return [...bySession.values()];
 }
 
 export interface StatusLink {
@@ -160,11 +212,14 @@ function gitBranch(path: string): string | null {
 }
 
 export function handleStatus(ctx: CliContext, _parsed: ParsedCtlArgs): unknown {
-  const result = runTmuxDirect(["list-sessions", "-f", INTERNAL_SESSION_FILTER, "-F", STATUS_FORMAT], ctx.socket);
+  const result = runTmuxDirect(
+    ["list-panes", "-a", "-f", INTERNAL_SESSION_FILTER, "-F", STATUS_FORMAT],
+    ctx.socket,
+  );
   const lines = result.ok ? result.lines : [];
-  const rows = lines
-    .map(parseStatusLine)
-    .filter((r): r is StatusSessionRow => r !== null);
+  const rows = collapseStatusRows(
+    lines.map(parseStatusLine).filter((r): r is StatusSessionRow => r !== null),
+  );
 
   const config = loadUserConfig();
   const pinnedNames = new Set(config.pinnedSessions ?? []);

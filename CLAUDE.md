@@ -23,7 +23,7 @@ bun run src/main.ts ctl session list     # List sessions (JSON)
 
 There is no build step for running — `bin/jmux` is `import "../src/main.ts"`. The `dist/` dir is only produced by `tsc` and is not shipped in the npm package (see `package.json` `files`).
 
-The published binary is installed with `bun install -g @jx0/jmux`. The `jmux --install-agent-hooks` subcommand writes a `Stop` hook into `~/.claude/settings.json` that sets the tmux `@jmux-attention` option — this is how the orange `!` indicator appears when Claude Code finishes a response.
+The published binary is installed with `bun install -g @jx0/jmux`. The `jmux --install-agent-hooks` subcommand installs state emitters into every supported agent found on the machine — see "Agent state tracking" below.
 
 ## Architecture
 
@@ -94,6 +94,59 @@ The skill file `skills/jmux-control.md` documents usage patterns for agents — 
 ### Diff panel
 
 **`src/diff-panel.ts`** provides an integrated hunk diff viewer that docks to the right side of the terminal or zooms to full width. It spawns an external `hunk` process and captures its output. The panel has focus toggling (keyboard input routes to hunk when focused) and survives session switches by re-spawning.
+
+### Agent state tracking
+
+The sidebar's RUNNING / WAITING / COMPLETE badges come from four tmux user
+options. **The options are the protocol** — nothing downstream knows which agent
+wrote them, so supporting a new agent means adding an emitter, never touching
+the tracker.
+
+| Option | Scope | Written by | Meaning |
+| --- | --- | --- | --- |
+| `@jmux-agent-state` | **pane** | agent emitter | `running` / `waiting` / `complete` |
+| `@jmux-agent-state-since` | **pane** | agent emitter | epoch seconds, drives the elapsed timer |
+| `@jmux-agent-kind` | **pane** | agent emitter | `claude` / `codex` / `pi` |
+| `@jmux-agent-pane` | session | agent emitter | the pane to send keys to (`ctl agent state`) |
+
+Three things about this are easy to break:
+
+- **State is pane-scoped, and that is load-bearing.** A session can host several
+  agents in splits; a session-scoped option would let the last writer clobber
+  its siblings. `AgentStateTracker` keys on pane id and rolls panes up to a
+  session with `outranks()` (`agent-state-rollup.ts`) — waiting > running >
+  complete, ties to the earliest `since` so the timer tracks the oldest agent.
+  That helper is shared with `cli/agent.ts` and `cli/status.ts` so a session is
+  never summarised two different ways depending on who asked.
+- **A pane-context read of a session option inherits; `show-option -p` does
+  not.** This asymmetry is used deliberately in both directions. Inheritance is
+  what lets a session-scoped writer (an old install, or the snapshot restore
+  path) keep working with no flag day — every pane reports the session value and
+  the rollup collapses it back. The non-inheriting `show-option -p` is what the
+  idempotent `PreToolUse` guard reads, so a legacy install promotes itself to
+  pane scope on the first tool call.
+- **`@jmux-agent-kind` is the only trustworthy pane-level identity.** Because
+  `@jmux-agent-state` inherits, "session has state" is true of every pane in
+  that session including editors and shells. Nothing writes `kind` at session
+  scope, so it has no inheritance source. `glass/auto-detect.ts` depends on this.
+
+Emitters live in `src/agent-hooks/`. Claude Code and Codex share
+`json-hooks.ts` outright — Codex 0.145 accepts the same PascalCase event names
+in the same document shape, just at `~/.codex/hooks.json`. Codex additionally
+needs `[features] hooks = true` (`codex-toml.ts` splices it in and re-parses to
+verify before writing) and prompts the user to trust new hooks; jmux does not
+synthesise those `trusted_hash` values. pi has no shell hooks at all, so
+`pi-extension.ts` is shipped as an asset and registered in pi's
+`settings.extensions`. **pi cannot report `waiting`** — its extension API
+exposes no permission event — which is what `AgentIntegration.reports` records.
+
+`agent-screen.ts` is the last-resort tier for agents with no integration at all:
+it reads pane text and matches per-agent regex signatures. It is opt-in
+(`agentScreenDetection`), its table is config-extendable, and `screenTierMayWrite`
+forbids it from overwriting a state the agent reports itself — a guess must
+never displace a fact. Only add a built-in signature you have read off a real
+terminal; an unverified pattern produces a confident wrong answer instead of an
+honest blank.
 
 ### OTEL receiver
 

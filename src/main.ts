@@ -106,9 +106,10 @@ import { OtelReceiver } from "./otel-receiver";
 import { computeFrameLayout, sidebarBottomRow, type FrameLayout } from "./frame-layout";
 import { AgentStateTracker, coerceStaleAgentState } from "./agent-state";
 import { logError } from "./log";
-import { installHooks, type ClaudeSettings } from "./hook-installer";
+import { installAllAgents, screenTierMayWrite } from "./agent-hooks/registry";
+import { BUILTIN_SIGNATURES, classifyPaneScreen, compileSignatures, hasSignatureFor } from "./agent-screen";
 import { resolve, dirname } from "path";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from "fs";
+import { writeFileSync, existsSync, mkdirSync, appendFileSync } from "fs";
 import { homedir } from "os";
 import pkg from "../package.json" with { type: "json" };
 
@@ -182,7 +183,7 @@ Usage:
 Options:
   -L, --socket <name>      Use a separate tmux server socket
   --demo                   Run in demo mode with mock data
-  --install-agent-hooks    Install Claude Code attention flag hooks
+  --install-agent-hooks    Install agent state hooks (Claude Code, Codex, pi)
   -v, --version            Show version
   -h, --help               Show this help
 
@@ -190,7 +191,7 @@ Examples:
   jmux                     Start with default session
   jmux my-project          Start with named session
   jmux -L work             Use isolated tmux server
-  jmux --install-agent-hooks  Set up Claude Code integration
+  jmux --install-agent-hooks  Set up agent state tracking
 
 Agent Control (JSON output):
   jmux ctl session list          List sessions
@@ -236,42 +237,29 @@ if (process.argv.includes("--install-agent-hooks")) {
 }
 
 function installAgentHooks(): void {
-  const claudeDir = resolve(homedir(), ".claude");
-  const settingsPath = resolve(claudeDir, "settings.json");
+  const reports = installAllAgents();
 
-  if (!existsSync(claudeDir)) {
-    mkdirSync(claudeDir, { recursive: true });
+  const touched = reports.filter((r) => r.kind === "installed" || r.kind === "migrated");
+  const failed = reports.filter((r) => r.kind === "failed");
+
+  for (const report of reports) {
+    const status =
+      report.kind === "skipped"
+        ? "not installed on this machine — skipped"
+        : report.kind === "noop"
+          ? "already up to date"
+          : report.kind === "failed"
+            ? "FAILED"
+            : report.kind;
+    console.log(`${report.label}: ${status}`);
+    for (const note of report.notes) console.log(`  ${note}`);
   }
 
-  let settings: ClaudeSettings = {};
-  if (existsSync(settingsPath)) {
-    try {
-      settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-    } catch {
-      console.error("Error: could not parse ~/.claude/settings.json");
-      process.exit(1);
-    }
-  }
-
-  const outcome = installHooks(settings);
-
-  if (outcome.kind === "noop") {
-    console.log("jmux agent hooks are already installed.");
-    return;
-  }
-
-  writeFileSync(settingsPath, JSON.stringify(outcome.settings, null, 2) + "\n");
-
-  if (outcome.kind === "migrated") {
-    console.log("Migrated jmux Stop hook to the new agent-state hooks");
-    console.log("(UserPromptSubmit, PermissionRequest, PreToolUse, Stop).");
-    console.log("Restart Claude Code in any open session to pick them up.");
-  } else {
-    console.log("Installed jmux agent hooks in ~/.claude/settings.json");
+  if (touched.length > 0) {
     console.log("");
-    console.log("Your jmux sidebar will now show RUNNING / WAITING / COMPLETE");
-    console.log("for each Claude Code session.");
+    console.log("Your jmux sidebar will show RUNNING / WAITING / COMPLETE per agent pane.");
   }
+  if (failed.length > 0) process.exit(1);
 }
 
 // --- Bun version gate (TUI requires Bun.markdown.ansi) ---
@@ -963,16 +951,27 @@ const otelReceiver = new OtelReceiver({
     const id = currentSessions.find((s) => s.name === sessionName)?.id;
     if (!id) return;
     if (agentStateTracker.getState(id) !== "waiting") return;
-    // Chain the two writes so we never leave the session with state=running
+    // Correct every pane of this session that is parked in `waiting`. This has
+    // to be a per-pane write: state is pane-scoped now, so a session-scoped
+    // set-option would be shadowed by any pane holding its own value and the
+    // stale `waiting` would survive.
+    const stuck = agentStateTracker.findPanesInState(id, "waiting");
+    if (stuck.length === 0) return;
+    // Chain the two writes so we never leave a pane with state=running
     // and since=stale-from-waiting. Fire-and-forget; failures are harmless.
     void (async () => {
-      try {
-        await control.sendCommand(`set-option -t ${tq(id)} @jmux-agent-state running`);
-        await control.sendCommand(
-          `set-option -t ${tq(id)} @jmux-agent-state-since ${Math.floor(Date.now() / 1000)}`,
-        );
-      } catch {
-        // Best-effort: control-channel failure leaves the previous state intact.
+      const since = Math.floor(Date.now() / 1000);
+      for (const paneId of stuck) {
+        try {
+          await control.sendCommand(
+            `set-option -p -t ${tq(paneId)} @jmux-agent-state running`,
+          );
+          await control.sendCommand(
+            `set-option -p -t ${tq(paneId)} @jmux-agent-state-since ${since}`,
+          );
+        } catch {
+          // Best-effort: control-channel failure leaves the previous state intact.
+        }
       }
     })();
   },
@@ -5241,6 +5240,15 @@ try {
       scheduleRender();
     }
 
+    // Hot-apply screen-signature detection: both the table and the on/off
+    // switch, so adding a signature takes effect without a restart.
+    screenSignatures = [
+      ...compileSignatures(updated.agentScreenSignatures),
+      ...compileSignatures(BUILTIN_SIGNATURES),
+    ];
+    if (updated.agentScreenDetection === true) startScreenScan();
+    else stopScreenScan();
+
     // Hot-apply agent-state indicator colors to sidebar + Command Center.
     const newStateColors = resolveStateColors(updated.stateColors);
     sidebar.setStateColors(newStateColors);
@@ -5594,24 +5602,165 @@ async function gitBranchForPath(cwd: string): Promise<string | null> {
   }
 }
 
+/**
+ * Agent state is read per *pane*, not per session, so two agents split into one
+ * session don't clobber each other. A pane-context read of `@jmux-agent-state`
+ * falls back to the session option when the pane has none of its own, which is
+ * what keeps session-scoped writers (an un-migrated agent integration, or the
+ * snapshot restore path) working unchanged — see AgentStateTracker's note.
+ */
+const AGENT_STATE_FORMAT = [
+  "#{pane_id}",
+  "#{session_id}",
+  "#{@jmux-agent-state}",
+  "#{@jmux-agent-state-since}",
+].join(US);
+
 async function fetchAgentState(): Promise<void> {
   const result = await control.sendCommand(
-    `list-sessions -f "${INTERNAL_SESSION_FILTER}" -F '#{session_id}:#{@jmux-agent-state}:#{@jmux-agent-state-since}'`,
+    `list-panes -a -f "${INTERNAL_SESSION_FILTER}" -F '${AGENT_STATE_FORMAT}'`,
   );
-  const activeIds: string[] = [];
+  const activePaneIds: string[] = [];
   for (const line of result) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const colon1 = trimmed.indexOf(":");
-    const colon2 = trimmed.indexOf(":", colon1 + 1);
-    if (colon1 < 0 || colon2 < 0) continue;
-    const id = trimmed.slice(0, colon1);
-    const rawState = trimmed.slice(colon1 + 1, colon2);
-    const rawSince = trimmed.slice(colon2 + 1);
-    activeIds.push(id);
-    agentStateTracker.apply(id, rawState || null, rawSince || null);
+    const [paneId, sessionId, rawState, rawSince] = splitFields(trimmed);
+    if (!paneId || !sessionId) continue;
+    activePaneIds.push(paneId);
+    agentStateTracker.apply(paneId, sessionId, rawState || null, rawSince || null);
   }
-  agentStateTracker.pruneExcept(activeIds);
+  agentStateTracker.pruneExcept(activePaneIds);
+}
+
+/**
+ * Screen-signature tier. Panes running an agent jmux has no integration for
+ * report nothing at all; this reads their visible text and writes the same tmux
+ * options a hook would, so everything downstream — tracker, rollup, sidebar,
+ * Command Center — is unchanged and unaware.
+ *
+ * `@jmux-agent-source screen` records the provenance so a derived state is
+ * distinguishable from one an agent actually reported.
+ */
+const SCREEN_SCAN_FORMAT = [
+  "#{pane_id}",
+  "#{pane_current_command}",
+  "#{@jmux-agent-kind}",
+  "#{@jmux-agent-state}",
+  "#{@jmux-agent-source}",
+].join(US);
+
+// Compiled separately rather than spread into one literal: the config value is
+// hand-edited JSON, and spreading a non-iterable like `{}` throws before
+// compileSignatures could sanitise it — at module scope, that is a boot failure.
+// User entries come first so they win for the same command.
+let screenSignatures = [
+  ...compileSignatures(configStore.config.agentScreenSignatures),
+  ...compileSignatures(BUILTIN_SIGNATURES),
+];
+let screenScanInterval: ReturnType<typeof setInterval> | null = null;
+let screenScanInFlight = false;
+
+/**
+ * Retract a screen-derived state. Only ever called for panes whose
+ * `@jmux-agent-source` is `screen`, so this can never erase a state an agent
+ * reported about itself.
+ */
+async function clearScreenState(paneId: string): Promise<void> {
+  await control
+    .sendCommand(
+      `set-option -pu -t ${tq(paneId)} @jmux-agent-state ; ` +
+        `set-option -pu -t ${tq(paneId)} @jmux-agent-state-since ; ` +
+        `set-option -pu -t ${tq(paneId)} @jmux-agent-source`,
+    )
+    .catch(() => {});
+}
+
+async function scanAgentScreens(): Promise<void> {
+  if (screenScanInFlight || screenSignatures.length === 0) return;
+  screenScanInFlight = true;
+  try {
+    const rows = await control.sendCommand(
+      `list-panes -a -f "${INTERNAL_SESSION_FILTER}" -F '${SCREEN_SCAN_FORMAT}'`,
+    );
+    for (const line of rows) {
+      if (!line.trim()) continue;
+      const [paneId, command, kind, currentState, source] = splitFields(line.trim());
+      if (!paneId) continue;
+
+      // Capturing is the expensive part — a whole screen buffer per pane per
+      // tick over the control channel. The command is already in hand, so skip
+      // every pane no signature could match rather than reading them all.
+      if (!hasSignatureFor(command ?? "", screenSignatures)) {
+        // A pane we previously classified has stopped running its agent (the
+        // command is now a shell). Nothing else will ever clear our write, so a
+        // stale badge would sit in the sidebar forever.
+        if (source === "screen") await clearScreenState(paneId);
+        continue;
+      }
+
+      const screen = await control
+        .sendCommand(`capture-pane -p -t ${tq(paneId)}`)
+        .catch(() => [] as string[]);
+      const derived = classifyPaneScreen(command ?? "", screen.join("\n"), screenSignatures);
+      if (derived === null) {
+        // Still an agent pane, but its screen no longer matches any state we
+        // know. Drop our stale guess rather than leaving it to rot.
+        if (source === "screen") await clearScreenState(paneId);
+        continue;
+      }
+      if (!screenTierMayWrite(kind ?? "", derived)) continue;
+
+      // Only rewrite on an actual transition. Re-asserting the same state every
+      // tick would reset @jmux-agent-state-since and destroy the elapsed timer,
+      // which is the same trap the PreToolUse hook guards against.
+      if (currentState === derived && source === "screen") continue;
+
+      const since = Math.floor(Date.now() / 1000);
+      await control
+        .sendCommand(
+          `set-option -p -t ${tq(paneId)} @jmux-agent-state ${derived} ; ` +
+            `set-option -p -t ${tq(paneId)} @jmux-agent-state-since ${since} ; ` +
+            `set-option -p -t ${tq(paneId)} @jmux-agent-source screen`,
+        )
+        .catch(() => {});
+    }
+  } catch {
+    // A failed scan is a missed tick, not an error worth surfacing.
+  } finally {
+    screenScanInFlight = false;
+  }
+}
+
+function startScreenScan(): void {
+  if (screenScanInterval || configStore.config.agentScreenDetection !== true) return;
+  screenScanInterval = setInterval(() => void scanAgentScreens(), 2000);
+}
+
+function stopScreenScan(): void {
+  if (!screenScanInterval) return;
+  clearInterval(screenScanInterval);
+  screenScanInterval = null;
+  // Retract everything the tier ever wrote. Without this, turning detection off
+  // freezes its last guesses on screen permanently — the scanner that would
+  // have corrected them is gone, and tmux outlives jmux, so the ghosts survive
+  // a restart too.
+  void purgeScreenStates();
+}
+
+/** Clear screen-derived state from every pane still carrying it. */
+async function purgeScreenStates(): Promise<void> {
+  try {
+    const rows = await control.sendCommand(
+      `list-panes -a -F '#{pane_id}${US}#{@jmux-agent-source}'`,
+    );
+    for (const line of rows) {
+      if (!line.trim()) continue;
+      const [paneId, source] = splitFields(line.trim());
+      if (paneId && source === "screen") await clearScreenState(paneId);
+    }
+  } catch {
+    // Best-effort cleanup; a failure here is not worth surfacing.
+  }
 }
 
 async function ensureParkSession(): Promise<void> {
@@ -5690,7 +5839,11 @@ function refreshPinnedPanes(): void {
   for (const paneId of orderedPaneIds) {
     const loc = state.live.get(paneId)!;
     const meta = labelByPane.get(paneId)!;
-    const agentState = agentStateTracker.getState(loc.sessionId);
+    // Per-pane, not the session rollup: each tile mirrors one agent, so a
+    // sibling agent blocked in another pane must not paint this tile WAITING.
+    // Falls back to the session value automatically for session-scoped writers,
+    // because the pane-context read inherits.
+    const agentState = agentStateTracker.getPaneState(paneId);
     const tabId = resolveTabId(pinnedTracker.getValue(paneId) ?? null, commandCenterTabs);
     entries.push({
       paneId,
@@ -5978,6 +6131,18 @@ async function start(): Promise<void> {
 
   startupComplete = true;
 
+  // Screen-signature tier for agents with no hook or extension integration.
+  //
+  // Purge first, unconditionally: tmux outlives jmux, so any derived state on
+  // disk is from a previous run and is stale by definition — the screen it was
+  // read from is long gone. Without this, state written before a quit or crash
+  // is permanent whenever detection is subsequently off, since the scanner that
+  // would retract it never starts. When detection *is* on, the scanner
+  // re-derives within one tick.
+  void purgeScreenStates();
+  // Opt-in, so this is a no-op unless the user turned it on.
+  startScreenScan();
+
   // --- Snapshotter wiring ---
   if (configStore.config.snapshot?.enabled !== false) {
     const {
@@ -6176,17 +6341,22 @@ async function start(): Promise<void> {
     openModal(welcomeModal, () => {});
   }
 
-  // Subscribe to per-session agent-state user options. Each subscription is a
-  // space-separated list of "<session_id>=<value>" pairs across all sessions.
+  // Subscribe to per-pane agent-state user options. These only ever act as a
+  // *trigger* — the payload is discarded and fetchAgentState() re-queries — so
+  // the format just has to change whenever any pane's value does.
+  //
+  // The nesting is required: `#{S:}` loops every session but `#{P:}` alone only
+  // covers panes of the *current window*, so a bare pane loop would silently
+  // miss every unfocused window. `#{S:#{W:#{P:}}}` enumerates the whole server.
   await control.registerSubscription(
     "agent-state",
     1,
-    "#{S:#{session_id}=#{@jmux-agent-state} }",
+    "#{S:#{W:#{P:#{pane_id}=#{@jmux-agent-state} }}}",
   );
   await control.registerSubscription(
     "agent-state-since",
     1,
-    "#{S:#{session_id}=#{@jmux-agent-state-since} }",
+    "#{S:#{W:#{P:#{pane_id}=#{@jmux-agent-state-since} }}}",
   );
 
   // Subscribe to window count + active window + name — fires on add/remove/switch/rename

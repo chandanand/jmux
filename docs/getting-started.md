@@ -349,7 +349,7 @@ Settings are saved to `~/.config/jmux/config.json` and most take effect immediat
 ## Next steps
 
 - Read the [cheat sheet](cheat-sheet.md) for a complete keybinding reference
-- Set up [Claude Code integration](claude-code-integration.md) for agent notifications
+- Set up [agent integration](agent-integration.md) for live Claude Code / Codex / pi state
 - Connect [Linear and GitLab](issue-tracking.md) for issue tracking and MR status in the panel
 - Try [wtm](https://github.com/jarredkenny/worktree-manager) for git worktree workflows
 - See [configuration](configuration.md) for advanced tmux config layering

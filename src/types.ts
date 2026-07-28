@@ -123,3 +123,20 @@ export interface AgentStateRecord {
   /** Epoch milliseconds. Converted from the seconds the hook writes. */
   since: number;
 }
+
+/**
+ * Which agent program a pane is running, as written by that agent's own
+ * integration into the per-pane `@jmux-agent-kind` option.
+ *
+ * Unlike `@jmux-agent-state`, nothing ever writes this at session scope, so it
+ * has no inheritance source — a non-empty value is proof *this* pane hosts an
+ * agent. That distinction is load-bearing for pane detection; see
+ * `glass/auto-detect.ts`.
+ */
+export type AgentKind = "claude" | "codex" | "pi";
+
+export const AGENT_KINDS: readonly AgentKind[] = ["claude", "codex", "pi"];
+
+export function isAgentKind(v: string): v is AgentKind {
+  return (AGENT_KINDS as readonly string[]).includes(v);
+}

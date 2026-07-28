@@ -2,6 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { US } from "../../tmux-fields";
 import {
   parseStatusLine,
+  collapseStatusRows,
   buildStatusSnapshot,
   type StatusSessionRow,
   type StatusInputs,
@@ -13,9 +14,9 @@ function row(parts: string[]): string {
 }
 
 describe("parseStatusLine", () => {
-  test("parses all eight fields, preserving an empty reason/issue", () => {
+  test("parses all nine fields, preserving an empty reason/issue", () => {
     const parsed = parseStatusLine(
-      row(["$1", "TRA-123", "running", "1781480000", "1", "ci failed", "", "/repo/wt"]),
+      row(["$1", "TRA-123", "running", "1781480000", "1", "ci failed", "", "/repo/wt", "1"]),
     );
     expect(parsed).toEqual({
       id: "$1",
@@ -26,6 +27,7 @@ describe("parseStatusLine", () => {
       attentionReason: "ci failed",
       linearIssue: "",
       path: "/repo/wt",
+      active: true,
     });
   });
 
@@ -35,7 +37,7 @@ describe("parseStatusLine", () => {
 
   test("parses tmux 3.4 output where the separator is octal-escaped (issue #7)", () => {
     // tmux 3.4 emits the literal text `\037` in place of the raw 0x1F byte.
-    const line = ["$1", "TRA-123", "running", "1781480000", "1", "ci failed", "", "/repo/wt"].join("\\037");
+    const line = ["$1", "TRA-123", "running", "1781480000", "1", "ci failed", "", "/repo/wt", "1"].join("\\037");
     expect(parseStatusLine(line)).toEqual({
       id: "$1",
       name: "TRA-123",
@@ -45,6 +47,7 @@ describe("parseStatusLine", () => {
       attentionReason: "ci failed",
       linearIssue: "",
       path: "/repo/wt",
+      active: true,
     });
   });
 });
@@ -73,6 +76,7 @@ describe("buildStatusSnapshot", () => {
     attentionReason: "",
     linearIssue: "",
     path: "/repo/wt",
+    active: true,
     ...o,
   });
 
@@ -141,5 +145,78 @@ describe("buildStatusSnapshot", () => {
     );
     expect(out.sessions[0].pinned).toBe(true);
     expect(out.sessions[0].branch).toBe("TRA-123-fix");
+  });
+});
+
+describe("collapseStatusRows", () => {
+  const row = (o: Partial<StatusSessionRow> & { id: string }): StatusSessionRow => ({
+    name: "s",
+    agentState: "",
+    agentSince: "",
+    attention: "",
+    attentionReason: "",
+    linearIssue: "",
+    path: "/p",
+    active: false,
+    ...o,
+  });
+
+  test("collapses several panes of one session into a single row", () => {
+    const out = collapseStatusRows([
+      row({ id: "$1", active: true }),
+      row({ id: "$1" }),
+      row({ id: "$1" }),
+    ]);
+    expect(out).toHaveLength(1);
+  });
+
+  test("the most urgent pane supplies the session's agent state", () => {
+    const out = collapseStatusRows([
+      row({ id: "$1", agentState: "complete", agentSince: "100" }),
+      row({ id: "$1", agentState: "waiting", agentSince: "200" }),
+      row({ id: "$1", agentState: "running", agentSince: "300" }),
+    ]);
+    expect(out[0].agentState).toBe("waiting");
+    expect(out[0].agentSince).toBe("200");
+  });
+
+  test("ties resolve to the earliest since", () => {
+    const out = collapseStatusRows([
+      row({ id: "$1", agentState: "running", agentSince: "500" }),
+      row({ id: "$1", agentState: "running", agentSince: "100" }),
+    ]);
+    expect(out[0].agentSince).toBe("100");
+  });
+
+  test("the active pane supplies the session path", () => {
+    const out = collapseStatusRows([
+      row({ id: "$1", path: "/inactive" }),
+      row({ id: "$1", path: "/active", active: true }),
+    ]);
+    expect(out[0].path).toBe("/active");
+  });
+
+  test("a session whose panes report nothing keeps an empty state", () => {
+    const out = collapseStatusRows([row({ id: "$1", active: true })]);
+    expect(out[0].agentState).toBe("");
+    expect(out[0].agentSince).toBe("");
+  });
+
+  test("an unknown state string never wins over a valid one", () => {
+    const out = collapseStatusRows([
+      row({ id: "$1", agentState: "running", agentSince: "100" }),
+      row({ id: "$1", agentState: "bogus", agentSince: "200" }),
+    ]);
+    expect(out[0].agentState).toBe("running");
+  });
+
+  test("sessions stay separate and preserve session-scoped fields", () => {
+    const out = collapseStatusRows([
+      row({ id: "$1", name: "a", agentState: "waiting", agentSince: "1", attention: "1", attentionReason: "ci", active: true }),
+      row({ id: "$2", name: "b", agentState: "running", agentSince: "1", linearIssue: "TRA-9", active: true }),
+    ]);
+    expect(out).toHaveLength(2);
+    expect(out.find((r) => r.id === "$1")?.attentionReason).toBe("ci");
+    expect(out.find((r) => r.id === "$2")?.linearIssue).toBe("TRA-9");
   });
 });

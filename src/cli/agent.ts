@@ -2,6 +2,7 @@ import { runTmuxDirect } from "./tmux";
 import { INTERNAL_SESSION_FILTER } from "../glass/internal-sessions";
 import { CliError, type CliContext } from "./context";
 import { US, splitFields } from "../tmux-fields";
+import { outranks } from "../agent-state-rollup";
 import type { ParsedCtlArgs } from "../cli";
 
 export type CtlAgentState = "running" | "waiting" | "complete";
@@ -29,6 +30,29 @@ export interface AgentRecord {
   /** The session's currently active pane — a best-effort fallback only. */
   activePane: string | null;
   path: string | null;
+  /**
+   * Which agent program reported the winning state (`@jmux-agent-kind`), or
+   * null when the state came from a session-scoped writer that predates the
+   * per-agent integrations.
+   */
+  kind: string | null;
+}
+
+/**
+ * One pane's raw contribution. Agent state is a *pane* option now — a session
+ * can host several agents in splits — so this reads panes and rolls them up
+ * rather than asking tmux for a per-session value that no longer exists.
+ */
+export interface AgentPaneRow {
+  sessionId: string;
+  session: string;
+  state: CtlAgentState | null;
+  since: number | null;
+  agentPane: string | null;
+  paneId: string | null;
+  path: string | null;
+  active: boolean;
+  kind: string | null;
 }
 
 const AGENT_FORMAT = [
@@ -39,33 +63,23 @@ const AGENT_FORMAT = [
   "#{@jmux-agent-pane}",
   "#{pane_id}",
   "#{pane_current_path}",
+  "#{pane_active}",
+  "#{@jmux-agent-kind}",
 ].join(US);
 
 /**
- * Parse one `list-sessions -F` line into an AgentRecord. Pure — `nowSeconds`
- * is injected so age computation is deterministic in tests.
+ * Parse one `list-panes -F` line. Pure — `nowSeconds` is injected so age
+ * computation is deterministic in tests.
  *
- * tmux renders an unset user option as an empty string, so an agent that never
+ * tmux renders an unset user option as an empty string, so a pane that never
  * fired a hook yields `state: null` rather than a bogus record.
  */
-export function parseAgentStateLine(
-  line: string,
-  nowSeconds: number,
-): AgentRecord | null {
+export function parseAgentPaneLine(line: string): AgentPaneRow | null {
   const parts = splitFields(line);
-  if (parts.length < 7) return null;
+  if (parts.length < 9) return null;
 
-  const sessionId = parts[0];
-  const session = parts[1];
   const rawState = parts[2];
   const rawSince = parts[3];
-  const agentPane = parts[4] || null;
-  const activePane = parts[5] || null;
-  const path = parts[6] || null;
-
-  const state = VALID_AGENT_STATES.has(rawState)
-    ? (rawState as CtlAgentState)
-    : null;
 
   let since: number | null = null;
   const seconds = Number(rawSince);
@@ -73,9 +87,70 @@ export function parseAgentStateLine(
     since = Math.floor(seconds);
   }
 
-  const ageSeconds = since !== null ? Math.max(0, nowSeconds - since) : null;
+  return {
+    sessionId: parts[0],
+    session: parts[1],
+    state: VALID_AGENT_STATES.has(rawState) ? (rawState as CtlAgentState) : null,
+    since,
+    agentPane: parts[4] || null,
+    paneId: parts[5] || null,
+    path: parts[6] || null,
+    active: parts[7] === "1",
+    kind: parts[8] || null,
+  };
+}
 
-  return { session, sessionId, state, since, ageSeconds, agentPane, activePane, path };
+/**
+ * Collapse pane rows into one record per session, most urgent pane winning.
+ * Sessions with no agent at all are still reported (with `state: null`), which
+ * is what `agent watch` relies on to notice a session disappearing.
+ */
+export function rollupAgentRecords(
+  rows: AgentPaneRow[],
+  nowSeconds: number,
+): AgentRecord[] {
+  const bySession = new Map<string, AgentRecord>();
+  // Narrowed to the winning state only — storing the whole row would lose the
+  // non-null guarantee and force an assertion at the comparison site.
+  const winner = new Map<string, { state: CtlAgentState; since: number | null }>();
+
+  for (const row of rows) {
+    let record = bySession.get(row.sessionId);
+    if (!record) {
+      record = {
+        session: row.session,
+        sessionId: row.sessionId,
+        state: null,
+        since: null,
+        ageSeconds: null,
+        agentPane: null,
+        activePane: null,
+        path: null,
+        kind: null,
+      };
+      bySession.set(row.sessionId, record);
+    }
+
+    // `@jmux-agent-pane` is a session option, so any pane reads the same value.
+    if (row.agentPane) record.agentPane = row.agentPane;
+    // The active pane defines the session's reported path, matching what
+    // `list-sessions` used to return.
+    if (row.active) {
+      record.activePane = row.paneId;
+      record.path = row.path;
+    }
+
+    if (row.state === null) continue;
+    const candidate = { state: row.state, since: row.since };
+    if (!outranks(candidate, winner.get(row.sessionId) ?? null)) continue;
+    winner.set(row.sessionId, candidate);
+    record.state = row.state;
+    record.since = row.since;
+    record.kind = row.kind;
+    record.ageSeconds = row.since !== null ? Math.max(0, nowSeconds - row.since) : null;
+  }
+
+  return [...bySession.values()];
 }
 
 function listAgentRecords(
@@ -83,16 +158,19 @@ function listAgentRecords(
   sessionFilter: string | null,
   nowSeconds: number,
 ): AgentRecord[] {
-  const args = ["list-sessions", "-f", INTERNAL_SESSION_FILTER, "-F", AGENT_FORMAT];
-  if (sessionFilter) {
-    args.push("-f", `#{==:#{session_name},${sessionFilter}}`);
-  }
+  // tmux takes a single -f; passing two silently drops the first, which used to
+  // leak jmux's internal sessions into a name-filtered query.
+  const filter = sessionFilter
+    ? `#{&&:${INTERNAL_SESSION_FILTER},#{==:#{session_name},${sessionFilter}}}`
+    : INTERNAL_SESSION_FILTER;
+  const args = ["list-panes", "-a", "-f", filter, "-F", AGENT_FORMAT];
   const result = runTmuxDirect(args, ctx.socket);
   // No sessions → tmux exits non-zero; treat as empty.
   const lines = result.ok ? result.lines : [];
-  return lines
-    .map((line) => parseAgentStateLine(line, nowSeconds))
-    .filter((r): r is AgentRecord => r !== null);
+  const rows = lines
+    .map(parseAgentPaneLine)
+    .filter((r): r is AgentPaneRow => r !== null);
+  return rollupAgentRecords(rows, nowSeconds);
 }
 
 /**

@@ -43,9 +43,9 @@ jmux answers that at a glance. The **sidebar** lists every session with live ind
 - **Jump between sessions** with `Ctrl-Shift-Up/Down`. Sessions sharing a project are grouped automatically.
 
 <details>
-<summary><b>Setup</b> — the orange <code>!</code> attention flag for Claude Code</summary>
+<summary><b>Setup</b> — live agent state for Claude Code, Codex and pi</summary>
 
-`jmux --install-agent-hooks` writes a `Stop` hook into `~/.claude/settings.json` that flags a session the moment Claude Code finishes a response. [How it works](docs/claude-code-integration.md).
+`jmux --install-agent-hooks` installs a state emitter into every supported agent it finds, so the sidebar shows RUNNING / WAITING / COMPLETE per agent pane. [How it works](docs/agent-integration.md).
 </details>
 
 ### From ticket to merged, without leaving the terminal
