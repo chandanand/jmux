@@ -249,9 +249,9 @@ describe("explainRow", () => {
     const rows = rowsOf(harness());
     const tab = (id: string) => rows.find((r) => r.kind === "tab" && r.viewId === id);
     expect(explainRow(tab("urgent")))
-      .toBe("Urgent · 1st of 2 · 1 status · 4 issues · 1st in Up next");
+      .toBe("Urgent · 1st of 2 · 1 status · 4 issues · shows its unstarted work in the sidebar · 1st in Up next");
     expect(explainRow(tab("post-merge")))
-      .toBe("Post-merge · 2nd of 2 · 2 statuses · 6 issues · 1 of them park · not in Up next");
+      .toBe("Post-merge · 2nd of 2 · 2 statuses · 6 issues · shows its unstarted work in the sidebar · 1 of them park · not in Up next");
   });
 
   test("position counts stages only, so an MR tab between them doesn't skew it", () => {
@@ -345,11 +345,59 @@ describe("parking is a column in the table", () => {
     expect(h.port.getParkedStates()).toContain("Triage");
   });
 
-  test("space on a tab row does nothing — parking is per status", () => {
+  test("space on a tab row never parks anything — parking is per status", () => {
+    // It toggles that stage's unstarted rows instead; what it must not do is
+    // reach the parked list, which is keyed on statuses and not on stages.
+    const { screen, h } = open();
+    const before = [...h.port.getParkedStates()];
+    selectRow(screen, "Urgent");
+    screen.handleInput(" ");
+    expect(h.port.getParkedStates()).toEqual(before);
+  });
+
+  test("s hides a stage from the sidebar, and shows it again", () => {
+    const { screen, h } = open();
+    selectRow(screen, "Urgent");
+    screen.handleInput("s");
+    expect(h.current().find((v) => v.id === "urgent")?.inSidebar).toBe(false);
+    screen.handleInput("s");
+    expect(h.current().find((v) => v.id === "urgent")?.inSidebar).toBeUndefined();
+  });
+
+  test("space toggles a stage's unstarted rows without hiding the stage", () => {
     const { screen, h } = open();
     selectRow(screen, "Urgent");
     screen.handleInput(" ");
-    expect(h.writes).toBe(0);
+    const v = h.current().find((x) => x.id === "urgent")!;
+    expect(v.showUnstarted).toBe(false);
+    expect(v.inSidebar).toBeUndefined();
+  });
+
+  test("neither toggle applies to an MR tab", () => {
+    const { screen, h } = open();
+    selectRow(screen, "My MRs");
+    const before = h.writes;
+    screen.handleInput("s");
+    screen.handleInput(" ");
+    expect(h.writes).toBe(before);
+  });
+
+  test("the row says so only when a stage is off its default", () => {
+    const { screen } = open();
+    selectRow(screen, "Urgent");
+    expect(text(screen.render(100, 40), findRow(screen.render(100, 40), "Urgent")))
+      .not.toContain("hidden");
+    screen.handleInput("s");
+    const grid = screen.render(100, 40);
+    expect(text(grid, findRow(grid, "Urgent"))).toContain("hidden");
+  });
+
+  test("the cursor stays on the stage it just toggled", () => {
+    const { screen } = open();
+    selectRow(screen, "Urgent");
+    screen.handleInput("s");
+    const grid = screen.render(100, 40);
+    expect(text(grid, findRow(grid, "Urgent"))).toContain("▸");
   });
 
   test("the cursor stays on the status it just toggled", () => {

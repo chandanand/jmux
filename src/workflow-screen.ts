@@ -47,6 +47,7 @@ import { drawSettingRow, type SettingDef } from "./settings-screen";
 import {
   assignStateToView, createView, deleteView, moveStateInView, moveView,
   renameView, stateIndexInView, suggestLayout, unassignState, isParkedState,
+  stageInSidebar, stageShowsUnstarted, toggleViewInSidebar, toggleViewUnstarted,
   type PanelView,
 } from "./panel-view";
 import type { WorkStage } from "./repo-settings";
@@ -162,6 +163,8 @@ export type WorkflowRow =
       /** 1-based position among the issues stages, and how many there are.
        * Carried so `explainRow` can state the thing ⇧↑↓ changes. */
       position: number; stageCount: number;
+      /** Sidebar visibility, and whether unstarted work shows under it. */
+      inSidebar: boolean; showUnstarted: boolean;
     }
   | { kind: "new-tab" }
   /** STATUSES block: the column headings, then one row per tracker status. */
@@ -221,6 +224,8 @@ export function buildRows(port: WorkflowPort, tier: SettingsTier): WorkflowRow[]
       issues: states.reduce((n, s) => n + count(s), 0),
       upNextRank: rank >= 0 ? rank : null,
       position, stageCount,
+      inSidebar: stageInSidebar(view),
+      showUnstarted: stageShowsUnstarted(view),
     });
   }
   rows.push({ kind: "new-tab" });
@@ -294,6 +299,14 @@ export function explainRow(row: WorkflowRow | undefined): string {
         plural(row.statuses, "status", "statuses"),
         plural(row.issues, "issue"),
       ];
+      // Said in full rather than by glyph: "hidden" is the one state where the
+      // sidebar stops matching this screen, and the reason its sessions have not
+      // vanished is not guessable from a marker.
+      parts.push(!row.inSidebar
+        ? "no band in the sidebar — its sessions fall to the bottom, ungrouped"
+        : row.showUnstarted
+          ? "shows its unstarted work in the sidebar"
+          : "in the sidebar, without its unstarted work");
       if (row.parks > 0) parts.push(`${row.parks} of them park`);
       parts.push(row.upNextRank !== null
         ? `${ordinal(row.upNextRank + 1)} in Up next`
@@ -539,7 +552,10 @@ export class WorkflowScreen {
     if (data === "\x1b[C") { this.step(row, 1); return; }
 
     if (data === "\r") { this.activate(row); return; }
-    if (data === " ") { this.toggleParks(row); return; }
+    // `space` is the toggle key on both row kinds: the status table's parks
+    // column, and a stage's unstarted rows. `s` covers the band itself.
+    if (data === " ") { this.toggleParks(row); this.toggleUnstarted(row); return; }
+    if (data === "s") { this.toggleSidebar(row); return; }
     if (data === "u") { this.toggleUpNext(row); return; }
     if (data === "d" || data === "\x7f") { this.remove(row); return; }
     if (data === "g") { this.switchTier(); return; }
@@ -697,6 +713,26 @@ export class WorkflowScreen {
     if (row.kind !== "status") return;
     this.port!.toggleParked(row.state);
     this.followState(row.state);
+  }
+
+  /**
+   * Whether this stage is a band in the sidebar at all. Its sessions are
+   * unaffected either way — they fall to the flat remainder when it is off — so
+   * this hides a heading, never work.
+   */
+  private toggleSidebar(row: WorkflowRow): void {
+    if (row.kind !== "tab" || row.source !== "issues") return;
+    const port = this.port!;
+    port.setViews(toggleViewInSidebar(port.getViews(), row.viewId));
+    this.followSelection(row);
+  }
+
+  /** Whether this stage's unstarted issues show as startable ghost rows. */
+  private toggleUnstarted(row: WorkflowRow): void {
+    if (row.kind !== "tab" || row.source !== "issues") return;
+    const port = this.port!;
+    port.setViews(toggleViewUnstarted(port.getViews(), row.viewId));
+    this.followSelection(row);
   }
 
   /**
@@ -914,9 +950,17 @@ export class WorkflowScreen {
         return;
 
       case "tab": {
+        // Sidebar state speaks only when it is off its default, the same way the
+        // parks count does — both settings are on for most stages, and a row
+        // that restated "yes, normal" for every one of them would be noise.
+        const sidebarState: Array<{ text: string; attrs: CellAttrs }> =
+          !model.inSidebar ? [{ text: "hidden  ", attrs: WARN_ATTRS }]
+          : !model.showUnstarted ? [{ text: "no unstarted  ", attrs: DIM_ATTRS }]
+          : [];
         const value: Array<{ text: string; attrs: CellAttrs }> = model.source !== "issues"
           ? [{ text: "merge requests · not a stage", attrs: DIM_ATTRS }]
           : [
+              ...sidebarState,
               ...(model.upNextRank !== null
                 ? [{ text: `${ordinal(model.upNextRank + 1)} up next  `, attrs: VALUE_ATTRS }]
                 : []),
@@ -1044,6 +1088,8 @@ export class WorkflowScreen {
           // drops segments from the back, so the least discoverable key was also
           // the first to disappear on a narrow terminal.
           segments.push({ key: "⇧↑↓", label: "order" }, { key: "↵", label: "rename" },
+            { key: "s", label: selected.inSidebar ? "hide" : "show" },
+            { key: "space", label: "unstarted" },
             { key: "u", label: "up next" }, { key: "d", label: "delete" });
         }
         break;

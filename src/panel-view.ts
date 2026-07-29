@@ -106,6 +106,73 @@ export interface PanelView {
    * result with nothing to configure.
    */
   states?: string[];
+  /**
+   * Show this stage as a band in the sidebar. Default true.
+   *
+   * Hiding a stage hides its *header*, never its sessions: those fall through to
+   * the flat remainder, which is already where a session whose status no stage
+   * claims ends up. The sidebar is the one surface always on screen, so a stage
+   * setting must not be able to make a waiting agent disappear from it.
+   */
+  inSidebar?: boolean;
+  /**
+   * Show this stage's unstarted issues as ghost rows. Default true.
+   *
+   * Nested under `inSidebar` — with no band there is nowhere for the rows to go
+   * — and under the global `pipeline.showUnstartedInSidebar`, which decides how
+   * many each stage may show at all.
+   */
+  showUnstarted?: boolean;
+}
+
+/** Whether a stage draws a band in the sidebar. Absent means yes. */
+export function stageInSidebar(view: PanelView): boolean {
+  return view.inSidebar !== false;
+}
+
+/** Whether a stage contributes ghost rows. Absent means yes; a hidden stage
+ * never does, regardless of its own flag. */
+export function stageShowsUnstarted(view: PanelView): boolean {
+  return stageInSidebar(view) && view.showUnstarted !== false;
+}
+
+function setFlag(
+  views: PanelView[],
+  viewId: string,
+  key: "inSidebar" | "showUnstarted",
+  value: boolean,
+): PanelView[] {
+  return views.map((v) => {
+    if (v.id !== viewId || v.source !== "issues") return v;
+    // Default-valued flags are dropped rather than written as `true`: a config
+    // that says nothing and a config that says "the default" must not be two
+    // different files, or every untouched stage grows noise on first toggle.
+    if (value) {
+      const { [key]: _drop, ...rest } = v;
+      return rest as PanelView;
+    }
+    return { ...v, [key]: false };
+  });
+}
+
+/** Toggle whether a stage appears in the sidebar at all. */
+export function toggleViewInSidebar(views: PanelView[], viewId: string): PanelView[] {
+  const view = views.find((v) => v.id === viewId);
+  if (!view) return views;
+  return setFlag(views, viewId, "inSidebar", !stageInSidebar(view));
+}
+
+/**
+ * Toggle whether a stage shows unstarted work. Turning it on for a hidden stage
+ * also un-hides the stage: the alternative is a setting that reports itself as
+ * on while showing nothing, which is the failure this screen exists to avoid.
+ */
+export function toggleViewUnstarted(views: PanelView[], viewId: string): PanelView[] {
+  const view = views.find((v) => v.id === viewId);
+  if (!view) return views;
+  const next = !stageShowsUnstarted(view);
+  const withFlag = setFlag(views, viewId, "showUnstarted", next);
+  return next ? setFlag(withFlag, viewId, "inSidebar", true) : withFlag;
 }
 
 /**
@@ -192,6 +259,11 @@ export function parseViews(raw: unknown): PanelView[] {
       sortOrder: sortOrder === "desc" ? "desc" : "asc",
       sessionLinkedFirst: sessionLinkedFirst !== false,
       ...(parseStates((entry as any).states) ? { states: parseStates((entry as any).states)! } : {}),
+      // Only `false` is carried. Both default to true, so anything else — absent,
+      // true, or garbage from a hand-edited file — means "on", and the key stays
+      // out of the rebuilt view rather than being normalised into it.
+      ...((entry as any).inSidebar === false ? { inSidebar: false as const } : {}),
+      ...((entry as any).showUnstarted === false ? { showUnstarted: false as const } : {}),
     });
   }
   return views.length > 0 ? views : DEFAULT_VIEWS;

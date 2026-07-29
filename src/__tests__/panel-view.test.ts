@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { parseViews, DEFAULT_VIEWS, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, stateIndexInView, stateAssignments, stageForState, assignStateToView, moveStateInView, unassignState, createView, renameView, moveView, deleteView, parkedStages, toggleParkedState, isParkedState, effectiveFilter, suggestLayout, type PanelView } from "../panel-view";
+import { parseViews, DEFAULT_VIEWS, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, stateIndexInView, stateAssignments, stageForState, assignStateToView, moveStateInView, unassignState, createView, renameView, moveView, deleteView, parkedStages, toggleParkedState, isParkedState, stageInSidebar, stageShowsUnstarted, toggleViewInSidebar, toggleViewUnstarted, effectiveFilter, suggestLayout, type PanelView } from "../panel-view";
 import type { WorkStage } from "../repo-settings";
 
 describe("parseViews", () => {
@@ -611,5 +611,82 @@ describe("suggestLayout", () => {
   test("output survives a parseViews round-trip unchanged", () => {
     const views = suggestLayout(states);
     expect(parseViews(JSON.parse(JSON.stringify(views)))).toEqual(views);
+  });
+});
+
+describe("sidebar visibility per stage", () => {
+  const views = (): PanelView[] => parseViews([
+    { id: "todo", label: "To do", source: "issues", filter: { scope: "assigned" }, states: ["Todo"] },
+    { id: "review", label: "Review", source: "issues", filter: { scope: "assigned" }, states: ["In Review"] },
+    { id: "mrs", label: "MRs", source: "mrs", filter: { scope: "authored" } },
+  ]);
+  const byId = (vs: PanelView[], id: string): PanelView => vs.find((v) => v.id === id)!;
+
+  test("both default to on, so an untouched config behaves as before", () => {
+    for (const v of views()) {
+      expect(stageInSidebar(v)).toBe(true);
+      expect(stageShowsUnstarted(v)).toBe(true);
+    }
+  });
+
+  test("hiding a stage also stops its unstarted rows — there is no band to hold them", () => {
+    const v = byId(toggleViewInSidebar(views(), "todo"), "todo");
+    expect(stageInSidebar(v)).toBe(false);
+    expect(stageShowsUnstarted(v)).toBe(false);
+    // …but the stage's own unstarted flag is untouched, so un-hiding restores it.
+    expect(v.showUnstarted).toBeUndefined();
+    expect(stageShowsUnstarted(byId(toggleViewInSidebar([v], "todo"), "todo"))).toBe(true);
+  });
+
+  test("unstarted toggles independently while the stage is shown", () => {
+    const off = byId(toggleViewUnstarted(views(), "todo"), "todo");
+    expect(stageInSidebar(off)).toBe(true);
+    expect(stageShowsUnstarted(off)).toBe(false);
+    const on = byId(toggleViewUnstarted([off], "todo"), "todo");
+    expect(stageShowsUnstarted(on)).toBe(true);
+  });
+
+  test("turning unstarted on for a hidden stage un-hides it, rather than lying", () => {
+    const hidden = toggleViewInSidebar(views(), "todo");
+    const v = byId(toggleViewUnstarted(hidden, "todo"), "todo");
+    expect(stageInSidebar(v)).toBe(true);
+    expect(stageShowsUnstarted(v)).toBe(true);
+  });
+
+  test("only the non-default value is stored, so defaults add no config noise", () => {
+    const on = byId(views(), "todo");
+    expect(on.inSidebar).toBeUndefined();
+    expect(on.showUnstarted).toBeUndefined();
+    const off = byId(toggleViewInSidebar(views(), "todo"), "todo");
+    expect(off.inSidebar).toBe(false);
+    // Toggling back removes the key rather than writing `true`.
+    expect(byId(toggleViewInSidebar([off], "todo"), "todo").inSidebar).toBeUndefined();
+  });
+
+  test("the flags survive a config round-trip", () => {
+    const edited = toggleViewUnstarted(toggleViewInSidebar(views(), "todo"), "review");
+    const reloaded = parseViews(JSON.parse(JSON.stringify(edited)));
+    expect(stageInSidebar(byId(reloaded, "todo"))).toBe(false);
+    expect(stageShowsUnstarted(byId(reloaded, "review"))).toBe(false);
+    expect(stageInSidebar(byId(reloaded, "review"))).toBe(true);
+  });
+
+  test("garbage in the config reads as the default rather than throwing", () => {
+    const vs = parseViews([
+      { id: "a", label: "A", source: "issues", filter: { scope: "assigned" },
+        inSidebar: "no", showUnstarted: 0 },
+    ]);
+    expect(stageInSidebar(vs[0]!)).toBe(true);
+    expect(stageShowsUnstarted(vs[0]!)).toBe(true);
+  });
+
+  test("MR tabs are not stages, so neither toggle touches them", () => {
+    expect(toggleViewInSidebar(views(), "mrs")).toEqual(views());
+    expect(toggleViewUnstarted(views(), "mrs")).toEqual(views());
+  });
+
+  test("an unknown id changes nothing", () => {
+    expect(toggleViewInSidebar(views(), "nope")).toEqual(views());
+    expect(toggleViewUnstarted(views(), "nope")).toEqual(views());
   });
 });

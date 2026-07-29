@@ -43,7 +43,7 @@ import { StdinGate } from "./stdin-gate";
 import { TmuxControl, type ControlEvent } from "./tmux-control";
 import { DiffPanel } from "./diff-panel";
 import { InfoPanel, rebuildInfoPanelColors } from "./info-panel";
-import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, parkedStages, toggleParkedState, effectiveFilter, stageForState, type PanelView } from "./panel-view";
+import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, parkedStages, toggleParkedState, effectiveFilter, stageForState, stageInSidebar, stageShowsUnstarted, type PanelView } from "./panel-view";
 import { transformIssues, transformMrs, buildViewNodes, renderView, createViewState, filterItems, rebuildPanelViewColors, computeViewLayout, splitRatioForSepRow, DEFAULT_PANEL_SPLIT_RATIO, type ViewState, type ViewNode, type IssueSessionInfo } from "./panel-view-renderer";
 import { createAdapters } from "./adapters/registry";
 import { PollCoordinator } from "./adapters/poll-coordinator";
@@ -1183,7 +1183,10 @@ function recomputeSessionBands(): void {
     // headers read top-to-bottom in the order they arranged their workflow.
     const issue = ctx?.issues[0];
     const stageView = issue ? stageForState(panelViews, issue.status) : null;
-    if (stageView) {
+    // A stage hidden from the sidebar claims nothing for grouping: its sessions
+    // fall to the flat remainder, exactly like a session whose status no stage
+    // claims. Hiding the band must never hide the session.
+    if (stageView && stageInSidebar(stageView)) {
       stages.set(name, {
         id: stageView.id,
         label: stageView.label,
@@ -1284,8 +1287,13 @@ function recomputeGhosts(): void {
   // the user has already declared they pull new work from.
   const perStage = sidebar.getGroupMode() === "stage";
   const sources = perStage
-    ? panelViews.filter((v) => v.source === "issues").map((v) => v.id)
-    : (configStore.config.pipeline?.upNext ?? []);
+    ? panelViews.filter((v) => v.source === "issues" && stageShowsUnstarted(v)).map((v) => v.id)
+    : (configStore.config.pipeline?.upNext ?? []).filter((id) => {
+        // The flat band is fed by Up next, but a stage the user has switched off
+        // shouldn't leak its work back in through the other placement.
+        const view = panelViews.find((v) => v.id === id);
+        return !view || stageShowsUnstarted(view);
+      });
   if (sources.length === 0) {
     sidebar.setGhostSessions([]);
     return;
