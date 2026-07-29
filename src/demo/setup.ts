@@ -52,6 +52,12 @@ export function setupDemo(): DemoContext {
   }
 
   // 2. Write config.json
+  //
+  // Stages are seeded rather than left to DEFAULT_VIEWS so demo mode exercises
+  // the configured-workflow paths — stage grouping in the sidebar, and the Up
+  // next band. `showUnstartedInSidebar` is deliberately ON here and OFF in the
+  // shipped default: demo mode exists to show the features, and a band nobody
+  // can see is a band nobody can check.
   const config = {
     sidebarWidth: 26,
     cacheTimers: false,
@@ -59,6 +65,44 @@ export function setupDemo(): DemoContext {
       codeHost: { type: "demo" },
       issueTracker: { type: "demo" },
     },
+    panelViews: [
+      {
+        id: "todo", label: "To do", source: "issues",
+        filter: { scope: "assigned" },
+        groupBy: "none", subGroupBy: "none",
+        sortBy: "priority", sortOrder: "asc", sessionLinkedFirst: false,
+        states: ["Todo", "Backlog"],
+      },
+      {
+        id: "in-progress", label: "In progress", source: "issues",
+        filter: { scope: "assigned" },
+        groupBy: "none", subGroupBy: "none",
+        sortBy: "priority", sortOrder: "asc", sessionLinkedFirst: true,
+        states: ["In Progress", "In Review"],
+      },
+      {
+        id: "done", label: "Done", source: "issues",
+        filter: { scope: "assigned" },
+        groupBy: "none", subGroupBy: "none",
+        sortBy: "updated", sortOrder: "desc", sessionLinkedFirst: false,
+        states: ["Done"],
+      },
+      {
+        id: "my-mrs", label: "My MRs", source: "mrs",
+        filter: { scope: "authored" },
+        groupBy: "none", subGroupBy: "none",
+        sortBy: "updated", sortOrder: "desc", sessionLinkedFirst: true,
+      },
+    ],
+    pipeline: {
+      // Feeds the flat "Up next" band on the non-stage grouping axes. Grouped by
+      // stage, every stage fills its own band and this is not consulted.
+      upNext: ["todo"],
+      showUnstartedInSidebar: 3,
+    },
+    // Stage grouping so demo mode opens on the placement the feature is really
+    // about: ghosts under each stage, including stages holding only ghosts.
+    sidebarGroupBy: "stage",
   };
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
 

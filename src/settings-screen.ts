@@ -11,10 +11,31 @@ export interface SettingDef {
   label: string;
   type: "boolean" | "text" | "list" | "map" | "multiselect" | "action";
   getValue: () => string;
+  /**
+   * The *editable* form of the value, when it differs from the displayed one.
+   *
+   * `getValue` is prose ("never", "2 days") because that is what reads well in a
+   * row; feeding that same string back in as the edit buffer does not round-trip
+   * — a commit parses "never" to NaN, and typing a number onto the end of it
+   * yields "never5". Rows whose display form is not their input form supply this
+   * so the prompt opens on something the user can actually edit.
+   */
+  getEditValue?: () => string;
   // For boolean: toggle callback
   onToggle?: () => void;
   // For text: commit callback
   onTextCommit?: (value: string) => void;
+  /**
+   * Nudge the value one place with ◂ ▸, without opening an editor.
+   *
+   * Only for values on an ordered ladder the user can walk — a count, a
+   * duration. Deliberately NOT how `list` settings work: those choose among
+   * every tracker state, and cycling twenty-five of them one keypress at a time
+   * is why nobody found them (see `editSetting`). A row offering this still
+   * supports Enter, so a distant value is one typed number rather than a
+   * hundred presses.
+   */
+  onStep?: (delta: number) => void;
   // For list: cycle through options
   options?: string[];
   onOptionSelect?: (value: string) => void;
@@ -650,7 +671,7 @@ export class SettingsScreen {
       }
 
       if (setting.type === "text" && setting.onTextCommit) {
-        const current = setting.getValue();
+        const current = setting.getEditValue?.() ?? setting.getValue();
         this.editState = { mode: "text", settingId: setting.id, buffer: current, cursorPos: current.length };
         return { type: "none" };
       }

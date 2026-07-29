@@ -159,6 +159,9 @@ export type WorkflowRow =
   | {
       kind: "tab"; viewId: string; label: string; source: "issues" | "mrs";
       statuses: number; parks: number; issues: number; upNextRank: number | null;
+      /** 1-based position among the issues stages, and how many there are.
+       * Carried so `explainRow` can state the thing ⇧↑↓ changes. */
+      position: number; stageCount: number;
     }
   | { kind: "new-tab" }
   /** STATUSES block: the column headings, then one row per tracker status. */
@@ -199,17 +202,25 @@ export function buildRows(port: WorkflowPort, tier: SettingsTier): WorkflowRow[]
 
   rows.push({
     kind: "band", label: "Your workflow",
-    hint: "The stages you work in, top to bottom in priority order. Each is a tab in the info panel.",
+    // The order is load-bearing — it drives the panel's tab strip and the
+    // sidebar's stage bands — but nothing about a static list says it can be
+    // rearranged, so the key is named here rather than left to the footer,
+    // where it sits fifth in a six-segment run and reads as noise.
+    hint: "The stages you work in, top to bottom in priority order — ⇧↑↓ to rearrange. Each is a tab in the info panel.",
   });
+  const stageCount = views.filter((v) => v.source === "issues").length;
+  let position = 0;
   for (const view of views) {
     const states = view.states ?? [];
     const rank = upNext.indexOf(view.id);
+    if (view.source === "issues") position++;
     rows.push({
       kind: "tab", viewId: view.id, label: view.label, source: view.source,
       statuses: states.length,
       parks: states.filter((s) => isParkedState(parkedStates, s)).length,
       issues: states.reduce((n, s) => n + count(s), 0),
       upNextRank: rank >= 0 ? rank : null,
+      position, stageCount,
     });
   }
   rows.push({ kind: "new-tab" });
@@ -276,7 +287,13 @@ export function explainRow(row: WorkflowRow | undefined): string {
 
     case "tab": {
       if (row.source === "mrs") return `${row.label} · a merge-request tab, not a workflow stage.`;
-      const parts = [row.label, plural(row.statuses, "status", "statuses"), plural(row.issues, "issue")];
+      // Position leads: it is what ⇧↑↓ changes, and what the panel's tab order
+      // and the sidebar's stage bands both follow.
+      const parts = [
+        `${row.label} · ${ordinal(row.position)} of ${row.stageCount}`,
+        plural(row.statuses, "status", "statuses"),
+        plural(row.issues, "issue"),
+      ];
       if (row.parks > 0) parts.push(`${row.parks} of them park`);
       parts.push(row.upNextRank !== null
         ? `${ordinal(row.upNextRank + 1)} in Up next`
@@ -515,6 +532,12 @@ export class WorkflowScreen {
     const row = this.rows()[this.selectedIndex];
     if (!row) return;
 
+    // ◂ ▸ nudge a stepped setting in place. Checked before the row actions so a
+    // steppable row consumes them; every other row ignores left/right entirely,
+    // which is what they did before this existed.
+    if (data === "\x1b[D") { this.step(row, -1); return; }
+    if (data === "\x1b[C") { this.step(row, 1); return; }
+
     if (data === "\r") { this.activate(row); return; }
     if (data === " ") { this.toggleParks(row); return; }
     if (data === "u") { this.toggleUpNext(row); return; }
@@ -624,13 +647,22 @@ export class WorkflowScreen {
     }
   }
 
+  /** Walk a stepped setting one place. A no-op on anything else. */
+  private step(row: WorkflowRow, delta: number): void {
+    if (row.kind !== "setting") return;
+    row.def.onStep?.(delta);
+  }
+
   private editSetting(def: SettingDef): void {
     if (def.type === "boolean") { def.onToggle?.(); return; }
     if (def.type === "action") { def.onActivate?.(); return; }
 
     if (def.type === "text" && def.onTextCommit) {
       const commit = def.onTextCommit;
-      this.openPrompt(def.label, def.getValue(), (v) => commit(v));
+      // getEditValue, not getValue — see the note on SettingDef. A row whose
+      // display form is prose ("never") would otherwise open its prompt on a
+      // string that parses back to nothing.
+      this.openPrompt(def.label, def.getEditValue?.() ?? def.getValue(), (v) => commit(v));
       return;
     }
 
@@ -949,11 +981,18 @@ export class WorkflowScreen {
 
       case "setting": {
         const scope = model.def.getScope?.();
+        // A steppable row wears its ◂ ▸ brackets, so the keys are visible on the
+        // row itself rather than only in the footer. Shown on the selected row
+        // only: on every row at once they read as decoration and add a column of
+        // noise to rows that don't step.
+        const stepped = selected && !!model.def.onStep;
         drawSettingRow(grid, row, bounds, {
           label: model.def.label,
           labelAttrs: selected ? LABEL_ACTIVE : LABEL_ATTRS,
           value: [
+            ...(stepped ? [{ text: "◂ ", attrs: ADD_ATTRS }] : []),
             { text: truncateToCols(model.def.getValue(), Math.max(8, Math.floor((right - left) * 0.45))), attrs: VALUE_ATTRS },
+            ...(stepped ? [{ text: " ▸", attrs: ADD_ATTRS }] : []),
             ...(scope ? [{ text: ` (${scope})`, attrs: DIM_ATTRS }] : []),
           ],
           selected,
@@ -1001,12 +1040,17 @@ export class WorkflowScreen {
         break;
       case "tab":
         if (selected.source === "issues") {
-          segments.push({ key: "↵", label: "rename" }, { key: "u", label: "up next" },
-            { key: "d", label: "delete" }, { key: "⇧↑↓", label: "order" });
+          // `⇧↑↓ order` sits second, right beside the ↑↓ it varies: the footer
+          // drops segments from the back, so the least discoverable key was also
+          // the first to disappear on a narrow terminal.
+          segments.push({ key: "⇧↑↓", label: "order" }, { key: "↵", label: "rename" },
+            { key: "u", label: "up next" }, { key: "d", label: "delete" });
         }
         break;
       case "setting":
-        segments.push({ key: "↵", label: "edit" },
+        segments.push(
+          ...(selected.def.onStep ? [{ key: "◂▸", label: "change" }] : []),
+          { key: "↵", label: "edit" },
           ...(selected.def.getScope?.() === "override" ? [{ key: "d", label: "clear" }] : []));
         break;
       default:

@@ -16,6 +16,32 @@ describe("DemoIssueTrackerAdapter", () => {
     expect(adapter.authHint).toBe("demo mode — no credentials needed");
   });
 
+  test("every issue carries a stateType, so stage projection works in demo mode", async () => {
+    // The seed data has no stateType of its own; the adapter stamps it from its
+    // status table. Without it every demo issue projects to "active" — which
+    // looks right until something keys off "done", as the sidebar's ghost rows
+    // do, and a completed issue then shows as unstarted work that never clears.
+    const issues = await adapter.getMyIssues();
+    for (const issue of issues) {
+      expect(issue.stateType).toBeDefined();
+    }
+    const done = issues.filter((i) => i.status === "Done");
+    expect(done.length).toBeGreaterThan(0);
+    for (const issue of done) expect(issue.stateType).toBe("completed");
+    expect(issues.find((i) => i.status === "Todo")?.stateType).toBe("unstarted");
+    expect(issues.find((i) => i.status === "In Progress")?.stateType).toBe("started");
+  });
+
+  test("the status table agrees with the workflow states it also feeds", async () => {
+    // One table drives both, so a status classified one way for the picker and
+    // another way for an issue would be a contradiction, not a difference.
+    const states = await adapter.listWorkflowStates();
+    const byName = new Map(states.map((s) => [s.name, s.type]));
+    for (const issue of await adapter.getMyIssues()) {
+      if (byName.has(issue.status)) expect(issue.stateType).toBe(byName.get(issue.status)!);
+    }
+  });
+
   test("getMyIssues returns all issues", async () => {
     const issues = await adapter.getMyIssues();
     expect(issues).toHaveLength(DEMO_ISSUES.length);

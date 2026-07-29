@@ -51,6 +51,10 @@ import { SessionState } from "./session-state";
 import type { SessionContext, WorkflowState } from "./adapters/types";
 import { stageForIssue, resolveIssueRepoDir, STAGE_ORDER, STAGE_LABELS } from "./work-stage";
 import {
+  selectGhosts, selectGhostsPerStage, ghostCapValue, formatGhostCap, editGhostCap, parseGhostCap, stepGhostCap,
+  GHOST_CAP_ALL, type GhostQueue, type GhostCap,
+} from "./ghosts";
+import {
   detectMrTransitions,
   transitionTarget,
   TRANSITION_LABELS,
@@ -886,6 +890,10 @@ sidebar.setStateColors(resolveStateColors(configStore.config.stateColors));
 function applySidebarGroup(mode: GroupMode): void {
   sidebar.setGroupMode(mode);
   configStore.set("sidebarGroupBy", mode);
+  // The grouping axis decides both where ghosts land and which stages they come
+  // from — per-stage on the stage axis, the Up next set anywhere else — so the
+  // set has to be rebuilt when the axis changes, not just re-placed.
+  recomputeGhosts();
 }
 /** Set the sidebar member-sort mode and persist it, so it survives restart. */
 function applySidebarSort(mode: SortMode): void {
@@ -1221,6 +1229,101 @@ function recomputeSessionBands(): void {
 
   sidebar.setParkedSessions(parked);
   sidebar.setSessionStages(stages);
+  recomputeGhosts();
+}
+
+/** The stored ghost-row cap. Conversions all live in ghosts.ts. */
+function storedGhostCap(): unknown {
+  return configStore.config.pipeline?.showUnstartedInSidebar ?? null;
+}
+
+/** The effective cap: 0 for off, Infinity for "all". */
+function ghostCap(): number {
+  return ghostCapValue(storedGhostCap());
+}
+
+/** Persist a new cap and repaint the band. */
+function setGhostCap(next: GhostCap): void {
+  configStore.setPipeline("showUnstartedInSidebar", next);
+  recomputeGhosts();
+  scheduleRender();
+}
+
+/**
+ * Rebuild the sidebar's Up next band: the issues in your pull queues that have
+ * no session yet.
+ *
+ * Called from `recomputeSessionBands` so it can never go stale — every signal
+ * that changes the answer (a poll, a session appearing, a config edit) already
+ * routes there. That funnel also carries signals which can't change the answer
+ * (agent state, a few times a second), so this recomputes more often than it
+ * strictly must. Measured at 0.24ms for 300 issues across 7 queues — well
+ * inside a frame, and not worth an input-signature guard. The obvious candidate
+ * for one, comparing `getGlobalIssues()` by reference, is unsound anyway: that
+ * array is mutated in place by `addGlobalIssue` and by the targeted per-issue
+ * refresh, so exactly the status change that should add or remove a ghost would
+ * keep its identity and be missed.
+ *
+ * With the feature off it returns before doing any of the work.
+ */
+function recomputeGhosts(): void {
+  const cap = ghostCap();
+  if (cap === 0) {
+    sidebar.setGhostSessions([]);
+    return;
+  }
+
+  // Which stages contribute depends on where the rows will land.
+  //
+  // Grouped by stage, every stage shows the work sitting in it that nobody has
+  // picked up — the row is filed under its own stage, so "which stage is this?"
+  // is answered by where it sits and needs no gate.
+  //
+  // On any other axis the rows collect into one flat band that cannot say which
+  // stage anything came from, so it falls back to the Up next set: the stages
+  // the user has already declared they pull new work from.
+  const perStage = sidebar.getGroupMode() === "stage";
+  const sources = perStage
+    ? panelViews.filter((v) => v.source === "issues").map((v) => v.id)
+    : (configStore.config.pipeline?.upNext ?? []);
+  if (sources.length === 0) {
+    sidebar.setGhostSessions([]);
+    return;
+  }
+
+  const byView = orderedIssuesByView();
+  const sessionStates = getIssueSessionStates();
+  const stages = derivedStages();
+
+  const queues: GhostQueue[] = [];
+  for (const viewId of sources) {
+    const view = panelViews.find((v) => v.id === viewId);
+    if (!view || view.source !== "issues") continue;
+    queues.push({
+      viewId,
+      label: view.label,
+      // Priority is the stage's position in the workflow screen, NOT its
+      // position in `upNext` — see the note in ghosts.ts.
+      rank: panelViews.indexOf(view),
+      issues: (byView.get(viewId) ?? []).map((issue) => {
+        const stage = stageForIssue(issue, stages);
+        return {
+          id: issue.id,
+          identifier: issue.identifier,
+          title: issue.title,
+          hasSession: sessionStates.get(issue.id)?.state === "session",
+          // Done and parked work never becomes a ghost. Nothing gives a
+          // completed issue a session, so those rows would accumulate under a
+          // "Done" stage forever with no way to clear them.
+          inactive: stage === "done" || stage === "parked",
+        };
+      }),
+    });
+  }
+
+  sidebar.setGhostSessions(
+    perStage ? selectGhostsPerStage(queues, cap) : selectGhosts(queues, cap),
+  );
 }
 
 // --- Status transitions ---
@@ -2505,6 +2608,10 @@ const inputRouter = new InputRouter(
       const sel = sidebar.getSelectionByRow(row);
       if (sel?.type === "overview" || sel?.type === "pinnedPane") {
         void enterGlass();
+        return;
+      }
+      if (sel?.type === "ghost") {
+        void startGhost(sel.issueId);
         return;
       }
       const session = sidebar.getSessionByRow(row);
@@ -3866,11 +3973,62 @@ function workflowBands(tier: SettingsTier): WorkflowBand[] {
             const d = configStore.config.pipeline?.autoParkIdleDays ?? null;
             return d === null ? "never" : `${d} ${d === 1 ? "day" : "days"}`;
           },
+          // "never" is prose, not an editable number: seeding the prompt with it
+          // meant typing a day count produced "never3", which parses to nothing,
+          // so this setting could not be switched on from its own prompt.
+          getEditValue: () => {
+            const d = configStore.config.pipeline?.autoParkIdleDays ?? null;
+            return d === null ? "" : String(d);
+          },
           describe: () => "Sessions with a linked issue are governed by their tab instead. Blank or 0 turns this off.",
           onTextCommit: (v: string) => {
             const n = parseInt(v, 10);
             configStore.setPipeline("autoParkIdleDays", isNaN(n) || n <= 0 ? null : n);
             recomputeSessionBands();
+          },
+        },
+      ],
+    },
+    {
+      label: "Unstarted work",
+      hint: "The mirror of parking: work you have not picked up yet, shown in the sidebar.",
+      settings: [
+        {
+          id: "show-unstarted", label: "Show unstarted work in the sidebar", type: "text" as const,
+          getValue: () => formatGhostCap(storedGhostCap()),
+          // The number on its own, so the prompt opens on something editable —
+          // see the note on SettingDef.getEditValue.
+          getEditValue: () => editGhostCap(storedGhostCap()),
+          onTextCommit: (v: string) => setGhostCap(parseGhostCap(v)),
+          // ◂ ▸ walk never → 1 … 99 → all. Enter still takes a typed number, so
+          // the ladder covers the nudges and typing covers the jumps.
+          onStep: (delta: number) => setGhostCap(stepGhostCap(storedGhostCap(), delta)),
+          describe: () => {
+            const n = ghostCap();
+            // A number prompt gives no hint of what it accepts, and this one
+            // takes a word as well — so the accepted forms are spelled out here,
+            // on the line the user is reading when they press Enter.
+            if (n === 0) {
+              return `◂ ▸ to set a count, or "${GHOST_CAP_ALL}" for every one. Blank turns unstarted rows off.`;
+            }
+            const each = n === Infinity ? "Every" : `Top ${n}`;
+            // What the setting does depends on the grouping axis, so it says so
+            // rather than describing a placement the user isn't looking at.
+            if (sidebar.getGroupMode() === "stage") {
+              return `${each} unstarted issue in each stage, under its own band. Click one to start it.`;
+            }
+            // Off the stage axis the rows collect in one band fed by Up next, so
+            // an empty rotation is the one way this can look configured and do
+            // nothing. Named in workflow order — the order they come out in.
+            const stages = (configStore.config.pipeline?.upNext ?? [])
+              .map((id) => panelViews.findIndex((v) => v.id === id))
+              .filter((i) => i >= 0)
+              .sort((a, b) => a - b)
+              .map((i) => panelViews[i]!.label);
+            if (stages.length === 0) {
+              return "Grouped by stage this fills every band; on this axis it needs a stage in Up next — mark one with u above.";
+            }
+            return `${each} from ${stages.join(", ")} in one band. Group by stage (^a G) to see every stage's.`;
           },
         },
       ],
@@ -3912,6 +4070,9 @@ function buildWorkflowPort(): WorkflowPort {
       const at = cur.indexOf(viewId);
       if (at >= 0) cur.splice(at, 1); else cur.push(viewId);
       configStore.setPipeline("upNext", cur);
+      // The Up next set is what the sidebar's ghost band draws from, so adding
+      // or dropping a stage changes it immediately.
+      recomputeGhosts();
       scheduleRender();
     },
     getBands: workflowBands,
@@ -4191,28 +4352,56 @@ function issuesForView(view: PanelView | undefined): import("./adapters/types").
 }
 
 /**
- * The next issue to pull, honouring the configured queue order. Ordering
- * *within* a queue reuses buildViewNodes so "the top of the list" means
- * exactly what the panel shows — no second sort implementation to drift.
+ * Every issues queue's contents, in the order its own tab renders them.
+ *
+ * Ordering reuses buildViewNodes so "the top of the list" means exactly what the
+ * panel shows — no second sort implementation to drift. Shared by `Ctrl-a u` and
+ * the sidebar's ghost band so both agree on what "next" is.
  */
-function upNextIssue(): { viewLabel: string; issue: import("./adapters/types").Issue } | null {
-  const order = configStore.config.pipeline?.upNext ?? [];
-  if (order.length === 0) return null;
-
+function orderedIssuesByView(): Map<string, import("./adapters/types").Issue[]> {
   const byView = new Map<string, import("./adapters/types").Issue[]>();
+  const states = getIssueSessionStates();
+  const mrs = mrsByUrl();
   for (const view of panelViews) {
     if (view.source !== "issues") continue;
-    const items = transformIssues(issuesForView(view), new Set(), getIssueSessionStates(), mrsByUrl());
+    const items = transformIssues(issuesForView(view), new Set(), states, mrs);
     const issues = buildViewNodes(items, view, new Set())
       .filter((n) => n.kind === "item" && n.item.type === "issue")
       .map((n) => (n as Extract<ViewNode, { kind: "item" }>).item.raw as import("./adapters/types").Issue);
     byView.set(view.id, issues);
   }
+  return byView;
+}
 
-  const picked = pickUpNext(order, byView);
+/**
+ * The next issue to pull, honouring the configured queue order.
+ */
+function upNextIssue(): { viewLabel: string; issue: import("./adapters/types").Issue } | null {
+  const order = configStore.config.pipeline?.upNext ?? [];
+  if (order.length === 0) return null;
+
+  const picked = pickUpNext(order, orderedIssuesByView());
   if (!picked) return null;
   const view = panelViews.find((v) => v.id === picked.viewId);
   return { viewLabel: view?.label ?? picked.viewId, issue: picked.item };
+}
+
+/**
+ * Turn a ghost row into a real session — the same three-state flow as `n` in the
+ * issues panel, deliberately reusing `startWorkOnIssue` rather than duplicating
+ * a "create a session for this issue" path that could drift from it.
+ *
+ * The state has to be looked up rather than assumed. A ghost is by construction
+ * an issue with no live *session*, but it may well have a worktree already (an
+ * abandoned attempt, or one made outside jmux); passing a hardcoded "none" would
+ * send `startWorkOnIssue` down the create-a-worktree path on top of one that
+ * exists.
+ */
+async function startGhost(issueId: string): Promise<void> {
+  const issue = pollCoordinator.getGlobalIssues().find((i) => i.id === issueId);
+  if (!issue) return;
+  const state = getIssueSessionStates().get(issue.id);
+  await startWorkOnIssue(issue, state?.state ?? "none", state?.sessionName);
 }
 
 /** Start (or switch to) whatever is at the top of the queue rotation. */

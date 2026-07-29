@@ -36,6 +36,19 @@ export interface PipelineConfig {
   transitionConfirm?: "always" | "undo-toast" | "never";
   /** Ordered panel-view ids the "Up next" row pulls from. */
   upNext?: string[];
+  /**
+   * How many unstarted issues to show as ghost rows in the sidebar's Up next
+   * band: a count, `"all"` for every one of them, or null/0 for none. The value
+   * *is* the switch — there is no separate boolean that could disagree with it.
+   * Off by default: the sidebar is otherwise a truthful mirror of tmux, and rows
+   * for sessions that don't exist are something the user opts into.
+   *
+   * `"all"` is a literal rather than a magic number (-1, 0, Infinity) because it
+   * has to survive a JSON round-trip and still say what it means to someone
+   * reading the config file. `Infinity` in particular does not: JSON.stringify
+   * writes it as `null`, which is this field's "off".
+   */
+  showUnstartedInSidebar?: number | "all" | null;
 }
 
 export interface SnapshotConfig {

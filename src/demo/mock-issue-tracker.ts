@@ -27,7 +27,17 @@ export class DemoIssueTrackerAdapter implements IssueTrackerAdapter {
     this.byBranch = new Map();
 
     for (const issue of DEMO_ISSUES) {
-      const copy = { ...issue, linkedMrUrls: [...issue.linkedMrUrls] };
+      // Stamp the category here, not in the seed data, so every path out of this
+      // adapter carries it and the one table above stays the only place demo
+      // statuses are classified. Without it every demo issue falls through
+      // `stageFromStateType`'s default to "active" — which reads as a *correct*
+      // demo right up until something keys off `done`, as the sidebar's ghost
+      // rows do, and then a completed issue shows as unstarted work forever.
+      const copy = {
+        ...issue,
+        stateType: issue.stateType ?? DEMO_STATE_TYPES[issue.status],
+        linkedMrUrls: [...issue.linkedMrUrls],
+      };
       this.issues.set(copy.id, copy);
       if (copy.branchName) {
         this.byBranch.set(copy.branchName, copy);

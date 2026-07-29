@@ -1938,6 +1938,190 @@ describe("Sidebar — sort & filter", () => {
     expect(header).toContain("⊞ Stage");
   });
 
+  // --- Up next: unstarted issues as ghost rows ---
+  //
+  // Membership, ordering and the cap are all resolved by the caller (main.ts,
+  // from the tracker + Up next config + live sessions), so these hand the
+  // sidebar a finished list — the same boundary as setSessionStages.
+
+  const ghost = (issueId: string, identifier: string, title: string) => ({ issueId, identifier, title });
+
+  test("ghosts render identifier and title over two rows, under an Up next header", () => {
+    const sb = seeded();
+    sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
+    const header = linesWith(sb, "Up next");
+    const id = linesWith(sb, "ENG-142");
+    const title = linesWith(sb, "fix flaky auth test");
+    expect(header).toBeGreaterThan(-1);
+    expect(header).toBeLessThan(id);
+    // The title sits on the row directly below its identifier — a session row's
+    // exact geometry, which is what makes the ghost a preview of what it becomes.
+    expect(title).toBe(id + 1);
+  });
+
+  test("the band sits below live sessions and above Parked", () => {
+    const sb = seeded();
+    sb.setParkedSessions(new Set(["delta"]));
+    sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
+    expect(linesWith(sb, "alpha")).toBeLessThan(linesWith(sb, "Up next"));
+    expect(linesWith(sb, "Up next")).toBeLessThan(linesWith(sb, "Parked"));
+  });
+
+  test("no ghosts means no band at all", () => {
+    const sb = seeded();
+    sb.setGhostSessions([]);
+    expect(linesWith(sb, "Up next")).toBe(-1);
+  });
+
+  test("both of a ghost's rows resolve to the same selection", () => {
+    const sb = seeded();
+    sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
+    const idRow = linesWith(sb, "ENG-142");
+    expect(sb.getSelectionByRow(idRow)).toEqual({ type: "ghost", issueId: "i1" });
+    expect(sb.getSelectionByRow(idRow + 1)).toEqual({ type: "ghost", issueId: "i1" });
+  });
+
+  test("a ghost row is not a session row — it never resolves to one", () => {
+    const sb = seeded();
+    sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
+    const idRow = linesWith(sb, "ENG-142");
+    expect(sb.getSessionByRow(idRow)).toBeNull();
+    expect(sb.getSessionByRow(idRow + 1)).toBeNull();
+  });
+
+  test("ghosts stay out of the session cycle order", () => {
+    // displayOrder drives Ctrl-Shift-Up/Down. A nav key that provisioned a
+    // worktree would be a destructive surprise, so ghosts are click-only.
+    const sb = seeded();
+    const before = sb.getDisplayOrderIds();
+    sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
+    expect(sb.getDisplayOrderIds()).toEqual(before);
+  });
+
+  test("the band collapses like any other group, keyed on its own axis", () => {
+    const sb = seeded();
+    sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
+    expect(linesWith(sb, "ENG-142")).toBeGreaterThan(-1);
+    sb.toggleGroup("upnext");
+    expect(linesWith(sb, "Up next")).toBeGreaterThan(-1); // header stays
+    expect(linesWith(sb, "ENG-142")).toBe(-1);            // rows fold away
+  });
+
+  test("untagged ghosts use the flat band on every axis except stage", () => {
+    // The caller tags ghosts with a stage only for the per-stage placement; on
+    // any other axis they arrive untagged and collect into one band.
+    for (const mode of ["none", "project", "status"] as const) {
+      const sb = seeded();
+      sb.setGroupMode(mode);
+      sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
+      expect(linesWith(sb, "Up next")).toBeGreaterThan(-1);
+      expect(linesWith(sb, "ENG-142")).toBeGreaterThan(-1);
+    }
+  });
+
+  // --- Per-stage ghosts: every stage shows the work nobody is on ---
+
+  const stageGhost = (
+    issueId: string, identifier: string, title: string,
+    stageId: string, stageLabel: string, rank: number,
+  ) => ({ issueId, identifier, title, stageId, stageLabel, rank });
+
+  test("a ghost sits inside its own stage band, below that stage's sessions", () => {
+    const sb = seeded();
+    sb.setGroupMode("stage");
+    sb.setSessionStages(new Map([["alpha", stage("todo", "To do", 0)]]));
+    sb.setGhostSessions([stageGhost("i1", "ENG-142", "fix flaky auth", "todo", "To do", 0)]);
+    const header = linesWith(sb, "To do");
+    expect(header).toBeGreaterThan(-1);
+    expect(header).toBeLessThan(linesWith(sb, "alpha"));
+    // Real work outranks work nobody has picked up.
+    expect(linesWith(sb, "alpha")).toBeLessThan(linesWith(sb, "ENG-142"));
+    // …and no separate Up next band is emitted on this axis.
+    expect(linesWith(sb, "Up next")).toBe(-1);
+  });
+
+  test("a stage holding only ghosts still gets a band", () => {
+    // The band can only be named from the ghost's own stageLabel here — there
+    // is no session in that stage to carry it.
+    const sb = seeded();
+    sb.setGroupMode("stage");
+    sb.setSessionStages(new Map([["alpha", stage("todo", "To do", 0)]]));
+    sb.setGhostSessions([stageGhost("i1", "ENG-9", "ship it", "review", "In review", 1)]);
+    expect(linesWith(sb, "In review")).toBeGreaterThan(-1);
+    expect(linesWith(sb, "ENG-9")).toBeGreaterThan(-1);
+  });
+
+  test("ghost-only stage bands obey workflow order like any other", () => {
+    const sb = seeded();
+    sb.setGroupMode("stage");
+    sb.setSessionStages(new Map());
+    sb.setGhostSessions([
+      stageGhost("i2", "ENG-2", "second", "review", "In review", 1),
+      stageGhost("i1", "ENG-1", "first", "todo", "To do", 0),
+    ]);
+    expect(linesWith(sb, "To do")).toBeLessThan(linesWith(sb, "In review"));
+    expect(linesWith(sb, "ENG-1")).toBeLessThan(linesWith(sb, "ENG-2"));
+  });
+
+  test("ghosts count toward a collapsed band's tally", () => {
+    // A stage of only ghosts must not collapse to a header reading "(0)".
+    const sb = seeded();
+    sb.setGroupMode("stage");
+    sb.setSessionStages(new Map());
+    sb.setGhostSessions([
+      stageGhost("i1", "ENG-1", "one", "todo", "To do", 0),
+      stageGhost("i2", "ENG-2", "two", "todo", "To do", 0),
+    ]);
+    sb.toggleGroup("stage:todo");
+    const g = sb.getGrid();
+    const row = linesWith(sb, "To do");
+    const text = Array.from({ length: WIDTH }, (_, i) => g.cells[row][i].char).join("");
+    expect(text).toContain("(2)");
+    expect(linesWith(sb, "ENG-1")).toBe(-1);
+  });
+
+  test("per-stage ghosts stay out of the session cycle order too", () => {
+    const sb = seeded();
+    sb.setGroupMode("stage");
+    sb.setSessionStages(new Map([["alpha", stage("todo", "To do", 0)]]));
+    const before = sb.getDisplayOrderIds();
+    sb.setGhostSessions([stageGhost("i1", "ENG-142", "fix it", "todo", "To do", 0)]);
+    expect(sb.getDisplayOrderIds()).toEqual(before);
+  });
+
+  test("a filter suppresses per-stage ghosts, and empties a ghost-only band", () => {
+    const sb = seeded();
+    sb.setGroupMode("stage");
+    sb.setSessionStages(new Map());
+    sb.setGhostSessions([stageGhost("i1", "ENG-1", "one", "todo", "To do", 0)]);
+    expect(linesWith(sb, "ENG-1")).toBeGreaterThan(-1);
+    sb.setFilterMode("attention");
+    expect(linesWith(sb, "ENG-1")).toBe(-1);
+    expect(linesWith(sb, "To do")).toBe(-1); // nothing left to head
+  });
+
+  test("a filter hides the band — ghosts have no agent state to match on", () => {
+    const sb = seeded();
+    sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
+    expect(linesWith(sb, "Up next")).toBeGreaterThan(-1);
+    for (const mode of ["attention", "active"] as const) {
+      sb.setFilterMode(mode);
+      expect(linesWith(sb, "Up next")).toBe(-1);
+      expect(linesWith(sb, "ENG-142")).toBe(-1);
+    }
+    sb.setFilterMode("all");
+    expect(linesWith(sb, "Up next")).toBeGreaterThan(-1);
+  });
+
+  test("a long title is truncated rather than spilling past the sidebar edge", () => {
+    const sb = seeded();
+    sb.setGhostSessions([ghost("i1", "ENG-142", "a".repeat(200))]);
+    const g = sb.getGrid();
+    const row = linesWith(sb, "aaa");
+    // Nothing may be written in the final column — that's the sidebar's border.
+    expect(g.cells[row][WIDTH - 1].char).not.toBe("a");
+  });
+
   test("header shows clickable group + sort chips, each its own hit target", () => {
     const sb = seeded();
     const header = () => Array.from({ length: WIDTH }, (_, i) => sb.getGrid().cells[0][i].char).join("");

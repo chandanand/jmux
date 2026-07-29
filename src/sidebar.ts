@@ -24,6 +24,7 @@ import {
   type SessionSortInfo,
   type StageBucket,
 } from "./sidebar-sort";
+import type { GhostEntry } from "./ghosts";
 
 export interface PinnedPaneEntry {
   paneId: string;
@@ -36,7 +37,11 @@ export interface PinnedPaneEntry {
 export type SidebarSelection =
   | { type: "overview" }
   | { type: "session"; id: string }
-  | { type: "pinnedPane"; paneId: string };
+  | { type: "pinnedPane"; paneId: string }
+  /** An unstarted issue in the Up next band. Carries only the id: the caller
+   * owns the issue data, and the sidebar deliberately knows nothing about
+   * trackers (same boundary as `setSessionStages`). */
+  | { type: "ghost"; issueId: string };
 
 const HEADER_ROWS = 2; // "Sessions" header + separator
 
@@ -145,6 +150,21 @@ const HOVER_DETAIL_ATTRS: CellAttrs = {
   bgMode: ColorMode.RGB,
 };
 
+// Ghost rows. The identifier is secondary rather than primary text and the
+// marker is a hollow ring against the live rows' filled dot — a ghost must read
+// as "not running yet" at a glance, or the sidebar stops being a truthful
+// picture of what exists.
+const GHOST_MARK_ATTRS: CellAttrs = {
+  fg: tokens.textTertiary.fg,
+  fgMode: tokens.textTertiary.fgMode,
+  dim: tokens.textTertiary.dim,
+};
+const GHOST_ID_ATTRS: CellAttrs = {
+  fg: tokens.textSecondary.fg,
+  fgMode: tokens.textSecondary.fgMode,
+};
+const GHOST_TITLE_ATTRS: CellAttrs = { dim: true };
+
 /**
  * Re-sync the sidebar's highlight backgrounds from the current theme. Called
  * after a terminal background is detected. The bare consts (ACTIVE_BG/HOVER_BG)
@@ -191,6 +211,13 @@ export function rebuildSidebarColors(): void {
 
   UPDATE_AVAILABLE_ATTRS.fg = tokens.attention.fg;
   UPDATE_AVAILABLE_ATTRS.fgMode = tokens.attention.fgMode;
+
+  GHOST_MARK_ATTRS.fg = tokens.textTertiary.fg;
+  GHOST_MARK_ATTRS.fgMode = tokens.textTertiary.fgMode;
+  GHOST_MARK_ATTRS.dim = tokens.textTertiary.dim;
+
+  GHOST_ID_ATTRS.fg = tokens.textSecondary.fg;
+  GHOST_ID_ATTRS.fgMode = tokens.textSecondary.fgMode;
 }
 // Group-header label tone — textSecondary, not the old bold palette-8. (The
 // Command Center header, which shares this const, re-adds bold explicitly at
@@ -286,6 +313,10 @@ type RenderItem =
   // renaming a stage doesn't silently expand a group the user had collapsed.
   | { type: "group-header"; key: string; label: string; collapsed: boolean; sessionCount: number }
   | { type: "session"; sessionIndex: number; grouped: boolean; groupLabel?: string; pinnedCount?: number }
+  // An issue with no session yet. Drawn with a session row's exact geometry —
+  // identifier where the name goes, title where the detail line goes — so the
+  // row it becomes on activation is the row it was already standing in for.
+  | { type: "ghost"; ghostIndex: number }
   | { type: "spacer" }
   | { type: "overview"; paneCount: number };
 
@@ -297,6 +328,13 @@ const PINNED_GROUP_LABEL = "Pinned";
 // row without killing the session behind it.
 const PARKED_GROUP_KEY = "parked";
 const PARKED_GROUP_LABEL = "Parked";
+
+// The other mirror of Parked: parked work has been handed off, up-next work has
+// not been picked up. They bracket the live sessions at the bottom of the list.
+// Expanded by default — unlike Parked, this band exists to *show* rows, and
+// defaulting it collapsed would make enabling the setting look like a no-op.
+const GHOST_GROUP_KEY = "upnext";
+const GHOST_GROUP_LABEL = "Up next";
 
 // The project bucket a session belongs to: its wtm project name (preferred) or
 // a directory-derived label, else null (ungrouped).
@@ -314,6 +352,10 @@ interface GroupBucket {
   label: string;
   rank: number;
   indices: number[];
+  /** Ghost rows in this group, emitted below its sessions. Only ever populated
+   * on the stage axis — that is the only grouping an issue without a session
+   * can be placed on. */
+  ghostIndices: number[];
 }
 
 function buildRenderPlan(
@@ -327,6 +369,7 @@ function buildRenderPlan(
   filterMode: FilterMode,
   parkedNames: Set<string> = new Set(),
   stageByName: Map<string, StageBucket> = new Map(),
+  ghosts: readonly GhostEntry[] = [],
 ): {
   items: RenderItem[];
   displayOrder: number[];
@@ -345,10 +388,17 @@ function buildRenderPlan(
     );
   }
 
+  const bucketFor = (key: string, label: string, rank: number): GroupBucket => {
+    let existing = bucketMap.get(key);
+    if (!existing) {
+      existing = { key, label, rank, indices: [], ghostIndices: [] };
+      bucketMap.set(key, existing);
+    }
+    return existing;
+  };
+
   const bucket = (key: string, label: string, rank: number, i: number): void => {
-    const existing = bucketMap.get(key);
-    if (existing) existing.indices.push(i);
-    else bucketMap.set(key, { key, label, rank, indices: [i] });
+    bucketFor(key, label, rank).indices.push(i);
   };
 
   for (let i = 0; i < sessions.length; i++) {
@@ -405,6 +455,33 @@ function buildRenderPlan(
     bucket(`status:${st}`, statusGroupLabel(st), statusRank(st), i);
   }
 
+  // Ghosts on the stage axis join their own stage's band, below its sessions.
+  // A stage holding only ghosts still gets a band — that is the whole point of
+  // the placement, and it is why a ghost carries its stage's label and rank:
+  // with no session in that stage, there is nothing else to name the header.
+  //
+  // Only under groupMode "stage". An issue with no session has no project, no
+  // agent status and no activity, so there is no honest bucket for it on any
+  // other axis; those modes get the flat band emitted further down instead.
+  //
+  // A filter suppresses ghosts everywhere. Both filters ("needs you", "active")
+  // select on agent state, which a ghost has none of — so it can neither match
+  // one nor be honestly excluded by it. Leaving them up would answer "show me
+  // only the sessions wanting my attention" with a list of work nobody has
+  // started.
+  const flatGhosts: number[] = [];
+  if (filterMode === "all") {
+    for (let g = 0; g < ghosts.length; g++) {
+      const ghost = ghosts[g]!;
+      if (groupMode === "stage" && ghost.stageId !== undefined) {
+        bucketFor(`stage:${ghost.stageId}`, ghost.stageLabel ?? ghost.stageId, ghost.rank ?? 0)
+          .ghostIndices.push(g);
+      } else if (groupMode !== "stage") {
+        flatGhosts.push(g);
+      }
+    }
+  }
+
   const info = (i: number) => sortInfos[i]!;
 
   // Member order within every bucket + Pinned + the flat list obeys sortMode.
@@ -430,7 +507,13 @@ function buildRenderPlan(
   items.push({ type: "overview", paneCount: pinnedPanes.length });
   items.push({ type: "spacer" });
 
-  const emitGroup = (key: string, label: string, indices: number[], collapsedByDefault = false): void => {
+  const emitGroup = (
+    key: string,
+    label: string,
+    indices: number[],
+    collapsedByDefault = false,
+    ghostIndices: readonly number[] = [],
+  ): void => {
     // Parked inverts the collapse default: the band exists to hide rows, so an
     // absent entry in `collapsedGroups` means collapsed, and toggling records
     // the expanded state instead.
@@ -442,7 +525,10 @@ function buildRenderPlan(
       key,
       label,
       collapsed: isCollapsed,
-      sessionCount: indices.length,
+      // Ghosts count toward the header's tally: collapsed, the number has to
+      // account for every row folded away, or a stage holding only ghosts
+      // collapses to a header reading "(0)".
+      sessionCount: indices.length + ghostIndices.length,
     });
     items.push({ type: "spacer" });
     if (isCollapsed) return;
@@ -457,6 +543,11 @@ function buildRenderPlan(
       displayOrder.push(idx);
       items.push({ type: "spacer" });
     }
+    // Ghosts last within the band: work someone is on outranks work nobody is.
+    for (const g of ghostIndices) {
+      items.push({ type: "ghost", ghostIndex: g });
+      items.push({ type: "spacer" });
+    }
   };
 
   // Pinned group, always the top group when any pins exist.
@@ -466,7 +557,7 @@ function buildRenderPlan(
 
   // Grouped buckets (none in group=none).
   for (const b of buckets) {
-    emitGroup(b.key, b.label, b.indices);
+    emitGroup(b.key, b.label, b.indices, false, b.ghostIndices);
   }
 
   // Flat list: group=none, or the project-less remainder in group=project.
@@ -479,6 +570,34 @@ function buildRenderPlan(
     });
     displayOrder.push(idx);
     items.push({ type: "spacer" });
+  }
+
+  // Up next: the fallback placement, for every grouping axis except stage.
+  // Below the live sessions and above Parked — work you haven't picked up is
+  // secondary to work that's running, but it isn't the back burner either.
+  //
+  // Emitted directly rather than through emitGroup so `displayOrder` stays
+  // untouched: that array drives Ctrl-Shift-Up/Down session cycling, and a nav
+  // key that provisioned a worktree would be a destructive surprise. Ghosts are
+  // click-activated; `Ctrl-a u` already provides the keyboard route to the top
+  // one. (The per-stage placement gets this for free — emitGroup pushes ghost
+  // items without touching displayOrder either.)
+  if (flatGhosts.length > 0) {
+    const collapsed = collapsedGroups.has(GHOST_GROUP_KEY);
+    items.push({
+      type: "group-header",
+      key: GHOST_GROUP_KEY,
+      label: GHOST_GROUP_LABEL,
+      collapsed,
+      sessionCount: flatGhosts.length,
+    });
+    items.push({ type: "spacer" });
+    if (!collapsed) {
+      for (const g of flatGhosts) {
+        items.push({ type: "ghost", ghostIndex: g });
+        items.push({ type: "spacer" });
+      }
+    }
   }
 
   // Parked band last, below everything — the back burner, not a headline.
@@ -501,6 +620,9 @@ function buildRenderPlan(
  */
 function itemHeight(item: RenderItem, hasStateRow: (sessionIndex: number) => boolean): number {
   if (item.type === "session") return hasStateRow(item.sessionIndex) ? 3 : 2;
+  // Identifier row + title row. Fixed at 2: a ghost has no agent to promote,
+  // so it never grows the third row a live session can.
+  if (item.type === "ghost") return 2;
   // Command Center: header row + an agent-state breakdown row when panes exist.
   if (item.type === "overview") return item.paneCount > 0 ? 2 : 1;
   return 1; // group-header or spacer
@@ -538,6 +660,7 @@ export class Sidebar {
   private pinnedSessions = new Set<string>();
   private parkedSessions = new Set<string>();
   private sessionStages = new Map<string, StageBucket>();
+  private ghosts: GhostEntry[] = [];
   private pinnedPanes: PinnedPaneEntry[] = [];
   private rowToSelection = new Map<number, SidebarSelection>();
   private currentVersion: string = "";
@@ -612,6 +735,17 @@ export class Sidebar {
    */
   setSessionStages(stages: Map<string, StageBucket>): void {
     this.sessionStages = new Map(stages);
+    this.rebuildPlan();
+  }
+
+  /**
+   * Unstarted issues for the Up next band, already selected, ordered and capped
+   * by the caller. Same boundary as `setSessionStages`: which issues qualify
+   * depends on the tracker, the stage config and the live session list, none of
+   * which the sidebar knows about.
+   */
+  setGhostSessions(ghosts: readonly GhostEntry[]): void {
+    this.ghosts = [...ghosts];
     this.rebuildPlan();
   }
 
@@ -717,6 +851,7 @@ export class Sidebar {
       this.filterMode,
       this.parkedSessions,
       this.sessionStages,
+      this.ghosts,
     );
     this.items = items;
     this.displayOrder = displayOrder;
@@ -1125,6 +1260,8 @@ export class Sidebar {
         this.rowToGroupKey.set(screenRow, item.key);
       } else if (item.type === "spacer") {
         // nothing to render
+      } else if (item.type === "ghost") {
+        this.renderGhost(grid, screenRow, item);
       } else {
         this.renderSession(grid, screenRow, item);
       }
@@ -1173,6 +1310,54 @@ export class Sidebar {
     if (isActive) {
       writeString(grid, row, 0, "▎", ACTIVE_MARKER_ATTRS);
     }
+  }
+
+  /**
+   * An unstarted issue, in a live session row's geometry: marker in column 1,
+   * identifier at the name column, title on the detail row. Both rows map to the
+   * same selection, exactly as a session's two rows do, so a click anywhere on
+   * the pair activates it.
+   *
+   * Never painted as active — a ghost has no session to be attached to, so the
+   * `isActive` argument to paintRowChrome is always false and the selection rail
+   * stays with whatever real session the user is actually in.
+   */
+  private renderGhost(
+    grid: CellGrid,
+    idRow: number,
+    item: Extract<RenderItem, { type: "ghost" }>,
+  ): void {
+    const ghost = this.ghosts[item.ghostIndex];
+    if (!ghost) return;
+
+    const titleRow = idRow + 1;
+    const isHovered = this.hoveredRow !== null &&
+      (this.hoveredRow === idRow || this.hoveredRow === titleRow);
+    const bgAttrs: CellAttrs = isHovered
+      ? { bg: HOVER_BG, bgMode: ColorMode.RGB }
+      : {};
+
+    this.rowToSelection.set(idRow, { type: "ghost", issueId: ghost.issueId });
+    if (titleRow < this.height) {
+      this.rowToSelection.set(titleRow, { type: "ghost", issueId: ghost.issueId });
+    }
+
+    this.paintRowChrome(grid, idRow, false, isHovered);
+    this.paintRowChrome(grid, titleRow, false, isHovered);
+
+    // A hollow ring where a live row carries its filled activity dot.
+    writeString(grid, idRow, 1, "○", { ...GHOST_MARK_ATTRS, ...bgAttrs });
+
+    const textStart = 3;
+    const maxCols = this.width - textStart - 1;
+    if (maxCols <= 0) return;
+
+    writeString(grid, idRow, textStart, truncateToCols(ghost.identifier, maxCols),
+      { ...GHOST_ID_ATTRS, ...bgAttrs });
+
+    if (titleRow >= this.height) return;
+    writeString(grid, titleRow, textStart, truncateToCols(ghost.title, maxCols),
+      { ...GHOST_TITLE_ATTRS, ...bgAttrs });
   }
 
   private renderSession(

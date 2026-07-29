@@ -245,13 +245,27 @@ describe("explainRow", () => {
     expect(explain("Old", {}, stale)).toContain("no longer in your tracker");
   });
 
-  test("a tab reports its size, how much of it parks, and its rotation slot", () => {
+  test("a tab reports its position, size, how much of it parks, and its rotation slot", () => {
     const rows = rowsOf(harness());
     const tab = (id: string) => rows.find((r) => r.kind === "tab" && r.viewId === id);
     expect(explainRow(tab("urgent")))
-      .toBe("Urgent · 1 status · 4 issues · 1st in Up next");
+      .toBe("Urgent · 1st of 2 · 1 status · 4 issues · 1st in Up next");
     expect(explainRow(tab("post-merge")))
-      .toBe("Post-merge · 2 statuses · 6 issues · 1 of them park · not in Up next");
+      .toBe("Post-merge · 2nd of 2 · 2 statuses · 6 issues · 1 of them park · not in Up next");
+  });
+
+  test("position counts stages only, so an MR tab between them doesn't skew it", () => {
+    const mixed = parseViews([
+      { id: "a", label: "A", source: "issues", filter: { scope: "assigned" }, states: [] },
+      { id: "m", label: "M", source: "mrs", filter: { scope: "authored" } },
+      { id: "b", label: "B", source: "issues", filter: { scope: "assigned" }, states: [] },
+    ]);
+    const rows = rowsOf(harness({}, mixed));
+    const tab = (id: string) => rows.find((r) => r.kind === "tab" && r.viewId === id);
+    expect(explainRow(tab("a"))).toContain("1st of 2");
+    expect(explainRow(tab("b"))).toContain("2nd of 2");
+    // An MR tab is not a stage, so it neither has a position nor consumes one.
+    expect(explainRow(tab("m"))).toBe("M · a merge-request tab, not a workflow stage.");
   });
 
   test("a setting row borrows its own description", () => {
@@ -649,6 +663,84 @@ describe("WorkflowScreen behaviour bands", () => {
     screen.handleInput("2");
     screen.handleInput("\r");
     expect(out.value).toBe("2");
+  });
+
+  test("a text prompt opens on the editable value, not the prose the row displays", () => {
+    // The row reads "never"; the input form is empty. Seeding the prompt with
+    // the display string meant typing a number produced "never3" — which parses
+    // to nothing, so the setting could not be switched on from its own prompt.
+    const out: { value: string | null } = { value: null };
+    const { screen } = open({
+      getBands: () => [band({
+        getValue: () => "never",
+        getEditValue: () => "",
+        onTextCommit: (v) => { out.value = v; },
+      })],
+    });
+    selectRow(screen, "Park idle sessions after");
+    screen.handleInput("\r");
+    screen.handleInput("3");   // deliberately no \x15 first
+    screen.handleInput("\r");
+    expect(out.value).toBe("3");
+  });
+
+  test("without getEditValue a text prompt still opens on the displayed value", () => {
+    const out: { value: string | null } = { value: null };
+    const { screen } = open({
+      getBands: () => [band({ getValue: () => "abc", onTextCommit: (v) => { out.value = v; } })],
+    });
+    selectRow(screen, "Park idle sessions after");
+    screen.handleInput("\r");
+    screen.handleInput("d");
+    screen.handleInput("\r");
+    expect(out.value).toBe("abcd");
+  });
+
+  test("◂ ▸ step a stepped setting in place, without opening an editor", () => {
+    const steps: number[] = [];
+    const { screen } = open({
+      getBands: () => [band({ onStep: (d) => { steps.push(d); } })],
+    });
+    selectRow(screen, "Park idle sessions after");
+    screen.handleInput("\x1b[C");
+    screen.handleInput("\x1b[C");
+    screen.handleInput("\x1b[D");
+    expect(steps).toEqual([1, 1, -1]);
+    // No prompt was opened — the value changes on the row itself.
+    expect(screen.render(80, 24)).toBeDefined();
+  });
+
+  test("left/right do nothing on a setting that isn't stepped", () => {
+    const out: { value: string | null } = { value: null };
+    const { screen } = open({
+      getBands: () => [band({ onTextCommit: (v) => { out.value = v; } })],
+    });
+    selectRow(screen, "Park idle sessions after");
+    screen.handleInput("\x1b[C");
+    screen.handleInput("\x1b[D");
+    expect(out.value).toBeNull();
+    // …and the cursor hasn't wandered: Enter still edits the row it was on.
+    screen.handleInput("\r");
+    screen.handleInput("\x15");
+    screen.handleInput("9");
+    screen.handleInput("\r");
+    expect(out.value).toBe("9");
+  });
+
+  test("a stepped row advertises ◂ ▸, and only while it is selected", () => {
+    const { screen } = open({ getBands: () => [band({ onStep: () => {} })] });
+    const text = (): string => {
+      const g = screen.render(80, 24);
+      return Array.from({ length: g.rows }, (_, r) =>
+        Array.from({ length: 80 }, (_, c) => g.cells[r][c].char).join("")).join("\n");
+    };
+    // Not selected yet — the row is plain.
+    expect(text()).not.toContain("◂");
+    selectRow(screen, "Park idle sessions after");
+    const shown = text();
+    expect(shown).toContain("◂");
+    expect(shown).toContain("▸");
+    expect(shown).toContain("change"); // and the footer names the keys
   });
 
   test("a list setting is a filterable picker, not a 25-step cycle", () => {
