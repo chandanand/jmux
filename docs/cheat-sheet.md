@@ -57,6 +57,20 @@ Four bands sit outside the grouping, in fixed positions:
   in their own stage's band instead. Off until you set a count on the workflow
   screen; see
   [Unstarted work in the sidebar](issue-tracking.md#unstarted-work-in-the-sidebar).
+  Selecting one opens a **preview** rather than starting it:
+
+  | Key | Action |
+  |-----|--------|
+  | `↵` | Start / Resume / Switch — whichever the pre-flight says applies |
+  | `s` | Change the issue's status (park it, or move it along) |
+  | `o` | Open the issue in your browser |
+  | `↑` `↓` `PgUp` `PgDn` | Scroll the issue body |
+  | `Esc` / `q` | Back to what you were doing |
+
+  The preview shows the issue *and* what starting it would do — the session and
+  branch name, the worktree path, the base branch, whether `wtm` or plain
+  `git worktree add` creates it, and which agent launches. Nothing is
+  provisioned until you press `↵`.
 - **Parked** is always last and **collapsed by default**, showing its count
   (`Parked (9)`). It holds sessions whose issue reached a status you marked as
   parked on the workflow screen — see
@@ -69,11 +83,15 @@ Four bands sit outside the grouping, in fixed positions:
 
 | Key | Action |
 |-----|--------|
-| `Ctrl-Shift-Up` | Switch to previous session |
-| `Ctrl-Shift-Down` | Switch to next session |
+| `Ctrl-Shift-Up` | Move to previous sidebar row |
+| `Ctrl-Shift-Down` | Move to next sidebar row |
 | `Ctrl-a n` | New session / new worktree (auto-detects wtm projects) |
 | `Ctrl-a r` | Rename current session |
 | `Ctrl-a m` | Move current window to another session |
+
+`Ctrl-Shift-Up` / `Ctrl-Shift-Down` walk every row the sidebar draws, not only
+sessions: landing on a session switches to it, landing on an unstarted issue
+opens its preview (below). The Command Center is the first stop in the cycle.
 
 Park a handed-off session (or bring one back) from the palette: **Park session**
 / **Unpark session**. Parked sessions collapse into a single row at the bottom of

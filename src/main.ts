@@ -792,6 +792,9 @@ const stdinGate = new StdinGate({
     rebuildInfoPanelColors();
     rebuildSettingsColors();
     rebuildWorkflowColors();
+    rebuildGhostPreviewColors();
+    // rebuildPanelViewColors also re-derives the shared issue-detail attrs, so
+    // the preview's body tracks the theme through the same call.
     rebuildPanelViewColors();
     applyPaneStyles(); // re-issue tmux window-style fades for the new theme
     // Pre-ready, the first paint after boot reads the freshly themed values;
@@ -929,6 +932,8 @@ const pinnedTracker = new PinnedPaneTracker();
 
 // Whether the Overview (pane-of-glass) view is currently shown, and its renderer.
 let inGlass = false;
+/** The real session the interactive client was on before glass parked it. */
+let preGlassSessionId: string | null = null;
 let glassView: GlassView | null = null;
 
 let commandCenterTabs: TabEntry[] = normalizeTabs(configStore.config.commandCenterTabs);
@@ -996,9 +1001,13 @@ let diffPty: import("bun-pty").Terminal | null = null;
 let diffPanelFocused = false;
 const settingsScreen = new SettingsScreen();
 const workflowScreen = new WorkflowScreen();
+const ghostPreview = new GhostPreview();
 
 import { SettingsScreen, rebuildSettingsColors, type SettingDef, type SettingsCategory, type SettingsAction } from "./settings-screen";
 import { WorkflowScreen, rebuildWorkflowColors, TRANSITIONS_BAND, type WorkflowPort, type WorkflowBand, type SettingsTier } from "./workflow-screen";
+import { GhostPreview, rebuildGhostPreviewColors, type GhostPreviewPort, type StartOutcome } from "./ghost-preview";
+import { buildPreflight, type Preflight } from "./ghost-preflight";
+import { resolveNavStep, type NavFocus } from "./nav-order";
 
 const adapters = demoCtx
   ? { codeHost: demoCtx.codeHost, issueTracker: demoCtx.issueTracker }
@@ -1608,25 +1617,37 @@ otelReceiver.onUpdate = (sessionName) => {
   scheduleRender();
 };
 
+/**
+ * Ctrl-Shift-Up/Down through `[Overview, ...sidebar rows]`.
+ *
+ * Rows are sessions *and* ghosts: landing on a session switches to it, landing
+ * on a ghost previews it. Ghosts were excluded while selecting one provisioned
+ * a worktree; previewing is not destructive, so the exclusion went with it.
+ *
+ * The stepping arithmetic lives in nav-order.ts — the empty-list and
+ * stale-focus cases are easy to get wrong and worth a unit test.
+ */
 function switchByOffset(offset: number): void {
-  const ids = sidebar.getDisplayOrderIds();
-  // Virtual cycle with the Overview as the first stop: [Overview, ...sessions].
-  const n = ids.length + 1;
-  let curPos: number;
-  if (inGlass) {
-    curPos = 0;
-  } else {
-    const idx = ids.indexOf(currentSessionId ?? "");
-    curPos = idx >= 0 ? idx + 1 : Math.min(1, ids.length);
-  }
-  const newPos = (((curPos + offset) % n) + n) % n;
-  if (newPos === 0) {
+  const targets = sidebar.getNavOrder();
+  const focus: NavFocus = inGlass
+    ? { type: "overview" }
+    : ghostPreview.isOpen && ghostPreview.getIssueId()
+      ? { type: "ghost", issueId: ghostPreview.getIssueId()! }
+      : { type: "session", sessionId: currentSessionId ?? "" };
+
+  const next = resolveNavStep(targets, focus, offset);
+
+  if (next.type === "overview") {
     if (!inGlass) void enterGlass();
     return;
   }
-  const target = ids[newPos - 1];
-  if (inGlass) void leaveGlass(target);
-  else switchSession(target);
+  if (next.type === "session") {
+    if (inGlass) void leaveGlass(next.sessionId);
+    else void switchSession(next.sessionId);
+    return;
+  }
+  const issue = pollCoordinator.getGlobalIssues().find((i) => i.id === next.issueId);
+  if (issue) openGhostPreview({ id: issue.id, identifier: issue.identifier });
 }
 
 // --- Diff panel lifecycle ---
@@ -1913,7 +1934,9 @@ function relayout(): void {
  * which row bands (toolbar/rules/footer) exist differs.
  */
 function activeChromeLayout(): FrameLayout {
-  return settingsScreen.isOpen || workflowScreen.isOpen || inGlass ? fullScreenLayout : layout;
+  return settingsScreen.isOpen || workflowScreen.isOpen || ghostPreview.isOpen || inGlass
+    ? fullScreenLayout
+    : layout;
 }
 
 /**
@@ -2036,6 +2059,26 @@ async function fetchSessions(): Promise<void> {
   }
 }
 
+/**
+ * Put the sidebar rail on the attached session — unless another surface owns
+ * the main area.
+ *
+ * The rail marks the row whose content is on screen, not merely which session
+ * tmux has us attached to. Those are the same thing most of the time, but the
+ * ghost preview and the Command Center both show something else, and an
+ * authoritative `%client-session-changed` from another tmux client would
+ * otherwise yank the rail onto a session the user cannot currently see.
+ * `currentSessionId` still tracks tmux either way; only the rail is withheld.
+ *
+ * Every write to the rail on the session-change path goes through here — there
+ * are two (resolveClientName and the client-session-changed handler), and
+ * guarding one but not the other is indistinguishable from guarding neither.
+ */
+function applySessionRail(): void {
+  if (ghostPreview.isOpen || inGlass) return;
+  sidebar.setActiveSession(currentSessionId ?? "");
+}
+
 async function resolveClientName(): Promise<void> {
   try {
     const lines = await control.sendCommand(
@@ -2050,7 +2093,7 @@ async function resolveClientName(): Promise<void> {
         const sessionId = rest[0];
         if (sessionId) {
           currentSessionId = sessionId;
-          sidebar.setActiveSession(sessionId);
+          applySessionRail();
         }
         return;
       }
@@ -2069,6 +2112,17 @@ async function syncControlClient(): Promise<void> {
 }
 
 async function switchSession(sessionId: string): Promise<void> {
+  // Choosing a session is choosing to stop previewing. Central so sidebar
+  // clicks, keyboard navigation and the palette all get it for free. Guarded
+  // against the unpark in closeGhostPreview, which calls back into here.
+  if (ghostPreview.isOpen) {
+    ghostPreview.close();
+    sidebar.setFocusedGhost(null);
+    previewUnparkTarget = null;
+    inputRouter.setModalOpen(inputConsumerActive());
+    applyChromeLayout();
+  }
+
   if (!ptyClientName) await resolveClientName();
   if (!ptyClientName) return;
 
@@ -2164,6 +2218,29 @@ function renderFrame(): void {
       { x: 0, y: 0 },
       sidebarGrid,
       null, null, null, undefined, undefined,
+      dragChrome(),
+    );
+    return;
+  }
+
+  // Ghost preview: the same frameless full-screen takeover as settings and
+  // workflow — but the modal overlay is composited, because unlike those two
+  // this surface opens a real ListModal (the status picker) over itself.
+  // Passing null here would open that picker invisibly.
+  if (ghostPreview.isOpen) {
+    const sidebarGrid = sidebarShown ? sidebar.getGrid() : null;
+    const totalCols = fullScreenLayout.termCols;
+    const contentCols = sidebarShown ? totalCols - fullScreenLayout.main.x : totalCols;
+    const overlay = computeModalOverlay(fullScreenLayout);
+    renderer.render(
+      fullScreenLayout,
+      ghostPreview.render(contentCols, fullScreenLayout.contentRows),
+      { x: 0, y: 0 },
+      sidebarGrid,
+      null,
+      overlay?.grid ?? null,
+      overlay?.cursor ?? null,
+      undefined, undefined,
       dragChrome(),
     );
     return;
@@ -2620,7 +2697,8 @@ const inputRouter = new InputRouter(
         return;
       }
       if (sel?.type === "ghost") {
-        void startGhost(sel.issueId);
+        const issue = pollCoordinator.getGlobalIssues().find((i) => i.id === sel.issueId);
+        if (issue) openGhostPreview({ id: issue.id, identifier: issue.identifier });
         return;
       }
       const session = sidebar.getSessionByRow(row);
@@ -2739,6 +2817,13 @@ const inputRouter = new InputRouter(
       }
       if (settingsScreen.isOpen) {
         handleSettingsInput(data);
+        return;
+      }
+      // Guarded on no modal being open: the preview hosts the status picker,
+      // and swallowing input here would leave that picker unable to receive
+      // the keys it exists to collect.
+      if (ghostPreview.isOpen && !activeModal?.isOpen()) {
+        handleGhostPreviewInput(data);
         return;
       }
       if (!activeModal?.isOpen()) return;
@@ -3225,7 +3310,13 @@ function closeModal(): void {
   activeModal?.close();
   activeModal = null;
   onModalResult = null;
-  inputRouter.setModalOpen(false);
+  // Hand routing back to whatever is still claiming input rather than clearing
+  // it outright. A full-screen surface can host a modal — the ghost preview
+  // opens the status picker over itself — and blindly clearing here left that
+  // surface painted but deaf, with the next keystroke leaking to the pty.
+  // Modal results call closeModal() before their callback, and SIGWINCH calls
+  // it too, so both paths went through this.
+  inputRouter.setModalOpen(inputConsumerActive());
   renderFrame();
 }
 
@@ -3883,6 +3974,7 @@ function toggleSettingsScreen(): void {
     settingsScreen.close();
     inputRouter.setModalOpen(inputConsumerActive());
   } else {
+    if (ghostPreview.isOpen) closeGhostPreview();
     settingsScreen.open(buildSettingsCategories());
     inputRouter.setModalOpen(true);
   }
@@ -4110,6 +4202,7 @@ function buildWorkflowPort(): WorkflowPort {
  */
 function openWorkflowScreen(): void {
   if (settingsScreen.isOpen) settingsScreen.close();
+  if (ghostPreview.isOpen) closeGhostPreview();
   closeModal();
   workflowScreen.open(buildWorkflowPort());
   inputRouter.setModalOpen(true);
@@ -4126,6 +4219,150 @@ function toggleWorkflowScreen(): void {
     return;
   }
   openWorkflowScreen();
+}
+
+function buildGhostPreviewPort(): GhostPreviewPort {
+  return {
+    getIssue: (issueId) =>
+      pollCoordinator.getGlobalIssues().find((i) => i.id === issueId) ?? null,
+
+    getPreflight: (issueId) => {
+      const issue = pollCoordinator.getGlobalIssues().find((i) => i.id === issueId);
+      if (!issue) return null;
+      const state = issueSessionStateFor(issue);
+      const repoDir = resolveIssueRepoDir(issue, configStore.config, homedir());
+      return buildPreflight({
+        issueState: state?.state ?? "none",
+        linkedSessionName: state?.sessionName,
+        repoDir,
+        sessionName: resolveIssueSessionName(issue),
+        team: issue.team ?? null,
+        settings: repoSettingsFor(repoDir),
+        trackerPresent: !!adapters.issueTracker,
+      });
+    },
+
+    onStart: (issueId) => startGhost(issueId),
+
+    onOpenInBrowser: (issueId) => {
+      adapters.issueTracker?.openInBrowser(issueId);
+    },
+
+    onChangeStatus: (issueId) => {
+      const tracker = adapters.issueTracker;
+      const issue = pollCoordinator.getGlobalIssues().find((i) => i.id === issueId);
+      if (!tracker || !issue) return;
+      tracker.getAvailableStatuses(issue.id).then((statuses) => {
+        if (statuses.length === 0) return;
+        // The request is async and the user is not frozen while it runs. If
+        // they left, or moved to another issue, a picker opening now would
+        // land over an unrelated screen and write to the wrong issue.
+        if (!ghostPreview.isOpen || ghostPreview.getIssueId() !== issue.id) return;
+        const listModal = new ListModal({
+          items: statuses.map((s) => ({ id: s, label: s })),
+          header: `${issue.identifier} — Update Status`,
+        });
+        listModal.open();
+        openModal(listModal, (selected: unknown) => {
+          const sel = selected as { id: string };
+          if (!sel?.id) return;
+          pollCoordinator.optimisticIssueStatus(issue.id, sel.id);
+          tracker.updateStatus(issue.id, sel.id)
+            .then(() => { pollCoordinator.refreshGlobalItem("issue", issue.id); })
+            .catch((e) => {
+              // The optimistic write already moved the row. Say so and pull the
+              // true value back, rather than leaving a silent lie on screen.
+              logError("jmux", `status update failed for ${issue.identifier}: ${(e as Error).message}`);
+              showToast(`${issue.identifier} status update failed`);
+              pollCoordinator.refreshGlobalItem("issue", issue.id);
+            });
+        });
+      }).catch(() => { /* tracker unreachable; nothing to open */ });
+    },
+  };
+}
+
+/**
+ * The session to unpark onto when a glass-opened preview closes.
+ *
+ * Non-null only when the preview was opened out of the Command Center. Glass
+ * parks the interactive client on an internal session and `exitGlass()`
+ * deliberately does not switch back — its contract puts that on the caller. A
+ * ghost is not a session target, so the preview cannot hand off to
+ * `leaveGlass()`; it takes ownership of the unpark instead and defers it until
+ * the user actually leaves.
+ */
+let previewUnparkTarget: string | null = null;
+
+/**
+ * Open the preview on a ghost, taking over the main area.
+ *
+ * The identifier travels with the id because the preview caches it: once an
+ * issue drops out of the global list there is no way to recover a human-
+ * readable name for the "no longer available" state.
+ */
+function openGhostPreview(issue: { id: string; identifier: string }): void {
+  // One full-screen surface at a time — two would leave one painted and deaf.
+  if (settingsScreen.isOpen) settingsScreen.close();
+  if (workflowScreen.isOpen) workflowScreen.close();
+  closeModal();
+
+  if (inGlass) {
+    // Leave the client parked: the preview paints the whole main area, so the
+    // parked session is invisible and unparking now would only make the tiles
+    // flash. The debt is settled in closeGhostPreview.
+    previewUnparkTarget = preGlassSessionId ?? currentSessionId;
+    exitGlass();
+  }
+
+  // The rail marks the row whose content fills the main area.
+  sidebar.setActiveSession("");
+  sidebar.setOverviewActive(false);
+  sidebar.setFocusedGhost(issue.id);
+  sidebar.scrollToActive();
+
+  ghostPreview.open(buildGhostPreviewPort(), issue);
+  inputRouter.setModalOpen(true);
+  applyChromeLayout();
+  scheduleRender();
+}
+
+function closeGhostPreview(): void {
+  if (!ghostPreview.isOpen) return;
+  ghostPreview.close();
+  sidebar.setFocusedGhost(null);
+
+  const unpark = previewUnparkTarget;
+  previewUnparkTarget = null;
+  if (unpark) {
+    // Opened out of glass, so the client is still parked on the internal
+    // session and something has to put it back on real work.
+    void switchSession(unpark);
+  } else {
+    applySessionRail();
+  }
+
+  inputRouter.setModalOpen(inputConsumerActive());
+  applyChromeLayout();
+  scheduleRender();
+}
+
+function handleGhostPreviewInput(data: string): void {
+  const wasOpen = ghostPreview.isOpen;
+  ghostPreview.handleInput(data);
+  // Escape/q closes the screen directly, and a successful start closes it from
+  // its own async continuation; both bypass closeGhostPreview, so the chrome
+  // and routing are re-synced here the way handleWorkflowInput does it.
+  if (wasOpen && !ghostPreview.isOpen) {
+    sidebar.setFocusedGhost(null);
+    const unpark = previewUnparkTarget;
+    previewUnparkTarget = null;
+    if (unpark) void switchSession(unpark);
+    else applySessionRail();
+    applyChromeLayout();
+    inputRouter.setModalOpen(inputConsumerActive());
+  }
+  scheduleRender();
 }
 
 function handleWorkflowInput(data: string): void {
@@ -4151,7 +4388,8 @@ function handleWorkflowInput(data: string): void {
  * one question with one answer is what stops the next surface repeating it.
  */
 function inputConsumerActive(): boolean {
-  return settingsScreen.isOpen || workflowScreen.isOpen || activeModal?.isOpen() === true;
+  return settingsScreen.isOpen || workflowScreen.isOpen || ghostPreview.isOpen
+    || activeModal?.isOpen() === true;
 }
 
 function handleSettingsInput(data: string): void {
@@ -4196,16 +4434,16 @@ async function startWorkOnIssue(
   issue: import("./adapters/types").Issue,
   issueState: "none" | "worktree" | "session",
   linkedSessionName: string | undefined,
-): Promise<void> {
+): Promise<StartOutcome> {
       // STATE 3: a live session already exists for this issue (either via an
       // explicit L-key link or a workflow-derived name match). Switch to it.
       // Done before the workflow/repoDir check so explicit links work even
       // when the issue's team has no teamRepoMap entry.
       if (issueState === "session" && linkedSessionName) {
         if (!ptyClientName) await resolveClientName();
-        if (!ptyClientName) return;
+        if (!ptyClientName) return "failed";
         await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(linkedSessionName)}`);
-        return;
+        return "switched";
       }
 
       const workflow = configStore.config.issueWorkflow;
@@ -4214,10 +4452,10 @@ async function startWorkOnIssue(
       // Automated path: config maps this issue's team to a repo
       if (repoDir) {
         if (!ptyClientName) await resolveClientName();
-        if (!ptyClientName) return;
+        if (!ptyClientName) return "failed";
 
         const session = resolveIssueSessionName(issue);
-        if (!session) return;
+        if (!session) return "failed";
 
         const expandedDir = repoDir.replace("~", homedir());
         // Settings resolve against the *issue's* repo, not the session the user
@@ -4254,7 +4492,7 @@ async function startWorkOnIssue(
             await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(session)}`);
             sessionState.addLink(session, { type: "issue", id: issue.id });
             void requestTransition(issue, "session-start");
-            return;
+            return "created";
           }
 
           // STATE 1: Nothing exists → create worktree + session. Every issue
@@ -4292,6 +4530,7 @@ async function startWorkOnIssue(
           await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(session)}`);
           sessionState.addLink(session, { type: "issue", id: issue.id });
           void requestTransition(issue, "session-start");
+          return "created";
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           const lines: StyledLine[] = [
@@ -4307,7 +4546,10 @@ async function startWorkOnIssue(
           errorModal.open();
           openModal(errorModal, () => {});
         }
-        return;
+        // The catch swallowed the error into a modal, so the promise resolves
+        // normally — callers can only tell this apart from success by the
+        // outcome, which is why one is returned at all.
+        return "failed";
       }
 
       // Fallback: no config mapping — open manual modal
@@ -4343,6 +4585,9 @@ async function startWorkOnIssue(
           showNewSessionError(result, err);
         }
       });
+      // The picker is now up and the user drives from here — neither a success
+      // nor a failure, and specifically not something to close a surface over.
+      return "handed-off";
 }
 
 /**
@@ -4415,11 +4660,11 @@ function upNextIssue(): { viewLabel: string; issue: import("./adapters/types").I
  * send `startWorkOnIssue` down the create-a-worktree path on top of one that
  * exists.
  */
-async function startGhost(issueId: string): Promise<void> {
+async function startGhost(issueId: string): Promise<StartOutcome> {
   const issue = pollCoordinator.getGlobalIssues().find((i) => i.id === issueId);
-  if (!issue) return;
-  const state = getIssueSessionStates().get(issue.id);
-  await startWorkOnIssue(issue, state?.state ?? "none", state?.sessionName);
+  if (!issue) return "gone";
+  const state = issueSessionStateFor(issue);
+  return startWorkOnIssue(issue, state?.state ?? "none", state?.sessionName);
 }
 
 /** Start (or switch to) whatever is at the top of the queue rotation. */
@@ -4430,49 +4675,65 @@ async function startUpNext(): Promise<void> {
   await startWorkOnIssue(next.issue, state?.state ?? "none", state?.sessionName);
 }
 
-function getIssueSessionStates(): Map<string, IssueSessionInfo> {
-  const states = new Map<string, IssueSessionInfo>();
-  const workflow = configStore.config.issueWorkflow;
-  const sessionNames = new Set(currentSessions.map((s) => s.name));
+/**
+ * Explicit issue→session links, keyed by issue id.
+ *
+ * An explicit link (set with the L key) wins over the workflow-derived name so
+ * re-linking an issue to a different session is honoured. If several live
+ * sessions claim the same issue, the current one wins.
+ */
+function explicitIssueLinks(): Map<string, string> {
   const currentName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
-
-  // Build a reverse index from sessionState: issue id -> live session name.
-  // An explicit link (set via the L key) wins over the workflow-derived name
-  // so that re-linking an issue to a different session is honoured by `n`.
-  // If multiple live sessions claim the same issue, prefer the current session.
-  const explicitLinks = new Map<string, string>();
-  for (const sessionName of sessionNames) {
-    for (const id of sessionState.getLinkedIssueIds(sessionName)) {
-      const existing = explicitLinks.get(id);
-      if (!existing || sessionName === currentName) {
-        explicitLinks.set(id, sessionName);
-      }
+  const links = new Map<string, string>();
+  for (const session of currentSessions) {
+    for (const id of sessionState.getLinkedIssueIds(session.name)) {
+      const existing = links.get(id);
+      if (!existing || session.name === currentName) links.set(id, session.name);
     }
   }
+  return links;
+}
 
+/**
+ * Session state for a single issue.
+ *
+ * Split out of `getIssueSessionStates` because the ghost preview needs the
+ * answer for exactly one issue, on every repaint. The map form walks every
+ * global issue and `existsSync`es each candidate worktree path — fine once per
+ * poll, a synchronous scan of the whole backlog per frame when pty output is
+ * driving repaints.
+ *
+ * `links` is optional so the batch caller builds the reverse index once instead
+ * of once per issue.
+ */
+function issueSessionStateFor(
+  issue: import("./adapters/types").Issue,
+  links?: Map<string, string>,
+): IssueSessionInfo | undefined {
+  const explicit = (links ?? explicitIssueLinks()).get(issue.id);
+  if (explicit) return { state: "session", sessionName: explicit };
+
+  const workflow = configStore.config.issueWorkflow;
+  if (!workflow?.teamRepoMap) return undefined;
+  const session = resolveIssueSessionName(issue);
+  if (!session) return undefined;
+
+  if (currentSessions.some((s) => s.name === session)) {
+    return { state: "session", sessionName: session };
+  }
+
+  const repoDir = workflow.teamRepoMap[issue.team ?? ""];
+  if (!repoDir) return undefined;
+  const wtPath = `${repoDir.replace("~", homedir())}/${session}`;
+  return existsSync(wtPath) ? { state: "worktree", sessionName: session } : undefined;
+}
+
+function getIssueSessionStates(): Map<string, IssueSessionInfo> {
+  const states = new Map<string, IssueSessionInfo>();
+  const links = explicitIssueLinks();
   for (const issue of pollCoordinator.getGlobalIssues()) {
-    const explicit = explicitLinks.get(issue.id);
-    if (explicit) {
-      states.set(issue.id, { state: "session", sessionName: explicit });
-      continue;
-    }
-
-    if (!workflow?.teamRepoMap) continue;
-    const session = resolveIssueSessionName(issue);
-    if (!session) continue;
-
-    if (sessionNames.has(session)) {
-      states.set(issue.id, { state: "session", sessionName: session });
-    } else {
-      const repoDir = workflow.teamRepoMap[issue.team ?? ""];
-      if (repoDir) {
-        const expandedDir = repoDir.replace("~", homedir());
-        const wtPath = `${expandedDir}/${session}`;
-        if (existsSync(wtPath)) {
-          states.set(issue.id, { state: "worktree", sessionName: session });
-        }
-      }
-    }
+    const info = issueSessionStateFor(issue, links);
+    if (info) states.set(issue.id, info);
   }
   return states;
 }
@@ -5626,7 +5887,7 @@ control.onEvent((event: ControlEvent) => {
     case "client-session-changed":
       // This fires when the PTY client switches sessions — authoritative
       resolveClientName().then(async () => {
-        sidebar.setActiveSession(currentSessionId ?? "");
+        applySessionRail();
         if (startupComplete) {
           await syncControlClient();
           fetchWindows();
@@ -6105,6 +6366,12 @@ function resizeGlass(): void {
 }
 
 async function enterGlass(): Promise<void> {
+  // Captured before anything else: parking the client below fires
+  // %client-session-changed, which rewrites currentSessionId to the internal
+  // park session. Anything that later needs "the real session we came from" —
+  // the ghost preview's unpark — has to read it from here.
+  preGlassSessionId = currentSessionId;
+  if (ghostPreview.isOpen) closeGhostPreview();
   ensureGlassView();
   inGlass = true;
   applyChromeLayout(); // frameless layout now governs the sidebar/input router

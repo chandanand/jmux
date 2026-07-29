@@ -41,6 +41,8 @@ const CHROME_MODULES = [
   "capture-modal.ts",
   "settings-screen.ts",
   "panel-view-renderer.ts",
+  "issue-detail.ts",
+  "ghost-preview.ts",
   "info-panel.ts",
   "glass/view.ts",
   "glass/strip.ts",

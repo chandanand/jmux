@@ -1989,13 +1989,122 @@ describe("Sidebar — sort & filter", () => {
     expect(sb.getSessionByRow(idRow + 1)).toBeNull();
   });
 
-  test("ghosts stay out of the session cycle order", () => {
-    // displayOrder drives Ctrl-Shift-Up/Down. A nav key that provisioned a
-    // worktree would be a destructive surprise, so ghosts are click-only.
+  test("ghosts stay out of displayOrder — it is the session cycle", () => {
+    // displayOrder means "sessions", and callers that ask for it get sessions.
+    // Keyboard navigation moved to getNavOrder(), which includes ghosts.
     const sb = seeded();
     const before = sb.getDisplayOrderIds();
     sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
     expect(sb.getDisplayOrderIds()).toEqual(before);
+  });
+
+  // --- Navigation order: ghosts are reachable from the keyboard ---
+  //
+  // They were excluded while landing on one provisioned a worktree. Selecting a
+  // ghost now opens a preview, so the exclusion lost its justification.
+
+  test("getNavOrder interleaves ghosts with sessions in render order", () => {
+    const sb = seeded();
+    sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
+    const nav = sb.getNavOrder();
+    expect(nav.filter((t) => t.type === "ghost")).toEqual([{ type: "ghost", issueId: "i1" }]);
+    // The flat band sits below the sessions, so the ghost is the last stop.
+    expect(nav[nav.length - 1]).toEqual({ type: "ghost", issueId: "i1" });
+    expect(nav.filter((t) => t.type === "session")).toHaveLength(4);
+  });
+
+  test("session nav targets carry ids that resolve against the session list", () => {
+    const sb = seeded();
+    const ids = sb.getDisplayOrderIds();
+    const navSessions = sb.getNavOrder()
+      .filter((t): t is { type: "session"; sessionId: string } => t.type === "session")
+      .map((t) => t.sessionId);
+    expect(navSessions).toEqual(ids);
+  });
+
+  test("ghosts join nav order on the stage axis too, inside their band", () => {
+    const sb = seeded();
+    sb.setGroupMode("stage");
+    sb.setSessionStages(new Map([["alpha", stage("todo", "To do", 0)]]));
+    sb.setGhostSessions([stageGhost("i1", "ENG-142", "fix flaky auth", "todo", "To do", 0)]);
+    const nav = sb.getNavOrder();
+    const ghostAt = nav.findIndex((t) => t.type === "ghost" && t.issueId === "i1");
+    const alphaAt = nav.findIndex((t) => t.type === "session" && t.sessionId === "$0");
+    expect(ghostAt).toBeGreaterThan(-1);
+    expect(alphaAt).toBeGreaterThan(-1);
+    expect(ghostAt).toBeGreaterThan(alphaAt);
+  });
+
+  test("a filter drops ghosts from nav order entirely", () => {
+    // Both filters select on agent state, which a ghost has none of, so the
+    // rows are never emitted — and an unemitted row is not a nav stop.
+    const sb = seeded();
+    sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
+    expect(sb.getNavOrder().some((t) => t.type === "ghost")).toBe(true);
+    sb.setFilterMode("attention");
+    expect(sb.getNavOrder().some((t) => t.type === "ghost")).toBe(false);
+  });
+
+  test("a collapsed band contributes no nav stops", () => {
+    const sb = seeded();
+    sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
+    sb.toggleGroup("upnext");
+    expect(sb.getNavOrder().some((t) => t.type === "ghost")).toBe(false);
+  });
+
+  // --- The focused ghost owns the rail while the preview is up ---
+
+  test("setFocusedGhost paints both of the ghost's rows as active", () => {
+    const sb = seeded();
+    sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
+    const idRow = linesWith(sb, "ENG-142");
+
+    const plain = sb.getGrid().cells[idRow]![0]!.bg;
+    sb.setFocusedGhost("i1");
+    const focused = sb.getGrid();
+    expect(focused.cells[idRow]![0]!.bg).not.toBe(plain);
+    expect(focused.cells[idRow + 1]![0]!.bg).toBe(focused.cells[idRow]![0]!.bg);
+
+    sb.setFocusedGhost(null);
+    expect(sb.getGrid().cells[idRow]![0]!.bg).toBe(plain);
+  });
+
+  test("focusing one ghost leaves its siblings unpainted", () => {
+    const sb = seeded();
+    sb.setGhostSessions([
+      ghost("i1", "ENG-142", "first"),
+      ghost("i2", "ENG-143", "second"),
+    ]);
+    sb.setFocusedGhost("i1");
+    const g = sb.getGrid();
+    const focusedRow = linesWith(sb, "ENG-142");
+    const otherRow = linesWith(sb, "ENG-143");
+    expect(g.cells[focusedRow]![0]!.bg).not.toBe(g.cells[otherRow]![0]!.bg);
+  });
+
+  test("scrollToActive brings an off-screen focused ghost into view", () => {
+    const sb = new Sidebar(WIDTH, 12); // short viewport, so the band is below the fold
+    sb.updateSessions(makeSessions([
+      { name: "alpha" }, { name: "bravo" }, { name: "charlie" }, { name: "delta" },
+    ]));
+    sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
+    expect(linesWith(sb, "ENG-142")).toBe(-1);
+
+    sb.setActiveSession("");
+    sb.setFocusedGhost("i1");
+    sb.scrollToActive();
+    expect(linesWith(sb, "ENG-142")).toBeGreaterThan(-1);
+  });
+
+  test("scrollToActive is inert when the focused ghost is not on screen at all", () => {
+    // The preview deliberately outlives its row: a filter can remove it while
+    // the surface stays open. That must not throw or scroll somewhere random.
+    const sb = seeded();
+    sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
+    sb.setFilterMode("attention");
+    sb.setActiveSession("");
+    sb.setFocusedGhost("i1");
+    expect(() => sb.scrollToActive()).not.toThrow();
   });
 
   test("the band collapses like any other group, keyed on its own axis", () => {

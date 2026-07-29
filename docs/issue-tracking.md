@@ -527,10 +527,54 @@ A hollow `○` where a live session carries its filled activity dot. The row use
 session row's exact two-row shape — identifier where the name goes, title where
 the branch goes — because that is the row it turns into.
 
-**Clicking one starts it**, running the same flow as `n` in the issues panel:
-worktree, session, agent, issue linked. If a worktree already exists from an
-earlier attempt it is reused rather than recreated. `Ctrl-a u` still starts the
-top item of your first non-empty queue without you clicking anything.
+**Clicking one previews it** — it does not start anything. The main area is
+replaced by the issue and, above the description, exactly what starting it would
+do:
+
+```
+  ENG-1255
+
+  ENG-1255 Add audit log for admin actions
+  Status: Todo   Priority: P3
+  Assignee: Jarred Kenny
+  Team: Platform
+
+  Starting will create
+    session  eng-1255-add-audit-log
+    worktree ~/Code/tracktile/eng-1255-add-audit-log
+    branch   eng-1255-add-audit-log (from main)
+    tool     wtm create
+    agent    claude
+
+  Description:
+  Compliance requires an immutable audit trail for all admin actions…
+
+  [↵] Start  [s] Status  [o] Open  [Esc] Back
+```
+
+`↵` runs the same flow as `n` in the issues panel: worktree, session, agent,
+issue linked. If a worktree already exists from an earlier attempt it is reused
+rather than recreated, and the action reads **Resume**; if a session already
+claims the issue it reads **Switch**. When the issue's team maps to no repo the
+pre-flight says so, and `↵` opens the manual session picker instead.
+
+`s` changes the issue's status without starting anything — which is also how you
+park it, since parking is a status. The row re-bands or disappears on its own.
+
+`Esc` returns you to whatever you were doing; the session underneath was never
+touched. `Ctrl-a u` still starts the top item of your first non-empty queue in
+one gesture, without previewing — it is an explicit start command, and what
+changed here is only that *selecting* a row no longer provisions.
+
+Unstarted rows are also reachable from the keyboard: `Ctrl-Shift-Up` /
+`Ctrl-Shift-Down` walk them alongside your sessions, so you can read down your
+backlog without touching the mouse.
+
+> **Known limitation.** A session created for an issue by `jmux ctl issue start`
+> in *another* jmux instance is not visible to the preview, which will still
+> offer **Start**. The CLI records its link in a tmux option that the TUI does
+> not read, and it names sessions by a different rule. The issues panel's `n`
+> key has the same blind spot; unifying the two is separate work.
 
 Note `IN REVIEW` above: a stage with no sessions still gets a band when it has
 unstarted work. And a stage whose work is all in flight simply shows no `○` rows.

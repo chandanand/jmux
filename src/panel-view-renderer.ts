@@ -1,13 +1,20 @@
 // src/panel-view-renderer.ts
 import type { CellGrid } from "./types";
 import { ColorMode } from "./types";
-import { createGrid, writeString, textCols, truncateToCols, type CellAttrs, type StyledLine } from "./cell-grid";
+import { createGrid, writeString, truncateToCols, type CellAttrs } from "./cell-grid";
 import { stateIndexInView, type PanelView, type GroupByField } from "./panel-view";
 import type { Issue, IssueStateType, MergeRequest, PipelineStatus } from "./adapters/types";
 import { fuzzyMatch } from "./fuzzy";
-import { renderMarkdownToStyledLines } from "./markdown";
 import { neutralFg } from "./theme";
 import { tokens } from "./chrome-tokens";
+import {
+  buildIssueDetailLines,
+  paintDetailLines,
+  rebuildIssueDetailColors,
+  DETAIL_LABEL,
+  DETAIL_VALUE,
+  type DetailLine,
+} from "./issue-detail";
 
 export type IssueSessionState = "none" | "worktree" | "session";
 
@@ -366,15 +373,14 @@ const PIPELINE_ATTRS: Record<string, CellAttrs> = {
 /** Injectable clock so row rendering stays deterministic under test. */
 let nowMs: () => number = () => Date.now();
 export function setPanelClock(fn: () => number): void { nowMs = fn; }
-const DETAIL_LABEL: CellAttrs = { fg: 8, fgMode: ColorMode.Palette, dim: true };
-const DETAIL_VALUE: CellAttrs = { fg: 7, fgMode: ColorMode.Palette };
+// DETAIL_LABEL / DETAIL_VALUE live in issue-detail.ts alongside the builder
+// that is their main consumer; the MR builder and action bar below import them
+// so both detail flavours stay visually identical.
 const DETAIL_KEY: CellAttrs = { fg: 2, fgMode: ColorMode.Palette };
 const SEPARATOR_ATTRS: CellAttrs = { fg: 8, fgMode: ColorMode.Palette, dim: true };
 // Accent for the split separator while it's hovered as a drag handle. Filled
 // in by rebuildPanelViewColors so it tracks the terminal theme.
 const SEPARATOR_HOVER_ATTRS: CellAttrs = { fg: 8, fgMode: ColorMode.Palette };
-const HINT_ATTRS: CellAttrs = { fg: 8, fgMode: ColorMode.Palette, dim: true };
-const URL_ATTRS: CellAttrs = { fg: tokens.link.fg, fgMode: tokens.link.fgMode, underline: true };
 
 export function rebuildPanelViewColors(): void {
   // chrome-tokens is rebuilt first (see main.ts's onBackground handler), so the
@@ -385,12 +391,14 @@ export function rebuildPanelViewColors(): void {
   }
   PRIORITY_ATTRS[2]!.fg = tokens.textPrimary.fg;
   PRIORITY_ATTRS[2]!.fgMode = tokens.textPrimary.fgMode;
-  URL_ATTRS.fg = tokens.link.fg;
-  URL_ATTRS.fgMode = tokens.link.fgMode;
   SEPARATOR_HOVER_ATTRS.fg = tokens.accent.fg;
   SEPARATOR_HOVER_ATTRS.fgMode = tokens.accent.fgMode;
   const n = neutralFg(7);
-  for (const a of [TITLE_ATTRS, DETAIL_VALUE]) { a.fg = n.fg; a.fgMode = n.fgMode; }
+  TITLE_ATTRS.fg = n.fg;
+  TITLE_ATTRS.fgMode = n.fgMode;
+  // The detail attributes moved out with their builder, but the rebuild stays
+  // a single entry point so main.ts's onBackground handler has one thing to call.
+  rebuildIssueDetailColors();
 }
 rebuildPanelViewColors();
 
@@ -652,65 +660,6 @@ function renderItem(grid: CellGrid, row: number, cols: number, item: RenderableI
   writeString(grid, row, col, text, selected ? { ...TITLE_ATTRS, bold: true } : TITLE_ATTRS);
 }
 
-type DetailLine =
-  | { text: string; attrs: CellAttrs; indent?: number }
-  | { segments: StyledLine; indent?: number };
-
-function buildIssueDetailLines(item: RenderableItem, cols: number): DetailLine[] {
-  const issue = item.raw as Issue;
-  const pad = 2;
-  const contentWidth = cols - pad * 2;
-  const lines: DetailLine[] = [];
-
-  // Header
-  lines.push({ text: `${issue.identifier} ${issue.title}`.slice(0, contentWidth), attrs: { ...DETAIL_VALUE, bold: true } });
-
-  // Metadata
-  let statusLine = `Status: ${issue.status}`;
-  if (issue.priority != null && issue.priority > 0) statusLine += `   Priority: P${issue.priority}`;
-  lines.push({ text: statusLine, attrs: DETAIL_LABEL });
-  lines.push({ text: `Assignee: ${issue.assignee ?? "Unassigned"}`, attrs: DETAIL_LABEL });
-  if (issue.team) lines.push({ text: `Team: ${issue.team}`, attrs: DETAIL_LABEL });
-
-  // Links
-  if (issue.links && issue.links.length > 0) {
-    lines.push({ text: "", attrs: DIM_ATTRS });
-    lines.push({ text: "Links:", attrs: { ...DETAIL_LABEL, bold: true } });
-    for (const link of issue.links) {
-      const label = link.title ?? link.url;
-      lines.push({ text: `${label}`.slice(0, contentWidth - 1), attrs: URL_ATTRS, indent: 1 });
-      if (link.title) {
-        lines.push({ text: link.url.slice(0, contentWidth - 1), attrs: DIM_ATTRS, indent: 1 });
-      }
-    }
-  }
-
-  // Description
-  if (issue.description) {
-    lines.push({ text: "", attrs: DIM_ATTRS });
-    lines.push({ text: "Description:", attrs: { ...DETAIL_LABEL, bold: true } });
-    for (const segLine of renderMarkdownToStyledLines(issue.description, contentWidth, { baseAttrs: DETAIL_VALUE })) {
-      lines.push({ segments: segLine });
-    }
-  }
-
-  // Comments
-  if (issue.comments && issue.comments.length > 0) {
-    lines.push({ text: "", attrs: DIM_ATTRS });
-    lines.push({ text: `Comments (${issue.comments.length}):`, attrs: { ...DETAIL_LABEL, bold: true } });
-    for (const comment of issue.comments) {
-      lines.push({ text: "", attrs: DIM_ATTRS });
-      const date = comment.createdAt ? new Date(comment.createdAt).toLocaleDateString() : "";
-      lines.push({ text: `${comment.author}  ${date}`, attrs: { ...DETAIL_LABEL, bold: true } });
-      for (const segLine of renderMarkdownToStyledLines(comment.body, contentWidth, { baseAttrs: DETAIL_VALUE })) {
-        lines.push({ segments: segLine });
-      }
-    }
-  }
-
-  return lines;
-}
-
 function buildMrDetailLines(item: RenderableItem, cols: number): DetailLine[] {
   const mr = item.raw as MergeRequest;
   const pad = 2;
@@ -737,45 +686,10 @@ function buildMrDetailLines(item: RenderableItem, cols: number): DetailLine[] {
 }
 
 function renderDetail(grid: CellGrid, startRow: number, cols: number, maxRows: number, item: RenderableItem, scrollOffset: number): void {
-  const pad = 2;
   const lines = item.type === "issue"
-    ? buildIssueDetailLines(item, cols)
+    ? buildIssueDetailLines(item.raw as Issue, cols)
     : buildMrDetailLines(item, cols);
-
-  // Show scroll indicator if content overflows
-  const totalLines = lines.length;
-  const canScroll = totalLines > maxRows;
-
-  for (let i = 0; i < maxRows; i++) {
-    const lineIdx = i + scrollOffset;
-    if (lineIdx >= totalLines) break;
-    const line = lines[lineIdx];
-    const indent = (line.indent ?? 0) * 2;
-    const startCol = pad + indent;
-    const maxWidth = cols - pad * 2 - indent;
-    if ("segments" in line) {
-      let used = 0;
-      for (const seg of line.segments) {
-        if (used >= maxWidth) break;
-        // writeString clips at the grid edge, so we don't pre-truncate the slice;
-        // we just track display width so the next segment lands at the right column.
-        writeString(grid, startRow + i, startCol + used, seg.text, seg.attrs);
-        used += textCols(seg.text);
-      }
-    } else {
-      writeString(grid, startRow + i, startCol, line.text.slice(0, maxWidth), line.attrs);
-    }
-  }
-
-  // Scroll indicators
-  if (canScroll) {
-    if (scrollOffset > 0) {
-      writeString(grid, startRow, cols - pad, "↑", HINT_ATTRS);
-    }
-    if (scrollOffset + maxRows < totalLines) {
-      writeString(grid, startRow + maxRows - 1, cols - pad, "↓", HINT_ATTRS);
-    }
-  }
+  paintDetailLines(grid, startRow, 0, cols, maxRows, lines, scrollOffset);
 }
 
 function writeAction(grid: CellGrid, row: number, col: number, key: string, label: string): number {

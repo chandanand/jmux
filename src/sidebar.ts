@@ -25,6 +25,7 @@ import {
   type StageBucket,
 } from "./sidebar-sort";
 import type { GhostEntry } from "./ghosts";
+import type { NavTarget } from "./nav-order";
 
 export interface PinnedPaneEntry {
   paneId: string;
@@ -373,6 +374,7 @@ function buildRenderPlan(
 ): {
   items: RenderItem[];
   displayOrder: number[];
+  navOrder: NavTarget[];
 } {
   const pinnedIndices: number[] = [];
   const parkedIndices: number[] = [];
@@ -502,6 +504,10 @@ function buildRenderPlan(
 
   const items: RenderItem[] = [];
   const displayOrder: number[] = [];
+  // Ctrl-Shift-Up/Down's stops, in render order. Ghosts belong here now that
+  // landing on one previews rather than provisions — see the note on the flat
+  // band below for the history.
+  const navOrder: NavTarget[] = [];
 
   // Command Center block first — always present (header + counts only).
   items.push({ type: "overview", paneCount: pinnedPanes.length });
@@ -541,11 +547,13 @@ function buildRenderPlan(
         pinnedCount: pinnedPaneCountBySession.get(sessions[idx].name),
       });
       displayOrder.push(idx);
+      navOrder.push({ type: "session", sessionId: sessions[idx]!.id });
       items.push({ type: "spacer" });
     }
     // Ghosts last within the band: work someone is on outranks work nobody is.
     for (const g of ghostIndices) {
       items.push({ type: "ghost", ghostIndex: g });
+      navOrder.push({ type: "ghost", issueId: ghosts[g]!.issueId });
       items.push({ type: "spacer" });
     }
   };
@@ -569,6 +577,7 @@ function buildRenderPlan(
       pinnedCount: pinnedPaneCountBySession.get(sessions[idx].name),
     });
     displayOrder.push(idx);
+    navOrder.push({ type: "session", sessionId: sessions[idx]!.id });
     items.push({ type: "spacer" });
   }
 
@@ -576,12 +585,15 @@ function buildRenderPlan(
   // Below the live sessions and above Parked — work you haven't picked up is
   // secondary to work that's running, but it isn't the back burner either.
   //
-  // Emitted directly rather than through emitGroup so `displayOrder` stays
-  // untouched: that array drives Ctrl-Shift-Up/Down session cycling, and a nav
-  // key that provisioned a worktree would be a destructive surprise. Ghosts are
-  // click-activated; `Ctrl-a u` already provides the keyboard route to the top
-  // one. (The per-stage placement gets this for free — emitGroup pushes ghost
-  // items without touching displayOrder either.)
+  // Emitted directly rather than through emitGroup because its header is not a
+  // session bucket — but it contributes nav stops like every other band.
+  //
+  // Ghosts were once deliberately excluded from keyboard navigation: landing on
+  // one used to provision a worktree, so a nav key was a destructive surprise.
+  // Selecting a ghost now opens a preview instead, which removed the only
+  // justification the exclusion ever had. `displayOrder` stays session-only —
+  // it is the *session* cycle, and callers that mean "sessions" still get
+  // sessions.
   if (flatGhosts.length > 0) {
     const collapsed = collapsedGroups.has(GHOST_GROUP_KEY);
     items.push({
@@ -595,6 +607,7 @@ function buildRenderPlan(
     if (!collapsed) {
       for (const g of flatGhosts) {
         items.push({ type: "ghost", ghostIndex: g });
+        navOrder.push({ type: "ghost", issueId: ghosts[g]!.issueId });
         items.push({ type: "spacer" });
       }
     }
@@ -605,7 +618,7 @@ function buildRenderPlan(
     emitGroup(PARKED_GROUP_KEY, PARKED_GROUP_LABEL, sortedParked, true);
   }
 
-  return { items, displayOrder };
+  return { items, displayOrder, navOrder };
 }
 
 /**
@@ -648,6 +661,9 @@ export class Sidebar {
   private height: number;
   private sessions: SessionInfo[] = [];
   private activeSessionId: string | null = null;
+  /** Issue id of the ghost the preview surface is showing, if any. */
+  private focusedGhostId: string | null = null;
+  private navOrder: NavTarget[] = [];
   private overviewActive = false;
   private items: RenderItem[] = [];
   private displayOrder: number[] = [];
@@ -702,6 +718,18 @@ export class Sidebar {
   /** Mark the Command Center (Overview) as the active selection. */
   setOverviewActive(active: boolean): void {
     this.overviewActive = active;
+  }
+
+  /**
+   * Mark a ghost row as the active selection, or clear it with null.
+   *
+   * The rail marks the row the main area is showing. A ghost can own it because
+   * the preview surface shows a ghost's content — the same reason Overview owns
+   * it in the Command Center.
+   */
+  setFocusedGhost(issueId: string | null): void {
+    if (this.focusedGhostId === issueId) return;
+    this.focusedGhostId = issueId;
   }
 
   toggleGroup(label: string): void {
@@ -840,7 +868,7 @@ export class Sidebar {
   }
 
   private rebuildPlan(): void {
-    const { items, displayOrder } = buildRenderPlan(
+    const { items, displayOrder, navOrder } = buildRenderPlan(
       this.sessions,
       this.collapsedGroups,
       this.pinnedSessions,
@@ -855,6 +883,7 @@ export class Sidebar {
     );
     this.items = items;
     this.displayOrder = displayOrder;
+    this.navOrder = navOrder;
     this.clampScroll();
   }
 
@@ -914,6 +943,15 @@ export class Sidebar {
     return this.displayOrder
       .map((idx) => this.sessions[idx]?.id)
       .filter(Boolean) as string[];
+  }
+
+  /**
+   * Every row Ctrl-Shift-Up/Down can land on, in render order — sessions and
+   * ghosts interleaved exactly as drawn. Rows inside a collapsed band, or
+   * removed by a filter, are absent because they were never emitted.
+   */
+  getNavOrder(): readonly NavTarget[] {
+    return this.navOrder;
   }
 
   setVersion(current: string, latest?: string): void {
@@ -988,23 +1026,34 @@ export class Sidebar {
     this.clampScroll();
   }
 
+  /**
+   * Bring whatever currently owns the rail into view — the attached session, or
+   * a focused ghost when the preview owns the surface.
+   *
+   * A focused ghost that isn't emitted at all (filtered out, inside a collapsed
+   * band, or no longer a ghost) is a no-op rather than an error: the preview
+   * deliberately outlives its row.
+   */
   scrollToActive(): void {
-    if (!this.activeSessionId) return;
+    if (!this.activeSessionId && !this.focusedGhostId) return;
     const viewportHeight = this.viewportHeight();
     let vRow = 0;
     for (const item of this.items) {
       const h = this.heightOf(item);
-      if (item.type === "session") {
-        const session = this.sessions[item.sessionIndex];
-        if (session?.id === this.activeSessionId) {
-          if (vRow < this.scrollOffset) {
-            this.scrollOffset = vRow;
-          } else if (vRow + h > this.scrollOffset + viewportHeight) {
-            this.scrollOffset = vRow + h - viewportHeight;
-          }
-          this.clampScroll();
-          return;
+      const isTarget =
+        item.type === "session"
+          ? this.sessions[item.sessionIndex]?.id === this.activeSessionId
+          : item.type === "ghost"
+            ? this.ghosts[item.ghostIndex]?.issueId === this.focusedGhostId
+            : false;
+      if (isTarget) {
+        if (vRow < this.scrollOffset) {
+          this.scrollOffset = vRow;
+        } else if (vRow + h > this.scrollOffset + viewportHeight) {
+          this.scrollOffset = vRow + h - viewportHeight;
         }
+        this.clampScroll();
+        return;
       }
       vRow += h;
     }
@@ -1318,9 +1367,12 @@ export class Sidebar {
    * same selection, exactly as a session's two rows do, so a click anywhere on
    * the pair activates it.
    *
-   * Never painted as active — a ghost has no session to be attached to, so the
-   * `isActive` argument to paintRowChrome is always false and the selection rail
-   * stays with whatever real session the user is actually in.
+   * Painted as active when the preview surface is showing this issue. A ghost
+   * has no session to be attached to, but the rail does not mark attachment —
+   * it marks the row whose content fills the main area, which is exactly what a
+   * ghost preview puts there. (Before the preview existed a ghost could never
+   * be active, because clicking one provisioned immediately and the row became
+   * a real session in the same gesture.)
    */
   private renderGhost(
     grid: CellGrid,
@@ -1331,19 +1383,22 @@ export class Sidebar {
     if (!ghost) return;
 
     const titleRow = idRow + 1;
-    const isHovered = this.hoveredRow !== null &&
+    const isActive = this.focusedGhostId !== null && ghost.issueId === this.focusedGhostId;
+    const isHovered = !isActive && this.hoveredRow !== null &&
       (this.hoveredRow === idRow || this.hoveredRow === titleRow);
-    const bgAttrs: CellAttrs = isHovered
-      ? { bg: HOVER_BG, bgMode: ColorMode.RGB }
-      : {};
+    const bgAttrs: CellAttrs = isActive
+      ? { bg: ACTIVE_BG, bgMode: ColorMode.RGB }
+      : isHovered
+        ? { bg: HOVER_BG, bgMode: ColorMode.RGB }
+        : {};
 
     this.rowToSelection.set(idRow, { type: "ghost", issueId: ghost.issueId });
     if (titleRow < this.height) {
       this.rowToSelection.set(titleRow, { type: "ghost", issueId: ghost.issueId });
     }
 
-    this.paintRowChrome(grid, idRow, false, isHovered);
-    this.paintRowChrome(grid, titleRow, false, isHovered);
+    this.paintRowChrome(grid, idRow, isActive, isHovered);
+    this.paintRowChrome(grid, titleRow, isActive, isHovered);
 
     // A hollow ring where a live row carries its filled activity dot.
     writeString(grid, idRow, 1, "○", { ...GHOST_MARK_ATTRS, ...bgAttrs });
