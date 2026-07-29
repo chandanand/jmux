@@ -44,6 +44,8 @@ tmux PTY bytes -> ScreenBridge (@xterm/headless) -> CellGrid -> Renderer -> stdo
 
 jmux feeds raw PTY bytes into a headless xterm.js terminal, reads back a grid of cells, then composites the main grid + sidebar + toolbar + optional overlays into a single frame and emits SGR codes to stdout.
 
+Because jmux is the **outermost** program on the terminal — tmux runs inside a pty it owns — it can also speak the terminal's graphics protocol directly, with no multiplexer passthrough in the way. That is what lets a screenshot attached to an issue render as an actual picture in the info panel; see [Images in issue previews](issue-tracking.md#images-in-issue-previews). Images ride the same cell grid as everything else: a picture reserves cells that carry a mark, and the graphics layer reads its work back off the finished frame — so scrolling, clipping and occlusion by a modal are handled by the code that already does those things to text.
+
 No opinions about what you run inside tmux. If it runs tmux, it runs jmux.
 
 For a deeper tour of the internals — the control-mode subtleties, input routing, modals, adapters, and the agent-control CLI — see [`CLAUDE.md`](../CLAUDE.md) at the repo root.

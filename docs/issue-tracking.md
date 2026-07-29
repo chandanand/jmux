@@ -107,6 +107,52 @@ Changes persist to `~/.config/jmux/config.json` automatically. Once a view looks
 right, **Save current view as tab** in the command palette (`Ctrl-a p`) clones
 it under a new name — configuring by demonstration rather than by editing JSON.
 
+### Images in issue previews
+
+When a terminal can draw pictures, jmux draws them: a screenshot pasted into a
+Linear issue or a GitHub comment renders inline in the detail pane and in the
+[ghost preview](#unstarted-work-in-the-sidebar), instead of a link you would
+have to open a browser to follow.
+
+This uses the **kitty graphics protocol**, so it works in kitty, Ghostty,
+WezTerm, Konsole and anything else that implements it. jmux asks the terminal at
+startup whether it speaks the protocol and believes the answer — on a terminal
+that doesn't, or one that never replies, images stay the clickable links they
+have always been. Nothing to turn on.
+
+Two rules decide what gets drawn, and both are deliberate:
+
+- **An image on a line of its own becomes a picture. An image inside a sentence
+  stays a link.** Drawing an image means cutting the document in two and
+  rendering the halves separately, which would break any list or table that
+  spanned the cut. A flush-left line is the one place no such construct can be
+  open. Badges wrapped in a link (`[![build](badge.svg)](ci)`) stay links too —
+  the page they point at is the useful destination, not the badge.
+- **Anything that can't be drawn falls back to the link, and says why.** A
+  private attachment that 403s, an SVG, a format with no converter installed —
+  each renders as the same link you'd have got anyway, with the reason beside
+  it. You are never left staring at a blank rectangle.
+
+**Clicking a drawn image opens it**, exactly as clicking the link did before —
+showing you the picture doesn't take away what the link could do. The whole
+image is the target, not just a caption.
+
+PNGs are sent to the terminal as-is. JPEG, GIF, WebP and BMP are re-encoded
+first, which needs ImageMagick (`magick`) or, on macOS, the built-in `sips` —
+both are looked for automatically, and without either those formats fall back to
+links. Fetching an attachment from a private tracker uses the same credential
+the tracker adapter does, and only ever sends it to that tracker's own host.
+
+Two settings, both under **Display** in the settings screen (`Ctrl-a I`):
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `images.enabled` | unset (detect) | Force inline images on or off, overriding detection |
+| `images.maxRows` | `16` | Tallest an inline image may be, in terminal rows |
+
+The height cap is the one worth tuning. Without it a tall screenshot pushes
+every word of the issue off the bottom of the pane, and you came for the issue.
+
 ---
 
 ## Session Linking

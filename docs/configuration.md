@@ -159,7 +159,10 @@ jmux's own settings (not tmux settings) live in `~/.config/jmux/config.json`. Ed
     "upNext": [],
     "showUnstartedInSidebar": null
   },
-  "panelViews": []
+  "panelViews": [],
+  "images": {
+    "maxRows": 16
+  }
 }
 ```
 
@@ -168,6 +171,13 @@ shows in the sidebar as startable rows: a count, `"all"`, or `null` for off.
 Per-stage exceptions (`inSidebar`, `showUnstarted`) live on the stage's own entry
 in `panelViews`. Both are edited on the workflow screen (`Ctrl-a W`) — see
 [Unstarted work in the sidebar](issue-tracking.md#unstarted-work-in-the-sidebar).
+
+`images` controls inline pictures in issue previews. `enabled` is deliberately
+absent from the example: left unset, jmux asks the terminal whether it speaks
+the kitty graphics protocol and uses the answer, which is right on every
+terminal that answers honestly. Set it to `true` or `false` only to overrule
+that. `maxRows` caps how tall one image may be. See
+[Images in issue previews](issue-tracking.md#images-in-issue-previews).
 
 ### Per-repo settings (`repoDefaults` / `repos`)
 

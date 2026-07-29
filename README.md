@@ -173,6 +173,14 @@ jmux paints its own sidebar, toolbar, and rounded window chrome — and it **ful
 
 Use any editor. Any Git tool. Any AI agent. Any shell. No Electron. No proprietary runtime. **If it runs tmux, it runs jmux.**
 
+### Screenshots render in the terminal
+
+A screenshot pasted into a Linear issue or a GitHub comment shows up as an **actual picture** in the info panel — not a link you have to leave the terminal to follow. jmux draws it with the kitty graphics protocol, which works in Ghostty, kitty, WezTerm and Konsole.
+
+It works because jmux is the outermost program on your terminal: tmux runs inside a pty jmux owns, so nothing has to be passed through a multiplexer. Nothing to turn on — jmux asks your terminal whether it can draw and believes the answer. Where it can't, images stay the clickable links they always were. Clicking a rendered image still opens it.
+
+See [Images in issue previews](docs/issue-tracking.md#images-in-issue-previews).
+
 ### Also included
 
 - **Command palette** (`Ctrl-a p`) — fuzzy-search sessions, windows, pane actions, settings, and issue/MR commands. ([screenshot](docs/screenshots/command-palette.webp))
