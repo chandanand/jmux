@@ -48,10 +48,15 @@ claims, list flat below the stage groups. See [Issue tracking](issue-tracking.md
 | Filter `Needs you` | Only sessions whose agent is waiting on you. |
 | Filter `Active` | Waiting *or* running — the sessions actually doing something. |
 
-Three bands sit outside the grouping, in fixed positions:
+Four bands sit outside the grouping, in fixed positions:
 
 - **Command Center** is always the first row.
 - **Pinned** is the top group whenever any pane is pinned.
+- **Up next** holds unstarted issues — work with no session yet — when the
+  sidebar is grouped by anything other than `Stage`. Under `Stage` those rows sit
+  in their own stage's band instead. Off until you set a count on the workflow
+  screen; see
+  [Unstarted work in the sidebar](issue-tracking.md#unstarted-work-in-the-sidebar).
 - **Parked** is always last and **collapsed by default**, showing its count
   (`Parked (9)`). It holds sessions whose issue reached a status you marked as
   parked on the workflow screen — see
@@ -201,8 +206,21 @@ See [issue-tracking.md](issue-tracking.md) for setup and configuration.
 In Progress, Waiting — each sitting on top of one or many of your tracker's
 statuses. Two blocks: your stages, then a table of every status. Each status has
 two settings: which stage it belongs to (`↵`) and whether it parks (`space`).
-`u` puts a stage in the `Ctrl-a u` rotation, `⇧↑↓` reorders, `d` removes. The
-line above the keys says what the selected row will actually do.
+The line above the keys says what the selected row will actually do.
+
+On a **stage** row:
+
+| Key | Action |
+|-----|--------|
+| `↵` | Rename the stage |
+| `⇧↑` `⇧↓` | Reorder it — this order drives the panel's tabs and the sidebar's bands |
+| `s` | Show / hide the stage in the sidebar (its sessions stay either way) |
+| `space` | Show / hide its unstarted work as startable rows |
+| `u` | Add to / drop from the `Ctrl-a u` rotation |
+| `d` | Delete the stage (asks first) |
+
+`◂` `▸` step a counted setting in place — including **how many unstarted issues
+each stage shows**, under the *Unstarted work* band.
 
 A stage holding more than one status groups its issues under those status names
 in the panel; a stage holding one draws no subheading. Nothing to configure.

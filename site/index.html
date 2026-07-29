@@ -521,6 +521,11 @@
         <p>Sessions on work you've handed off — merged, in QA, awaiting review — collapse into one <span class="mono" style="color:var(--ink)">Parked (n)</span> row. Nothing is killed, and any signal pulls one straight back out.</p>
       </div>
       <div class="tile animate-in">
+        <div class="ico" aria-hidden="true">○</div>
+        <h3>Unstarted Work</h3>
+        <p>The mirror of parked: each stage also shows the work <em>nobody</em> has picked up, as <span class="mono" style="color:var(--ink)">○</span> rows under the sessions that have. Click one and it becomes real — worktree, session, agent, issue linked.</p>
+      </div>
+      <div class="tile animate-in">
         <div class="ico" aria-hidden="true">⚑</div>
         <h3>Attention Flags</h3>
         <p>When an agent finishes or needs you, its session raises an orange <span style="color:var(--amber)">!</span> in the sidebar — from a Claude Code Stop hook.</p>
@@ -612,25 +617,29 @@
 <span class="dim">Your workflow ───────────────────────────────────────────────────</span>
     Urgent ······························ 1st up next  2 statuses
     To do ······························· 2nd up next  3 statuses
-    Waiting ····································· <span class="pk">&#x23F8;&#xFE0E;</span> 8  8 statuses
+  <span class="sel">▸</span> Waiting ······················ <span class="dim">no unstarted</span>  <span class="pk">&#x23F8;&#xFE0E;</span> 8  8 statuses
+    Done ····································· <span class="dim">hidden</span>  1 status
     <span class="dim">+ New stage</span>
 
 <span class="dim">Statuses ────────────────────────────────────────────────────────</span>
     <span class="dim">Status                  Stage                  Parks   Issues</span>
     Release Blockers        Urgent                              0
     To do                   To do                               5
-  <span class="sel">▸</span> QA (PRE-RELEASE WEB)    Waiting                  <span class="pk">&#x23F8;&#xFE0E;</span>         19
-    QA (RELEASE BR)         Waiting                  <span class="pk">&#x23F8;&#xFE0E;</span>          8
+    QA (PRE-RELEASE WEB)    Waiting                  <span class="pk">&#x23F8;&#xFE0E;</span>         19
     Backlog                 —                                   5
 
-<span class="sel">QA (PRE-RELEASE WEB) · 19 issues · Waiting · parks its sessions (3 now)</span>
-<span class="dim">↑↓ move · ↵ stage · space parks · d remove · esc close</span></div>
+<span class="dim">Unstarted work ──────────────────────────────────────────────────</span>
+    Show unstarted work in the sidebar ······· <span class="gr">◂</span> 3 per stage <span class="gr">▸</span>
+
+<span class="sel">Waiting · 4th of 5 · 8 statuses · in the sidebar, without its unstarted work</span>
+<span class="dim">↑↓ move · ⇧↑↓ order · ↵ rename · s hide · space unstarted · u up next</span></div>
     </div>
     <p class="termcap"><span class="kbd">Ctrl-a W</span> — your stages, then every status your tracker offers. Two settings each: which stage it belongs to, and whether its work has left your hands.</p>
     <p class="termcap" style="margin-top:22px"><a href="https://github.com/jarredkenny/jmux/blob/main/docs/issue-tracking.md#the-work-pipeline" target="_blank" rel="noopener" class="link-u">Read the work-pipeline guide →</a></p>
     <div class="ecogrid" style="margin-top:48px">
       <div class="ecocard animate-in"><div class="nm">Handed-off work parks</div><div class="tg">automatic</div><p>In review, in QA, blocked on a teammate — that session drops into one <span class="mono">Parked (n)</span> row. Nothing is killed.</p></div>
       <div class="ecocard animate-in"><div class="nm">And comes back</div><div class="tg">reversible</div><p>The issue moves, someone comments, the MR is touched, a pipeline goes red. It returns flagged, without you watching.</p></div>
+      <div class="ecocard animate-in"><div class="nm">See what you haven't started</div><div class="tg">one click</div><p>Each stage shows the work nobody has picked up, right under the sessions that have. Click a row and it becomes real — worktree, session, agent.</p></div>
       <div class="ecocard animate-in"><div class="nm">Pull the next thing</div><div class="tg">on demand</div><p><span class="mono">Ctrl-a u</span> takes the top of your first non-empty stage and does the whole ticket-to-worktree-to-agent dance.</p></div>
       <div class="ecocard animate-in"><div class="nm">Progress, reported for you</div><div class="tg">opt-in</div><p>Move an issue along when work starts, an MR opens, or it merges — with <span class="mono">^a Z</span> to undo. Off until you say so.</p></div>
     </div>
@@ -647,6 +656,7 @@
       <ul class="points">
         <li><strong>Headers rank by urgency, not alphabet</strong> — <span class="kbd">Ctrl-a G</span> groups by state and the bands land in a fixed order: Needs you, Running, Active, Done, Idle. No hunting.</li>
         <li><strong>Handed-off work sinks to the bottom</strong> — one collapsed <span class="mono" style="color:var(--ink)">Parked (8)</span> band, fed by the statuses you ticked on the workflow screen. Still one keypress from open.</li>
+        <li><strong>Work you haven't started shows too</strong> — issues with no session render as <span class="mono" style="color:var(--ink)">○</span> rows you can click to start. Grouped by stage they sit under their own stage; anywhere else they collect in one <span class="mono" style="color:var(--ink)">Up next</span> band. Per-stage, and off until you ask.</li>
         <li><strong>Or group by project</strong> — every worktree of a repo under one header. Sort within any group by name, activity, or state with <span class="kbd">Ctrl-a s</span>.</li>
         <li><strong>Narrow to the live ones</strong> — <span class="kbd">Ctrl-a f</span> filters to <em>Needs you</em> or <em>Active</em> when a twenty-session day gets loud.</li>
       </ul>
@@ -672,6 +682,11 @@
 
  <span class="gr">●</span> <span class="hd">chart-perf</span>
    <span class="dim">perf/dash-315-chart-re…</span>
+
+ <span class="dim">Up next</span> <span class="dim">─────────────────</span>
+
+ <span class="dim">○</span> TRA-1402
+   <span class="dim">Retry storms on the pa…</span>
 
  <span class="dim">Parked</span> <span class="dim">───────────────(9)</span></div>
       </div>

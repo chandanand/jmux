@@ -156,11 +156,18 @@ jmux's own settings (not tmux settings) live in `~/.config/jmux/config.json`. Ed
     "unparkOn": ["state-regression", "issue-comment", "mr-activity", "pipeline-failed"],
     "autoParkIdleDays": null,
     "transitionConfirm": "undo-toast",
-    "upNext": []
+    "upNext": [],
+    "showUnstartedInSidebar": null
   },
   "panelViews": []
 }
 ```
+
+`showUnstartedInSidebar` decides how many unstarted issues each workflow stage
+shows in the sidebar as startable rows: a count, `"all"`, or `null` for off.
+Per-stage exceptions (`inSidebar`, `showUnstarted`) live on the stage's own entry
+in `panelViews`. Both are edited on the workflow screen (`Ctrl-a W`) — see
+[Unstarted work in the sidebar](issue-tracking.md#unstarted-work-in-the-sidebar).
 
 ### Per-repo settings (`repoDefaults` / `repos`)
 

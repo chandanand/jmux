@@ -83,6 +83,7 @@ That second one is what keeps a fleet manageable:
 
 - **Park what you've handed off.** A teammate has it in review, QA has it, it's blocked on someone else — that session collapses into a single `Parked (n)` row at the bottom of the sidebar. Nothing is killed: the session, its worktree and its scrollback are untouched.
 - **Parking reverses itself.** The issue moves, someone comments, the MR is touched, a pipeline goes red, or the agent wants you — it comes straight back out, flagged. That's what makes it safe to trust.
+- **See what you haven't started.** Each stage can show the work sitting in it that nobody has picked up — issues with no session — as dimmed rows right under the sessions that do. Click one and it becomes real: worktree, session, agent, issue linked. The sidebar stops being a list of what's running and becomes the whole board.
 - **Pull the next thing** with `Ctrl-a u`. It takes the top item from your first non-empty stage and does the whole ticket-to-worktree-to-agent dance. The daily ritual is one keystroke.
 - **Capture without losing your place** — `Ctrl-a a` files a Linear issue from wherever you are. `Enter` files it and returns you; `Ctrl-S` files it *and* starts work on it.
 - **Status updates as a byproduct.** Optionally move an issue along when you start a session on it, when an MR appears on its branch, and when that MR merges — with `TRA-123 → QA  ^a Z undo` in the toolbar for twenty seconds. All of it defaults to off: **jmux never writes to your tracker until you say so.**
@@ -98,7 +99,8 @@ Workflow                                    Linear · 25 statuses · 9 unmapped
   Your workflow ──────────────────────────────────────────────────────
     Urgent ····································· 1st up next  2 statuses
     To do ······································ 2nd up next  3 statuses
-    Waiting ············································ ⏸ 8  8 statuses
+    Waiting ······························· no unstarted  ⏸ 8  8 statuses
+    Done ············································· hidden  1 status
     + New stage
 
   Statuses ───────────────────────────────────────────────────────────
@@ -108,11 +110,16 @@ Workflow                                    Linear · 25 statuses · 9 unmapped
     QA (PRE-RELEASE WEB)       Waiting                     ⏸        19
     Backlog                    —                                     5
 
+  Unstarted work ─────────────────────────────────────────────────────
+    Show unstarted work in the sidebar ················ ◂ 3 per stage ▸
+
   QA (PRE-RELEASE WEB) · 19 issues · Waiting · parks its sessions (3 now)
   ↑↓ move · ↵ stage · space parks · d remove · ⇧↑↓ order · esc close
 ```
 
 Two blocks: your stages, then a table of every status your tracker offers. Each status has exactly two settings — which stage it belongs to (`Enter`) and whether it parks (`space`) — and they're independent, so a status can park while belonging to no stage at all. The line above the keys tells you what the selected row will actually do, including when it will do nothing.
+
+Each **stage** carries two more: `s` shows or hides it in the sidebar, `space` shows or hides its unstarted work there. A row only mentions either when it's off its default, which is why most say nothing. Hiding a stage hides its heading, never its sessions — those fall to the flat list at the bottom, because no setting here should be able to make an agent that's waiting on you disappear.
 
 Full guide: [docs/issue-tracking.md](docs/issue-tracking.md).
 </details>

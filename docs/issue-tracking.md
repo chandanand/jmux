@@ -387,7 +387,8 @@ Workflow                                    Linear · 25 statuses · 9 unmapped
     Urgent ····································· 1st up next  2 statuses
     To do ······································ 2nd up next  3 statuses
     In Progress ············································· 3 statuses
-    Waiting ············································ ⏸ 8  8 statuses
+    Waiting ······································ no unstarted  ⏸ 8  8 statuses
+    Done ··················································· hidden  1 status
     + New stage
 
   Statuses ─────────────────────────────────────────────────────────────
@@ -403,6 +404,14 @@ Workflow                                    Linear · 25 statuses · 9 unmapped
   ↑↓ move · ↵ stage · space parks · d remove · ⇧↑↓ order · esc close
 ```
 
+On a stage row the keys and the explain line change to match:
+
+```
+  Waiting · 4th of 5 · 8 statuses · 61 issues · in the sidebar, without its
+  unstarted work · not in Up next
+  ↑↓ move · ⇧↑↓ order · ↵ rename · s hide · space unstarted · u up next · d delete
+```
+
 Every row in the table is the same kind of thing and takes the same keys. The
 line above the keys says what the row under the cursor **will actually do**,
 including when it will do nothing.
@@ -411,15 +420,22 @@ including when it will do nothing.
 |-----|-----------------|----------------------|--------------|
 | `↑` `↓` | move the cursor | | |
 | `Enter` | choose its stage | rename the stage | edit |
-| `space` | park / don't park | — | — |
+| `space` | park / don't park | show / hide its unstarted work | — |
+| `s` | — | show / hide the stage in the sidebar | — |
 | `u` | — | add to / drop from the `Ctrl-a u` rotation | — |
 | `d` | take it out of its stage | delete the stage (asks first) | clear a repo override |
 | `⇧↑` `⇧↓` | reorder within its stage | reorder the stage | — |
+| `◂` `▸` | — | — | step a counted value (e.g. how many unstarted) |
 | `g` | | | switch between this repo and the global defaults |
 | `Esc` | close | | |
 
 Order is priority order, top to bottom, for both stages and the statuses inside
 one. The order you add stages with `u` is the order `Ctrl-a u` checks them.
+
+A stage row only reports a sidebar setting when it is *off* its default, which is
+why most rows above say nothing about it: `hidden` (no band at all) or
+`no unstarted` (band, but no unstarted rows under it). See
+[Unstarted work in the sidebar](#unstarted-work-in-the-sidebar).
 
 **Starting from scratch?** With nothing configured the first row offers
 **⚑ Suggest a starting layout**, which builds `To do` / `In progress` / `Done`
@@ -484,6 +500,111 @@ still sink to the bottom band, in this mode as in every other.
 
 With no tracker connected, or before the first poll returns, no session resolves
 to a stage and the mode is simply a flat list.
+
+### Unstarted work in the sidebar
+
+The sidebar otherwise shows only what exists. Turn this on and it also shows the
+work sitting in each stage that **nobody has picked up** — issues with no session
+— as dimmed rows you can click to start:
+
+```
+  ⊞ Stage  ⇅ Name
+
+  URGENT (2)
+    TRA-1387 · payment-retry
+  ○ TRA-1402
+    Retry storms on the payment webhook
+
+  IN PROGRESS (1)
+    TRA-1399 · session-replay
+
+  IN REVIEW (1)
+  ○ TRA-1355
+    Cursor pagination for /events
+```
+
+A hollow `○` where a live session carries its filled activity dot. The row uses a
+session row's exact two-row shape — identifier where the name goes, title where
+the branch goes — because that is the row it turns into.
+
+**Clicking one starts it**, running the same flow as `n` in the issues panel:
+worktree, session, agent, issue linked. If a worktree already exists from an
+earlier attempt it is reused rather than recreated. `Ctrl-a u` still starts the
+top item of your first non-empty queue without you clicking anything.
+
+Note `IN REVIEW` above: a stage with no sessions still gets a band when it has
+unstarted work. And a stage whose work is all in flight simply shows no `○` rows.
+
+**Turn it on** in `Ctrl-a W` under **Unstarted work**:
+
+```
+  Unstarted work ───────────────────────────────────────────────────────
+    Show unstarted work in the sidebar ······················ ◂ 3 per stage ▸
+
+  Top 3 unstarted issue in each stage, under its own band. 1 stage opted out.
+  ↑↓ move · ◂▸ change · ↵ edit · esc close
+```
+
+Off by default — the sidebar is otherwise a truthful mirror of tmux, and rows for
+sessions that don't exist are something you opt into. `◂` `▸` walk
+`never → 1 → 2 … → 99 → all` and wrap, so `all` is one press left of `never`;
+`Enter` takes a typed number for anything else. The count is **per stage**, so
+`3` with four stages showing is up to twelve rows.
+
+Done and cancelled issues never appear. Nothing gives a completed issue a
+session, so those rows would pile up under a `Done` stage with no way to clear
+them. Parked statuses are left out for the same reason.
+
+#### Which stages participate
+
+Two keys on any stage row in **Your workflow**:
+
+| Key | Setting | Effect when off |
+|-----|---------|-----------------|
+| `s` | show the stage in the sidebar | no band; its sessions fall to the flat list at the bottom |
+| `space` | show its unstarted work | band and sessions stay; no `○` rows |
+
+Both are on for every stage until you say otherwise, and hiding a stage hides its
+**heading, never its sessions** — a stage setting must not be able to make an
+agent that is waiting on you disappear from the one surface always on screen.
+They land under that stage's own row in `panelViews`:
+
+```json
+{ "id": "done", "label": "Done", "source": "issues",
+  "states": ["Done", "Cancelled"],
+  "inSidebar": false }
+```
+
+Only `false` is ever written, so a stage you have never touched stays exactly as
+it was in your config.
+
+The count is the master switch and the per-stage keys are exceptions to it. With
+the count off, a stage row says **off globally** and names the setting rather
+than reporting a preference that currently does nothing — and your per-stage
+choices are kept, not cleared, so switching the count back on restores them.
+
+#### Grouped by something other than stage
+
+Stage bands only exist under `Ctrl-a G` → `Stage`. On the other axes an issue
+with no session has no project, no agent state and no activity to sort under, so
+the rows collect into a single **Up next** band above `Parked`, fed by the stages
+you marked with `u` for the `Ctrl-a u` rotation:
+
+```
+  jmux
+    TRA-1399 · session-replay
+
+  Up next ───────────────
+  ○ TRA-1402
+    Retry storms on the payment webhook
+
+  Parked ─────────────(8)
+```
+
+Ghost rows are click-activated in both placements and never join
+`Ctrl-Shift-↑`/`↓` session cycling — a navigation key that provisioned a worktree
+would be a nasty surprise. They are also hidden entirely by `Ctrl-a f`: both
+filters select on agent state, which unstarted work does not have.
 
 ### Tracker categories
 
@@ -666,10 +787,18 @@ settings screen (`Ctrl-a I` — capital I) under **Display**, **Integrations**,
     "unparkOn": ["state-regression", "issue-comment", "mr-activity", "pipeline-failed"],
     "autoParkIdleDays": 2,
     "transitionConfirm": "undo-toast",
-    "upNext": ["urgent", "todo"]
+    "upNext": ["urgent", "todo"],
+    "showUnstartedInSidebar": 3
   },
   "panelViews": []
 }
 ```
+
+`showUnstartedInSidebar` is a count *per stage*, `"all"`, or `null` for off (the
+default). It is stored as the literal `"all"` rather than a number, because
+`Infinity` does not survive a JSON round-trip — it is written as `null`, which is
+this field's "off". Per-stage exceptions live on the stage itself
+(`inSidebar` / `showUnstarted`); see
+[Unstarted work in the sidebar](#unstarted-work-in-the-sidebar).
 
 Settings are hot-reloaded — changes take effect without restarting jmux.
