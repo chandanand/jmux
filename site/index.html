@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>jmux — Orchestrate agents without replacing your tools</title>
-  <meta name="description" content="Run Claude Code, Codex, Pi, Hermes — or any terminal agent — in parallel. Real tmux underneath, with agent state, context cost, and issue-to-PR review layered on top. No bundled IDE. No new multiplexer.">
+  <title>jmux — Everyone else stops at the pane</title>
+  <meta name="description" content="Run a fleet of coding agents in your terminal — and run your backlog through them. Workflow stages, work that parks itself, and issue-to-merged without opening a browser.">
   <link rel="canonical" href="https://jmux.build">
   <meta name="theme-color" content="#f6f2ea" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#17130e" media="(prefers-color-scheme: dark)">
   <!-- Open Graph -->
-  <meta property="og:title" content="jmux — Orchestrate agents without replacing your tools">
-  <meta property="og:description" content="Run Claude Code, Codex, Pi, Hermes — or any terminal agent — in parallel. Real tmux underneath, with agent state, context cost, and issue-to-PR review layered on top. No bundled IDE. No new multiplexer.">
+  <meta property="og:title" content="jmux — Everyone else stops at the pane">
+  <meta property="og:description" content="Run a fleet of coding agents in your terminal — and run your backlog through them. Workflow stages, work that parks itself, and issue-to-merged without opening a browser.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://jmux.build">
   <meta property="og:site_name" content="jmux">
@@ -25,8 +25,8 @@
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:site" content="@jarredkenny">
   <meta name="twitter:creator" content="@jarredkenny">
-  <meta name="twitter:title" content="jmux — Orchestrate agents without replacing your tools">
-  <meta name="twitter:description" content="Run Claude Code, Codex, Pi, Hermes — or any terminal agent — in parallel. Real tmux underneath, with agent state, context cost, and issue-to-PR review layered on top. No bundled IDE. No new multiplexer.">
+  <meta name="twitter:title" content="jmux — Everyone else stops at the pane">
+  <meta name="twitter:description" content="Run a fleet of coding agents in your terminal — and run your backlog through them. Workflow stages, work that parks itself, and issue-to-merged without opening a browser.">
   <meta name="twitter:image" content="https://jmux.build/assets/og-command-center.jpg">
   <meta name="twitter:image:alt" content="jmux Command Center — parallel coding agents composited in one terminal">
   <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96">
@@ -42,7 +42,7 @@
     "@type": "SoftwareApplication",
     "name": "jmux",
     "url": "https://jmux.build",
-    "description": "Run Claude Code, Codex, Pi, Hermes — or any terminal agent — in parallel. Real tmux underneath, with agent state, context cost, and issue-to-PR review layered on top. No bundled IDE. No new multiplexer.",
+    "description": "Run a fleet of coding agents in your terminal — and run your backlog through them. Workflow stages, work that parks itself, and issue-to-merged without opening a browser.",
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "macOS, Linux",
     "softwareRequirements": "Bun 1.3.8+, tmux 3.2+",
@@ -199,7 +199,9 @@
   .hero .grid{ position:relative; z-index:2; display:grid; grid-template-columns:1.02fr 1.1fr; gap:56px; align-items:center; }
   .badge{ display:inline-flex; align-items:center; gap:.5em; align-self:flex-start; margin-bottom:22px; padding:6px 14px; border:1px solid var(--bd2); border-radius:999px; color:var(--ink2); font-size:12.5px; font-weight:600; background:var(--tint); }
   .badge:hover{ border-color:var(--ink3); color:var(--ink); }
-  .hero h1{ font-family:'Fraunces',serif; font-weight:400; letter-spacing:-.02em; line-height:1.02; font-size:66px; margin-bottom:26px; color:var(--ink); }
+  .hero h1{ font-family:'Fraunces',serif; font-weight:400; letter-spacing:-.02em; line-height:1.04; font-size:56px; margin-bottom:26px; color:var(--ink); text-wrap:balance; }
+  /* the payoff line is one phrase — never let it break between "Merge" and "out." */
+  .hero h1 .m{ text-wrap:nowrap; }
   .hero h1 .m{ display:block; color:var(--ink); }
   .hero .lead{ font-size:18px; max-width:44ch; margin-bottom:32px; }
   .cta-row{ display:flex; align-items:center; gap:20px; flex-wrap:wrap; }
@@ -293,8 +295,7 @@
   a.tcard:hover{ border-color:var(--ac-line); transform:translateY(-3px); }
   /* bento placement */
   .tweet{ grid-column:1; grid-row:1 / span 2; }
-  .tcard.c-a{ grid-column:2; grid-row:1; }
-  .tcard.c-b{ grid-column:3; grid-row:1; }
+  .tcard.c-top{ grid-column:2 / span 2; grid-row:1; }
   .tcard.c-wide{ grid-column:2 / span 2; grid-row:2; }
   .tcard p{ font-family:'Fraunces',serif; font-weight:400; color:var(--ink); font-size:19px; line-height:1.5; letter-spacing:-.01em; margin-bottom:20px; }
   .tcard .who{ display:flex; align-items:center; gap:11px; }
@@ -364,6 +365,8 @@
   /* ============ ECOSYSTEM ============ */
   .eco{ padding:104px 0; }
   .ecogrid{ display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-top:50px; text-align:left; }
+  /* six cards read as two clean rows, not a row of four and a ragged pair */
+  .ecogrid.three{ grid-template-columns:repeat(3,1fr); }
   .ecocard{ background:var(--card); border:1px solid var(--bd); border-radius:14px; padding:22px; transition:border-color .25s, transform .25s; }
   .ecocard:hover{ border-color:var(--ac-line); transform:translateY(-3px); }
   .ecocard .nm{ font-family:'Fraunces',serif; font-weight:600; font-size:18px; margin-bottom:6px; }
@@ -386,9 +389,59 @@
   footer .brand{ font-size:17px; }
   footer .links{ display:flex; gap:22px; } footer .links a:hover{ color:var(--ink); }
 
+  /* ============ SIDEBAR MOCK ============ */
+  /* Drawn rather than captured: stays crisp at any DPI, and shows all four
+     bands the copy claims — needs you / running / up next / parked — which no
+     single real screenshot happened to contain at once. Fixed dark, like the
+     other terminal blocks; a terminal doesn't follow the page theme. */
+  .sbm{
+    --bg:#20242b; --hi:#2b313a; --ink:#e3e7ed; --dim:#848c98;
+    --rule:rgba(255,247,232,.11); --grn:#8fbe86; --amb:#e0a84c; --rail:#d2793f;
+    width:100%; max-width:296px; border-radius:12px; overflow:hidden;
+    background:var(--bg); border:1px solid rgba(255,247,232,.13);
+    box-shadow:0 24px 56px rgba(24,16,6,.34);
+    font-family:'JetBrains Mono',monospace; font-size:11.5px; line-height:1.5;
+    color:var(--ink); text-align:left;
+  }
+  .sbm .chrome{ display:flex; align-items:center; gap:6px; padding:9px 12px; border-bottom:1px solid var(--rule); }
+  .sbm .chrome i{ width:9px; height:9px; border-radius:50%; display:block; flex:none; }
+  .sbm .chrome small{ margin-left:6px; color:var(--dim); font-size:10px; letter-spacing:.05em; }
+  .sbm .pad{ padding:9px 0 13px; }
+  .sbm .top{ display:flex; align-items:center; gap:11px; padding:0 12px 8px; color:var(--dim); font-size:11px; }
+  .sbm .top .fl{ margin-left:auto; color:var(--amb); font-weight:700; }
+  .sbm .cc{ padding:7px 12px 8px; border-top:1px solid var(--rule); border-bottom:1px solid var(--rule); }
+  .sbm .cc b{ font-weight:700; }
+  .sbm .cc .sub{ color:var(--dim); }
+  .sbm .cc .sub .r{ color:var(--amb); }
+  /* band header: label, hairline that eats the slack, optional right-hand count */
+  .sbm .band{ display:flex; align-items:center; gap:9px; padding:15px 12px 5px; color:var(--dim); font-size:11px; }
+  .sbm .band .rule{ flex:1; height:1px; background:var(--rule); }
+  .sbm .row{ padding:5px 12px 6px; border-left:2px solid transparent; }
+  .sbm .row.on{ background:var(--hi); border-left-color:var(--rail); }
+  .sbm .l{ display:flex; align-items:baseline; gap:7px; }
+  .sbm .l .rt{ margin-left:auto; padding-left:8px; flex:none; }
+  .sbm .nm{ font-weight:700; }
+  .sbm .dim{ color:var(--dim); }
+  .sbm .grn{ color:var(--grn); } .sbm .amb{ color:var(--amb); }
+  /* the branch line is the only thing allowed to truncate */
+  .sbm .tr{ min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* ============ TRUST STRIP ============ */
+  /* The hero sells the backlog; this answers "will it break my setup?" in the
+     first eight seconds, so the objection never gets to sit under the fold. */
+  .trust{ border-top:1px solid var(--bd); border-bottom:1px solid var(--bd); background:var(--base); padding:20px 0; }
+  .trust .row{ display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:9px 26px; }
+  .trust .it{ display:flex; align-items:center; gap:8px; color:var(--ink2); font-size:13px; }
+  .trust .it b{ color:var(--ink); font-weight:600; }
+  .trust .it .mono{ color:var(--ink); font-size:12.5px; }
+  .trust .dot{ width:3px; height:3px; border-radius:50%; background:var(--ink3); flex:none; }
+  /* the row wraps below this, and a separator stranded at a line end reads as a
+     bug — drop the dots and let the gap do the separating instead */
+  @media (max-width:1180px){ .trust .dot{ display:none; } .trust .row{ gap:6px 24px; } }
+
   /* ============ RESPONSIVE ============ */
   @media (max-width:1024px){
-    .ecogrid{ grid-template-columns:repeat(2,1fr); }
+    .ecogrid, .ecogrid.three{ grid-template-columns:repeat(2,1fr); }
   }
 
   @media (max-width:880px){
@@ -412,9 +465,11 @@
     .bento{ grid-template-columns:1fr; grid-auto-rows:auto; } .tile.big,.tile.wide{ grid-column:span 1; grid-row:auto; }
     .tile.big h3,.tile.big p{ max-width:none; }
     .tile.big .bigshot{ position:static; width:100%; height:190px; margin-top:18px; border-left:0; border:1px solid var(--bd2); border-radius:10px; }
-    .ecogrid,.tgrid{ grid-template-columns:1fr; }
+    .ecogrid,.ecogrid.three,.tgrid{ grid-template-columns:1fr; }
     .tgrid{ grid-auto-rows:auto; }
-    .tweet, .tcard.c-a, .tcard.c-b, .tcard.c-wide{ grid-column:auto; grid-row:auto; }
+    .tweet, .tcard.c-top, .tcard.c-wide{ grid-column:auto; grid-row:auto; }
+    .trust .row{ justify-content:flex-start; gap:9px 18px; }
+    .trust .it{ font-size:12.5px; }
 
     /* nav */
     nav .row{ height:60px; }
@@ -526,8 +581,9 @@
 </svg>
 <span class="v">v0.24.0</span></a>
   <div class="navlinks">
-    <a href="#features" class="hide-sm">Features</a>
     <a href="#workflow" class="hide-sm">Workflow</a>
+    <a href="#compare" class="hide-sm">Compare</a>
+    <a href="#features" class="hide-sm">Features</a>
     <a href="#ecosystem" class="hide-sm">Ecosystem</a>
     <a href="https://github.com/jarredkenny/jmux#readme" target="_blank" rel="noopener" class="hide-sm">Docs</a>
     <button class="tt" onclick="toggleTheme()" aria-label="Toggle theme" title="Toggle light / dark">
@@ -543,25 +599,25 @@
 <header class="hero" id="top">
   <div class="wrap grid">
     <div class="hero-copy">
-      <a href="#workflow" class="badge">&#x23F8;&#xFE0E;&nbsp;New · Workflow orchestration&nbsp;→</a>
-      <div class="eyebrow">Terminal Agent Orchestrator</div>
-      <h1>Replace nothing.<span class="m serif"><em>Orchestrate</em> everything.</span></h1>
-      <p class="lead">Agent IDEs want your terminal. New multiplexers want your tmux. jmux takes neither — it drives the real tmux you already run, and layers on agent state, context cost, and diff review.</p>
+      <a href="#workflow" class="badge">&#x23F8;&#xFE0E;&nbsp;New · Work that parks itself&nbsp;→</a>
+      <div class="eyebrow">Agent fleet · work pipeline</div>
+      <h1>Everyone else stops at the pane.<span class="m serif"><em>Ticket in.</em> Merge out.</span></h1>
+      <p class="lead">Run a fleet of coding agents in the terminal you already use — then run your actual backlog through them. Stages you define, work that parks itself once it leaves your hands, and issue-to-merged without opening a browser.</p>
       <div class="cta-row">
         <div class="pill"><span class="d">$</span> bun install -g @jx0/jmux
           <button class="cp" title="Copy" onclick="copyCmd(this,'bun install -g @jx0/jmux')">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
         </div>
-        <a href="#features" class="link-u">See what it does →</a>
+        <a href="#workflow" class="link-u">See the pipeline →</a>
       </div>
       <div class="proof">
-        <span>Keep your <span class="mono" style="color:var(--ink)">.tmux.conf</span>, your plugins, your prefix, your bindings. Quit jmux and <span class="mono" style="color:var(--ink)">tmux attach</span> still works.</span>
+        <span>Or look around first — <span class="mono" style="color:var(--ink)">jmux --demo</span> runs the whole thing on mock data. Every feature, no credentials, nothing to configure.</span>
       </div>
       <div class="chips">
         <span class="chip">Open source · AGPL-3.0</span>
-        <span class="chip">~0.3 MB</span>
-        <span class="chip">real tmux underneath</span>
+        <span class="chip">nothing to migrate</span>
+        <span class="chip">Linear · GitHub · GitLab</span>
       </div>
     </div>
     <div class="heroshot">
@@ -575,76 +631,136 @@
   </div>
 </header>
 
-<!-- FEATURE GRID -->
-<section class="sec base showcase" id="features">
-  <div class="wrap center">
-    <div class="animate-in"><div class="eyebrow">Built for the workflow</div>
-    <h2>Everything visible. <em>Nothing</em> in your way.</h2></div>
+<!-- 2 · TRUST STRIP -->
+<section class="trust">
+  <div class="wrap row">
+    <span class="it"><b>Nothing to migrate</b> — your config, plugins and bindings carry over</span>
+    <span class="dot"></span>
+    <span class="it">Sessions survive the terminal closing, and <b>jmux itself</b></span>
+    <span class="dot"></span>
+    <span class="it">And nothing to migrate <b>out</b></span>
   </div>
+</section>
+
+<!-- 3 · THE WORK PIPELINE -->
+<section class="sec panel cliband center" id="workflow">
   <div class="wrap">
-    <div class="bento">
-      <div class="tile big animate-in">
-        <div class="ico" aria-hidden="true">▤</div>
-        <h3>Session Sidebar</h3>
-        <p>Every session at a glance — project group, git branch, agent state, pipeline status, linked issue or PR, and live context tokens. Replaces tmux's status bar with a real workspace map.</p>
-        <img class="bigshot" src="assets/sidebar.webp" alt="jmux session sidebar showing grouped sessions, activity dots, and agent-state flags">
+    <div class="animate-in"><div class="eyebrow">The work pipeline</div>
+    <h2>The workflow is your team's.<br><em>The orchestration</em> is jmux's.</h2>
+    <p class="lead" style="margin:20px auto 0;max-width:650px">Your tracker has 25 statuses named for someone else's process. You think in five. So you <strong style="color:var(--ink)">define your own workflow stages</strong> — Urgent, To do, In Progress, Waiting, Done — and sit each one on top of one or many of your tracker's statuses. <em>In Code Review</em> and <em>Awaiting QA Sign-off</em> are both just Waiting. jmux runs your terminal from your ladder, not theirs.</p></div>
+    <div class="term screen">
+      <div class="bar"><span class="d" style="background:#ff5f56"></span><span class="d" style="background:#ffbd2e"></span><span class="d" style="background:#27c93f"></span><small>workflow</small></div>
+      <div class="body"><span class="hd">Workflow</span>                        <span class="dim">Linear · 25 statuses · 8 unmapped</span>
+
+<span class="dim">Your workflow ───────────────────────────────────────────────────</span>
+    Urgent ······························ 1st up next  2 statuses
+    To do ······························· 2nd up next  3 statuses
+    In Progress ······································ 3 statuses
+  ▸ Waiting ······················· <span class="dim">no unstarted</span>  <span class="pk">&#x23F8;&#xFE0E;</span> 8  8 statuses
+    Done ······································· <span class="dim">hidden</span>  1 status
+    <span class="dim">+ New stage</span>
+
+<span class="dim">Statuses ────────────────────────────────────────────────────────</span>
+    <span class="dim">Status                  Stage                Parks     Issues</span>
+    Customer Escalation     Urgent                              2
+    Ready for Development   To do                               5
+    In Code Review          Waiting              <span class="pk">&#x23F8;&#xFE0E;</span>              7
+    Awaiting QA Sign-off    Waiting              <span class="pk">&#x23F8;&#xFE0E;</span>             19
+    Backlog                 —                                   5
+
+<span class="dim">Unstarted work ──────────────────────────────────────────────────</span>
+    Show unstarted work in the sidebar ······· <span class="gr">◂</span> 3 per stage <span class="gr">▸</span>
+
+<span class="sel">Waiting · 4th of 5 · 8 statuses · in the sidebar, without its unstarted work</span>
+<span class="dim">↑↓ move · ⇧↑↓ order · ↵ rename · s hide · space unstarted · u up next</span></div>
+    </div>
+    <p class="termcap"><span class="kbd">Ctrl-a W</span> — your stages, then every status your tracker offers. Two settings each: which stage it belongs to, and whether its work has left your hands.</p>
+    <div class="ecogrid three" style="margin-top:48px">
+      <div class="ecocard animate-in"><div class="nm">Handed-off work parks</div><div class="tg">automatic</div><p>In review, in QA, blocked on a teammate — that session drops into one <span class="mono">Parked (n)</span> row. Nothing is killed.</p></div>
+      <div class="ecocard animate-in"><div class="nm">And comes back</div><div class="tg">reversible</div><p>The issue moves, someone comments, the MR is touched, a pipeline goes red. It returns flagged, without you watching.</p></div>
+      <div class="ecocard animate-in"><div class="nm">See what you haven't started</div><div class="tg">one click</div><p>Each stage shows the work nobody has picked up, right under the sessions that have. Click a row and it becomes real — worktree, session, agent.</p></div>
+      <div class="ecocard animate-in"><div class="nm">Pull the next thing</div><div class="tg">on demand</div><p><span class="mono">Ctrl-a u</span> takes the top of your first non-empty stage and does the whole ticket-to-worktree-to-agent dance.</p></div>
+      <div class="ecocard animate-in"><div class="nm">Capture without losing your place</div><div class="tg">anywhere</div><p><span class="mono">Ctrl-a a</span> files an issue from wherever you are. <span class="mono">Ctrl-S</span> files it <em>and</em> starts work on it.</p></div>
+      <div class="ecocard animate-in"><div class="nm">Progress, reported for you</div><div class="tg">opt-in</div><p>Move an issue along when work starts, an MR opens, or it merges — with <span class="mono">^a Z</span> to undo. Off until you say so.</p></div>
+    </div>
+    <p class="termcap" style="margin-top:40px;max-width:640px">Every other tool's answer to a growing fleet is a bigger grid. This one gets <strong style="color:var(--ink)">quieter</strong> as work leaves your hands — and loud again the moment it comes back.</p>
+    <p class="termcap" style="margin-top:18px"><a href="https://github.com/jarredkenny/jmux/blob/main/docs/issue-tracking.md#the-work-pipeline" target="_blank" rel="noopener" class="link-u">Read the work-pipeline guide →</a></p>
+  </div>
+</section>
+
+<!-- 4 · SIDEBAR & ATTENTION -->
+<section class="sec base showcase" id="sidebar">
+  <div class="wrap showrow txt-wide">
+    <div class="txt animate-in">
+      <div class="eyebrow">Where the fleet reports back</div>
+      <h2>The top of your sidebar<br><em>is what needs you.</em></h2>
+      <p class="lead">Two signals meet in one list. Agent state comes from Claude Code's hooks and telemetry; parked comes from your team's tracker. The sidebar sorts by both — so the thing waiting on a human is at the top, and the thing waiting on someone else is out of sight.</p>
+      <div class="states" style="margin:22px 0 26px">
+        <span class="st"><span class="g runpulse" style="color:var(--green)">⏵</span>RUNNING</span>
+        <span class="st"><span class="g" style="color:var(--amber)">!</span>WAITING</span>
+        <span class="st"><span class="g" style="color:var(--blue)">✓</span>COMPLETE</span>
       </div>
-      <div class="tile animate-in">
-        <div class="ico" aria-hidden="true">⏵</div>
-        <h3>Agent State</h3>
-        <p>Three live states, driven by Claude Code hooks + telemetry:</p>
-        <div class="states">
-          <span class="st"><span class="g runpulse" style="color:var(--green)">⏵</span>RUNNING</span>
-          <span class="st"><span class="g" style="color:var(--amber)">!</span>WAITING</span>
-          <span class="st"><span class="g" style="color:var(--blue)">✓</span>COMPLETE</span>
+      <ul class="points">
+        <li><strong>State comes from hooks, not screen-scraping</strong> — Claude Code, Codex and pi write their own run state through installed emitters, so RUNNING / WAITING / COMPLETE is a fact rather than a guess at what a buffer looks like. Any other terminal agent still runs; opt-in screen detection covers it when you want an estimate.</li>
+        <li><strong>Headers rank by urgency, not alphabet</strong> — <span class="kbd">Ctrl-a G</span> groups by state and the bands land in a fixed order: Needs you, Running, Active, Done, Idle. No hunting.</li>
+        <li><strong>Handed-off work sinks to the bottom</strong> — one collapsed <span class="mono" style="color:var(--ink)">Parked (8)</span> band, fed by the statuses you ticked on the workflow screen. Still one keypress from open.</li>
+        <li><strong>Work you haven't started shows too</strong> — issues with no session render as <span class="mono" style="color:var(--ink)">○</span> rows you can click to start. Grouped by stage they sit under their own stage; anywhere else they collect in one <span class="mono" style="color:var(--ink)">Up next</span> band.</li>
+        <li><strong>Narrow to the live ones</strong> — <span class="kbd">Ctrl-a f</span> filters to <em>Needs you</em> or <em>Active</em> when a twenty-session day gets loud. <span class="kbd">Ctrl-Shift-↑/↓</span> walks the list with no prefix and no menu.</li>
+      </ul>
+      <p style="margin-top:26px"><a href="https://github.com/jarredkenny/jmux/blob/main/docs/cheat-sheet.md#grouping-sorting-and-filtering" target="_blank" rel="noopener" class="link-u">Every grouping and sort mode →</a></p>
+    </div>
+    <div class="animate-in" style="display:flex;justify-content:center">
+      <div class="sbm" role="img" aria-label="The jmux sidebar, banded by urgency: a Needs you band holding a WAITING session, a Running band with two live agents and their context sizes, an Up next band with an unstarted issue, and a collapsed Parked band holding nine sessions.">
+        <div class="chrome" aria-hidden="true">
+          <i style="background:#ff5f56"></i><i style="background:#ffbd2e"></i><i style="background:#27c93f"></i>
+          <small>sidebar</small>
         </div>
-      </div>
-      <div class="tile animate-in">
-        <div class="ico" aria-hidden="true">⇋</div>
-        <h3>Instant Switching</h3>
-        <p><span class="kbd">Ctrl-Shift-↑/↓</span> — no prefix, no menu, no mode. Or click the sidebar.</p>
-      </div>
-      <div class="tile wide animate-in">
-        <div class="ico" aria-hidden="true">◷</div>
-        <h3>Context &amp; cache visibility</h3>
-        <p>No other multiplexer or agent IDE shows you this. Live context-window occupancy per session (<span class="mono" style="color:var(--ink)">42k</span>, <span class="mono" style="color:var(--ink)">1.5M</span>) plus a cache-warm countdown, read straight from Claude Code's OpenTelemetry. Know which agent is about to run out of room, and which one is still cheap to talk to — send while warm and save up to 90% on input tokens. No setup.</p>
-      </div>
-      <div class="tile animate-in">
-        <div class="ico" aria-hidden="true">⌘</div>
-        <h3>Command Palette</h3>
-        <p><span class="kbd">Ctrl-a p</span> — fuzzy-search sessions, windows, pane actions, settings.</p>
-      </div>
-      <div class="tile wide animate-in">
-        <div class="ico" aria-hidden="true">▦</div>
-        <h3>Command Center</h3>
-        <p>Pin the agent pane from every session and drive them all at once in one live grid, organized into named tabs. Tile borders glow by state — type into any tile to steer that agent. Pin by hand, or auto-pin every agent pane — Claude, Codex, or any command you name. Fully non-destructive: panes never leave their session.</p>
-      </div>
-      <div class="tile animate-in">
-        <div class="ico" aria-hidden="true">⏸</div>
-        <h3>Parked Work</h3>
-        <p>Sessions on work you've handed off — merged, in QA, awaiting review — collapse into one <span class="mono" style="color:var(--ink)">Parked (n)</span> row. Nothing is killed, and any signal pulls one straight back out.</p>
-      </div>
-      <div class="tile animate-in">
-        <div class="ico" aria-hidden="true">○</div>
-        <h3>Unstarted Work</h3>
-        <p>The mirror of parked: each stage also shows the work <em>nobody</em> has picked up, as <span class="mono" style="color:var(--ink)">○</span> rows under the sessions that have. Click one and it becomes real — worktree, session, agent, issue linked.</p>
-      </div>
-      <div class="tile animate-in">
-        <div class="ico" aria-hidden="true">⚑</div>
-        <h3>Attention Flags</h3>
-        <p>When an agent finishes or needs you, its session raises an orange <span style="color:var(--amber)">!</span> in the sidebar — from a Claude Code Stop hook.</p>
+        <div class="pad" aria-hidden="true">
+          <div class="top"><span>⊞ Status</span><span>⇅ Activity</span><span class="fl">1!</span></div>
+          <div class="cc">
+            <div><b>⌘ Command Center · 5</b></div>
+            <div class="sub"><span class="r">2 RUN</span> · 3 DONE</div>
+          </div>
+
+          <div class="band"><span>Needs you</span><span class="rule"></span></div>
+          <div class="row on">
+            <div class="l"><span class="amb">!</span><span class="nm">auth-refactor</span></div>
+            <div class="l dim"><span class="tr">feat/eng-1234-auth-provider</span><span class="rt">13s</span></div>
+            <div class="l"><span class="dim">88k</span><span class="rt amb">WAITING</span></div>
+          </div>
+
+          <div class="band"><span>Running</span><span class="rule"></span></div>
+          <div class="row">
+            <div class="l"><span class="grn runpulse">●</span><span class="nm">api-pagination</span></div>
+            <div class="l dim"><span class="tr">feat/eng-1241-cursor-paging</span><span class="rt">4:12</span></div>
+            <div class="l"><span class="dim">42k</span><span class="rt amb">RUNNING</span></div>
+          </div>
+          <div class="row">
+            <div class="l"><span class="grn">●</span><span class="nm">chart-perf</span></div>
+            <div class="l dim"><span class="tr">perf/dash-315-chart-rerender</span><span class="rt">0:41</span></div>
+            <div class="l"><span class="dim">1.5M</span><span class="rt amb">RUNNING</span></div>
+          </div>
+
+          <div class="band"><span>Up next</span><span class="rule"></span></div>
+          <div class="row">
+            <div class="l"><span class="dim">○</span><span class="nm dim">ENG-1402</span></div>
+            <div class="l dim"><span class="tr">Retry storms on the payments webhook</span></div>
+          </div>
+
+          <div class="band"><span>Parked</span><span class="rule"></span><span>8</span></div>
+        </div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- 4 · SHOWCASE ·0 — Command Center -->
+<!-- 5 · COMMAND CENTER -->
 <section class="sec showcase" id="command-center">
   <div class="wrap showrow flip">
     <div class="txt animate-in">
       <div class="eyebrow">Single pane of glass</div>
       <h2>The Command Center</h2>
-      <p class="lead">Pin the Claude or Codex pane from every session and drive your whole fleet from one live grid — type into any tile to steer that agent for real.</p>
+      <p class="lead">The pipeline hands you a fleet. This is where you drive it. Pin the Claude or Codex pane from every session into one live grid — and type into any tile to steer that agent for real.</p>
       <ul class="points">
         <li><strong>Borders glow by state</strong> — see who's <span style="color:var(--green)">running</span>, <span style="color:var(--amber)">waiting</span>, or <span style="color:var(--blue)">complete</span> at a glance.</li>
         <li><strong>Pin by hand or auto-pin</strong> every agent pane — Claude, Codex, or any command you name — fully non-destructive, panes never leave their session.</li>
@@ -658,47 +774,15 @@
   </div>
 </section>
 
-<!-- 4 · SHOWCASE ·1 -->
+<!-- 6a · TICKET → WORKTREE → AGENT -->
 <section class="sec base showcase">
   <div class="wrap showrow">
     <div class="txt animate-in">
-      <div class="eyebrow">Keyboard-first</div>
-      <h2>Command Palette</h2>
-      <p class="lead"><span class="kbd">Ctrl-a p</span> to open. Type to fuzzy-search sessions, windows, pane actions, and settings. Hit Enter to execute.</p>
-      <p class="lead">Switch sessions by name, split panes, zoom, change settings — without memorizing keybindings.</p>
-    </div>
-    <div class="shot animate-in">
-      <figure class="main"><img src="assets/command-palette.webp" alt="jmux command palette floating over a workspace"></figure>
-      <figure class="detail dr"><img src="assets/detail-palette.webp" alt="The fuzzy command palette listing Switch to session results"></figure>
-    </div>
-  </div>
-</section>
-
-<!-- 4 · SHOWCASE ·2 -->
-<section class="sec showcase">
-  <div class="wrap showrow flip">
-    <div class="txt animate-in">
-      <div class="eyebrow">Code review</div>
-      <h2>Info Panel &amp; Diff</h2>
-      <p class="lead"><span class="kbd">Ctrl-a g</span> to toggle. A tabbed side panel with diffs, issues, and PRs/MRs — the Diff tab powered by <a href="https://github.com/modem-dev/hunk" target="_blank" rel="noopener" class="link-u">hunk</a>: syntax highlighting, word-level diffs, split and full-screen views.</p>
-      <p class="lead">Split mode to monitor while agents work, full-screen for review. <span class="kbd">[</span> <span class="kbd">]</span> cycle tabs.</p>
-    </div>
-    <div class="shot animate-in">
-      <figure class="main"><img src="assets/diff-panel-split.webp" alt="jmux diff panel split mode"></figure>
-      <figure class="detail dl"><img src="assets/detail-diff.webp" alt="A syntax-highlighted hunk diff with added lines"></figure>
-    </div>
-  </div>
-</section>
-
-<!-- 4 · SHOWCASE ·3 -->
-<section class="sec base showcase">
-  <div class="wrap showrow">
-    <div class="txt animate-in">
-      <div class="eyebrow">Issue &amp; PR tracking</div>
-      <h2>Linear, GitHub &amp; GitLab<br><em>in the terminal.</em></h2>
-      <p class="lead">The info panel shows your Linear issues and your GitHub/GitLab PRs/MRs in tabbed views, with pipeline status glyphs in the sidebar. Sessions auto-link to their branch's PR and issue.</p>
-      <p class="lead">Select an issue, press <span class="kbd">n</span> — jmux creates a worktree, opens a session, and launches your agent with the issue context. <span class="kbd">o</span> open · <span class="kbd">s</span> status · <span class="kbd">a</span> approve.</p>
-      <p class="lead">Or skip the picking entirely: <span class="kbd">Ctrl-a u</span> pulls the top item off your queue and does the whole thing. <span class="kbd">Ctrl-a a</span> files a new issue from wherever you are — <span class="kbd">Ctrl-S</span> files it <em>and</em> starts work on it.</p>
+      <div class="eyebrow">Pick it up</div>
+      <h2>One keystroke from<br><em>ticket to working code.</em></h2>
+      <p class="lead">Select an issue, press <span class="kbd">n</span> — jmux creates the worktree, opens the session, and launches your agent with the issue context already loaded. No stashing, no branch switching, no copy-pasting a ticket into a prompt.</p>
+      <p class="lead">Linear for issues. GitHub, GitLab or <strong style="color:var(--ink)">self-hosted GitLab</strong> for merge requests — the one integration the desktop tools can't reach into your network to offer. Sessions auto-link to their branch's PR and issue, and pipeline status shows up as a glyph in the sidebar.</p>
+      <p class="lead">Or skip the picking entirely: <span class="kbd">Ctrl-a u</span> pulls the top item off your first non-empty stage and does the whole thing.</p>
       <p><a href="https://github.com/jarredkenny/jmux/blob/main/docs/issue-tracking.md" target="_blank" rel="noopener" class="link-u">Issue &amp; MR integration guide →</a></p>
     </div>
     <div class="shot animate-in">
@@ -708,9 +792,25 @@
   </div>
 </section>
 
-<!-- 4 · SHOWCASE ·3a — Inline images in issue previews -->
-<section class="sec showcase" id="images">
+<!-- 6b · REVIEW IT -->
+<section class="sec showcase">
   <div class="wrap showrow flip">
+    <div class="txt animate-in">
+      <div class="eyebrow">Review it</div>
+      <h2>Read the diff<br><em>beside the agent.</em></h2>
+      <p class="lead"><span class="kbd">Ctrl-a g</span> toggles a tabbed side panel — Diff, Issues, MRs, Review — with the Diff tab powered by <a href="https://github.com/modem-dev/hunk" target="_blank" rel="noopener" class="link-u">hunk</a>: syntax highlighting, word-level diffs, split and full-screen views.</p>
+      <p class="lead">Split mode to watch while the agent works, <span class="kbd">Ctrl-a z</span> for full-screen when it's time to actually read it. Then flip to the MRs tab and approve, undraft, or move the issue on — <span class="kbd">a</span> approve · <span class="kbd">r</span> undraft · <span class="kbd">s</span> status · <span class="kbd">o</span> open in browser.</p>
+    </div>
+    <div class="shot animate-in">
+      <figure class="main"><img src="assets/diff-panel-split.webp" alt="jmux diff panel split mode"></figure>
+      <figure class="detail dl"><img src="assets/detail-diff.webp" alt="A syntax-highlighted hunk diff with added lines"></figure>
+    </div>
+  </div>
+</section>
+
+<!-- 6c · INLINE IMAGES -->
+<section class="sec base showcase" id="images">
+  <div class="wrap showrow">
     <div class="txt animate-in">
       <div class="eyebrow">Terminal graphics <span class="new">NEW</span></div>
       <h2>The picture.<br><em>Not the link.</em></h2>
@@ -725,105 +825,54 @@
   </div>
 </section>
 
-<!-- 4 · SHOWCASE ·3b — Team workflow orchestration -->
-<section class="sec panel cliband center" id="workflow">
+<!-- 7 · CONTEXT & CACHE ECONOMICS -->
+<section class="sec showcase center">
   <div class="wrap">
-    <div class="animate-in"><div class="eyebrow">Team workflow orchestration <span class="new">NEW</span></div>
-    <h2>The workflow is your team's.<br><em>The orchestration</em> is jmux's.</h2>
-    <p class="lead" style="margin:20px auto 0;max-width:650px">Your tracker has 25 statuses named for someone else's process. You think in four. So you <strong style="color:var(--ink)">define your own workflow stages</strong> — Urgent, To do, In Progress, Waiting — and sit each one on top of one or many of your tracker's statuses. jmux runs your terminal from your ladder, not theirs.</p></div>
-    <div class="term screen">
-      <div class="bar"><span class="d" style="background:#ff5f56"></span><span class="d" style="background:#ffbd2e"></span><span class="d" style="background:#27c93f"></span><small>workflow</small></div>
-      <div class="body"><span class="hd">Workflow</span>                        <span class="dim">Linear · 25 statuses · 9 unmapped</span>
-
-<span class="dim">Your workflow ───────────────────────────────────────────────────</span>
-    Urgent ······························ 1st up next  2 statuses
-    To do ······························· 2nd up next  3 statuses
-  <span class="sel">▸</span> Waiting ······················ <span class="dim">no unstarted</span>  <span class="pk">&#x23F8;&#xFE0E;</span> 8  8 statuses
-    Done ····································· <span class="dim">hidden</span>  1 status
-    <span class="dim">+ New stage</span>
-
-<span class="dim">Statuses ────────────────────────────────────────────────────────</span>
-    <span class="dim">Status                  Stage                  Parks   Issues</span>
-    Release Blockers        Urgent                              0
-    To do                   To do                               5
-    QA (PRE-RELEASE WEB)    Waiting                  <span class="pk">&#x23F8;&#xFE0E;</span>         19
-    Backlog                 —                                   5
-
-<span class="dim">Unstarted work ──────────────────────────────────────────────────</span>
-    Show unstarted work in the sidebar ······· <span class="gr">◂</span> 3 per stage <span class="gr">▸</span>
-
-<span class="sel">Waiting · 4th of 5 · 8 statuses · in the sidebar, without its unstarted work</span>
-<span class="dim">↑↓ move · ⇧↑↓ order · ↵ rename · s hide · space unstarted · u up next</span></div>
-    </div>
-    <p class="termcap"><span class="kbd">Ctrl-a W</span> — your stages, then every status your tracker offers. Two settings each: which stage it belongs to, and whether its work has left your hands.</p>
-    <p class="termcap" style="margin-top:22px"><a href="https://github.com/jarredkenny/jmux/blob/main/docs/issue-tracking.md#the-work-pipeline" target="_blank" rel="noopener" class="link-u">Read the work-pipeline guide →</a></p>
-    <div class="ecogrid" style="margin-top:48px">
-      <div class="ecocard animate-in"><div class="nm">Handed-off work parks</div><div class="tg">automatic</div><p>In review, in QA, blocked on a teammate — that session drops into one <span class="mono">Parked (n)</span> row. Nothing is killed.</p></div>
-      <div class="ecocard animate-in"><div class="nm">And comes back</div><div class="tg">reversible</div><p>The issue moves, someone comments, the MR is touched, a pipeline goes red. It returns flagged, without you watching.</p></div>
-      <div class="ecocard animate-in"><div class="nm">See what you haven't started</div><div class="tg">one click</div><p>Each stage shows the work nobody has picked up, right under the sessions that have. Click a row and it becomes real — worktree, session, agent.</p></div>
-      <div class="ecocard animate-in"><div class="nm">Pull the next thing</div><div class="tg">on demand</div><p><span class="mono">Ctrl-a u</span> takes the top of your first non-empty stage and does the whole ticket-to-worktree-to-agent dance.</p></div>
-      <div class="ecocard animate-in"><div class="nm">Progress, reported for you</div><div class="tg">opt-in</div><p>Move an issue along when work starts, an MR opens, or it merges — with <span class="mono">^a Z</span> to undo. Off until you say so.</p></div>
-    </div>
-  </div>
-</section>
-
-<!-- 4 · SHOWCASE ·3c — Sidebar grouping & ordering -->
-<section class="sec showcase" id="sidebar">
-  <div class="wrap showrow txt-wide">
-    <div class="txt animate-in">
-      <div class="eyebrow">Grouping &amp; ordering <span class="new">NEW</span></div>
-      <h2>The top of your sidebar<br><em>is what needs you.</em></h2>
-      <p class="lead">Two signals meet in one list. Agent state comes from Claude Code's hooks and telemetry; parked comes from your team's tracker. The sidebar sorts by both — so the thing waiting on a human is at the top, and the thing waiting on someone else is out of sight.</p>
-      <ul class="points">
-        <li><strong>Headers rank by urgency, not alphabet</strong> — <span class="kbd">Ctrl-a G</span> groups by state and the bands land in a fixed order: Needs you, Running, Active, Done, Idle. No hunting.</li>
-        <li><strong>Handed-off work sinks to the bottom</strong> — one collapsed <span class="mono" style="color:var(--ink)">Parked (8)</span> band, fed by the statuses you ticked on the workflow screen. Still one keypress from open.</li>
-        <li><strong>Work you haven't started shows too</strong> — issues with no session render as <span class="mono" style="color:var(--ink)">○</span> rows you can click to start. Grouped by stage they sit under their own stage; anywhere else they collect in one <span class="mono" style="color:var(--ink)">Up next</span> band. Per-stage, and off until you ask.</li>
-        <li><strong>Or group by project</strong> — every worktree of a repo under one header. Sort within any group by name, activity, or state with <span class="kbd">Ctrl-a s</span>.</li>
-        <li><strong>Narrow to the live ones</strong> — <span class="kbd">Ctrl-a f</span> filters to <em>Needs you</em> or <em>Active</em> when a twenty-session day gets loud.</li>
-      </ul>
-      <p style="margin-top:26px"><a href="https://github.com/jarredkenny/jmux/blob/main/docs/cheat-sheet.md#grouping-sorting-and-filtering" target="_blank" rel="noopener" class="link-u">Every grouping and sort mode →</a></p>
-    </div>
     <div class="animate-in">
-      <div class="term screen mini">
-        <div class="bar"><span class="d" style="background:#ff5f56"></span><span class="d" style="background:#ffbd2e"></span><span class="d" style="background:#27c93f"></span><small>sidebar</small></div>
-        <div class="body"> <span class="dim">⊞ Status  ⇅ Activity</span>  <span class="pk">2!</span>
-<span class="dim">──────────────────────────</span>
- <span class="hd">⌘ Command Center</span>
-
- <span class="dim">Needs you</span> <span class="dim">───────────────</span>
-
-<span class="sel">▎</span><span class="pk">!</span> <span class="hd">auth-refactor</span>
-<span class="sel">▎</span>  <span class="dim">feat/eng-1234-auth… 13s</span>
-<span class="sel">▎</span>                  <span class="pk">WAITING</span>
-
- <span class="dim">Active</span> <span class="dim">──────────────────</span>
-
- <span class="gr">●</span> <span class="hd">api-pagination</span>
-   <span class="dim">feat/eng-1241-cursor-p…</span>
-
- <span class="gr">●</span> <span class="hd">chart-perf</span>
-   <span class="dim">perf/dash-315-chart-re…</span>
-
- <span class="dim">Up next</span> <span class="dim">─────────────────</span>
-
- <span class="dim">○</span> TRA-1402
-   <span class="dim">Retry storms on the pa…</span>
-
- <span class="dim">Parked</span> <span class="dim">───────────────(9)</span></div>
-      </div>
+      <div class="eyebrow">What the fleet costs you</div>
+      <h2>Which agent is running out of room.<br><em>Which one is still cheap.</em></h2>
+      <p class="lead" style="margin-top:22px">No other multiplexer and no agent IDE shows you this. jmux reads <strong style="color:var(--ink)">Claude Code's own OpenTelemetry stream</strong> and puts two numbers on a session's row: how much of its context window is occupied, and a countdown on how long its prompt cache stays warm.</p>
+      <p class="lead" style="margin-top:16px">Both change how you work a fleet. The first tells you which session is about to start forgetting things and should be handed off before it does. The second tells you which one to send the next message to <em>now</em> — sending while the cache is warm can save up to 90% on input tokens, and a five-agent day is a lot of input tokens.</p>
+      <p class="lead" style="margin-top:16px">There is no setup. If Claude Code is running, the numbers are there.</p>
     </div>
   </div>
 </section>
 
-<!-- 4 · SHOWCASE ·4 — Themes & chrome -->
+<!-- 8 · COMPARISON -->
+<section class="sec base cmp center" id="compare">
+  <div class="wrap">
+    <div class="animate-in"><div class="eyebrow">How it compares</div>
+    <h2>Everyone climbs the first rung.<br><em>Only one</em> gets to the top.</h2>
+    <p class="lead" style="margin:20px auto 0;max-width:620px">These aren't rival products so much as different heights. Panes are table stakes. The question is how far past them a tool is willing to go.</p></div>
+    <div class="ctable">
+      <table>
+        <thead><tr><th></th><th class="jcol">jmux</th><th>Agent IDEs</th><th>Agent muxes</th><th>Raw tmux</th></tr></thead>
+        <tbody>
+          <tr><td>Panes, splits &amp; sessions that survive a detach</td><td class="jcol yes">✓</td><td class="meh txt">Embedded terminals</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Agent run state at a glance</td><td class="jcol yes txt">Hooks + telemetry</td><td class="yes">✓</td><td class="meh txt">Screen heuristics</td><td class="no">✗</td></tr>
+          <tr><td>Worktree isolation &amp; diff review in place</td><td class="jcol yes">✓</td><td class="yes">✓</td><td class="no">✗</td><td class="no">✗</td></tr>
+          <tr><td>Issues &amp; PRs, incl. self-hosted GitLab</td><td class="jcol yes">✓</td><td class="meh">Partial</td><td class="no">✗</td><td class="no">✗</td></tr>
+          <tr><td>Your workflow: stages, parking, ticket&nbsp;→&nbsp;merged</td><td class="jcol yes">✓</td><td class="no">✗</td><td class="no">✗</td><td class="no">✗</td></tr>
+          <tr><td>Context window &amp; cache-warm economics</td><td class="jcol yes">✓</td><td class="no">✗</td><td class="no">✗</td><td class="no">✗</td></tr>
+          <tr><td>Keeps your terminal config, plugins &amp; bindings</td><td class="jcol yes">✓</td><td class="no">✗</td><td class="no txt">Brings its own</td><td class="yes">✓</td></tr>
+          <tr><td>Reversible — your sessions outlive it</td><td class="jcol yes">✓</td><td class="no">✗</td><td class="no">✗</td><td class="yes">✓</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="scrollhint">← swipe the table to compare →</p>
+    <p class="foot"><b>Agent IDEs</b> — Orca, Cursor, Windsurf, Conductor — ship their own terminal, editor, and runtime in a desktop app.<br><b>Agent muxes</b> — herdr and friends — are agent-aware multiplexers that stand in for tmux rather than building on it.<br><br><b>And Claude Code's own Agent Teams?</b> That's an input, not a column. Agent Teams parallelises one task, in one repo, with one vendor's agent. jmux runs your queue across repos, agents, worktrees and branches — an Agent Teams run is one session in it.</p>
+  </div>
+</section>
+
+<!-- 9 · REAL TMUX -->
 <section class="sec showcase">
   <div class="wrap showrow flip">
     <div class="txt animate-in">
-      <div class="eyebrow">No migration</div>
-      <h2>It's real tmux.<br><em>Bring everything.</em></h2>
-      <p class="lead">The other agent multiplexers are <strong>replacements</strong> — a new server, a new config, a new keymap, and your tmux plugins left behind. jmux drives the tmux binary you already have. Your <span class="mono" style="color:var(--ink)">~/.tmux.conf</span>, prefix key, plugins, theme, and bindings all carry over; jmux enforces only the handful of settings it needs to draw its own chrome.</p>
-      <p class="lead">Which means the exit is free too. Your sessions are ordinary tmux sessions — <strong>quit jmux and <span class="mono" style="color:var(--ink)">tmux attach</span> still lands you exactly where you were</strong>. No export, no lock-in, nothing to migrate in either direction.</p>
-      <p class="lead">The chrome follows suit: every glyph and surface is drawn from <strong>your terminal's own palette</strong>, so jmux looks native in light or dark without a line of config. Tune the rest from the settings screen (<span class="kbd">Ctrl-a I</span>) — <span style="color:var(--green)">running</span> / <span style="color:var(--amber)">waiting</span> / <span style="color:var(--blue)">complete</span> colors, code host, issue tracker, panel widths.</p>
+      <div class="eyebrow">Durable &amp; reversible</div>
+      <h2>Nothing to migrate.<br><em>In either direction.</em></h2>
+      <p class="lead">The other agent multiplexers are <strong>replacements</strong> — a new server, a new config, a new keymap, and your plugins left behind. jmux isn't one. It drives the tmux you already have, so your config, prefix key, plugins, theme and bindings all carry over; jmux enforces only the handful of settings it needs to draw its own chrome.</p>
+      <p class="lead">Which is why your work is genuinely durable. Sessions detach and reattach over SSH, from a second machine, from a phone. They survive the terminal closing — and they survive <strong style="color:var(--ink)">jmux itself being killed</strong>, because the agents were never running inside jmux to begin with. And the exit is free: quit, and your sessions are exactly where you left them, reachable with jmux gone entirely.</p>
+      <p class="lead">The chrome follows suit — every glyph and surface is drawn from <strong>your terminal's own palette</strong>, so jmux looks native in light or dark without a line of config. Tune the rest from the settings screen (<span class="kbd">Ctrl-a I</span>): <span style="color:var(--green)">running</span> / <span style="color:var(--amber)">waiting</span> / <span style="color:var(--blue)">complete</span> colors, code host, issue tracker, panel widths.</p>
     </div>
     <div class="stackpair">
       <figure class="back"><img src="assets/command-center.webp" alt="jmux chrome peeking behind the theme stack"></figure>
@@ -833,7 +882,7 @@
   </div>
 </section>
 
-<!-- 5 · TESTIMONIALS -->
+<!-- 10 · TESTIMONIALS -->
 <section class="sec base tst center">
   <div class="wrap">
     <div class="animate-in"><div class="eyebrow">From the timeline</div>
@@ -866,7 +915,7 @@
           <span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>113</span>
         </div>
       </article>
-      <div class="tcard c-a animate-in">
+      <div class="tcard c-top animate-in">
         <p>“I've used tmux for 5 years — jmux makes me 5× more efficient.”</p>
         <div class="who"><span class="av">M</span><span><div class="nm">Mouad</div></span></div>
       </div>
@@ -874,46 +923,14 @@
         <p>“The attention flags, clean sidebar, and quick session switching have genuinely made my workflow much smoother and less chaotic.”</p>
         <div class="who"><span class="av"><img src="assets/testimonial-ravinwashere.jpg" alt=""></span><span><div class="nm">Ravin</div><div class="hd">@ravinwashere</div></span></div>
       </a>
-      <div class="tcard c-b animate-in">
-        <p>“Wow.”</p>
-        <div class="who"><span class="av">A</span><span><div class="nm">Azzeddine</div></span></div>
-      </div>
     </div>
   </div>
 </section>
 
-<!-- 6 · COMPARISON -->
-<section class="sec cmp center">
-  <div class="wrap">
-    <div class="animate-in"><div class="eyebrow">How it compares</div>
-    <h2>Three ways to run a fleet.<br><em>Only one</em> asks nothing of you.</h2></div>
-    <div class="ctable">
-      <table>
-        <thead><tr><th></th><th class="jcol">jmux</th><th>Agent IDEs</th><th>New muxes</th><th>Raw tmux</th></tr></thead>
-        <tbody>
-          <tr><td>Runs in the terminal you already use</td><td class="jcol yes">✓</td><td class="no">✗</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>Keeps your tmux config, plugins &amp; bindings</td><td class="jcol yes">✓</td><td class="no">✗</td><td class="no txt">Replaces tmux</td><td class="yes">✓</td></tr>
-          <tr><td>Sessions reachable from a plain <span class="mono">tmux attach</span></td><td class="jcol yes">✓</td><td class="no">✗</td><td class="no">✗</td><td class="yes">✓</td></tr>
-          <tr><td>Agent run states (running / waiting / complete)</td><td class="jcol yes txt">Hooks + telemetry</td><td class="yes">✓</td><td class="meh txt">Screen heuristics</td><td class="no">✗</td></tr>
-          <tr><td>Context window &amp; cache-warm visibility</td><td class="jcol yes">✓</td><td class="no">✗</td><td class="no">✗</td><td class="no">✗</td></tr>
-          <tr><td>Integrated diff review</td><td class="jcol yes">✓</td><td class="yes">✓</td><td class="no">✗</td><td class="no">✗</td></tr>
-          <tr><td>Issue &amp; PR/MR tracking, incl. self-hosted GitLab</td><td class="jcol yes">✓</td><td class="meh">Partial</td><td class="no">✗</td><td class="no">✗</td></tr>
-          <tr><td>Start work straight from a ticket</td><td class="jcol yes">✓</td><td class="meh">Partial</td><td class="no">✗</td><td class="no">✗</td></tr>
-          <tr><td>Scriptable JSON control surface</td><td class="jcol yes">✓</td><td class="meh">Partial</td><td class="yes">✓</td><td class="meh">Manual</td></tr>
-          <tr><td>Runs over SSH / headless</td><td class="jcol yes">✓</td><td class="no">✗</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>Install size</td><td class="jcol mono" style="font-size:12.5px">~0.3 MB</td><td class="no mono" style="font-size:12.5px">200+ MB</td><td class="meh mono" style="font-size:12.5px">~10 MB</td><td class="meh">—</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <p class="scrollhint">← swipe the table to compare →</p>
-    <p class="foot"><b>Agent IDEs</b> — Orca, Cursor, Windsurf, Conductor — ship their own terminal, editor, and runtime in a desktop app.<br><b>New muxes</b> — herdr and friends — are agent-aware multiplexers that stand in for tmux rather than building on it.</p>
-  </div>
-</section>
-
-<!-- 7 · CLI BAND -->
+<!-- 11 · CLI BAND -->
 <section class="sec panel cliband center">
   <div class="wrap">
-    <div class="animate-in"><div class="eyebrow">Agent orchestration <span class="new">NEW</span></div>
+    <div class="animate-in"><div class="eyebrow">Agent orchestration</div>
     <h2>Agents that <em>orchestrate</em> agents.</h2>
     <p class="lead" style="margin-top:18px">Other control surfaces stop at panes and processes. jmux's understands <strong style="color:var(--ink)">tickets, branches, and run state</strong> — so an agent can pick up <span class="mono" style="color:var(--ink)">TRA-933</span>, get its own worktree and session, work, and raise a flag when it needs a human. State comes from hooks and telemetry, <strong style="color:var(--ink)">not from scraping a screen buffer</strong>, so it's authoritative rather than a guess. Context auto-resolves from <span class="kbd">$TMUX</span>, so it works headless too.</p></div>
     <div class="term">
@@ -936,25 +953,68 @@
   </div>
 </section>
 
-<!-- 8 · ECOSYSTEM -->
-<section class="sec eco center" id="ecosystem">
+<!-- 12 · FEATURE GRID -->
+<section class="sec showcase" id="features">
+  <div class="wrap center">
+    <div class="animate-in"><div class="eyebrow">Also in the box</div>
+    <h2>Everything visible. <em>Nothing</em> in your way.</h2></div>
+  </div>
   <div class="wrap">
-    <div class="animate-in"><div class="eyebrow">Ecosystem</div>
-    <h2>Best-in-class tools. <em>Deeply</em> integrated.</h2></div>
-    <div class="ecogrid">
-      <div class="ecocard animate-in"><div class="nm"><a href="https://github.com/modem-dev/hunk" target="_blank" rel="noopener">hunk</a></div><div class="tg">Best terminal diff viewer</div><p>Powers the integrated diff panel — word-level, split &amp; full-screen.</p></div>
-      <div class="ecocard animate-in"><div class="nm"><a href="https://github.com/jarredkenny/worktree-manager" target="_blank" rel="noopener">wtm</a></div><div class="tg">Git worktree manager</div><p>One worktree per agent, one session per branch.</p></div>
-      <div class="ecocard animate-in"><div class="nm">Claude Code</div><div class="tg">Deepest integration</div><p>Hook-driven run state, live context &amp; cache from telemetry, plus a jmux-control skill.</p></div>
-      <div class="ecocard animate-in"><div class="nm"><a href="https://linear.app" target="_blank" rel="noopener">Linear</a></div><div class="tg">Modern issue tracking</div><p>Assigned issues in the info panel; create sessions from issues.</p></div>
-      <div class="ecocard animate-in"><div class="nm"><a href="https://github.com" target="_blank" rel="noopener">GitHub</a><span class="new">NEW</span></div><div class="tg">Pull requests &amp; checks</div><p>PR detection, CI glyphs, approve &amp; mark-ready from the panel.</p></div>
-      <div class="ecocard animate-in"><div class="nm"><a href="https://about.gitlab.com" target="_blank" rel="noopener">GitLab</a></div><div class="tg">MRs, pipelines, approvals</div><p>Pipeline glyphs in the sidebar. Self-hosted supported.</p></div>
-      <div class="ecocard animate-in"><div class="nm">Codex · Pi · Hermes</div><div class="tg">Any terminal agent</div><p>Run them in panes, pin them to the Command Center, drive them side by side.</p></div>
-      <div class="ecocard dashed animate-in"><div class="nm">yours</div><div class="tg">Whatever you use</div><p>vim, emacs, your scripts. It's tmux underneath.</p></div>
+    <div class="bento">
+      <div class="tile big animate-in">
+        <div class="ico" aria-hidden="true">▤</div>
+        <h3>Session Sidebar</h3>
+        <p>Every session at a glance — project group, git branch, agent state, pipeline status, linked issue or PR, and live context tokens. A real workspace map where your status bar used to be.</p>
+        <img class="bigshot" src="assets/sidebar.webp" alt="jmux session sidebar showing grouped sessions, activity dots, and agent-state flags">
+      </div>
+      <div class="tile animate-in">
+        <div class="ico" aria-hidden="true">⇋</div>
+        <h3>Instant Switching</h3>
+        <p><span class="kbd">Ctrl-Shift-↑/↓</span> — no prefix, no menu, no mode. Or click the sidebar.</p>
+      </div>
+      <div class="tile animate-in">
+        <div class="ico" aria-hidden="true">⚑</div>
+        <h3>Attention Flags</h3>
+        <p>When an agent finishes or needs you, its session raises an orange <span style="color:var(--amber)">!</span> in the sidebar — from a Claude Code Stop hook.</p>
+      </div>
+      <div class="tile animate-in">
+        <div class="ico" aria-hidden="true">⌘</div>
+        <h3>Command Palette</h3>
+        <p><span class="kbd">Ctrl-a p</span> — fuzzy-search sessions, windows, pane actions, settings, and issue commands.</p>
+      </div>
+      <div class="tile animate-in">
+        <div class="ico" aria-hidden="true">◐</div>
+        <h3>Settings &amp; themes</h3>
+        <p><span class="kbd">Ctrl-a I</span> — state colors, adapters, per-repo defaults. The chrome already matches your terminal's palette.</p>
+      </div>
+      <div class="tile animate-in">
+        <div class="ico" aria-hidden="true">▶</div>
+        <h3>Demo mode</h3>
+        <p><span class="kbd">jmux --demo</span> runs everything on mock data. No credentials, no tracker, nothing to configure.</p>
+      </div>
     </div>
   </div>
 </section>
 
-<!-- 9 · CTA -->
+<!-- 13 · ECOSYSTEM -->
+<section class="sec base eco center" id="ecosystem">
+  <div class="wrap">
+    <div class="animate-in"><div class="eyebrow">Ecosystem</div>
+    <h2>Best-in-class tools. <em>Deeply</em> integrated.</h2></div>
+    <div class="ecogrid">
+      <div class="ecocard animate-in"><div class="nm">Claude Code</div><div class="tg">Deepest integration</div><p>Hook-driven run state, live context &amp; cache from telemetry, plus a jmux-control skill.</p></div>
+      <div class="ecocard animate-in"><div class="nm">Codex · pi</div><div class="tg">Same state emitters</div><p>Installed by <span class="mono">jmux --install-agent-hooks</span>. State is reported, not guessed.</p></div>
+      <div class="ecocard animate-in"><div class="nm"><a href="https://linear.app" target="_blank" rel="noopener">Linear</a></div><div class="tg">Modern issue tracking</div><p>Your issues in the info panel, mapped onto workflow stages you define.</p></div>
+      <div class="ecocard animate-in"><div class="nm"><a href="https://about.gitlab.com" target="_blank" rel="noopener">GitLab</a></div><div class="tg">MRs, pipelines, approvals</div><p>Pipeline glyphs in the sidebar. Self-hosted supported.</p></div>
+      <div class="ecocard animate-in"><div class="nm"><a href="https://github.com" target="_blank" rel="noopener">GitHub</a></div><div class="tg">Pull requests &amp; checks</div><p>PR detection, CI glyphs, approve &amp; mark-ready from the panel. Enterprise supported.</p></div>
+      <div class="ecocard animate-in"><div class="nm"><a href="https://github.com/modem-dev/hunk" target="_blank" rel="noopener">hunk</a></div><div class="tg">Best terminal diff viewer</div><p>Powers the integrated diff panel — word-level, split &amp; full-screen.</p></div>
+      <div class="ecocard animate-in"><div class="nm"><a href="https://github.com/jarredkenny/worktree-manager" target="_blank" rel="noopener">wtm</a></div><div class="tg">Git worktree manager</div><p>One worktree per agent, one session per branch.</p></div>
+      <div class="ecocard dashed animate-in"><div class="nm">any other agent</div><div class="tg">Whatever you run</div><p>Every terminal agent works in a pane, with opt-in screen detection for run state. vim, emacs, lazygit, your scripts — it's a real terminal underneath.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- 14 · CTA -->
 <section class="sec panel cta" id="install">
   <svg class="filigree" viewBox="0 0 1200 500" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
     <g stroke="var(--ac-line)" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round">
@@ -971,7 +1031,7 @@
     <div><span class="d">$</span> bun install -g @jx0/jmux</div>
     <div><span class="d">$</span> jmux</div>
   </div>
-  <p class="note">~0.3 MB. Installs in under a second. jmux will install tmux for you if needed.</p>
+  <p class="note">jmux will install tmux for you if needed. Not ready to point it at your repos? <span class="mono" style="color:var(--ink)">jmux --demo</span> runs the whole thing on mock data first.</p>
 </section>
 
 <!-- FOOTER -->

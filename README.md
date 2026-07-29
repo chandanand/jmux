@@ -66,15 +66,16 @@ Each agent gets its own isolated branch via **[wtm](https://github.com/jarredken
 
 ### Define your own workflow
 
-Your tracker has a lot of statuses. Ours has 25 — `QA (PRE-RELEASE WEB)`, `Promote (RELEASE BR)`, `Need ANDR Build` — most named for someone else's process. You don't think in 25 states. You think in four.
+Your tracker has a lot of statuses — `Ready for Development`, `Awaiting QA Sign-off`, `Pending Release Approval` — most of them named for someone else's process. You don't think in 25 states. You think in five.
 
 So jmux has you define **your own workflow stages** and sit each one on top of one or many of your tracker's statuses:
 
 ```
-Urgent       ──  Release Blockers, QA Failed
-To do        ──  To do, Dev Confirm (PRE-RELEASE)
-In Progress  ──  In Progress, In Review, MR Review
-Waiting      ──  QA (PRE-RELEASE WEB), QA (RELEASE BR), QA PASS, Need ANDR Build, …
+Urgent       ──  Customer Escalation, Failed QA
+To do        ──  Ready for Development, Triaged
+In Progress  ──  In Progress, Reopened
+Waiting      ──  In Code Review, Awaiting QA Sign-off, Pending Release Approval, …
+Done         ──  Released
 ```
 
 A stage shows up as a tab in the info panel, but that's how it *appears*, not what it *is* — it's one rung on the ladder you actually work by, and its place in the list is its priority. Every status then has exactly two settings: **which stage it belongs to**, and **whether it parks**.
@@ -94,26 +95,28 @@ That second one is what keeps a fleet manageable:
 Everything above is configured on one screen. It's two blocks: your panel tabs, then a table of every status your tracker offers.
 
 ```
-Workflow                                    Linear · 25 statuses · 9 unmapped
+Workflow                             Linear · 25 statuses · 8 unmapped
 
   Your workflow ──────────────────────────────────────────────────────
-    Urgent ····································· 1st up next  2 statuses
-    To do ······································ 2nd up next  3 statuses
-    Waiting ······························· no unstarted  ⏸ 8  8 statuses
-    Done ············································· hidden  1 status
+    Urgent ··································· 1st up next  2 statuses
+    To do ···································· 2nd up next  3 statuses
+    In Progress ··········································· 3 statuses
+    Waiting ···························· no unstarted  ⏸ 8  8 statuses
+    Done ············································ hidden  1 status
     + New stage
 
   Statuses ───────────────────────────────────────────────────────────
     Status                     Stage                     Parks  Issues
-    Release Blockers           Urgent                                0
-    To do                      To do                                 5
-    QA (PRE-RELEASE WEB)       Waiting                     ⏸        19
+    Customer Escalation        Urgent                                2
+    Ready for Development      To do                                 5
+    In Code Review             Waiting                   ⏸           7
+    Awaiting QA Sign-off       Waiting                   ⏸          19
     Backlog                    —                                     5
 
   Unstarted work ─────────────────────────────────────────────────────
-    Show unstarted work in the sidebar ················ ◂ 3 per stage ▸
+    Show unstarted work in the sidebar ··············· ◂ 3 per stage ▸
 
-  QA (PRE-RELEASE WEB) · 19 issues · Waiting · parks its sessions (3 now)
+  Awaiting QA Sign-off · 19 issues · Waiting · parks its sessions (3 now)
   ↑↓ move · ↵ stage · space parks · d remove · ⇧↑↓ order · esc close
 ```
 
