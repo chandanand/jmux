@@ -222,6 +222,8 @@ export function buildRows(port: WorkflowPort, tier: SettingsTier): WorkflowRow[]
     hint: "The stages you work in, top to bottom in priority order — ⇧↑↓ to rearrange. Each is a tab in the info panel.",
   });
   const stageCount = views.filter((v) => v.source === "issues").length;
+  // Loop-invariant: the master switch is one value for the whole screen.
+  const unstartedOffGlobally = port.unstartedCap() === 0;
   let position = 0;
   for (const view of views) {
     const states = view.states ?? [];
@@ -236,7 +238,7 @@ export function buildRows(port: WorkflowPort, tier: SettingsTier): WorkflowRow[]
       position, stageCount,
       inSidebar: stageInSidebar(view),
       showUnstarted: stageShowsUnstarted(view),
-      unstartedOffGlobally: port.unstartedCap() === 0,
+      unstartedOffGlobally,
     });
   }
   rows.push({ kind: "new-tab" });
@@ -316,9 +318,12 @@ export function explainRow(row: WorkflowRow | undefined): string {
       parts.push(!row.inSidebar
         ? "no band in the sidebar — its sessions fall to the bottom, ungrouped"
         : row.unstartedOffGlobally
-          // Names the setting *and* where it is, because this is the one state
-          // where pressing space changes the row and nothing else.
-          ? "unstarted rows are off for every stage — set a count under Unstarted work below"
+          // Names the setting and where it is — and still reports which way this
+          // stage is set. The master overrides the choice; it does not erase it,
+          // and without saying so `space` here would change a stored value with
+          // nothing on screen differing either side of the press.
+          ? `unstarted rows are off for every stage (set a count under Unstarted work below)${
+              row.showUnstarted ? "" : " — and this one has opted out"}`
           : row.showUnstarted
             ? "shows its unstarted work in the sidebar"
             : "in the sidebar, without its unstarted work");

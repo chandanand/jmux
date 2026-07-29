@@ -541,7 +541,8 @@ unstarted work. And a stage whose work is all in flight simply shows no `○` ro
   Unstarted work ───────────────────────────────────────────────────────
     Show unstarted work in the sidebar ······················ ◂ 3 per stage ▸
 
-  Top 3 unstarted issue in each stage, under its own band. 1 stage opted out.
+  Top 3 unstarted issues in each stage, under its own band. 1 stage opted out
+  (space above).
   ↑↓ move · ◂▸ change · ↵ edit · esc close
 ```
 
@@ -588,7 +589,8 @@ choices are kept, not cleared, so switching the count back on restores them.
 Stage bands only exist under `Ctrl-a G` → `Stage`. On the other axes an issue
 with no session has no project, no agent state and no activity to sort under, so
 the rows collect into a single **Up next** band above `Parked`, fed by the stages
-you marked with `u` for the `Ctrl-a u` rotation:
+you marked with `u` for the `Ctrl-a u` rotation — minus any that opted out above,
+so a stage you switched off cannot come back through the other placement:
 
 ```
   jmux

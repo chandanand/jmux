@@ -4,7 +4,7 @@ import {
   isSelectable, tableLayout, printableText, prevBoundary, nextBoundary,
   type WorkflowPort, type WorkflowRow, type WorkflowBand,
 } from "../workflow-screen";
-import { parseViews, toggleViewInSidebar, type PanelView } from "../panel-view";
+import { parseViews, toggleViewInSidebar, toggleViewUnstarted, type PanelView } from "../panel-view";
 import type { SettingDef } from "../settings-screen";
 import type { CellGrid } from "../types";
 import type { IssueStateType } from "../adapters/types";
@@ -385,6 +385,21 @@ describe("parking is a column in the table", () => {
     const rows = buildRows(harness({ unstartedCap: () => 0 }).port, "global");
     expect(explainRow(rows.find((r) => r.kind === "tab" && r.viewId === "urgent")))
       .toContain("off for every stage");
+  });
+
+  test("the master switch overrides a stage's choice without erasing it", () => {
+    // Otherwise `space` here changes a stored value with nothing on screen
+    // differing either side of the press — the same silent-no-op this whole
+    // disclosure exists to prevent, one level down.
+    const opted = toggleViewUnstarted(views(), "urgent");
+    const on = buildRows(harness({ unstartedCap: () => 0 }).port, "global");
+    const off = buildRows(harness({ unstartedCap: () => 0 }, opted).port, "global");
+    const line = (rows: WorkflowRow[]) =>
+      explainRow(rows.find((r) => r.kind === "tab" && r.viewId === "urgent"));
+    expect(line(on)).toContain("off for every stage");
+    expect(line(on)).not.toContain("opted out");
+    expect(line(off)).toContain("off for every stage");
+    expect(line(off)).toContain("opted out");
   });
 
   test("with the master switch on, a stage reports its own setting again", () => {

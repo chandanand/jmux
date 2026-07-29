@@ -4020,7 +4020,11 @@ function workflowBands(tier: SettingsTier): WorkflowBand[] {
             if (n === 0) {
               return `◂ ▸ to set a count, or "${GHOST_CAP_ALL}" for every one. Off, no stage shows unstarted work.`;
             }
-            const each = n === Infinity ? "Every" : `Top ${n}`;
+            // The noun rides along with the quantity so it agrees with it —
+            // "Top 3 unstarted issue" read as a typo in every case but n=1.
+            const each = n === Infinity
+              ? "Every unstarted issue"
+              : `Top ${n} unstarted ${n === 1 ? "issue" : "issues"}`;
             // Names the per-stage switch, so the master and the exceptions each
             // point at the other rather than looking like the only control.
             const off = panelViews.filter((v) => v.source === "issues" && !stageShowsUnstarted(v)).length;
@@ -4028,7 +4032,7 @@ function workflowBands(tier: SettingsTier): WorkflowBand[] {
             // What the setting does depends on the grouping axis, so it says so
             // rather than describing a placement the user isn't looking at.
             if (sidebar.getGroupMode() === "stage") {
-              return `${each} unstarted issue in each stage, under its own band.${except}`;
+              return `${each} in each stage, under its own band.${except}`;
             }
             // Off the stage axis the rows collect in one band fed by Up next, so
             // an empty rotation is the one way this can look configured and do
