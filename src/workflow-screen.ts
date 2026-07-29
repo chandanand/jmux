@@ -143,6 +143,14 @@ export interface WorkflowPort {
   getUpNext(): readonly string[];
   /** Add a tab to the rotation, or drop it. Appending is what sets priority. */
   toggleUpNext(viewId: string): void;
+  /**
+   * How many unstarted issues each stage may show; 0 when the feature is off.
+   *
+   * Read here so a stage row can say that its own unstarted toggle is currently
+   * moot. Without it the master switch defeats every per-stage toggle in
+   * silence — you press space, the row changes, and the sidebar does nothing.
+   */
+  unstartedCap(): number;
   /** The behaviour bands for the given tier, rebuilt on demand. */
   getBands(tier: SettingsTier): WorkflowBand[];
   /** Display name of the tracker, or null when it is not connected. */
@@ -165,6 +173,8 @@ export type WorkflowRow =
       position: number; stageCount: number;
       /** Sidebar visibility, and whether unstarted work shows under it. */
       inSidebar: boolean; showUnstarted: boolean;
+      /** The master switch is off, so `showUnstarted` currently does nothing. */
+      unstartedOffGlobally: boolean;
     }
   | { kind: "new-tab" }
   /** STATUSES block: the column headings, then one row per tracker status. */
@@ -226,6 +236,7 @@ export function buildRows(port: WorkflowPort, tier: SettingsTier): WorkflowRow[]
       position, stageCount,
       inSidebar: stageInSidebar(view),
       showUnstarted: stageShowsUnstarted(view),
+      unstartedOffGlobally: port.unstartedCap() === 0,
     });
   }
   rows.push({ kind: "new-tab" });
@@ -304,9 +315,13 @@ export function explainRow(row: WorkflowRow | undefined): string {
       // vanished is not guessable from a marker.
       parts.push(!row.inSidebar
         ? "no band in the sidebar — its sessions fall to the bottom, ungrouped"
-        : row.showUnstarted
-          ? "shows its unstarted work in the sidebar"
-          : "in the sidebar, without its unstarted work");
+        : row.unstartedOffGlobally
+          // Names the setting *and* where it is, because this is the one state
+          // where pressing space changes the row and nothing else.
+          ? "unstarted rows are off for every stage — set a count under Unstarted work below"
+          : row.showUnstarted
+            ? "shows its unstarted work in the sidebar"
+            : "in the sidebar, without its unstarted work");
       if (row.parks > 0) parts.push(`${row.parks} of them park`);
       parts.push(row.upNextRank !== null
         ? `${ordinal(row.upNextRank + 1)} in Up next`
@@ -955,6 +970,9 @@ export class WorkflowScreen {
         // that restated "yes, normal" for every one of them would be noise.
         const sidebarState: Array<{ text: string; attrs: CellAttrs }> =
           !model.inSidebar ? [{ text: "hidden  ", attrs: WARN_ATTRS }]
+          // The master switch outranks the per-stage one: while it is off, a
+          // row saying "no unstarted" would imply the others are showing some.
+          : model.unstartedOffGlobally ? [{ text: "off globally  ", attrs: DIM_ATTRS }]
           : !model.showUnstarted ? [{ text: "no unstarted  ", attrs: DIM_ATTRS }]
           : [];
         const value: Array<{ text: string; attrs: CellAttrs }> = model.source !== "issues"

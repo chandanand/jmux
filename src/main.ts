@@ -51,7 +51,7 @@ import { SessionState } from "./session-state";
 import type { SessionContext, WorkflowState } from "./adapters/types";
 import { stageForIssue, resolveIssueRepoDir, STAGE_ORDER, STAGE_LABELS } from "./work-stage";
 import {
-  selectGhosts, selectGhostsPerStage, ghostCapValue, formatGhostCap, editGhostCap, parseGhostCap, stepGhostCap,
+  selectGhosts, ghostCapValue, formatGhostCap, editGhostCap, parseGhostCap, stepGhostCap,
   GHOST_CAP_ALL, type GhostQueue, type GhostCap,
 } from "./ghosts";
 import {
@@ -1329,9 +1329,10 @@ function recomputeGhosts(): void {
     });
   }
 
-  sidebar.setGhostSessions(
-    perStage ? selectGhostsPerStage(queues, cap) : selectGhosts(queues, cap),
-  );
+  // One selector for both placements: the cap is per stage either way, and rows
+  // are always stage-tagged — the sidebar files them by tag when it is banding
+  // by stage and ignores the tag when it is not.
+  sidebar.setGhostSessions(selectGhosts(queues, cap));
 }
 
 // --- Status transitions ---
@@ -4017,13 +4018,17 @@ function workflowBands(tier: SettingsTier): WorkflowBand[] {
             // takes a word as well — so the accepted forms are spelled out here,
             // on the line the user is reading when they press Enter.
             if (n === 0) {
-              return `◂ ▸ to set a count, or "${GHOST_CAP_ALL}" for every one. Blank turns unstarted rows off.`;
+              return `◂ ▸ to set a count, or "${GHOST_CAP_ALL}" for every one. Off, no stage shows unstarted work.`;
             }
             const each = n === Infinity ? "Every" : `Top ${n}`;
+            // Names the per-stage switch, so the master and the exceptions each
+            // point at the other rather than looking like the only control.
+            const off = panelViews.filter((v) => v.source === "issues" && !stageShowsUnstarted(v)).length;
+            const except = off > 0 ? ` ${off} stage${off === 1 ? "" : "s"} opted out (space above).` : "";
             // What the setting does depends on the grouping axis, so it says so
             // rather than describing a placement the user isn't looking at.
             if (sidebar.getGroupMode() === "stage") {
-              return `${each} unstarted issue in each stage, under its own band. Click one to start it.`;
+              return `${each} unstarted issue in each stage, under its own band.${except}`;
             }
             // Off the stage axis the rows collect in one band fed by Up next, so
             // an empty rotation is the one way this can look configured and do
@@ -4036,7 +4041,7 @@ function workflowBands(tier: SettingsTier): WorkflowBand[] {
             if (stages.length === 0) {
               return "Grouped by stage this fills every band; on this axis it needs a stage in Up next — mark one with u above.";
             }
-            return `${each} from ${stages.join(", ")} in one band. Group by stage (^a G) to see every stage's.`;
+            return `${each} from each of ${stages.join(", ")}, in one band.${except} Group by stage (^a G) for a band each.`;
           },
         },
       ],
@@ -4071,6 +4076,7 @@ function buildWorkflowPort(): WorkflowPort {
       configStore.setPipeline("parkedStates", toggleParkedState(parkedStates(), state));
       recomputeSessionBands();
     },
+    unstartedCap: ghostCap,
     getUpNext: () => configStore.config.pipeline?.upNext ?? [],
     toggleUpNext: (viewId) => {
       // Append on add, so the order you add them is the order Ctrl-a u checks.

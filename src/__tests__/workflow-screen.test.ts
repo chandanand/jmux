@@ -4,7 +4,7 @@ import {
   isSelectable, tableLayout, printableText, prevBoundary, nextBoundary,
   type WorkflowPort, type WorkflowRow, type WorkflowBand,
 } from "../workflow-screen";
-import { parseViews, type PanelView } from "../panel-view";
+import { parseViews, toggleViewInSidebar, type PanelView } from "../panel-view";
 import type { SettingDef } from "../settings-screen";
 import type { CellGrid } from "../types";
 import type { IssueStateType } from "../adapters/types";
@@ -64,6 +64,7 @@ function harness(over: Partial<WorkflowPort> = {}, initial: PanelView[] = views(
         state.writes++;
       },
       getUpNext: () => ["urgent"],
+      unstartedCap: () => 3,
       toggleUpNext: () => {},
       getBands: () => [],
       trackerLabel: () => "Linear",
@@ -371,6 +372,34 @@ describe("parking is a column in the table", () => {
     const v = h.current().find((x) => x.id === "urgent")!;
     expect(v.showUnstarted).toBe(false);
     expect(v.inSidebar).toBeUndefined();
+  });
+
+  test("a stage says so when the master switch makes its toggle moot", () => {
+    // The bug this guards: with the global count off, pressing space changed
+    // the row and nothing else — a setting that looks configured and does
+    // nothing, which is the failure this whole screen exists to prevent.
+    const { screen } = open({ unstartedCap: () => 0 });
+    selectRow(screen, "Urgent");
+    const grid = screen.render(100, 40);
+    expect(text(grid, findRow(grid, "Urgent"))).toContain("off globally");
+    const rows = buildRows(harness({ unstartedCap: () => 0 }).port, "global");
+    expect(explainRow(rows.find((r) => r.kind === "tab" && r.viewId === "urgent")))
+      .toContain("off for every stage");
+  });
+
+  test("with the master switch on, a stage reports its own setting again", () => {
+    const rows = buildRows(harness({ unstartedCap: () => 3 }).port, "global");
+    expect(explainRow(rows.find((r) => r.kind === "tab" && r.viewId === "urgent")))
+      .toContain("shows its unstarted work");
+  });
+
+  test("a hidden stage reads as hidden even while the master switch is off", () => {
+    // "hidden" is the stronger statement — it also explains where the sessions
+    // went — so it outranks the global note.
+    const hidden = toggleViewInSidebar(views(), "urgent");
+    const rows = buildRows(harness({ unstartedCap: () => 0 }, hidden).port, "global");
+    expect(explainRow(rows.find((r) => r.kind === "tab" && r.viewId === "urgent")))
+      .toContain("no band in the sidebar");
   });
 
   test("neither toggle applies to an MR tab", () => {

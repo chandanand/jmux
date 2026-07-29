@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import {
-  selectGhosts, selectGhostsPerStage, ghostCapValue, formatGhostCap, editGhostCap, parseGhostCap, stepGhostCap,
+  selectGhosts, ghostCapValue, formatGhostCap, editGhostCap, parseGhostCap, stepGhostCap,
   GHOST_CAP_MAX, type GhostIssue, type GhostQueue,
 } from "../ghosts";
 
@@ -22,9 +22,12 @@ const queue = (viewId: string, rank: number, ids: Array<GhostIssue | string>): G
 const ids = (out: ReturnType<typeof selectGhosts>): string[] => out.map((g) => g.issueId);
 
 describe("selectGhosts", () => {
-  test("carries the fields a row needs", () => {
+  test("carries the fields a row needs, tagged with its stage", () => {
     const out = selectGhosts([queue("todo", 0, [issue({ id: "a", identifier: "ENG-1", title: "fix it" })])], 5);
-    expect(out).toEqual([{ issueId: "a", identifier: "ENG-1", title: "fix it" }]);
+    expect(out).toEqual([{
+      issueId: "a", identifier: "ENG-1", title: "fix it",
+      stageId: "todo", stageLabel: "Todo", rank: 0,
+    }]);
   });
 
   test("orders by stage rank, not by the order queues were passed in", () => {
@@ -53,9 +56,12 @@ describe("selectGhosts", () => {
     expect(ids(out)).toEqual(["b", "a"]);
   });
 
-  test("caps the total, counting across queues", () => {
-    const out = selectGhosts([queue("one", 0, ["a", "b"]), queue("two", 1, ["c", "d"])], 3);
-    expect(ids(out)).toEqual(["a", "b", "c"]);
+  test("caps per stage, not in total — one number, one meaning on both placements", () => {
+    // It briefly capped the total on the flat placement and per stage on the
+    // banded one, so "3" meant three altogether or three each depending on a
+    // grouping mode the setting never mentioned.
+    const out = selectGhosts([queue("one", 0, ["a", "b", "c"]), queue("two", 1, ["d", "e", "f"])], 2);
+    expect(ids(out)).toEqual(["a", "b", "d", "e"]);
   });
 
   test("a cap of zero is how the feature is off — no second boolean to disagree", () => {
@@ -91,9 +97,9 @@ describe("selectGhosts", () => {
   });
 });
 
-describe("selectGhostsPerStage", () => {
+describe("selectGhosts — stage tagging", () => {
   test("tags each row with the band it belongs in", () => {
-    const out = selectGhostsPerStage(
+    const out = selectGhosts(
       [queue("todo", 0, [issue({ id: "a", identifier: "ENG-1", title: "fix" })])], 5);
     expect(out).toEqual([{
       issueId: "a", identifier: "ENG-1", title: "fix",
@@ -102,7 +108,7 @@ describe("selectGhostsPerStage", () => {
   });
 
   test("caps per stage, so a busy stage can't starve the ones below it", () => {
-    const out = selectGhostsPerStage([
+    const out = selectGhosts([
       queue("urgent", 0, ["a", "b", "c", "d"]),
       queue("todo", 1, ["e", "f", "g"]),
     ], 2);
@@ -110,7 +116,7 @@ describe("selectGhostsPerStage", () => {
   });
 
   test("still skips started and done work, and those don't consume a stage's slots", () => {
-    const out = selectGhostsPerStage([
+    const out = selectGhosts([
       queue("todo", 0, [
         issue({ id: "a", hasSession: true }), issue({ id: "b", inactive: true }), "c", "d",
       ]),
@@ -119,7 +125,7 @@ describe("selectGhostsPerStage", () => {
   });
 
   test("dedupes across stages so one issue never appears under two bands", () => {
-    const out = selectGhostsPerStage([
+    const out = selectGhosts([
       queue("all", 1, ["a", "b"]),
       queue("urgent", 0, ["b"]),
     ], 5);
@@ -129,14 +135,14 @@ describe("selectGhostsPerStage", () => {
   });
 
   test("emits stages in rank order regardless of input order", () => {
-    const out = selectGhostsPerStage([
+    const out = selectGhosts([
       queue("later", 2, ["c"]), queue("first", 0, ["a"]), queue("mid", 1, ["b"]),
     ], 5);
     expect(out.map((g) => g.stageId)).toEqual(["first", "mid", "later"]);
   });
 
   test("an infinite cap takes every eligible issue in every stage", () => {
-    const out = selectGhostsPerStage([
+    const out = selectGhosts([
       queue("a", 0, Array.from({ length: 120 }, (_, i) => `x${i}`)),
       queue("b", 1, Array.from({ length: 80 }, (_, i) => `y${i}`)),
     ], Infinity);
@@ -144,7 +150,7 @@ describe("selectGhostsPerStage", () => {
   });
 
   test("off is off, on either placement", () => {
-    expect(selectGhostsPerStage([queue("todo", 0, ["a"])], 0)).toEqual([]);
+    expect(selectGhosts([queue("todo", 0, ["a"])], 0)).toEqual([]);
   });
 });
 
@@ -167,8 +173,8 @@ describe("the ghost cap", () => {
 
   test("displays as prose but edits as input — the two are not the same string", () => {
     expect(formatGhostCap(null)).toBe("never");
-    expect(formatGhostCap(1)).toBe("1 issue");
-    expect(formatGhostCap(5)).toBe("5 issues");
+    expect(formatGhostCap(1)).toBe("1 per stage");
+    expect(formatGhostCap(5)).toBe("5 per stage");
     expect(formatGhostCap("all")).toBe("all");
     expect(editGhostCap(null)).toBe("");
     expect(editGhostCap(5)).toBe("5");

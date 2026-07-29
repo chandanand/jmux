@@ -55,12 +55,16 @@ export function ghostCapValue(raw: unknown): number {
   return Math.floor(raw);
 }
 
-/** What the row displays. */
+/**
+ * What the row displays. A count says "per stage" outright: it is applied per
+ * stage on every placement, and a bare "3 issues" invited exactly the wrong
+ * reading when several stages were on screen at once.
+ */
 export function formatGhostCap(raw: unknown): string {
   const n = ghostCapValue(raw);
   if (n === 0) return GHOST_CAP_OFF;
   if (n === Infinity) return GHOST_CAP_ALL;
-  return `${n} ${n === 1 ? "issue" : "issues"}`;
+  return `${n} per stage`;
 }
 
 /** What the prompt opens on — the input form, which is not the display form. */
@@ -156,11 +160,18 @@ function entryOf(issue: GhostIssue): GhostEntry {
 }
 
 /**
- * Ghost rows as one flat list, highest-priority stage first, capped in total.
+ * The ghost rows to draw: stages in priority order, **capped per stage**.
  *
- * The placement used when the sidebar is grouped by anything other than stage:
- * there are no stage bands to sit in, so the rows collect into a single band and
- * the cap bounds the whole thing.
+ * The cap is per stage on every placement, not per stage in one and per total in
+ * the other. It briefly was the latter, and that made one setting mean two
+ * things — "3 issues" read as three altogether when grouped by project and three
+ * *each* when grouped by stage, with nothing on screen to say which. Per stage
+ * is also the only defensible reading for the banded placement, where a global
+ * budget would let a busy first stage starve every stage below it.
+ *
+ * Every row is tagged with its stage. The banded placement files rows by that
+ * tag; the flat one ignores it, so tagging unconditionally costs nothing and
+ * spares the caller a decision it would only get wrong.
  *
  * Deduplicates by issue id. One status has exactly one home stage, but a queue
  * whose view carries no `states` falls back to its plain filter — which can be
@@ -168,42 +179,10 @@ function entryOf(issue: GhostIssue): GhostEntry {
  * queues. First (highest-ranked) queue wins, which is also the queue the user
  * would say it belongs to.
  *
- * A cap of zero returns nothing, which is how the feature is switched off: the
- * setting is the count, so there is no second boolean that could disagree with it.
+ * A cap of zero returns nothing: it is the master switch, and the caller checks
+ * it before doing any of this work.
  */
 export function selectGhosts(queues: readonly GhostQueue[], cap: number): GhostEntry[] {
-  if (cap <= 0) return [];
-
-  const ordered = [...queues].sort((a, b) => a.rank - b.rank);
-  const out: GhostEntry[] = [];
-  const seen = new Set<string>();
-
-  for (const queue of ordered) {
-    for (const issue of queue.issues) {
-      if (out.length >= cap) return out;
-      if (!eligible(issue) || seen.has(issue.id)) continue;
-      seen.add(issue.id);
-      out.push(entryOf(issue));
-    }
-  }
-  return out;
-}
-
-/**
- * Ghost rows tagged with the stage band they belong in, capped **per stage**.
- *
- * The placement used when the sidebar is grouped by stage, which is the point of
- * the feature: every stage shows the work sitting in it that nobody has picked
- * up, directly under the sessions that already have. A global cap would be wrong
- * here — it would let a busy first stage starve every stage below it of rows.
- *
- * Dedup still runs across the whole set, and still resolves to the
- * highest-ranked stage, so one issue can never appear under two bands.
- */
-export function selectGhostsPerStage(
-  queues: readonly GhostQueue[],
-  cap: number,
-): GhostEntry[] {
   if (cap <= 0) return [];
 
   const ordered = [...queues].sort((a, b) => a.rank - b.rank);
