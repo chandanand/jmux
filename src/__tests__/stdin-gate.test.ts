@@ -106,3 +106,96 @@ describe("StdinGate — input buffering until ready", () => {
     expect(input.join("")).toBe("hi");
   });
 });
+
+describe("StdinGate — terminal graphics probe", () => {
+  function probeCollector() {
+    const probes: Array<{ supported: boolean | null; cellPx: { w: number; h: number } | null }> = [];
+    const input: string[] = [];
+    const gate = new StdinGate({
+      onBackground: () => {},
+      onInput: (str) => input.push(str),
+      onImageProbe: (r) => probes.push(r),
+      gridSize: () => ({ cols: 80, rows: 24 }),
+    });
+    gate.markReady();
+    return { gate, probes, input };
+  }
+
+  test("ignores graphics replies until armed", () => {
+    // Nothing asked the terminal a question, so nothing should be peeled out of
+    // what the user typed.
+    const { gate, probes, input } = probeCollector();
+    gate.feed("\x1b_Gi=31;OK\x1b\\");
+    expect(probes).toEqual([]);
+    expect(input.join("")).toBe("\x1b_Gi=31;OK\x1b\\");
+  });
+
+  test("once armed, a reply is reported and stripped from the input", () => {
+    const { gate, probes, input } = probeCollector();
+    gate.armImageProbe();
+    gate.feed("a\x1b_Gi=31;OK\x1b\\b");
+    expect(probes[0]!.supported).toBe(true);
+    expect(input.join("")).toBe("ab");
+  });
+
+  test("cell geometry arrives through the same path", () => {
+    const { gate, probes, input } = probeCollector();
+    gate.armImageProbe();
+    gate.feed("\x1b[6;18;9t");
+    expect(probes[0]!.cellPx).toEqual({ w: 9, h: 18 });
+    expect(input.join("")).toBe("");
+  });
+
+  test("a reply split across reads is reassembled", () => {
+    const { gate, probes, input } = probeCollector();
+    gate.armImageProbe();
+    gate.feed("\x1b_Gi=31;O");
+    expect(probes).toEqual([]);
+    expect(input.join("")).toBe("");
+    gate.feed("K\x1b\\typed");
+    expect(probes[0]!.supported).toBe(true);
+    expect(input.join("")).toBe("typed");
+  });
+
+  test("disarming releases whatever was held mid-reply", () => {
+    // A terminal that starts an APC and never finishes it must not cost the
+    // user the keystrokes queued behind it.
+    const { gate, input } = probeCollector();
+    gate.armImageProbe();
+    gate.feed("\x1b_Gi=31;O");
+    expect(input.join("")).toBe("");
+    gate.disarmImageProbe();
+    expect(input.join("")).toBe("\x1b_Gi=31;O");
+  });
+
+  test("disarming twice releases nothing a second time", () => {
+    const { gate, input } = probeCollector();
+    gate.armImageProbe();
+    gate.feed("\x1b_Gi=31;O");
+    gate.disarmImageProbe();
+    gate.disarmImageProbe();
+    expect(input.join("")).toBe("\x1b_Gi=31;O");
+  });
+
+  test("ordinary keystrokes pass through while armed", () => {
+    const { gate, probes, input } = probeCollector();
+    gate.armImageProbe();
+    gate.feed("\x1b[A");
+    gate.feed("q");
+    expect(probes).toEqual([]);
+    expect(input.join("")).toBe("\x1b[Aq");
+  });
+
+  test("the background reply still resolves while the graphics probe is armed", () => {
+    const backgrounds: RGB[] = [];
+    const gate = new StdinGate({
+      onBackground: (rgb) => backgrounds.push(rgb),
+      onInput: () => {},
+      onImageProbe: () => {},
+      gridSize: () => ({ cols: 80, rows: 24 }),
+    });
+    gate.armImageProbe();
+    gate.feed(REPLY);
+    expect(backgrounds.length).toBe(1);
+  });
+});

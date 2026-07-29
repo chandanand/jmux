@@ -15,22 +15,31 @@
 // terminal background is detected. `rebuildIssueDetailColors()` is the one
 // place that re-derives them, and panel-view-renderer's own rebuild calls it.
 
-import type { CellGrid } from "./types";
+import type { CellGrid, ImageMark } from "./types";
 import { ColorMode } from "./types";
-import { writeString, textCols, type CellAttrs, type StyledLine } from "./cell-grid";
+import { writeString, writeImageRow, textCols, type CellAttrs, type StyledLine } from "./cell-grid";
 import type { Issue } from "./adapters/types";
-import { renderMarkdownToStyledLines } from "./markdown";
+import { renderMarkdownBlocks, renderMarkdownToStyledLines } from "./markdown";
+import { getImagePort } from "./images/port";
 import { neutralFg } from "./theme";
 import { tokens } from "./chrome-tokens";
 
 /**
  * One rendered line. Untagged on purpose — a line is either a single run of
- * uniform text or a pre-styled segment list from the markdown renderer, and
- * every consumer discriminates on `"segments" in line`.
+ * uniform text, a pre-styled segment list from the markdown renderer, or one
+ * row of an image's reserved cell box, and every consumer discriminates on
+ * which key is present.
+ *
+ * An image being *lines* rather than a block with a height is what keeps it
+ * free: scrolling, the max-scroll clamp, clipping at the pane edge and
+ * occlusion by a modal are all things that already happen to lines, and an
+ * image inherits every one of them without a single call site learning that
+ * images exist.
  */
 export type DetailLine =
   | { text: string; attrs: CellAttrs; indent?: number }
-  | { segments: StyledLine; indent?: number };
+  | { segments: StyledLine; indent?: number }
+  | { imageRow: ImageMark; url: string; indent?: number };
 
 export const DETAIL_LABEL: CellAttrs = { fg: 8, fgMode: ColorMode.Palette, dim: true };
 export const DETAIL_VALUE: CellAttrs = { fg: 7, fgMode: ColorMode.Palette };
@@ -68,6 +77,66 @@ export interface IssueDetailOptions {
 }
 
 const PAD = 2;
+
+/**
+ * Markdown prose as detail lines, with standalone images drawn in place when
+ * the terminal can draw them.
+ *
+ * The fallback isn't a separate branch: with no image port, `extractImages` is
+ * off and this collapses to the single markdown render it always was. A
+ * loading or unusable image falls back to the same `![alt](url)` the whole
+ * document would have produced, rendered through the same renderer — so the
+ * link a user sees when an image fails is byte-identical to the link they saw
+ * before jmux could show images at all.
+ */
+function markdownDetailLines(text: string, contentWidth: number): DetailLine[] {
+  const port = getImagePort();
+  const lines: DetailLine[] = [];
+  const linkFallback = (url: string, alt: string, note?: string): void => {
+    for (const segLine of renderMarkdownToStyledLines(`![${alt}](${url})`, contentWidth, { baseAttrs: DETAIL_VALUE })) {
+      lines.push({ segments: segLine });
+    }
+    if (note) lines.push({ text: note, attrs: DETAIL_DIM });
+  };
+
+  for (const block of renderMarkdownBlocks(text, contentWidth, {
+    baseAttrs: DETAIL_VALUE,
+    extractImages: port !== null,
+  })) {
+    if (block.kind === "lines") {
+      for (const segLine of block.lines) lines.push({ segments: segLine });
+      continue;
+    }
+    if (!port) {
+      // Unreachable — extractImages is off without a port, so no image block is
+      // produced. Kept as the fallback rather than an assertion because the
+      // honest answer to "no port" is the link, at every site that asks.
+      linkFallback(block.url, block.alt);
+      continue;
+    }
+    const resolved = port.resolve(block.url, contentWidth);
+    if (resolved.kind === "loading") {
+      lines.push({ text: `⟳ ${block.alt || "loading image"}…`, attrs: DETAIL_DIM });
+      continue;
+    }
+    if (resolved.kind === "failed") {
+      linkFallback(block.url, block.alt, `  (${resolved.reason})`);
+      continue;
+    }
+    lines.push({ text: "", attrs: DETAIL_DIM });
+    // One mark object per row, shared by that row's cells — see writeImageRow.
+    // The URL rides along so the drawn image stays clickable: showing the
+    // picture must not take away the thing the link could do.
+    for (let r = 0; r < resolved.rows; r++) {
+      lines.push({
+        imageRow: { id: resolved.id, tileRow: r, rows: resolved.rows, cols: resolved.cols },
+        url: block.url,
+      });
+    }
+    lines.push({ text: "", attrs: DETAIL_DIM });
+  }
+  return lines;
+}
 
 /** An issue rendered as detail lines. */
 export function buildIssueDetailLines(
@@ -114,9 +183,7 @@ export function buildIssueDetailLines(
   if (issue.description) {
     lines.push({ text: "", attrs: DETAIL_DIM });
     lines.push({ text: "Description:", attrs: { ...DETAIL_LABEL, bold: true } });
-    for (const segLine of renderMarkdownToStyledLines(issue.description, contentWidth, { baseAttrs: DETAIL_VALUE })) {
-      lines.push({ segments: segLine });
-    }
+    lines.push(...markdownDetailLines(issue.description, contentWidth));
   }
 
   // Comments
@@ -127,9 +194,7 @@ export function buildIssueDetailLines(
       lines.push({ text: "", attrs: DETAIL_DIM });
       const date = comment.createdAt ? new Date(comment.createdAt).toLocaleDateString() : "";
       lines.push({ text: `${comment.author}  ${date}`, attrs: { ...DETAIL_LABEL, bold: true } });
-      for (const segLine of renderMarkdownToStyledLines(comment.body, contentWidth, { baseAttrs: DETAIL_VALUE })) {
-        lines.push({ segments: segLine });
-      }
+      lines.push(...markdownDetailLines(comment.body, contentWidth));
     }
   }
 
@@ -174,6 +239,17 @@ export function paintDetailLines(
     const col = startCol + PAD + indent;
     const maxWidth = cols - PAD * 2 - indent;
     if (maxWidth <= 0) continue;
+    if ("imageRow" in line) {
+      // A row that doesn't fit is simply not marked, and the image layer's
+      // whole-row rule then drops it from the placement — a picture is never
+      // half-drawn because the pane got narrow between layout and paint.
+      //
+      // The link goes on the cells under the picture, which is the whole of
+      // "clicking the image opens it": the click path reads URLs off the
+      // composited grid, so it needs to know nothing about images.
+      writeImageRow(grid, startRow + i, col, line.imageRow, { link: line.url });
+      continue;
+    }
     if ("segments" in line) {
       let used = 0;
       for (const seg of line.segments) {

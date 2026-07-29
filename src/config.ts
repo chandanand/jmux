@@ -119,7 +119,32 @@ export interface JmuxConfig {
   repos?: Record<string, RepoSettings>;
   /** Global pipeline behaviour (parking, transition confirmation, queues). */
   pipeline?: PipelineConfig;
+  /** Inline image rendering in issue previews. */
+  images?: ImagesConfig;
 }
+
+export interface ImagesConfig {
+  /**
+   * Force inline images on or off. Left unset, jmux asks the terminal whether
+   * it speaks the kitty graphics protocol and believes the answer — which is
+   * the right default, and this is the escape hatch for the terminal that
+   * answers wrongly in either direction.
+   *
+   * Forcing this on does not make an incapable terminal draw pictures; it makes
+   * it print the escape sequences. That is the user's call to make, not
+   * something to guess at on their behalf.
+   */
+  enabled?: boolean;
+  /**
+   * Tallest an inline image may be, in terminal rows. The cap matters more than
+   * the width one: a tall screenshot with no limit pushes every word of the
+   * issue off the bottom of the pane, and the reader came for the issue.
+   */
+  maxRows?: number;
+}
+
+/** Rows an inline image may claim when the config doesn't say. */
+export const DEFAULT_IMAGE_MAX_ROWS = 16;
 
 /**
  * tmux silently rewrites '.' and ':' in session names to '_'. If we let them

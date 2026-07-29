@@ -40,6 +40,10 @@ import {
   OSC11_QUERY,
 } from "./theme";
 import { StdinGate } from "./stdin-gate";
+import { GRAPHICS_PROBE, CELL_SIZE_PROBE, DEFAULT_CELL_PIXELS, type CellPixels } from "./images/kitty";
+import { ImageStore } from "./images/store";
+import { ImagePlane } from "./images/plane";
+import { StoreImagePort, setImagePort } from "./images/port";
 import { TmuxControl, type ControlEvent } from "./tmux-control";
 import { DiffPanel } from "./diff-panel";
 import { InfoPanel, rebuildInfoPanelColors } from "./info-panel";
@@ -79,7 +83,7 @@ import {
 import type { DemoContext } from "./demo/setup";
 import type { SessionInfo, WindowTab, PaletteCommand, PaletteResult, AgentState } from "./types";
 import { loadProjectDirsCache, saveProjectDirsCache } from "./project-dirs-cache";
-import { ConfigStore, sanitizeTmuxSessionName } from "./config";
+import { ConfigStore, sanitizeTmuxSessionName, DEFAULT_IMAGE_MAX_ROWS } from "./config";
 import {
   RepoFactsCache,
   resolveForRepo,
@@ -805,6 +809,14 @@ const stdinGate = new StdinGate({
     markInputActivity();
     inputRouter.handleInput(str);
   },
+  // Only ever fires while armed, which is after the graphics state below is
+  // declared — see probeTerminalGraphics().
+  onImageProbe: ({ supported, cellPx }) => {
+    if (supported !== null) imagesSupported = supported;
+    if (cellPx) imageCellPx = cellPx;
+    applyImageSupport();
+  },
+  gridSize: () => ({ cols: process.stdout.columns || 80, rows: process.stdout.rows || 24 }),
 });
 process.stdin.on("data", (data: Buffer) => stdinGate.feed(data.toString()));
 process.stdin.resume();
@@ -860,6 +872,79 @@ const pty = new TmuxPty({
 });
 const bridge = new ScreenBridge(mainCols, layout.ptyRows);
 const renderer = new Renderer();
+
+// --- Terminal graphics -------------------------------------------------------
+//
+// Inline images in issue previews, drawn with the kitty graphics protocol.
+// jmux can do this at all because it is the outermost program on the terminal —
+// tmux runs inside a pty it owns, so none of this goes through tmux and none of
+// tmux's passthrough rules apply.
+//
+// The whole feature hangs off one switch: with no port installed, issue detail
+// linkifies images exactly as it always did. So a terminal that can't draw, a
+// terminal that never answers the probe, and a user who turned it off all take
+// the identical, well-worn path — there is no degraded mode to keep working.
+const imageStore = new ImageStore(process.pid);
+const imagePlane = new ImagePlane(
+  (id) => imageStore.getById(id),
+  () => imageStore.takeFreedIds(),
+);
+let imageCellPx: CellPixels = DEFAULT_CELL_PIXELS;
+let imagesSupported: boolean | null = null;
+const storeImagePort = new StoreImagePort(imageStore, {
+  cellPx: () => imageCellPx,
+  maxRows: () => configStore.config.images?.maxRows ?? DEFAULT_IMAGE_MAX_ROWS,
+});
+imageStore.onChange(() => scheduleRender());
+
+/**
+ * Config wins over detection in both directions. Forcing this on won't make an
+ * incapable terminal draw pictures — it'll make it print escape sequences — but
+ * a terminal that answers the probe wrongly is exactly the case a detected
+ * default can't fix by itself.
+ */
+function imagesOn(): boolean {
+  const forced = configStore.config.images?.enabled;
+  return forced !== undefined ? forced : imagesSupported === true;
+}
+
+function applyImageSupport(): void {
+  const on = imagesOn();
+  setImagePort(on ? storeImagePort : null);
+  renderer.setImagePlane(on ? imagePlane : null);
+  // Guarded exactly like the OSC 11 background handler's repaint, and for the
+  // same two reasons. Pre-ready there is no frame to repaint — the first paint
+  // after boot reads this state anyway — and, load-bearing, this function runs
+  // once at module scope, where `scheduleRender` would touch module state
+  // declared further down the file and die in its temporal dead zone. Any
+  // startup-time call from up here owes the same check.
+  if (stdinReady) scheduleRender();
+}
+
+/** How long the stdin scanner stays armed waiting for a probe reply. */
+const IMAGE_PROBE_WINDOW_MS = 1500;
+let cellSizeProbeAt = 0;
+
+function probeTerminalGraphics(cellSizeOnly = false): void {
+  stdinGate.armImageProbe();
+  process.stdout.write(cellSizeOnly ? CELL_SIZE_PROBE : GRAPHICS_PROBE + CELL_SIZE_PROBE);
+  cellSizeProbeAt = Date.now();
+  setTimeout(() => stdinGate.disarmImageProbe(), IMAGE_PROBE_WINDOW_MS);
+}
+
+/**
+ * Re-ask for cell geometry after a resize — the same window can come back with
+ * a different font size, and every image's aspect ratio is computed from it.
+ * Throttled because a dragged window corner fires SIGWINCH continuously.
+ */
+function maybeReprobeCellSize(): void {
+  if (!imagesOn()) return;
+  if (Date.now() - cellSizeProbeAt < 1000) return;
+  probeTerminalGraphics(true);
+}
+
+applyImageSupport();
+probeTerminalGraphics();
 const sidebar = new Sidebar(sidebarWidth, sidebarBottomRow(layout));
 sidebar.setStateColors(resolveStateColors(configStore.config.stateColors));
 // Restore the persisted group + sort modes (filter is deliberately ephemeral — a
@@ -3811,6 +3896,36 @@ function buildSettingsCategories(): SettingsCategory[] {
           },
         },
         {
+          id: "inline-images", label: "Inline images in issue previews", type: "boolean" as const,
+          // The value discloses *why* it reads the way it does. A plain on/off
+          // here would let the row claim "on" on a terminal that cannot draw a
+          // pixel, which is the same trap as a per-stage toggle under a master
+          // switch that's off: a preference reported as in effect when it isn't.
+          getValue: () => {
+            const forced = configStore.config.images?.enabled;
+            if (forced === false) return "off";
+            if (forced === true) return imagesSupported === false ? "on (terminal can't draw)" : "on";
+            if (imagesSupported === true) return "on";
+            if (imagesSupported === false) return "off (terminal can't draw)";
+            return "off (detecting…)";
+          },
+          onToggle: () => {
+            configStore.set("images", { ...configStore.config.images, enabled: !imagesOn() });
+            applyImageSupport();
+          },
+        },
+        {
+          id: "image-max-rows", label: "Max image height (rows)", type: "text" as const,
+          getValue: () => String(configStore.config.images?.maxRows ?? DEFAULT_IMAGE_MAX_ROWS),
+          onTextCommit: (v) => {
+            const n = parseInt(v, 10);
+            if (!isNaN(n) && n >= 1 && n <= 60) {
+              configStore.set("images", { ...configStore.config.images, maxRows: n });
+              scheduleRender();
+            }
+          },
+        },
+        {
           id: "auto-pin-agents",
           label: "Auto-pin agent panes to Command Center",
           type: "boolean" as const,
@@ -5677,6 +5792,7 @@ process.on("SIGWINCH", () => {
   inputRouter.cancelDrag();
   relayout();
   if (inGlass) resizeGlass();
+  maybeReprobeCellSize();
 });
 
 // --- Config file watcher ---
@@ -5716,6 +5832,11 @@ try {
     ];
     if (updated.agentScreenDetection === true) startScreenScan();
     else stopScreenScan();
+
+    // Hot-apply the inline-image switch. `maxRows` needs nothing here — the
+    // port reads it live — but turning the feature off has to take the plane
+    // down, which is the one thing a live read can't do.
+    applyImageSupport();
 
     // Hot-apply agent-state indicator colors to sidebar + Command Center.
     const newStateColors = resolveStateColors(updated.stateColors);
@@ -6865,6 +6986,11 @@ function cleanupSync(): void {
   process.stdout.write("\x1b[?1000l"); // disable mouse button tracking
   process.stdout.write("\x1b[?1003l"); // disable mouse motion tracking
   process.stdout.write("\x1b[?1006l"); // disable SGR mouse mode
+  // Free every image the terminal is holding for us. Leaving the alternate
+  // screen clears the placements, but the transmitted data outlives it — the
+  // terminal keeps it until told otherwise, and jmux exiting is the last chance
+  // to tell it.
+  process.stdout.write(renderer.teardownImages());
   process.stdout.write("\x1b[?25h");
   process.stdout.write("\x1b[?1049l");
   if (process.stdin.setRawMode) {

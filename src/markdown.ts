@@ -20,6 +20,11 @@ export interface RenderMarkdownOptions {
   // drops the URL entirely. On by default. Images already nested inside a
   // link (`[![logo](img)](page)`) are left alone — the outer page URL wins.
   linkifyImages?: boolean;
+  // Lift flush-left, standalone images out of the prose as their own blocks so
+  // a caller can draw them (see renderMarkdownBlocks). Off by default, because
+  // only surfaces that can actually paint an image want this — everyone else
+  // gets the link rewrite above.
+  extractImages?: boolean;
 }
 
 function linkifyImages(text: string): string {
@@ -219,4 +224,117 @@ export function renderMarkdownToStyledLines(
     hyperlinks: opts.hyperlinks ?? true,
   });
   return parseAnsi(ansi, opts.baseAttrs ?? {}, opts.trimTrailingBlanks ?? true);
+}
+
+// --- Image blocks -----------------------------------------------------------
+
+/** A run of prose, or one image that stood alone in it. */
+export type MarkdownChunk =
+  | { kind: "text"; text: string }
+  | { kind: "image"; url: string; alt: string };
+
+export type MarkdownBlock =
+  | { kind: "lines"; lines: StyledLine[] }
+  | { kind: "image"; url: string; alt: string };
+
+/** `![alt](url)` and nothing else — no title argument, no surrounding text. */
+const STANDALONE_IMAGE_RE = /^!\[([^\]]*)\]\(([^)\s]+)\)$/;
+/** The HTML form GitHub's own editor emits when you paste a screenshot. */
+const STANDALONE_IMG_TAG_RE = /^<img\s[^>]*?src=["']([^"']+)["'][^>]*>$/i;
+const IMG_TAG_ALT_RE = /\balt=["']([^"']*)["']/i;
+/** ``` or ~~~ opening or closing a fenced code block. */
+const FENCE_RE = /^(`{3,}|~{3,})/;
+
+/**
+ * Split markdown into prose and the images that stood on their own inside it.
+ *
+ * The rule is deliberately narrow: **a flush-left line containing nothing but
+ * one image**. Everything else — an image mid-sentence, a badge wrapped in a
+ * link, an image indented into a list item — stays in the prose and is
+ * linkified as before.
+ *
+ * The narrowness is the point. Lifting an image out of the text means cutting
+ * the document in two and rendering the halves independently, which silently
+ * breaks any construct that spanned the cut: a list loses its numbering, a
+ * table loses its header. A flush-left line is the one position where no such
+ * construct can be open, so it is the one position where the cut is free.
+ * Fenced code is skipped for the same reason in reverse — an image inside a
+ * fence isn't an image, it's the text of an example.
+ */
+export function splitImageChunks(text: string): MarkdownChunk[] {
+  const chunks: MarkdownChunk[] = [];
+  const lines = text.split("\n");
+  let buffer: string[] = [];
+  let fence: string | null = null;
+
+  const flush = () => {
+    if (buffer.length === 0) return;
+    const joined = buffer.join("\n");
+    buffer = [];
+    if (joined.trim().length > 0) chunks.push({ kind: "text", text: joined });
+  };
+
+  for (const line of lines) {
+    if (fence !== null) {
+      buffer.push(line);
+      // A closing fence must be at least as long as the opening one and of the
+      // same character; anything shorter is content, not a terminator.
+      const close = line.match(FENCE_RE);
+      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
+      continue;
+    }
+    const open = line.match(FENCE_RE);
+    if (open) {
+      fence = open[1];
+      buffer.push(line);
+      continue;
+    }
+
+    const md = line.match(STANDALONE_IMAGE_RE);
+    if (md) {
+      flush();
+      chunks.push({ kind: "image", alt: md[1].trim(), url: md[2] });
+      continue;
+    }
+    const tag = line.match(STANDALONE_IMG_TAG_RE);
+    if (tag) {
+      flush();
+      chunks.push({ kind: "image", alt: line.match(IMG_TAG_ALT_RE)?.[1].trim() ?? "", url: tag[1] });
+      continue;
+    }
+    buffer.push(line);
+  }
+  flush();
+  return chunks;
+}
+
+/**
+ * Markdown as alternating rendered prose and image references.
+ *
+ * The counterpart to `renderMarkdownToStyledLines` for surfaces that can draw a
+ * picture. With `extractImages` off it returns exactly one `lines` block whose
+ * content is identical to that function's output, so a caller that can't draw
+ * needs no second code path — and the two can't drift, because there is only
+ * one renderer underneath.
+ */
+export function renderMarkdownBlocks(
+  text: string,
+  width: number,
+  opts: RenderMarkdownOptions = {},
+): MarkdownBlock[] {
+  if (!text || width <= 0) return [];
+  if (!opts.extractImages) {
+    const lines = renderMarkdownToStyledLines(text, width, opts);
+    return lines.length > 0 ? [{ kind: "lines", lines }] : [];
+  }
+  const blocks: MarkdownBlock[] = [];
+  for (const chunk of splitImageChunks(text)) {
+    if (chunk.kind === "image") {
+      blocks.push(chunk);
+      continue;
+    }
+    const lines = renderMarkdownToStyledLines(chunk.text, width, opts);
+    if (lines.length > 0) blocks.push({ kind: "lines", lines });
+  }
+  return blocks;
 }

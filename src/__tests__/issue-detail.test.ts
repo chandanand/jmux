@@ -7,6 +7,7 @@ import {
   type DetailLine,
 } from "../issue-detail";
 import { createGrid } from "../cell-grid";
+import { setImagePort, type ImagePort } from "../images/port";
 import type { Issue } from "../adapters/types";
 
 const ISSUE: Issue = {
@@ -17,7 +18,9 @@ const ISSUE: Issue = {
 };
 
 function textOf(line: DetailLine): string {
-  return "segments" in line ? line.segments.map((s) => s.text).join("") : line.text;
+  if ("segments" in line) return line.segments.map((s) => s.text).join("");
+  if ("imageRow" in line) return `[image#${line.imageRow.id}:${line.imageRow.tileRow}]`;
+  return line.text;
 }
 
 function lineTexts(lines: readonly DetailLine[]): string[] {
@@ -146,5 +149,155 @@ describe("paintDetailLines", () => {
     const grid = createGrid(4, 2);
     paintDetailLines(grid, 0, 0, 4, 2, lines, 0);
     expect(extractText(grid)).not.toContain("line-");
+  });
+});
+
+// --- Inline images ----------------------------------------------------------
+//
+// The port is what the whole feature hangs off: with none installed, images
+// linkify exactly as they always did, so these tests assert both halves.
+
+describe("inline images", () => {
+  const WITH_IMAGE: Issue = {
+    ...ISSUE,
+    description: "Before\n\n![a shot](https://x/y.png)\n\nAfter",
+  };
+
+  function withPort<T>(port: ImagePort | null, fn: () => T): T {
+    setImagePort(port);
+    try {
+      return fn();
+    } finally {
+      setImagePort(null);
+    }
+  }
+
+  const readyPort = (rows: number, cols: number): ImagePort => ({
+    resolve: () => ({ kind: "ready", id: 42, cols, rows }),
+  });
+
+  test("with no port the image is a link, as it was before images existed", () => {
+    const texts = lineTexts(buildIssueDetailLines(WITH_IMAGE, 60)).join("\n");
+    expect(texts).toContain("a shot");
+    expect(texts).not.toContain("[image#");
+  });
+
+  test("a ready image reserves one detail line per row of its box", () => {
+    const lines = withPort(readyPort(5, 20), () => buildIssueDetailLines(WITH_IMAGE, 60));
+    const rows = lines.filter((l) => "imageRow" in l);
+    expect(rows.length).toBe(5);
+    expect(rows.map((l) => (l as { imageRow: { tileRow: number } }).imageRow.tileRow)).toEqual([0, 1, 2, 3, 4]);
+    for (const l of rows) {
+      expect((l as { imageRow: { rows: number; cols: number; id: number } }).imageRow).toMatchObject({
+        id: 42, rows: 5, cols: 20,
+      });
+    }
+  });
+
+  test("prose on both sides of the image survives the split", () => {
+    const texts = withPort(readyPort(2, 10), () => lineTexts(buildIssueDetailLines(WITH_IMAGE, 60))).join("\n");
+    expect(texts).toContain("Before");
+    expect(texts).toContain("After");
+  });
+
+  test("a loading image reserves a single line and says so", () => {
+    const port: ImagePort = { resolve: () => ({ kind: "loading" }) };
+    const texts = withPort(port, () => lineTexts(buildIssueDetailLines(WITH_IMAGE, 60)));
+    expect(texts.some((t) => t.includes("a shot") && t.includes("⟳"))).toBe(true);
+    expect(texts.some((t) => t.startsWith("[image#"))).toBe(false);
+  });
+
+  test("a failed image falls back to the link and names the reason", () => {
+    const port: ImagePort = { resolve: () => ({ kind: "failed", reason: "HTTP 403" }) };
+    const texts = withPort(port, () => lineTexts(buildIssueDetailLines(WITH_IMAGE, 60))).join("\n");
+    expect(texts).toContain("a shot");
+    expect(texts).toContain("HTTP 403");
+    expect(texts).not.toContain("[image#");
+  });
+
+  test("images in comments are drawn too", () => {
+    const issue: Issue = {
+      ...ISSUE,
+      description: undefined,
+      comments: [{ author: "sam", body: "![](https://x/y.png)", createdAt: "2026-01-01" }],
+    };
+    const lines = withPort(readyPort(3, 12), () => buildIssueDetailLines(issue, 60));
+    expect(lines.filter((l) => "imageRow" in l).length).toBe(3);
+  });
+
+  test("painting an image line marks every cell of its row", () => {
+    const lines = withPort(readyPort(2, 6), () => buildIssueDetailLines(WITH_IMAGE, 60));
+    const grid = createGrid(60, lines.length);
+    paintDetailLines(grid, 0, 0, 60, lines.length, lines, 0);
+    const row = grid.cells.find((r) => r.some((c) => c.image));
+    expect(row).toBeDefined();
+    const marked = row!.filter((c) => c.image);
+    expect(marked.length).toBe(6);
+    expect(marked.every((c) => c.char === " ")).toBe(true);
+  });
+
+  test("an image wider than the region is left unmarked rather than clipped", () => {
+    const lines = withPort(readyPort(2, 50), () => buildIssueDetailLines(WITH_IMAGE, 60));
+    const grid = createGrid(20, lines.length);
+    paintDetailLines(grid, 0, 0, 20, lines.length, lines, 0);
+    expect(grid.cells.some((r) => r.some((c) => c.image))).toBe(false);
+  });
+
+  test("scrolling past an image drops its earlier rows from the frame", () => {
+    const lines = withPort(readyPort(6, 8), () => buildIssueDetailLines(WITH_IMAGE, 60));
+    const firstImageAt = lines.findIndex((l) => "imageRow" in l);
+    const grid = createGrid(60, 4);
+    paintDetailLines(grid, 0, 0, 60, 4, lines, firstImageAt + 2);
+    const tiles = grid.cells
+      .flatMap((r) => r.filter((c) => c.image))
+      .map((c) => c.image!.tileRow);
+    expect(Math.min(...tiles)).toBe(2);
+  });
+});
+
+describe("clicking a drawn image", () => {
+  const WITH_IMAGE: Issue = {
+    ...ISSUE,
+    description: "Before\n\n![a shot](https://x/y.png)\n\nAfter",
+  };
+
+  function build(): DetailLine[] {
+    setImagePort({ resolve: () => ({ kind: "ready", id: 42, cols: 8, rows: 3 }) });
+    try {
+      return buildIssueDetailLines(WITH_IMAGE, 60);
+    } finally {
+      setImagePort(null);
+    }
+  }
+
+  test("every cell under the picture carries the image URL", () => {
+    // Drawing the image must not take away what the link could already do:
+    // jmux's click path reads URLs off the composited grid, so the cells the
+    // picture covers are what make it clickable.
+    const lines = build();
+    const grid = createGrid(60, lines.length);
+    paintDetailLines(grid, 0, 0, 60, lines.length, lines, 0);
+    const marked = grid.cells.flatMap((r) => r.filter((c) => c.image));
+    expect(marked.length).toBe(8 * 3);
+    expect(marked.every((c) => c.link === "https://x/y.png")).toBe(true);
+  });
+
+  test("cells beside the picture carry no link", () => {
+    const lines = build();
+    const grid = createGrid(60, lines.length);
+    paintDetailLines(grid, 0, 0, 60, lines.length, lines, 0);
+    const row = grid.cells.find((r) => r.some((c) => c.image))!;
+    expect(row[0].link).toBeUndefined();
+    expect(row[59].link).toBeUndefined();
+  });
+
+  test("a partly scrolled image is still clickable on the rows that show", () => {
+    const lines = build();
+    const firstImageAt = lines.findIndex((l) => "imageRow" in l);
+    const grid = createGrid(60, 2);
+    paintDetailLines(grid, 0, 0, 60, 2, lines, firstImageAt + 1);
+    const marked = grid.cells.flatMap((r) => r.filter((c) => c.image));
+    expect(marked.length).toBeGreaterThan(0);
+    expect(marked.every((c) => c.link === "https://x/y.png")).toBe(true);
   });
 });

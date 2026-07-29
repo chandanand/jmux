@@ -4,6 +4,24 @@ export const enum ColorMode {
   RGB = 2,
 }
 
+/**
+ * What a cell says about a terminal-graphics image drawn over it.
+ *
+ * Lives on the cell so that clipping, scrolling, offsetting and occlusion are
+ * handled by the code that already does those things to text — see
+ * `src/images/plane.ts`, which reads these back off the finished frame. Shared
+ * by every cell of one image row so a run can be recognised by value.
+ */
+export interface ImageMark {
+  /** Terminal-side image id. */
+  id: number;
+  /** This row's index within the image's full cell box. */
+  tileRow: number;
+  /** The image's full box, in cells. */
+  rows: number;
+  cols: number;
+}
+
 export interface Cell {
   char: string;
   width: number; // 0 = continuation of wide char, 1 = normal, 2 = wide
@@ -15,6 +33,12 @@ export interface Cell {
   italic: boolean;
   underline: boolean;
   dim: boolean;
+  /**
+   * Set only on cells reserved for an image. Painting text over a cell clears
+   * it, which is what makes occlusion self-reporting rather than something the
+   * image layer has to be told about.
+   */
+  image?: ImageMark;
   // OSC 8 hyperlink target. When set, the renderer wraps runs of cells
   // sharing the same link in OSC 8 open/close escapes so the terminal
   // treats the visible text as one clickable region — even across line

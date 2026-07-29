@@ -33,7 +33,9 @@ function input(over: Partial<PreflightInput> = {}): PreflightInput {
 }
 
 function textOf(line: DetailLine): string {
-  return "segments" in line ? line.segments.map((s) => s.text).join("") : line.text;
+  if ("segments" in line) return line.segments.map((s) => s.text).join("");
+  if ("imageRow" in line) return `[image#${line.imageRow.id}:${line.imageRow.tileRow}]`;
+  return line.text;
 }
 
 const joined = (lines: readonly DetailLine[]) => lines.map(textOf).join("\n");

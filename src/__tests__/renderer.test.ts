@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { sgrForCell, compositeGrids, getModalPosition, getToolbarTabRanges, getToolbarButtonRanges, getToolbarStatusChipRange, buildToolbarButtons, BORDER_CHAR } from "../renderer";
-import { createGrid, writeString, textCols } from "../cell-grid";
+import { createGrid, writeString, writeImageRow, textCols } from "../cell-grid";
 import { ColorMode } from "../types";
 import type { Cell } from "../types";
 import { sidebarBottomRow, type FrameLayout, type PanelMode, type Span } from "../frame-layout";
@@ -185,6 +185,42 @@ describe("compositeGrids", () => {
     expect(result.cells[0][4].char).toBe(BORDER_CHAR);
     expect(result.cells[0][5].char).toBe("m");
     expect(result.cells[0][10].char).toBe("!");
+  });
+
+  test("image marks survive compositing at their new screen coordinates", () => {
+    const sidebar = createGrid(4, 2);
+    const main = createGrid(6, 2);
+    writeImageRow(main, 1, 0, { id: 9, tileRow: 0, rows: 1, cols: 6 });
+    const layout = makeLayout({ sidebarCols: 4, mainCols: 6, termRows: 2 });
+    const result = compositeGrids(layout, main, sidebar);
+    // Offset by the sidebar and its border, not left where main had them.
+    expect(result.cells[1][4].image).toBeUndefined();
+    expect(result.cells[1][5].image).toMatchObject({ id: 9, cols: 6 });
+    expect(result.cells[1][10].image).toMatchObject({ id: 9 });
+  });
+
+  test("an image's URL survives compositing, so clicking it resolves", () => {
+    // getLinkAt reads the composited frame — the same array this builds — so
+    // this is the whole of "the drawn image is still clickable".
+    const sidebar = createGrid(4, 2);
+    const main = createGrid(6, 2);
+    writeImageRow(main, 1, 0, { id: 9, tileRow: 0, rows: 1, cols: 6 }, { link: "https://x/y.png" });
+    const layout = makeLayout({ sidebarCols: 4, mainCols: 6, termRows: 2 });
+    const result = compositeGrids(layout, main, sidebar);
+    expect(result.cells[1][5].link).toBe("https://x/y.png");
+    expect(result.cells[1][10].link).toBe("https://x/y.png");
+    expect(result.cells[0][5].link).toBeUndefined();
+  });
+
+  test("a modal clears the image marks behind it, in and out of its box", () => {
+    // An image can't be dimmed by a terminal, so a bright picture behind a
+    // dimmed screen would contradict what the dimming says.
+    const sidebar = createGrid(4, 6);
+    const main = createGrid(20, 6);
+    for (let r = 0; r < 6; r++) writeImageRow(main, r, 0, { id: 9, tileRow: r, rows: 6, cols: 20 });
+    const layout = makeLayout({ sidebarCols: 4, mainCols: 20, termRows: 6 });
+    const result = compositeGrids(layout, main, sidebar, null, createGrid(6, 2));
+    expect(result.cells.some((row) => row.some((c) => c.image))).toBe(false);
   });
 });
 

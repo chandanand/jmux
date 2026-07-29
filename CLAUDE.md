@@ -55,7 +55,7 @@ tmux PTY bytes → ScreenBridge (@xterm/headless) → CellGrid → Renderer → 
 
 - **`src/screen-bridge.ts`** — feeds raw PTY bytes into a headless xterm.js terminal and reads back a `CellGrid` (2D array of `Cell` with fg/bg/mode/bold/italic/underline/dim). This is the ground truth for what tmux thinks the screen looks like.
 - **`src/cell-grid.ts`** — owns the `Cell` shape, the `cellWidth` Unicode width table, and grid construction helpers. The width table must agree with `charDisplayWidth` in `renderer.ts`; they're both used for column tracking and drift here causes visible ghost gaps.
-- **`src/renderer.ts`** — composites the main grid + sidebar + toolbar + optional modal overlay into a single frame, then diff-free emits SGR codes to stdout. Only re-emits SGR when attributes change between adjacent cells. After wide (width=2) cells it explicitly repositions the cursor to prevent drift between xterm.js's width model and the real terminal.
+- **`src/renderer.ts`** — composites the main grid + sidebar + toolbar + optional modal overlay into a single frame, then diff-free emits SGR codes to stdout. Only re-emits SGR when attributes change between adjacent cells. After wide (width=2) cells it explicitly repositions the cursor to prevent drift between xterm.js's width model and the real terminal. Terminal graphics are emitted from the *finished* composite, after its text and before the cursor is parked — see "Terminal graphics" below; a frame that can't be diffed is a resize, which is why the plane is reset there.
 - **`src/sidebar.ts`** — the left 26-col (configurable) panel listing sessions with groups, activity dots, attention flags, hover states, scrolling. Grouping prefers a session's wtm `project` (bare-repo basename) over directory path matching. The `stage` grouping axis buckets sessions by the user-defined workflow stage claiming their linked issue's status — resolution needs the tracker poll and `panelViews`, so it happens in `main.ts` (`recomputeSessionBands`) and arrives pre-resolved via `setSessionStages()`, the same shape of dependency as `setParkedSessions()`. `sidebar.ts` itself stays free of tracker and config knowledge.
 - **Ghost rows (`src/ghosts.ts`)** — the sidebar's one deliberate exception to being a truthful mirror of tmux: rows for issues that have *no* session yet. They earn that by being convertible — clicking one opens the **ghost preview** (`src/ghost-preview.ts`), whose Enter runs the same `startWorkOnIssue` flow as `n` in the issues panel, turning the row into the row it was already drawn as (which is why a ghost uses a session row's exact two-row geometry).
 
@@ -171,6 +171,63 @@ never displace a fact. Only add a built-in signature you have read off a real
 terminal; an unverified pattern produces a confident wrong answer instead of an
 honest blank.
 
+### Terminal graphics (inline images)
+
+`src/images/` draws real pictures for standalone images in issue descriptions
+and comments, using the kitty graphics protocol. It works at all because **jmux
+is the outermost program**: it composites its own chrome and writes to the real
+terminal, with tmux inside a pty it owns. None of this goes through tmux, so
+none of tmux's passthrough rules apply. jmux launched inside *another*
+multiplexer simply gets no answer to its probe and the feature stays off, which
+is the correct outcome rather than a case to special-case.
+
+**One switch, no degraded mode.** `setImagePort(null)` is the entire off state,
+and with no port `renderMarkdownBlocks` doesn't extract images, so the fallback
+is the *same* linkify path that predates any of this. A terminal that can't
+draw, one that never answers, and a user who turned it off are all one code
+path — there is no second rendering mode to keep working.
+
+**Marks live on cells, and that is load-bearing.** An image is `rows` ordinary
+`DetailLine`s, each painting `cols` blank cells that carry an `ImageMark`
+(`types.ts`). `images/plane.ts` then reads the placements back off the
+*finished composite*. This is why scrolling, clipping at a pane edge, the
+blit offset and occlusion by a modal all work with no image-specific code:
+they already work on cells. Two consequences to preserve:
+
+- **Writing text over a cell clears its mark** (`writeCell`/`writeString`), and
+  the modal dimming loop clears marks outright. That is the occlusion signal.
+  Terminals draw graphics *over* text, so an image a modal half-covered would
+  render on top of the modal; and since an image can't be dimmed, one left
+  behind a dimmed screen would be the only bright thing on it.
+- **The cells under a picture carry its URL**, so the existing link-click path
+  (`getLinkAt` over the composited frame) opens it with no knowledge that images
+  exist. Drawing an image must never remove an affordance the link had.
+- **A whole image row must survive to be drawn.** `scanFrameForImages` requires
+  every cell of a row to carry the same mark, so a partly occluded row drops
+  out and the surviving rows — always contiguous — become a crop. Partial
+  scroll and partial occlusion are the same case, handled once.
+
+**Two probes, both optional.** The capability probe (`a=q`) is the only command
+sent without `q=2`, because it's the one whose reply we want; `stdin-gate.ts`
+peels replies out of stdin while armed, and is armed only around a probe —
+it holds a partial APC across reads, and an unbounded hold on input is not
+something to leave on for the life of the process. A split *CSI* reply is
+deliberately *not* held: holding a partial `ESC [` would swallow a lone Escape
+keypress, and losing the cell geometry costs an aspect-ratio guess while losing
+Escape costs the user their way out of a screen.
+
+**The terminal is half the cache.** An id in `ImageStore` is an id the terminal
+holds data under, so ids are never reused and eviction has to tell the terminal
+to free the data — hence `takeFreedIds()`, pulled by the plane so the delete
+travels in the same write as the rest of the frame. Ids are seeded from the pid
+so two jmux instances in one terminal don't transmit over each other.
+
+Lookups happen *during render* (`buildIssueDetailLines` has nowhere to await),
+so `request()` is synchronous and must never re-enter a fetch for a URL it has
+seen — **including a failed one**, or an open preview would hammer the tracker
+at 60fps. Credentials are allowlisted by host, never by which tracker the issue
+came from: issue text is written by anyone who can comment.
+
 ### OTEL receiver
 
 **`src/otel-receiver.ts`** listens for OpenTelemetry spans from Claude Code to extract cache read/write timing. This drives the cache timer display in the sidebar's session status. It binds a local HTTP server that accepts OTLP trace exports.
@@ -195,5 +252,6 @@ jmux's own settings live in `~/.config/jmux/config.json` (sidebar width, claude 
 - **The session sanitization rule.** tmux session names reject `.` and `:`. Worktree creation uses `sanitizeTmuxSessionName` once and reuses that single name for the worktree directory, the `wtm create` argument, *and* the tmux session. Splitting these creates drift between the directory on disk and the session name. See `main.ts:1217` and commit `f43c5c1`.
 - **Wide characters.** Column bookkeeping is sensitive. Any new code that writes to a `CellGrid` needs to handle width-2 cells by leaving a width-0 continuation cell after them. See existing patterns in `renderer.ts` toolbar rendering and `sidebar.ts`.
 - **OSC 52 clipboard passthrough.** `forwardOsc52` in `main.ts` buffers across chunked PTY data so copy sequences survive split reads. Don't replace it with a naive regex scan.
+- **`main.ts` is the one file no unit test can reach**, because it spawns tmux at import time and so cannot be imported. `src/__tests__/boot-smoke.test.ts` is the suite's single integration test and covers exactly that gap: it boots jmux under a real pty and asserts it is still alive six seconds later. It exists because the gap shipped a bug — a function defined near the top of main.ts and *called* at module scope reached a `let` declared 1500 lines below and died in its temporal dead zone before the first frame. tsc can't see that (the access is through a call, not a direct reference) and no unit test can either. **Anything called at module scope in main.ts must only touch bindings declared above it**; the established idiom for startup-time work that wants a repaint is `if (stdinReady) scheduleRender()`.
 - **Tests are pure unit tests over the logic modules.** `src/__tests__/*` exercises `ControlParser`, `CellGrid`, `InputRouter`, `ScreenBridge`, modals, and the sidebar's render plan. They don't spawn tmux. When adding logic that depends on tmux protocol parsing or grid math, add a test at the same level — don't reach for integration tests.
 - **No bundler, no transpile-on-publish.** Package `files` ships `bin`, `src`, `config`. `bin/jmux` imports `src/main.ts` directly; users run it under Bun. Imports must stay valid at runtime — don't add build-time-only tricks.

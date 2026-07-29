@@ -6,6 +6,7 @@ import { theme, neutralFg } from "./theme";
 import type { FrameLayout } from "./frame-layout";
 import { tokens, frame, space } from "./chrome-tokens";
 import type { DragHandle } from "./drag";
+import type { ImagePlane } from "./images/plane";
 
 export const BORDER_CHAR = "\u2502"; // │
 
@@ -562,10 +563,17 @@ export function compositeGrids(
     const pos = getModalPosition(layout, modalOverlay.cols, modalOverlay.rows);
 
     // Dim all content cells behind the palette (main area + toolbar, not sidebar)
+    //
+    // Images go away entirely rather than dimming: a terminal draws them over
+    // the text and there is no dim to apply, so an image left behind a modal
+    // would be the one bright thing on a screen whose whole point is that
+    // everything but the modal has receded. Clearing the mark here is the same
+    // occlusion signal writing text over a cell gives — see images/plane.ts.
     const mainStart = layout.main.x;
     for (let y = 0; y < totalRows; y++) {
       for (let x = mainStart; x < totalCols; x++) {
         grid.cells[y][x].dim = true;
+        grid.cells[y][x].image = undefined;
       }
     }
 
@@ -651,6 +659,25 @@ export class Renderer {
   private prevAttrs: Cell | null = null;
   private prevGrid: CellGrid | null = null;
   private lastMouseModeTime = 0;
+  private imagePlane: ImagePlane | null = null;
+
+  /**
+   * Install the terminal-graphics layer, or null on a terminal that can't draw
+   * images. Set after construction because the capability is only known once
+   * the terminal has answered its probe, which is several frames after the
+   * renderer exists.
+   */
+  setImagePlane(plane: ImagePlane | null): void {
+    if (this.imagePlane && this.imagePlane !== plane) {
+      process.stdout.write(this.imagePlane.shutdown());
+    }
+    this.imagePlane = plane;
+  }
+
+  /** Everything the image layer has on screen, gone. For shutdown. */
+  teardownImages(): string {
+    return this.imagePlane ? this.imagePlane.shutdown() : "";
+  }
 
   /**
    * URL of the hyperlink at the given absolute (0-indexed) cell of the last
@@ -690,6 +717,14 @@ export class Renderer {
       this.prevGrid !== null &&
       this.prevGrid.rows === grid.rows &&
       this.prevGrid.cols === grid.cols;
+
+    // A frame that can't be diffed is a frame whose coordinate system changed —
+    // a resize. Image placements are anchored to cells, so every one of them is
+    // now pinned to the wrong place, and nothing will ever overwrite a picture
+    // by drawing text: they have to be dropped explicitly and re-placed below.
+    if (!canDiff && this.imagePlane) {
+      buf.push(this.imagePlane.reset());
+    }
 
     for (let y = 0; y < grid.rows; y++) {
       if (canDiff) {
@@ -758,6 +793,14 @@ export class Renderer {
     }
 
     this.prevGrid = grid;
+
+    // Terminal graphics, after the text of the frame and before the cursor is
+    // parked: placements are read back off the finished composite (so clipping
+    // and occlusion come from the same cells the text did), and each one moves
+    // the cursor to its anchor, which the block below then corrects.
+    if (this.imagePlane) {
+      buf.push(this.imagePlane.frame(grid));
+    }
 
     // Reset attributes, position cursor. Matches compositeGrids's content
     // offset exactly (layout.contentTop, not a hardcoded toolbar row count)

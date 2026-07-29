@@ -13,12 +13,24 @@
 // are buffered and replayed in order once markReady() is called.
 
 import { scanForOsc11, type RGB } from "./theme";
+import { scanForImageProbe, type CellPixels } from "./images/kitty";
+
+export interface ImageProbeResult {
+  /** Non-null once the terminal has answered the graphics capability probe. */
+  supported: boolean | null;
+  /** Non-null once it has reported its cell geometry. */
+  cellPx: CellPixels | null;
+}
 
 export interface StdinGateHooks {
   /** Called once, when the terminal's OSC 11 background reply is resolved. */
   onBackground: (rgb: RGB) => void;
   /** Forwarded input bytes (reply peeled off). Only called once ready. */
   onInput: (str: string) => void;
+  /** Called for each terminal-graphics probe reply, while armed. */
+  onImageProbe?: (result: ImageProbeResult) => void;
+  /** Grid size, needed to divide a text-area pixel report into cells. */
+  gridSize?: () => { cols: number; rows: number };
 }
 
 export class StdinGate {
@@ -26,8 +38,33 @@ export class StdinGate {
   private resolved = false;
   private ready = false;
   private queue: string[] = [];
+  // Graphics-probe scanning is armed only around a probe, not permanently. The
+  // scan holds a partial APC reply across chunks, and an unbounded hold on
+  // input jmux might never receive again is not something to leave switched on
+  // for the life of the process.
+  private imageArmed = false;
+  private imagePending = "";
 
   constructor(private readonly hooks: StdinGateHooks) {}
+
+  /** Start peeling graphics-probe replies out of the stream. */
+  armImageProbe(): void {
+    this.imageArmed = true;
+    this.imagePending = "";
+  }
+
+  /**
+   * Stop scanning, releasing anything held mid-reply back into the input
+   * stream — a terminal that started an APC and never finished it must not cost
+   * the user the keystrokes that followed.
+   */
+  disarmImageProbe(): void {
+    if (!this.imageArmed) return;
+    this.imageArmed = false;
+    const held = this.imagePending;
+    this.imagePending = "";
+    if (held.length > 0) this.emit(held);
+  }
 
   /** Feed one raw stdin chunk. */
   feed(chunk: string): void {
@@ -42,6 +79,20 @@ export class StdinGate {
       if (scan.forward === null) return; // holding a split reply
       str = scan.forward;
     }
+    if (this.imageArmed) {
+      const grid = this.hooks.gridSize?.() ?? { cols: 0, rows: 0 };
+      const scan = scanForImageProbe(this.imagePending, str, grid);
+      this.imagePending = scan.pending;
+      if (scan.supported !== null || scan.cellPx !== null) {
+        this.hooks.onImageProbe?.({ supported: scan.supported, cellPx: scan.cellPx });
+      }
+      if (scan.forward === null) return; // holding a split reply
+      str = scan.forward;
+    }
+    this.emit(str);
+  }
+
+  private emit(str: string): void {
     if (str.length === 0) return;
     if (this.ready) {
       this.hooks.onInput(str);

@@ -1,4 +1,4 @@
-import type { Cell, CellGrid } from "./types";
+import type { Cell, CellGrid, ImageMark } from "./types";
 import { ColorMode } from "./types";
 
 export const DEFAULT_CELL: Readonly<Cell> = {
@@ -13,6 +13,7 @@ export const DEFAULT_CELL: Readonly<Cell> = {
   underline: false,
   dim: false,
   link: undefined,
+  image: undefined,
 };
 
 export function createGrid(cols: number, rows: number): CellGrid {
@@ -111,6 +112,10 @@ export function writeCell(
   const cell = grid.cells[row][col];
   cell.char = ch;
   cell.width = w;
+  // Text over a cell means the cell shows text. Clearing the image mark here
+  // is what lets the image layer discover occlusion by reading the finished
+  // frame instead of being told about every surface that might cover one.
+  cell.image = undefined;
   if (attrs) {
     if (attrs.fg !== undefined) cell.fg = attrs.fg;
     if (attrs.bg !== undefined) cell.bg = attrs.bg;
@@ -127,12 +132,55 @@ export function writeCell(
     const cont = grid.cells[row][col + 1];
     cont.char = "";
     cont.width = 0;
+    cont.image = undefined;
     if (attrs) {
       if (attrs.bg !== undefined) cont.bg = attrs.bg;
       if (attrs.bgMode !== undefined) cont.bgMode = attrs.bgMode;
     }
   }
   return w;
+}
+
+/**
+ * Reserve one row of an image's cell box: `mark.cols` blank cells that carry
+ * `mark`, starting at (row, col).
+ *
+ * The same mark object is written to every cell of the row so the image layer's
+ * scan can recognise the run, and blank cells are written rather than left
+ * alone so whatever the surface had there before is genuinely gone — the
+ * picture is drawn over these cells by the terminal, not into them, and stale
+ * glyphs would show through wherever the image is transparent.
+ *
+ * `attrs.link` is honoured, and that is how a drawn image stays clickable: the
+ * cells under it carry the image's URL, so jmux's existing link-click path
+ * opens it exactly as it opened the link that used to be there. Nothing about
+ * clicking had to learn that images exist.
+ *
+ * Returns false without writing anything when the row doesn't fit, so a caller
+ * that reserved layout space it can't actually paint doesn't leave a partial
+ * mark the scan would then reject one row at a time.
+ */
+export function writeImageRow(
+  grid: CellGrid,
+  row: number,
+  col: number,
+  mark: ImageMark,
+  attrs?: CellAttrs,
+): boolean {
+  if (row < 0 || row >= grid.rows) return false;
+  if (col < 0 || col + mark.cols > grid.cols) return false;
+  for (let i = 0; i < mark.cols; i++) {
+    const cell = grid.cells[row][col + i];
+    cell.char = " ";
+    cell.width = 1;
+    cell.link = attrs?.link;
+    cell.image = mark;
+    if (attrs) {
+      if (attrs.bg !== undefined) cell.bg = attrs.bg;
+      if (attrs.bgMode !== undefined) cell.bgMode = attrs.bgMode;
+    }
+  }
+  return true;
 }
 
 // Truncates `text` to fit within `maxCols` display columns, appending a
@@ -339,6 +387,7 @@ export function writeString(
     const cell = grid.cells[row][c];
     cell.char = ch;
     cell.width = w;
+    cell.image = undefined; // see writeCell — text over a cell is text
     if (attrs) {
       if (attrs.fg !== undefined) cell.fg = attrs.fg;
       if (attrs.bg !== undefined) cell.bg = attrs.bg;
@@ -355,6 +404,7 @@ export function writeString(
       const cont = grid.cells[row][c + 1];
       cont.char = "";
       cont.width = 0;
+      cont.image = undefined;
       if (attrs) {
         if (attrs.bg !== undefined) cont.bg = attrs.bg;
         if (attrs.bgMode !== undefined) cont.bgMode = attrs.bgMode;
