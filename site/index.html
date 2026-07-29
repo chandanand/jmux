@@ -144,6 +144,8 @@
   }
 
   html{ scroll-behavior:smooth; }
+  /* sticky nav must not cover the top of an anchored section */
+  section[id], header[id]{ scroll-margin-top:80px; }
   body{ background:var(--page); color:var(--ink); font-family:'Inter',system-ui,sans-serif; -webkit-font-smoothing:antialiased; line-height:1.55; overflow-x:hidden; transition:background .3s ease, color .3s ease; }
   .serif{ font-family:'Fraunces',Georgia,serif; font-optical-sizing:auto; }
   .mono{ font-family:'JetBrains Mono',monospace; }
@@ -272,6 +274,9 @@
     .showrow .frame, .showrow .shot{ --bleed:max(0px, calc((100vw - 1180px) / 2 * 0.5)); width:calc(100% + var(--bleed)); }
     .showrow:not(.flip) .frame, .showrow:not(.flip) .shot{ justify-self:start; }
     .showrow.flip .frame, .showrow.flip .shot{ justify-self:end; }
+    /* rows that carry more prose than picture — must stay a modifier, not an
+       inline style, or it outranks the single-column mobile rule */
+    .showrow.txt-wide{ grid-template-columns:1.25fr .95fr; }
   }
   @media (max-width:880px){ .shot .detail{ width:62%; } }
   .showrow h2{ font-size:36px; margin-bottom:18px; }
@@ -331,6 +336,9 @@
   .ctable thead .jcol{ color:var(--ink); font-weight:700; }
   .yes{ color:var(--ink); } .no{ color:var(--ink3); } .meh{ color:var(--ink3); font-size:12.5px; }
   .cmp .foot{ text-align:center; color:var(--ink3); font-size:12.5px; margin-top:20px; }
+  /* the table is wider than a phone and scrolls; say so, since a touch
+     surface shows no scrollbar to hint at it */
+  .scrollhint{ display:none; margin-top:12px; color:var(--ink3); font-size:11.5px; font-family:'JetBrains Mono',monospace; letter-spacing:.04em; }
 
   /* ============ CLI BAND (navy panel) ============ */
   .cliband{ padding:104px 0; }
@@ -338,7 +346,7 @@
   .term .bar{ display:flex; align-items:center; gap:7px; padding:12px 15px; border-bottom:1px solid rgba(255,247,232,.09); }
   .term .bar .d{ width:11px; height:11px; border-radius:50%; }
   .term .bar small{ margin-left:8px; color:#7b7360; font-family:'JetBrains Mono'; font-size:11px; }
-  .term .body{ padding:24px 26px; font-family:'JetBrains Mono',monospace; font-size:12.5px; line-height:1.95; color:#d7cfbf; }
+  .term .body{ padding:24px 26px; font-family:'JetBrains Mono',monospace; font-size:12.5px; line-height:1.95; color:#d7cfbf; overflow-wrap:anywhere; }
   .term .c{ color:#7b7360; } .term .w{ color:#e7dfce; } .term .a{ color:var(--ac); } .term .am{ color:var(--amber); }
   .term .o{ color:#948a76; }
   .term.screen{ max-width:648px; }
@@ -362,7 +370,7 @@
   .ecocard.dashed{ border-style:dashed; } .ecocard.dashed .nm{ color:var(--ink2); }
 
   /* ============ CTA (navy panel) ============ */
-  .cta{ padding:128px 0; text-align:center; position:relative; overflow:hidden; }
+  .cta{ padding:128px 32px; text-align:center; position:relative; overflow:hidden; }
   .cta h2{ font-size:56px; font-weight:400; letter-spacing:-.02em; position:relative; z-index:2; }
   .cta .sub{ color:var(--ink2); margin:18px 0 36px; position:relative; z-index:2; font-size:15px; }
   .cmd{ position:relative; z-index:2; max-width:440px; margin:0 auto; background:var(--card); border:1px solid var(--bd2); border-radius:14px; padding:24px 26px; text-align:left; font-family:'JetBrains Mono'; font-size:14px; }
@@ -375,20 +383,102 @@
   footer .brand{ font-size:17px; }
   footer .links{ display:flex; gap:22px; } footer .links a:hover{ color:var(--ink); }
 
+  /* ============ RESPONSIVE ============ */
+  @media (max-width:1024px){
+    .ecogrid{ grid-template-columns:repeat(2,1fr); }
+  }
+
   @media (max-width:880px){
     .wrap{ padding:0 22px; }
-    .hero{ padding:64px 0 60px; }
-    .hero .grid,.showrow,.showrow.flip{ grid-template-columns:1fr; gap:44px; }
+
+    /* vertical rhythm — desktop section padding is ~1.5 screens on a phone */
+    .hero{ padding:56px 0 56px; }
+    .showcase,.tst,.cmp,.cliband,.eco{ padding:72px 0; }
+    .cta{ padding:84px 22px; }
+    .showrow + .showrow{ margin-top:64px; }
+
+    /* type */
+    .hero h1{ font-size:44px; }
+    .hero .lead{ font-size:17px; }
+    h2,.showrow h2{ font-size:32px; } .cta h2{ font-size:36px; }
+    .points li{ font-size:15px; }
+
+    /* single column */
+    .hero .grid,.showrow,.showrow.flip{ grid-template-columns:1fr; gap:40px; }
     .showrow.flip .txt{ order:0; }
-    .hero h1{ font-size:46px; }
-    h2,.showrow h2{ font-size:34px; } .cta h2{ font-size:38px; }
     .bento{ grid-template-columns:1fr; grid-auto-rows:auto; } .tile.big,.tile.wide{ grid-column:span 1; grid-row:auto; }
     .tile.big h3,.tile.big p{ max-width:none; }
     .tile.big .bigshot{ position:static; width:100%; height:190px; margin-top:18px; border-left:0; border:1px solid var(--bd2); border-radius:10px; }
     .ecogrid,.tgrid{ grid-template-columns:1fr; }
     .tgrid{ grid-auto-rows:auto; }
     .tweet, .tcard.c-a, .tcard.c-b, .tcard.c-wide{ grid-column:auto; grid-row:auto; }
+
+    /* nav */
+    nav .row{ height:60px; }
     .navlinks .hide-sm{ display:none; }
+    .navlinks{ gap:12px; }
+    .brand{ font-size:20px; gap:9px; }
+    .btn{ padding:10px 16px; font-size:13.5px; }
+
+    /* screenshot decks: the desktop offsets are a fraction of a much wider
+       card, so at phone width they push the deck off the right (hero) or
+       left (themes) edge. Pull the offsets in and reserve room for them. */
+    .heroshot{ padding:0 16% 12% 0; }
+    .herostack .card[data-pos="1"]{ transform:translate(6%,7%) scale(.94); }
+    .herostack .card[data-pos="2"]{ transform:translate(12%,14%) scale(.88); }
+    .herostack .card[data-pos="3"]{ transform:translate(18%,21%) scale(.82); }
+    .stackpair{ margin:0 0 12% 16%; }
+    .stackpair .mid{ transform:translate(-9%,10%) scale(.93); }
+    .stackpair .back{ transform:translate(-18%,20%) scale(.86); }
+
+    /* terminals */
+    .term{ margin-top:36px; }
+    .term .body{ padding:18px 16px; font-size:12px; line-height:1.75; }
+    .term.screen .body{ font-size:11px; }
+    .termcap{ font-size:12.5px; }
+
+    /* comparison table */
+    .ctable{ margin-top:34px; }
+    .ctable table{ min-width:580px; font-size:12.5px; }
+    .ctable th,.ctable td{ padding:12px 9px; }
+    .ctable th:first-child,.ctable td:first-child{ width:38%; padding-left:14px; }
+    .scrollhint{ display:block; }
+
+    /* touch targets — the copy glyph is a 19px hit area at desktop size */
+    .cp{ padding:8px; margin:-8px -4px; }
+  }
+
+  /* a 56%-wide detail card floated over an already-illegible screenshot
+     reads as neither; below this width it becomes its own figure */
+  @media (max-width:700px){
+    .shot .detail{ position:static; width:100%; margin-top:14px; box-shadow:var(--shadow-sm); }
+  }
+
+  @media (max-width:620px){
+    .navlinks .hide-xs{ display:none; }
+  }
+
+  /* the workflow mock is ~76 columns of monospace — narrower than this it
+     always scrolls, so fade the right edge to say there is more */
+  @media (max-width:580px){
+    .term.screen:not(.mini) .body{
+      -webkit-mask-image:linear-gradient(to right,#000 calc(100% - 34px),transparent);
+      mask-image:linear-gradient(to right,#000 calc(100% - 34px),transparent);
+    }
+  }
+
+  @media (max-width:430px){
+    .wrap{ padding:0 18px; }
+    .cta{ padding:76px 18px; }
+    .hero h1{ font-size:38px; }
+    .hero .lead{ font-size:16px; }
+    h2,.showrow h2{ font-size:28px; } .cta h2{ font-size:31px; }
+    .pill{ font-size:13px; padding:11px 13px; }
+    .cmd{ font-size:13px; padding:22px 20px; }
+    .tcard p{ font-size:17px; }
+    .tweet .body{ font-size:15.5px; }
+    footer .row{ flex-direction:column; gap:16px; text-align:center; }
+    footer .links{ gap:20px; }
   }
 
   /* ============ MOTION ============ */
@@ -430,7 +520,7 @@
       <svg class="moon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
       <svg class="sun" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 1v3M12 20v3M4.2 4.2l2 2M17.8 17.8l2 2M1 12h3M20 12h3M4.2 19.8l2-2M17.8 6.2l2-2"/></svg>
     </button>
-    <a href="https://github.com/jarredkenny/jmux" target="_blank" rel="noopener" class="btn ghost">GitHub</a>
+    <a href="https://github.com/jarredkenny/jmux" target="_blank" rel="noopener" class="btn ghost hide-xs">GitHub</a>
     <a href="#install" class="btn">Install</a>
   </div>
 </div></nav>
@@ -648,7 +738,7 @@
 
 <!-- 4 · SHOWCASE ·3c — Sidebar grouping & ordering -->
 <section class="sec showcase" id="sidebar">
-  <div class="wrap showrow" style="grid-template-columns:1.25fr .95fr">
+  <div class="wrap showrow txt-wide">
     <div class="txt animate-in">
       <div class="eyebrow">Grouping &amp; ordering <span class="new">NEW</span></div>
       <h2>The top of your sidebar<br><em>is what needs you.</em></h2>
@@ -784,6 +874,7 @@
         </tbody>
       </table>
     </div>
+    <p class="scrollhint">← swipe the table to compare →</p>
     <p class="foot"><b>Agent IDEs</b> — Orca, Cursor, Windsurf, Conductor — ship their own terminal, editor, and runtime in a desktop app.<br><b>New muxes</b> — herdr and friends — are agent-aware multiplexers that stand in for tmux rather than building on it.</p>
   </div>
 </section>
