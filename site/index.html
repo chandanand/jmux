@@ -708,6 +708,23 @@
   </div>
 </section>
 
+<!-- 4 · SHOWCASE ·3a — Inline images in issue previews -->
+<section class="sec showcase" id="images">
+  <div class="wrap showrow flip">
+    <div class="txt animate-in">
+      <div class="eyebrow">Terminal graphics <span class="new">NEW</span></div>
+      <h2>The picture.<br><em>Not the link.</em></h2>
+      <p class="lead">Someone attached a screenshot to the bug. Everywhere else that's a URL you have to leave the terminal to follow. Here it's the <strong style="color:var(--ink)">picture</strong> — in the pane, under the sentence describing it, in the comments where the argument happened.</p>
+      <p class="lead">Real image data, drawn with the kitty graphics protocol in Ghostty, kitty, WezTerm and Konsole. Nothing to turn on: jmux asks your terminal whether it can draw and believes the answer. Where it can't, images stay the links they always were — and clicking a rendered one still opens it.</p>
+      <p class="lead">It works because jmux is the <em>outermost</em> program on your terminal. tmux runs inside a pty jmux owns, so the pixels never have to survive a multiplexer.</p>
+      <p><a href="https://github.com/jarredkenny/jmux/blob/main/docs/issue-tracking.md#images-in-issue-previews" target="_blank" rel="noopener" class="link-u">How inline images work →</a></p>
+    </div>
+    <div class="shot animate-in">
+      <figure class="main"><img src="assets/inline-images.webp" alt="jmux with an agent session running beside the info panel, where a tracker issue's attached screenshots render as real pictures"></figure>
+    </div>
+  </div>
+</section>
+
 <!-- 4 · SHOWCASE ·3b — Team workflow orchestration -->
 <section class="sec panel cliband center" id="workflow">
   <div class="wrap">
