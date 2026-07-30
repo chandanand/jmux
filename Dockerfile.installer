@@ -25,7 +25,7 @@ RUN useradd -m tester
 USER tester
 WORKDIR /home/tester
 
-COPY --chown=tester:tester site/install.sh /home/tester/install.sh
+COPY --chown=tester:tester site/install /home/tester/install.sh
 
 # JMUX_ASSUME_YES because there is no tty here — which is also the assertion
 # that the installer never blocks on a prompt it cannot show.

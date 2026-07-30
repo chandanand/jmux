@@ -14,14 +14,18 @@ Claude Code, Codex, or any agent — each in its own isolated session. jmux is t
 ![jmux with sidebar sessions, window tabs toolbar, and Claude Code](docs/screenshots/hero.webp)
 
 ```bash
-bun install -g @jx0/jmux && jmux
+curl -fsSL https://jmux.build/install | sh && jmux
 ```
 
 </div>
 
 ## Get running
 
-- **Requirements** — [Bun](https://bun.sh) 1.3.8+ and [tmux](https://github.com/tmux/tmux) 3.2+. jmux offers to install tmux on first run.
+- **Install** — the command above needs no runtime; it installs a self-contained
+  binary. Also on Homebrew (`brew install jarredkenny/tap/jmux`) and npm
+  (`bun install -g @jx0/jmux`, which needs [Bun](https://bun.sh) 1.3.8+ and is
+  the only option on Alpine/musl).
+- **Requirements** — [tmux](https://github.com/tmux/tmux) 3.2+. jmux offers to install it on first run.
 - **Just want to look around?** `jmux --demo` runs with mock data — explore every feature, no credentials needed.
 - **New to tmux?** Start with the **[Getting Started guide](docs/getting-started.md)**.
 

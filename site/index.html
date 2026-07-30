@@ -604,8 +604,8 @@
       <h1>Everyone else stops at the pane.<span class="m serif"><em>Ticket in.</em> Merge out.</span></h1>
       <p class="lead">Run a fleet of coding agents in the terminal you already use — then run your actual backlog through them. Stages you define, work that parks itself once it leaves your hands, and issue-to-merged without opening a browser.</p>
       <div class="cta-row">
-        <div class="pill"><span class="d">$</span> bun install -g @jx0/jmux
-          <button class="cp" title="Copy" onclick="copyCmd(this,'bun install -g @jx0/jmux')">
+        <div class="pill"><span class="d">$</span> curl -fsSL https://jmux.build/install | sh
+          <button class="cp" title="Copy" onclick="copyCmd(this,'curl -fsSL https://jmux.build/install | sh')">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
         </div>
@@ -1025,10 +1025,10 @@
   <h2>Two commands. <em>You're in.</em></h2>
   <p class="sub">Requires Bun 1.3.8+ and tmux 3.2+.</p>
   <div class="cmd">
-    <button class="cp" title="Copy" onclick="copyCmd(this,'bun install -g @jx0/jmux\njmux')" style="position:absolute;top:16px;right:16px">
+    <button class="cp" title="Copy" onclick="copyCmd(this,'curl -fsSL https://jmux.build/install | sh\njmux')" style="position:absolute;top:16px;right:16px">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
     </button>
-    <div><span class="d">$</span> bun install -g @jx0/jmux</div>
+    <div><span class="d">$</span> curl -fsSL https://jmux.build/install | sh</div>
     <div><span class="d">$</span> jmux</div>
   </div>
   <p class="note">jmux will install tmux for you if needed. Not ready to point it at your repos? <span class="mono" style="color:var(--ink)">jmux --demo</span> runs the whole thing on mock data first.</p>

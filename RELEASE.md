@@ -180,10 +180,10 @@ binary and still pass Homebrew's integrity check.
 ## Occasionally
 
 - **`bun run test:installer`** — installs jmux in a clean container with no Bun
-  and runs it. Worth doing after changing `site/install.sh`.
+  and runs it. Worth doing after changing `site/install`.
 - **`bun run test:installer-musl`** — asserts the installer *refuses* on Alpine
   rather than installing a binary that cannot work.
-- **`site/install.sh` ships on site pushes, not with releases.** It resolves the
+- **`site/install` ships on site pushes, not with releases.** It resolves the
   latest release at runtime, so it must keep working against both the current
   release and the next one.
 - **Bun's version is a build input.** `bun build --compile` embeds whichever Bun

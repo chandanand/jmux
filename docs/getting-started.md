@@ -7,7 +7,7 @@ jmux orchestrates your terminal tools — tmux for sessions, hunk for diffs, wtm
 ## Install
 
 ```bash
-bun install -g @jx0/jmux
+curl -fsSL https://jmux.build/install | sh
 ```
 
 jmux will check for dependencies and offer to install them automatically. If you prefer to install manually:
@@ -26,7 +26,14 @@ sudo dnf install tmux
 pacman -S tmux
 ```
 
-You'll also need [Bun](https://bun.sh) 1.3.8+ and optionally [git](https://git-scm.com/) for branch display in the sidebar.
+No runtime needed — that installs a self-contained binary. Two other ways:
+
+```bash
+brew install jarredkenny/tap/jmux    # also installs tmux for you
+bun install -g @jx0/jmux             # needs Bun 1.3.8+; the only option on Alpine/musl
+```
+
+Optionally install [git](https://git-scm.com/) for branch display in the sidebar.
 
 ---
 

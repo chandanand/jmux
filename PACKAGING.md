@@ -26,7 +26,7 @@ finding changed a decision, the decision says so.
 | CI workflow | tmux installed and asserted, so the smoke tests cannot skip silently |
 | `release.sh` | five targets built and signed; `--dry-run` stops before publishing |
 | Formula bumper | `bump-formula.test.ts`, incl. per-platform checksum pairing |
-| **`install.sh` end to end** | clean debian container with no Bun: downloads, verifies checksum, installs, runs |
+| **`site/install` end to end** | clean debian container with no Bun: downloads, verifies checksum, installs, runs |
 | musl refusal | Alpine container asserts it refuses *and* names the npm channel |
 
 Full suite: **2455 pass, 0 fail**; typecheck clean.
@@ -40,7 +40,7 @@ shipped release:
    `packaging/Formula/jmux.rb` into it. `release.sh` skips the bump with a
    notice until it exists.
 2. **Add the `/install` rewrite** so `https://jmux.build/install` serves
-   `site/install.sh` (object storage has no rewrite file; this is a CDN rule).
+   `site/install` (object storage has no rewrite file; this is a CDN rule).
 3. **Cut the first binary release**: write the release notes, `gh release create
    --draft`, then `./release.sh`.
 4. **Apple Developer account**, if and when notarization is wanted — see D8 for
@@ -498,7 +498,7 @@ clean machine with no Bun installed.
 
 **Goal:** one command installs jmux on macOS and glibc Linux.
 
-1. `site/install.sh`: detect os/arch, **detect musl and refuse with an
+1. `site/install`: detect os/arch, **detect musl and refuse with an
    explanation** (D13), select the baseline x64 build when `/proc/cpuinfo` lacks
    `avx2`, resolve the latest release from the GitHub API at runtime, download,
    **verify the checksum** (`shasum -a 256` on macOS, `sha256sum` on Linux —
@@ -519,13 +519,13 @@ clean machine with no Bun installed.
 5. Detect tmux; if missing or below `MIN_TMUX_VERSION`, print the platform's
    install command. This duplicates `preflight()` deliberately, to fail before
    the user holds a binary they can't run — guarded against drift by a single
-   `MIN_TMUX_VERSION` constant plus a test asserting `install.sh` carries the
+   `MIN_TMUX_VERSION` constant plus a test asserting `site/install` carries the
    same floor. Fix `preflight()`'s missing version check at the same time, since
    that path serves the brew and npm channels.
 6. Warn when the install dir is not on `PATH`, with the exact line to add.
 7. Support `JMUX_VERSION=`, `JMUX_INSTALL_DIR=`, `JMUX_ASSUME_YES=`.
 8. Serve at `https://jmux.build/install` through the existing site pipeline.
-   A static `site/install.sh` maps to `/install.sh`, so the extensionless URL
+   A static `site/install` maps to `/install.sh`, so the extensionless URL
    needs an explicit rewrite or a second uploaded object — **that rewrite is a
    prerequisite, not an assumption.** Update `README.md:17` and
    `site/index.html`.

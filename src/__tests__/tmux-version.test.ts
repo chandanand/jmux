@@ -51,7 +51,7 @@ describe("tmuxVersionOk", () => {
 // Duplication is fine; silent divergence is not.
 describe("install.sh agrees with the constant", () => {
   const installer = readFileSync(
-    resolve(import.meta.dir, "..", "..", "site", "install.sh"),
+    resolve(import.meta.dir, "..", "..", "site", "install"),
     "utf-8",
   );
 
