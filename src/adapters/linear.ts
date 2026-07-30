@@ -2,6 +2,7 @@
 import { HttpError, type IssueTrackerAdapter, type AdapterAuthState, type Issue, type IssueStateType, type WorkflowState } from "./types";
 import { buildLinearPrompt } from "./linear-prompt";
 import { logError } from "../log";
+import { openUrl } from "../platform";
 
 const LINEAR_API = "https://api.linear.app/graphql";
 
@@ -100,7 +101,7 @@ export class LinearAdapter implements IssueTrackerAdapter {
   openInBrowser(issueId: string): void {
     this.graphql(`query($id: String!) { issue(id: $id) { url } }`, { id: issueId }).then((resp) => {
       const url = resp?.data?.issue?.url;
-      if (url) Bun.spawn(["open", url], { stdout: "ignore", stderr: "ignore" });
+      if (url) openUrl(url);
     });
   }
 

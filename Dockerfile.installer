@@ -1,0 +1,40 @@
+# Clean-environment test for site/install.sh.
+#
+# Dockerfile.test cannot serve this: it installs Bun and `bun link`s jmux, so a
+# jmux that ran there would prove nothing about the binary channel. This image
+# has no Bun, no Node, and no jmux — only tmux and the tools the installer
+# itself needs.
+#
+#   docker build -f Dockerfile.installer -t jmux-installer-test .
+#   docker run --rm jmux-installer-test
+#
+# Exercises the real published artifacts over the network, which is the point:
+# checksum verification, tarball layout, and whether the binary actually runs
+# somewhere Bun has never been.
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      curl ca-certificates tar tmux \
+    && rm -rf /var/lib/apt/lists/*
+
+# A non-root user, because ~/.local/bin and the PATH warning only behave
+# realistically for someone who is not root.
+RUN useradd -m tester
+USER tester
+WORKDIR /home/tester
+
+COPY --chown=tester:tester site/install.sh /home/tester/install.sh
+
+# JMUX_ASSUME_YES because there is no tty here — which is also the assertion
+# that the installer never blocks on a prompt it cannot show.
+ENV JMUX_ASSUME_YES=1
+ENV PATH="/home/tester/.local/bin:${PATH}"
+
+CMD set -eux; \
+    sh /home/tester/install.sh; \
+    command -v jmux; \
+    jmux --version; \
+    tmux -V; \
+    echo "--- install.sh clean-environment test passed ---"

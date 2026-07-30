@@ -7,6 +7,7 @@ import {
   type BranchContext,
 } from "./types";
 import { logError } from "../log";
+import { openUrl } from "../platform";
 
 const GITHUB_API = "https://api.github.com";
 
@@ -250,7 +251,7 @@ export class GitHubAdapter implements CodeHostAdapter {
     const parsed = parseMrId(mrId);
     if (!parsed) return;
     const url = deriveWebUrl(this.baseUrl, parsed.ownerRepo, `pull/${parsed.number}`);
-    Bun.spawn(["open", url], { stdout: "ignore", stderr: "ignore" });
+    openUrl(url);
   }
 
   async markReady(mrId: string): Promise<void> {

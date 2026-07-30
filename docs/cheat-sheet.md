@@ -86,8 +86,8 @@ Four bands sit outside the grouping, in fixed positions:
 | `Ctrl-Shift-Up` | Move to previous sidebar row |
 | `Ctrl-Shift-Down` | Move to next sidebar row |
 | `Ctrl-a n` | New session / new worktree (auto-detects wtm projects) |
-| `Ctrl-a r` | Rename current session |
-| `Ctrl-a m` | Move current window to another session |
+| `Ctrl-a p` → "Rename session" | Rename current session |
+| `Ctrl-a p` → "Move window to session" | Move current window to another session |
 
 `Ctrl-Shift-Up` / `Ctrl-Shift-Down` walk every row the sidebar draws, not only
 sessions: landing on a session switches to it, landing on an unstarted issue

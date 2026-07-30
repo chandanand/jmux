@@ -1,0 +1,30 @@
+# The musl refusal, tested.
+#
+# bun-pty ships no musl native library, so a musl build of jmux would install
+# cleanly and then die the moment it opens a pty. The installer must therefore
+# refuse *before* installing, and point at the channel that does work.
+#
+# This asserts the refusal rather than the install:
+#
+#   docker build -f Dockerfile.installer-musl -t jmux-installer-musl .
+#   docker run --rm jmux-installer-musl
+FROM alpine:3.20
+
+RUN apk add --no-cache curl ca-certificates tar
+
+COPY site/install.sh /install.sh
+
+ENV JMUX_ASSUME_YES=1
+
+# Success here means the installer FAILED with the right message. A clean exit
+# would mean it installed a binary that cannot run.
+CMD set -eu; \
+    if sh /install.sh > /out.log 2>&1; then \
+      echo "FAIL: installer succeeded on musl — it must refuse"; \
+      cat /out.log; \
+      exit 1; \
+    fi; \
+    grep -q "musl" /out.log || { echo "FAIL: refusal did not mention musl"; cat /out.log; exit 1; }; \
+    grep -q "bun install -g @jx0/jmux" /out.log || { echo "FAIL: refusal did not offer the npm channel"; cat /out.log; exit 1; }; \
+    test ! -f /root/.local/bin/jmux || { echo "FAIL: a binary was installed anyway"; exit 1; }; \
+    echo "--- musl refusal test passed ---"

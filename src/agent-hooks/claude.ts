@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import type { AgentState } from "../types";
-import { detectInstalledKind, installHooks } from "./json-hooks";
+import { detectInstalledKind, installHooks, uninstallHooks } from "./json-hooks";
 import type {
   AgentIntegration,
   HookEvent,
@@ -70,5 +70,18 @@ export const claudeIntegration: AgentIntegration = {
       kind: outcome.kind,
       notes: ["Restart Claude Code in any open session to pick the hooks up."],
     };
+  },
+
+  uninstall(): { removed: boolean; paths: string[]; notes: string[] } {
+    const path = claudeSettingsPath();
+    if (!existsSync(path)) return { removed: false, paths: [], notes: [] };
+
+    const { removed, settings } = uninstallHooks(readSettings(path), CLAUDE_EVENTS);
+    if (!removed) return { removed: false, paths: [], notes: [] };
+
+    // Rewrite rather than delete: settings.json holds the user's own config
+    // alongside our hooks.
+    writeFileSync(path, JSON.stringify(settings, null, 2) + "\n");
+    return { removed: true, paths: [`${path} (jmux hooks)`], notes: [] };
   },
 };

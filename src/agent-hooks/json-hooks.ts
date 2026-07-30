@@ -77,6 +77,38 @@ function stripLegacyAndJmux(entries: HookEntry[] | undefined): HookEntry[] {
     .filter((e) => e.hooks.length > 0);
 }
 
+/**
+ * Remove jmux's hooks, leaving every unrelated entry untouched.
+ *
+ * The counterpart to `installHooks`, sharing `stripLegacyAndJmux` so the two
+ * can never disagree about what "a jmux hook" is. Legacy entries are removed
+ * too: uninstall that left an old emitter behind would keep writing state for
+ * a jmux that is gone.
+ *
+ * An event whose list becomes empty is deleted rather than left as `[]`, so an
+ * uninstalled config is byte-identical to one jmux never touched.
+ */
+export function uninstallHooks(
+  settings: HookSettings,
+  events: readonly HookEvent[],
+): { removed: boolean; settings: HookSettings } {
+  const next: HookSettings = structuredClone(settings);
+  if (!next.hooks) return { removed: false, settings: next };
+
+  let removed = false;
+  for (const event of events) {
+    const before = next.hooks[event];
+    if (!before) continue;
+    const after = stripLegacyAndJmux(before);
+    if (after.length !== before.length) removed = true;
+    if (after.length === 0) delete next.hooks[event];
+    else next.hooks[event] = after;
+  }
+
+  if (Object.keys(next.hooks).length === 0) delete next.hooks;
+  return { removed, settings: next };
+}
+
 export function installHooks(
   settings: HookSettings,
   kind: AgentKind,

@@ -120,6 +120,39 @@ describe("Restorer eligibility", () => {
     if (!result.ok) expect(result.reason).toBe("tmux_error");
   });
 
+  // Every phrasing tmux uses to say "the server you asked about is gone" must
+  // read as eligible. `server exited unexpectedly` is what tmux 3.4 tells a
+  // client whose server died under it — the exact situation snapshot restore
+  // exists for. Missing it made jmux decline to restore precisely when it
+  // should have, and it went unnoticed because the dev machine's tmux says
+  // something else.
+  test.each([
+    ["no server running on /tmp/tmux-501/default"],
+    ["error connecting to /tmp/tmux-0/default (No such file or directory)"],
+    ["no sessions"],
+    ["server exited unexpectedly"],
+  ])("eligible when tmux says %j", async (stderr) => {
+    const fs = new FakeFs();
+    fs.files.set("/snap/state.json", new TextEncoder().encode(snapshotJson()));
+    const runner = new FakeRunner();
+    runner.setResponse("list-sessions -F #{session_name}", {
+      stdout: "",
+      stderr,
+      exitCode: 1,
+    });
+    const r = new Restorer({
+      dir: "/snap",
+      fs,
+      runner,
+      clock: new FakeClock(),
+      jmuxVersion: "test",
+      userShell: "/bin/zsh",
+      resolveClaudeCommand: () => "claude",
+    });
+    const result = await r.checkEligibility();
+    expect(result.ok).toBe(true);
+  });
+
   test("invalid snapshot is backed up and ineligible", async () => {
     const fs = new FakeFs();
     fs.files.set("/snap/state.json", new TextEncoder().encode("{not json"));

@@ -6,6 +6,7 @@ import {
   type PipelineStatus,
   type BranchContext,
 } from "./types";
+import { openUrl } from "../platform";
 
 const GITLAB_API = "https://gitlab.com/api/v4";
 
@@ -95,7 +96,7 @@ export class GitLabAdapter implements CodeHostAdapter {
     const [project, iid] = mrId.split(":");
     const projectPath = decodeURIComponent(project);
     const url = `https://gitlab.com/${projectPath}/-/merge_requests/${iid}`;
-    Bun.spawn(["open", url], { stdout: "ignore", stderr: "ignore" });
+    openUrl(url);
   }
 
   async markReady(mrId: string): Promise<void> {
