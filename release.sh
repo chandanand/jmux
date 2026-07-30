@@ -65,6 +65,15 @@ gh auth status >/dev/null 2>&1 || die "gh is not authenticated — run: gh auth 
 npm whoami     >/dev/null 2>&1 || die "npm is not authenticated — run: npm login"
 ok "bun, gh, npm, docker all present and authenticated"
 
+# `npm whoami` proves authentication, not publish capability. With 2FA enabled
+# publish needs a one-time password, and npm's OTP flow needs a terminal — it
+# fails outright when stdout is piped. Better to say so now than after ten
+# minutes of compiling.
+if [ "$DRY_RUN" = "0" ] && [ ! -t 1 ]; then
+  echo "    ! stdout is not a terminal. If your npm account has 2FA, the publish"
+  echo "      step will fail — run this directly in a shell, or set NPM_OTP."
+fi
+
 if [ ! -d "$TAP_DIR/.git" ]; then
   echo "    ! homebrew tap not found at $TAP_DIR — the formula bump will be skipped"
   echo "      (set JMUX_TAP_DIR, or create the tap; see PACKAGING.md Stage 5)"
@@ -310,7 +319,9 @@ say "Publishing to npm"
 if npm view "@jx0/jmux@$VERSION" version >/dev/null 2>&1; then
   ok "@jx0/jmux@$VERSION already published — skipping"
 else
-  npm publish
+  # NPM_OTP lets a non-interactive run publish under 2FA; without it npm opens
+  # its own browser/OTP flow, which needs a terminal.
+  if [ -n "${NPM_OTP:-}" ]; then npm publish --otp="$NPM_OTP"; else npm publish; fi
   ok "@jx0/jmux@$VERSION published"
 fi
 

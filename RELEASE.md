@@ -24,6 +24,9 @@ npm login              # publishes @jx0/jmux
 ```
 
 - **Docker** must be running — the Linux artifact is verified in a container.
+- **Run it in a real terminal.** If your npm account has 2FA, `npm publish`
+  needs a one-time password and its prompt requires a TTY — piping the script's
+  output breaks it. For an unattended run, set `NPM_OTP=123456`.
 - **Rosetta**, to verify the Intel Mac build on Apple Silicon:
   `softwareupdate --install-rosetta`
 - **The Homebrew tap**, if you want the formula bumped automatically. Clone
