@@ -6766,9 +6766,12 @@ async function start(): Promise<void> {
       openModal(modal, () => {});
     }
     await control.sendCommand(stampCommand(jmuxDir));
-  } catch {
+  } catch (err) {
     // A server that won't answer about its generation is not a reason to fail
-    // startup — the check is a courtesy, not a dependency.
+    // startup — the check is a courtesy, not a dependency. But swallowing the
+    // reason silently means the check can stop working and never say so, which
+    // is how this shipped not working the first time.
+    logError("config-generation", `check skipped: ${(err as Error).message}`);
   }
 
   // Start OTLP receiver and inject OTel env vars

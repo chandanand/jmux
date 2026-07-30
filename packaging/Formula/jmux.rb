@@ -43,8 +43,14 @@ class Jmux < Formula
       sha256 "0000000000000000000000000000000000000000000000000000000000000000" # linux-arm64
     end
     on_intel do
-      url "https://github.com/jarredkenny/jmux/releases/download/v#{version}/jmux-#{version}-linux-x64.tar.gz"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000" # linux-x64
+      # The baseline build, deliberately. Homebrew cannot branch on whether the
+      # host CPU has AVX2, and the standard build dies with an illegal
+      # instruction on CPUs that lack it. The shell installer *can* check
+      # /proc/cpuinfo and picks the faster build there; here, correctness on
+      # every x86-64 machine is worth more than a difference no one running a
+      # terminal UI can perceive.
+      url "https://github.com/jarredkenny/jmux/releases/download/v#{version}/jmux-#{version}-linux-x64-baseline.tar.gz"
+      sha256 "0000000000000000000000000000000000000000000000000000000000000000" # linux-x64-baseline
     end
   end
 
@@ -67,24 +73,27 @@ class Jmux < Formula
   end
 
   test do
-    # `--version` exits before any of the interesting startup work, so on its
-    # own it proves almost nothing. The second assertion is the real one: boot
-    # against a private tmux socket and confirm the server came up with jmux's
-    # materialized config, which exercises asset materialization, the tmux
-    # spawn, and the config path all at once.
-    assert_match version.to_s, shell_output("#{bin}/jmux --version")
+    assert_match version.to_s, shell_output("#{bin/"jmux"} --version")
 
-    socket = "jmux-brew-test-#{Process.pid}"
-    require "pty"
-    begin
-      PTY.spawn("#{bin}/jmux", "--socket", socket) do |_r, _w, pid|
-        sleep 6
-        detach = shell_output("tmux -L #{socket} show-options -g detach-on-destroy 2>/dev/null", 0)
-        Process.kill("TERM", pid)
-        assert_match "off", detach
-      end
-    ensure
-      system "tmux", "-L", socket, "kill-server"
-    end
+    # The real risk in a compiled binary is asset materialization. Under
+    # `bun build --compile` the bundle lives on a virtual filesystem that tmux —
+    # a separate process — cannot read, so jmux must write its tmux config out
+    # to a real path before spawning tmux. If that regresses, the binary starts
+    # and then fails in a way `--version` would never catch.
+    #
+    # `--install-skill` drives exactly that path, and needs no tmux, no pty and
+    # no writable /tmp, so it is deterministic inside the test sandbox. Booting
+    # the full TUI here is not: Homebrew's sandbox stops tmux from starting a
+    # server, and the failure looks like jmux's rather than the sandbox's.
+    ENV["HOME"] = testpath
+    ENV["XDG_DATA_HOME"] = testpath/"data"
+    ENV["CLAUDE_CONFIG_DIR"] = testpath/"claude"
+
+    system bin/"jmux", "--install-skill"
+    assert_path_exists testpath/"claude/skills/jmux-control/SKILL.md"
+
+    tmux_conf = Dir[testpath/"data/jmux/assets/*/config/tmux.conf"].first
+    refute_nil tmux_conf, "jmux did not materialize its tmux config"
+    assert_match "source-file", File.read(tmux_conf)
   end
 end

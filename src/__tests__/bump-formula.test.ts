@@ -1,13 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { bumpFormula, parseSums } from "../formula";
+import { bumpFormula, formulaPlatforms, parseSums } from "../formula";
 
 const SUMS = `
 aaaa000000000000000000000000000000000000000000000000000000000001  jmux-0.26.0-darwin-arm64.tar.gz
 aaaa000000000000000000000000000000000000000000000000000000000002  jmux-0.26.0-darwin-x64.tar.gz
 aaaa000000000000000000000000000000000000000000000000000000000003  jmux-0.26.0-linux-x64.tar.gz
 aaaa000000000000000000000000000000000000000000000000000000000004  jmux-0.26.0-linux-arm64.tar.gz
+aaaa000000000000000000000000000000000000000000000000000000000006  jmux-0.26.0-linux-x64-baseline.tar.gz
 aaaa000000000000000000000000000000000000000000000000000000000005  jmux-0.25.0-linux-x64.tar.gz
 `;
 
@@ -21,7 +22,7 @@ describe("parseSums", () => {
     const sums = parseSums(SUMS, "0.26.0");
     expect(sums.get("darwin-arm64")).toBe("aaaa000000000000000000000000000000000000000000000000000000000001");
     expect(sums.get("linux-arm64")).toBe("aaaa000000000000000000000000000000000000000000000000000000000004");
-    expect(sums.size).toBe(4);
+    expect(sums.size).toBe(5);
   });
 
   // A stale line from a previous release sitting in the same file must not be
@@ -44,24 +45,33 @@ describe("bumpFormula", () => {
   // sha256 lines, and pairing one with the wrong architecture installs the
   // wrong binary while still passing Homebrew's integrity check.
   test("pairs each checksum with its own platform", () => {
-    const out = bumpFormula(FORMULA, "0.26.0", parseSums(SUMS, "0.26.0"));
+    const sums = parseSums(SUMS, "0.26.0");
+    const out = bumpFormula(FORMULA, "0.26.0", sums);
 
-    for (const [platform, sha] of parseSums(SUMS, "0.26.0")) {
-      expect(out).toContain(`sha256 "${sha}" # ${platform}`);
+    // Driven by what the formula references, not by what the release shipped:
+    // the release carries a baseline x64 build the formula deliberately does
+    // not use.
+    for (const platform of formulaPlatforms(out)) {
+      expect(out).toContain(`sha256 "${sums.get(platform)}" # ${platform}`);
     }
+    expect(formulaPlatforms(out).length).toBeGreaterThan(1);
   });
 
-  test("leaves placeholders it was given no checksum for", () => {
-    const partial = new Map([["darwin-arm64", "b".repeat(64)]]);
-    const out = bumpFormula(FORMULA, "0.26.0", partial);
-    expect(out).toContain(`sha256 "${"b".repeat(64)}" # darwin-arm64`);
-    expect(out).toContain('sha256 "0000000000000000000000000000000000000000000000000000000000000000" # linux-x64');
+  // A release may ship more artifacts than the formula uses —
+  // linux-x64-baseline exists for pre-AVX2 CPUs, which only the shell
+  // installer can select. That must not be an error.
+  test("ignores released artifacts the formula does not reference", () => {
+    const sums = parseSums(SUMS, "0.26.0");
+    sums.set("linux-x64-baseline", "d".repeat(64));
+    expect(() => bumpFormula(FORMULA, "0.26.0", sums)).not.toThrow();
   });
 
-  // Silence here would mean shipping a formula with a placeholder checksum.
-  test("refuses to guess when a platform tag is missing", () => {
-    expect(() => bumpFormula(FORMULA, "0.26.0", new Map([["solaris-sparc", "c".repeat(64)]]))).toThrow(
-      /no sha256 line tagged/,
+  // The dangerous direction: a formula line left holding a placeholder.
+  test("refuses when the formula references a platform the release lacks", () => {
+    const partial = parseSums(SUMS, "0.26.0");
+    partial.delete("darwin-arm64");
+    expect(() => bumpFormula(FORMULA, "0.26.0", partial)).toThrow(
+      /release has no checksum for it/,
     );
   });
 

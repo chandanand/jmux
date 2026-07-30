@@ -30,21 +30,27 @@ export function parseSums(text: string, version: string): Map<string, string> {
  * A platform with no tagged line is an error rather than a no-op: quietly
  * skipping it would ship a formula with a placeholder checksum.
  */
+/** Every platform the formula has a tagged `sha256` line for. */
+export function formulaPlatforms(source: string): string[] {
+  return [...source.matchAll(/sha256\s+"[0-9a-f]{64}"\s*#\s*(\S+)/g)].map((m) => m[1]!);
+}
+
 export function bumpFormula(source: string, version: string, sums: Map<string, string>): string {
   let out = source.replace(/^(\s*version\s+")[^"]+(")/m, `$1${version}$2`);
 
-  for (const [platform, sha] of sums) {
-    const pattern = new RegExp(`(sha256\\s+")[0-9a-f]{64}("\\s*#\\s*${platform}\\b)`, "g");
-
-    // Test for the tag rather than comparing before/after text: re-bumping a
-    // formula that is already at this version rewrites each line to exactly
-    // what it already said, and a string comparison reads that as "no match".
-    if (!pattern.test(out)) {
+  // Driven by the formula, not by the release. A release may legitimately ship
+  // artifacts the formula does not reference — `linux-x64-baseline` exists for
+  // pre-AVX2 CPUs, which the shell installer selects per-CPU and Homebrew
+  // cannot branch on. The dangerous direction is the other one: a formula line
+  // left holding a placeholder checksum.
+  for (const platform of formulaPlatforms(out)) {
+    const sha = sums.get(platform);
+    if (!sha) {
       throw new Error(
-        `no sha256 line tagged "# ${platform}" in the formula — refusing to guess which one it is`,
+        `formula references "# ${platform}" but the release has no checksum for it`,
       );
     }
-    pattern.lastIndex = 0;
+    const pattern = new RegExp(`(sha256\\s+")[0-9a-f]{64}("\\s*#\\s*${platform}\\b)`, "g");
     out = out.replace(pattern, `$1${sha}$2`);
   }
 
