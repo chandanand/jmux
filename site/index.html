@@ -383,6 +383,38 @@
   .cmd div{ margin:6px 0; color:var(--ink); } .cmd .d{ color:var(--ac); }
   .cta .note{ color:var(--ink3); font-size:12.5px; margin-top:22px; position:relative; z-index:2; }
 
+  /* ---- install picker ---------------------------------------------------
+     Tokens are redefined by .panel, so the same classes render correctly on
+     both the light hero and the espresso CTA without a second set of rules. */
+  .installer{ position:relative; z-index:2; }
+  /* Block-level so the command always starts on its own line: as an inline
+     element the short `bun`/`brew` commands sat beside the tabs while the long
+     curl one wrapped below, so the layout jumped when switching tabs. */
+  .ipick{ display:flex; width:max-content; max-width:100%; gap:2px; padding:3px; border-radius:11px; background:var(--tint); border:1px solid var(--bd); margin-bottom:11px; }
+  .ipick button{ appearance:none; background:none; border:0; cursor:pointer; font:inherit; font-size:12.5px; color:var(--ink2); padding:6px 13px; border-radius:8px; transition:background .15s,color .15s; white-space:nowrap; }
+  .ipick button:hover{ color:var(--ink); }
+  .ipick button[aria-selected="true"]{ background:var(--card); color:var(--ink); box-shadow:var(--shadow-sm); }
+  .ipick button:focus-visible{ outline:2px solid var(--ac); outline-offset:2px; }
+  .icap{ color:var(--ink3); font-size:12.5px; margin-top:10px; min-height:1.2em; }
+  .installer .pill .icmd{ white-space:nowrap; }
+
+  /* ---- channel cards ---- */
+  .chan{ position:relative; z-index:2; display:grid; gap:14px; grid-template-columns:repeat(3,minmax(0,1fr)); max-width:940px; margin:30px auto 0; text-align:left; }
+  .chan-card{ background:var(--card); border:1px solid var(--bd); border-radius:14px; padding:18px 18px 16px; }
+  .chan-card h3{ font-size:15px; font-weight:600; letter-spacing:-.01em; margin:0 0 4px; }
+  .chan-card p{ color:var(--ink2); font-size:12.5px; line-height:1.5; margin:0 0 12px; }
+  .chan-cmd{ display:flex; align-items:center; gap:8px; background:var(--tint); border:1px solid var(--bd); border-radius:9px; padding:9px 10px; font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink); overflow-x:auto; }
+  .chan-cmd code{ white-space:nowrap; }
+  .chan-cmd .cp{ margin-left:auto; flex:none; }
+  .chan-card a.more{ color:var(--ac); font-size:12.5px; text-decoration:none; border-bottom:1px solid var(--ac-line); }
+
+  @media (max-width:900px){ .chan{ grid-template-columns:1fr; max-width:440px; } }
+  @media (max-width:560px){
+    .ipick{ width:100%; justify-content:space-between; }
+    .installer .pill{ max-width:100%; overflow-x:auto; }
+    .installer .pill .icmd{ white-space:nowrap; }
+  }
+
   /* ============ FOOTER ============ */
   footer{ border-top:1px solid var(--bd); padding:34px 0; }
   footer .row{ display:flex; align-items:center; justify-content:space-between; color:var(--ink3); font-size:13px; }
@@ -603,13 +635,25 @@
       <div class="eyebrow">Agent fleet · work pipeline</div>
       <h1>Everyone else stops at the pane.<span class="m serif"><em>Ticket in.</em> Merge out.</span></h1>
       <p class="lead">Run a fleet of coding agents in the terminal you already use — then run your actual backlog through them. Stages you define, work that parks itself once it leaves your hands, and issue-to-merged without opening a browser.</p>
-      <div class="cta-row">
-        <div class="pill"><span class="d">$</span> curl -fsSL https://jmux.build/install | sh
-          <button class="cp" title="Copy" onclick="copyCmd(this,'curl -fsSL https://jmux.build/install | sh')">
+      <div class="installer">
+        <div class="ipick" role="tablist" aria-label="Install method">
+          <button role="tab" id="tab-script" aria-selected="true" data-key="script"
+            data-cmd="curl -fsSL https://jmux.build/install | sh"
+            data-note="No runtime needed — installs a self-contained binary.">Script</button>
+          <button role="tab" id="tab-brew" aria-selected="false" data-key="brew"
+            data-cmd="brew install jarredkenny/tap/jmux"
+            data-note="macOS and Linuxbrew. Installs tmux for you.">Homebrew</button>
+          <button role="tab" id="tab-bun" aria-selected="false" data-key="bun"
+            data-cmd="bun install -g @jx0/jmux"
+            data-note="Needs Bun 1.3.8+ — and it is the only channel on Alpine/musl.">Bun</button>
+        </div>
+        <div class="pill"><span class="d">$</span> <span class="icmd">curl -fsSL https://jmux.build/install | sh</span>
+          <button class="cp icopy" title="Copy">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
         </div>
-        <a href="#workflow" class="link-u">See the pipeline →</a>
+        <p class="icap">No runtime needed — installs a self-contained binary.</p>
+        <div class="cta-row" style="margin-top:16px"><a href="#workflow" class="link-u">See the pipeline →</a></div>
       </div>
       <div class="proof">
         <span>Or look around first — <span class="mono" style="color:var(--ink)">jmux --demo</span> runs the whole thing on mock data. Every feature, no credentials, nothing to configure.</span>
@@ -1023,21 +1067,51 @@
     </g>
   </svg>
   <h2>Two commands. <em>You're in.</em></h2>
-  <p class="sub">No runtime to install first. Just tmux 3.2+ &mdash; and jmux offers to install that for you.</p>
-  <div class="cmd">
-    <button class="cp" title="Copy" onclick="copyCmd(this,'curl -fsSL https://jmux.build/install | sh\njmux')" style="position:absolute;top:16px;right:16px">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-    </button>
-    <div><span class="d">$</span> curl -fsSL https://jmux.build/install | sh</div>
-    <div><span class="d">$</span> jmux</div>
+  <p class="sub">tmux 3.2+ is all jmux needs &mdash; and it offers to install that for you.</p>
+  <div class="installer">
+    <div class="ipick" role="tablist" aria-label="Install method">
+      <button role="tab" aria-selected="true" data-key="script"
+        data-cmd="curl -fsSL https://jmux.build/install | sh"
+        data-note="No runtime needed — installs a self-contained binary.">Script</button>
+      <button role="tab" aria-selected="false" data-key="brew"
+        data-cmd="brew install jarredkenny/tap/jmux"
+        data-note="macOS and Linuxbrew. Installs tmux for you.">Homebrew</button>
+      <button role="tab" aria-selected="false" data-key="bun"
+        data-cmd="bun install -g @jx0/jmux"
+        data-note="Needs Bun 1.3.8+ — and it is the only channel on Alpine/musl.">Bun</button>
+    </div>
+    <div class="cmd">
+      <button class="cp icopy" title="Copy" style="position:absolute;top:16px;right:16px">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      </button>
+      <div><span class="d">$</span> <span class="icmd">curl -fsSL https://jmux.build/install | sh</span></div>
+      <div><span class="d">$</span> jmux</div>
+    </div>
+    <p class="icap">No runtime needed — installs a self-contained binary.</p>
   </div>
-  <p class="note" style="margin-top:18px">Prefer a package manager?
-    <span class="mono" style="color:var(--ink)">brew install jarredkenny/tap/jmux</span>
-    &nbsp;·&nbsp;
-    <span class="mono" style="color:var(--ink)">bun install -g @jx0/jmux</span>
-    <br><span style="opacity:.75">The Bun package is also the way in on Alpine and other musl systems.</span>
-  </p>
-  <p class="note">Not ready to point it at your repos? <span class="mono" style="color:var(--ink)">jmux --demo</span> runs the whole thing on mock data first.</p>
+  <div class="chan">
+    <article class="chan-card">
+      <h3>Homebrew</h3>
+      <p>macOS and Linuxbrew. The only channel that installs tmux for you, since brew can declare it a dependency.</p>
+      <div class="chan-cmd"><code>brew install jarredkenny/tap/jmux</code>
+        <button class="cp" title="Copy" onclick="copyCmd(this,'brew install jarredkenny/tap/jmux')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+      </div>
+    </article>
+    <article class="chan-card">
+      <h3>Bun</h3>
+      <p>Runs jmux from source under your own Bun 1.3.8+. The way in on Alpine and other musl systems, where the binary cannot run.</p>
+      <div class="chan-cmd"><code>bun install -g @jx0/jmux</code>
+        <button class="cp" title="Copy" onclick="copyCmd(this,'bun install -g @jx0/jmux')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+      </div>
+    </article>
+    <article class="chan-card">
+      <h3>Direct download</h3>
+      <p>Signed tarballs with checksums for macOS and Linux, on arm64 and x86-64 — including a baseline build for older CPUs.</p>
+      <a class="more" href="https://github.com/jarredkenny/jmux/releases/latest">Browse the release →</a>
+    </article>
+  </div>
+
+  <p class="note" style="margin-top:26px">macOS and Linux (glibc). On Windows, run it inside WSL. Not ready to point it at your repos? <span class="mono" style="color:var(--ink)">jmux --demo</span> runs the whole thing on mock data first.</p>
 </section>
 
 <!-- FOOTER -->
@@ -1076,6 +1150,57 @@
     btn.classList.add('ok');
     btn._t = setTimeout(function(){ btn.innerHTML = btn._orig; btn.classList.remove('ok'); }, 1500);
   }
+
+  // ---- install picker ----
+  // Both pickers (hero and CTA) are driven by one apply() so they can never
+  // disagree: a visitor who picks Homebrew up top should not scroll down and be
+  // told to curl. The commands live in the markup rather than here, so there is
+  // one source of truth and the default still renders with JS disabled.
+  (function () {
+    var groups = [].slice.call(document.querySelectorAll('.installer'));
+    if (!groups.length) return;
+
+    function apply(key, focusGroup) {
+      groups.forEach(function (root) {
+        var tabs = [].slice.call(root.querySelectorAll('.ipick button'));
+        var tab = tabs.filter(function (b) { return b.dataset.key === key; })[0] || tabs[0];
+        tabs.forEach(function (b) { b.setAttribute('aria-selected', String(b === tab)); });
+        var cmd = root.querySelector('.icmd');
+        var cap = root.querySelector('.icap');
+        if (cmd) cmd.textContent = tab.dataset.cmd;
+        if (cap && tab.dataset.note) cap.textContent = tab.dataset.note;
+        if (root === focusGroup) tab.focus();
+      });
+      try { localStorage.setItem('jmux:install', key); } catch (e) {}
+    }
+
+    groups.forEach(function (root) {
+      var tabs = [].slice.call(root.querySelectorAll('.ipick button'));
+
+      tabs.forEach(function (tab, i) {
+        tab.addEventListener('click', function () { apply(tab.dataset.key); });
+        tab.addEventListener('keydown', function (e) {
+          var d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+          if (!d) return;
+          e.preventDefault();
+          apply(tabs[(i + d + tabs.length) % tabs.length].dataset.key, root);
+        });
+      });
+
+      // Copy whatever is currently shown, rather than a command baked into the
+      // handler — otherwise switching tabs would copy the wrong thing.
+      var copy = root.querySelector('.icopy');
+      if (copy) copy.addEventListener('click', function () {
+        var cmd = root.querySelector('.icmd').textContent;
+        var extra = root.querySelector('.cmd') ? '\njmux' : '';
+        copyCmd(copy, cmd + extra);
+      });
+    });
+
+    var saved;
+    try { saved = localStorage.getItem('jmux:install'); } catch (e) {}
+    if (saved) apply(saved);
+  })();
 
   // ---- scroll reveal ----
   (function () {
