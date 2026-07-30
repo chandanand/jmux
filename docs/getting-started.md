@@ -134,8 +134,8 @@ The Diff tab is powered by [hunk](https://github.com/modem-dev/hunk) — install
 | Settings | `Ctrl-a` then `i` |
 | Clear pane | `Ctrl-a` then `k` |
 | Copy pane to clipboard | `Ctrl-a` then `y` |
-| Rename session | `Ctrl-a` then `r` |
-| Move window to session | `Ctrl-a` then `m` |
+| Rename session | `Ctrl-a` then `p`, "Rename session" |
+| Move window to session | `Ctrl-a` then `p`, "Move window to session" |
 
 ---
 
