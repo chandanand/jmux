@@ -50,7 +50,14 @@ export type EligibilityResult =
   | { ok: true; snapshot: SnapshotFile }
   | { ok: false; reason: "no_snapshot" | "invalid_snapshot" | "server_busy" | "tmux_error" | "locked" | "lock_error" };
 
-const NO_SERVER_RX = /no server running|error connecting to|no sessions/i;
+// Every phrasing tmux uses for "the server you asked about is gone". These are
+// not interchangeable across versions: a client whose server died under it gets
+// `server exited unexpectedly` on tmux 3.4, where a fresh connection to a dead
+// socket gets `no server running` or `error connecting to`. Missing the first
+// made checkEligibility() report `tmux_error` and decline to restore — in
+// exactly the situation snapshots exist for.
+const NO_SERVER_RX =
+  /no server running|error connecting to|no sessions|server exited unexpectedly/i;
 
 export class Restorer {
   protected readonly log: RestoreLog;
