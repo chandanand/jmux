@@ -1,6 +1,7 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
+import { materializeAssets, piExtensionIn } from "../assets";
 import type { AgentState } from "../types";
 import type { AgentIntegration, InstallKind, InstallOutcomeKind } from "./types";
 
@@ -23,9 +24,16 @@ export function piExtensionTarget(): string {
   );
 }
 
-/** The extension source shipped inside the jmux package. */
+/**
+ * The extension source shipped inside jmux.
+ *
+ * Read from the materialized asset tree rather than `import.meta.dir`, which
+ * collapses to `/$bunfs` under `bun build --compile` — `detect()` would have
+ * silently reported "none" and `install()` would have thrown, on every binary
+ * install.
+ */
 function piExtensionSource(): string {
-  return resolve(import.meta.dir, "pi-extension.ts");
+  return piExtensionIn(materializeAssets());
 }
 
 interface PiSettings {
@@ -93,5 +101,32 @@ export const piIntegration: AgentIntegration = {
         "so jmux never shows WAITING for a pi pane.",
       ],
     };
+  },
+
+  uninstall(): { removed: boolean; paths: string[]; notes: string[] } {
+    const target = piExtensionTarget();
+    const paths: string[] = [];
+
+    // Deregister first: a settings entry pointing at a deleted file makes pi
+    // fail to start, so the order matters if only one of the two succeeds.
+    try {
+      const settings = readSettings();
+      const extensions = settings.extensions ?? [];
+      if (extensions.includes(target)) {
+        settings.extensions = extensions.filter((e) => e !== target);
+        if (settings.extensions.length === 0) delete settings.extensions;
+        writeFileSync(piSettingsPath(), JSON.stringify(settings, null, 2) + "\n");
+        paths.push(`${piSettingsPath()} (jmux extension entry)`);
+      }
+    } catch {
+      return { removed: false, paths: [], notes: ["could not read pi settings — left alone"] };
+    }
+
+    if (existsSync(target)) {
+      rmSync(target, { force: true });
+      paths.push(target);
+    }
+
+    return { removed: paths.length > 0, paths, notes: [] };
   },
 };

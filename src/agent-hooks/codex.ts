@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import type { AgentState } from "../types";
 import { ensureHooksFeature } from "./codex-toml";
-import { detectInstalledKind, installHooks } from "./json-hooks";
+import { detectInstalledKind, installHooks, uninstallHooks } from "./json-hooks";
 import type {
   AgentIntegration,
   HookEvent,
@@ -94,6 +94,24 @@ export const codexIntegration: AgentIntegration = {
       );
     }
     return { kind: outcome.kind, notes };
+  },
+
+  uninstall(): { removed: boolean; paths: string[]; notes: string[] } {
+    const path = hooksPath();
+    if (!existsSync(path)) return { removed: false, paths: [], notes: [] };
+
+    const { removed, settings } = uninstallHooks(readHooks(), CODEX_EVENTS);
+    if (!removed) return { removed: false, paths: [], notes: [] };
+
+    writeFileSync(path, JSON.stringify(settings, null, 2) + "\n");
+    // `[features] hooks = true` in config.toml is deliberately left: it is a
+    // Codex-wide setting the user may rely on for their own hooks, and jmux
+    // cannot know it was not already wanted.
+    return {
+      removed: true,
+      paths: [`${path} (jmux hooks)`],
+      notes: ["left [features] hooks = true in config.toml — it may not be ours"],
+    };
   },
 };
 

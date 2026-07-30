@@ -68,4 +68,10 @@ export interface AgentIntegration {
    * notes the user must act on (e.g. Codex's hook-trust prompt).
    */
   install(): { kind: InstallOutcomeKind; notes: string[] };
+  /**
+   * Reverse `install()`. Removing jmux itself never touches these files — they
+   * belong to the agents — so without this an uninstalled jmux leaves every
+   * agent on the machine invoking a binary that no longer exists.
+   */
+  uninstall(): { removed: boolean; paths: string[]; notes: string[] };
 }

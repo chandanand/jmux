@@ -69,3 +69,35 @@ export function installAllAgents(): InstallReport[] {
   }
   return reports;
 }
+
+export interface UninstallReport {
+  label: string;
+  removed: boolean;
+  paths: string[];
+  notes: string[];
+}
+
+/**
+ * Reverse every agent integration jmux installed.
+ *
+ * Unlike install, this does not skip absent agents: an agent uninstalled from
+ * the machine after jmux wrote into its config still has jmux's entries on
+ * disk, and those are exactly the leftovers this exists to clear.
+ */
+export function uninstallAllAgents(): UninstallReport[] {
+  const reports: UninstallReport[] = [];
+  for (const integration of AGENT_INTEGRATIONS) {
+    try {
+      const { removed, paths, notes } = integration.uninstall();
+      reports.push({ label: integration.label, removed, paths, notes });
+    } catch (err) {
+      reports.push({
+        label: integration.label,
+        removed: false,
+        paths: [],
+        notes: [err instanceof Error ? err.message : String(err)],
+      });
+    }
+  }
+  return reports;
+}

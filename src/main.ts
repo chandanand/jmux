@@ -1,5 +1,11 @@
 import { $ } from "bun";
 import { TmuxPty } from "./tmux-pty";
+import { clipboardCopyCommand } from "./platform";
+import { MIN_TMUX_VERSION, tmuxVersionOk } from "./tmux-version";
+import { configFileIn, materializeAssets } from "./assets";
+import { currentChannel, upgradeCommand } from "./channel";
+import { compareGeneration, GENERATION_OPTION, stampCommand, staleGenerationNotice } from "./config-generation";
+import { installSkill, uninstallIntegrations } from "./agent-hooks/skill";
 import { ScreenBridge } from "./screen-bridge";
 import { Renderer, getToolbarButtonRanges, getToolbarTabRanges, getModalPosition, buildToolbarButtons, type ToolbarConfig } from "./renderer";
 import { InputRouter } from "./input-router";
@@ -192,6 +198,8 @@ Options:
   -L, --socket <name>      Use a separate tmux server socket
   --demo                   Run in demo mode with mock data
   --install-agent-hooks    Install agent state hooks (Claude Code, Codex, pi)
+  --install-skill          Install the jmux-control skill for Claude Code
+  --uninstall-integrations Remove everything the two commands above installed
   -v, --version            Show version
   -h, --help               Show this help
 
@@ -200,6 +208,7 @@ Examples:
   jmux my-project          Start with named session
   jmux -L work             Use isolated tmux server
   jmux --install-agent-hooks  Set up agent state tracking
+  jmux --install-skill     Teach agents the jmux ctl CLI
 
 Agent Control (JSON output):
   jmux ctl session list          List sessions
@@ -239,9 +248,47 @@ if (process.argv.includes("-v") || process.argv.includes("--version")) {
   process.exit(0);
 }
 
+// --- Asset materialization (must precede every subcommand that reads assets) ---
+//
+// `bun build --compile` collapses `import.meta.dir` to `/$bunfs`, which tmux —
+// a separate process — cannot read. The embedded assets are written to a real
+// path here and `$JMUX_DIR` points at it.
+//
+// This sits above the subcommand branches deliberately: `--install-agent-hooks`
+// reads the materialized pi extension, and it is handled below. Per CLAUDE.md,
+// anything called at module scope may only touch bindings declared above it —
+// `materializeAssets` is an import, so it qualifies.
+let jmuxDir: string;
+try {
+  jmuxDir = materializeAssets();
+} catch (err) {
+  process.stderr.write(`${(err as Error).message}\n`);
+  process.exit(1);
+}
+const configFile = configFileIn(jmuxDir);
+
+// Export JMUX_DIR so every tmux subprocess (PTY, control, Restorer) inherits
+// it. The config file expands "$JMUX_DIR/config/defaults.conf", which is
+// resolved at config-load time against the tmux server's environment — which
+// is inherited from this process. Setting it here means we don't need to
+// `set-environment -g JMUX_DIR ...` after control-mode attaches.
+process.env.JMUX_DIR = jmuxDir;
+// Same mechanism, same reason: defaults.conf's `C-a y` bind pipes into
+// $JMUX_COPY. Resolved here rather than in the conf so the platform branch is
+// testable and lives in one place. Empty is meaningful — the bind reports it.
+process.env.JMUX_COPY = clipboardCopyCommand();
+
 if (process.argv.includes("--install-agent-hooks")) {
   installAgentHooks();
   process.exit(0);
+}
+
+if (process.argv.includes("--install-skill")) {
+  process.exit(installSkill() ? 0 : 1);
+}
+
+if (process.argv.includes("--uninstall-integrations")) {
+  process.exit(uninstallIntegrations() ? 0 : 1);
 }
 
 function installAgentHooks(): void {
@@ -361,15 +408,7 @@ let infoPanelWidth: number | null = configStore.config.infoPanelWidth ?? null;
 let diffPanelSplitRatio = configStore.config.diffPanel?.splitRatio ?? 0.4;
 let hunkCommand = configStore.config.diffPanel?.hunkCommand ?? "hunk";
 
-// Resolve paths relative to source
-const jmuxDir = resolve(dirname(import.meta.dir));
-const configFile = resolve(jmuxDir, "config", "tmux.conf");
-// Export JMUX_DIR so every tmux subprocess (PTY, control, Restorer) inherits
-// it. The config file expands "$JMUX_DIR/config/defaults.conf", which is
-// resolved at config-load time against the tmux server's environment — which
-// is inherited from this process. Setting it here means we don't need to
-// `set-environment -g JMUX_DIR ...` after control-mode attaches.
-process.env.JMUX_DIR = jmuxDir;
+// jmuxDir / configFile are resolved far above, before the subcommand branches.
 
 // Parse args: jmux [session] [--socket name] [--demo]
 let sessionName: string | undefined;
@@ -405,11 +444,36 @@ function hasCommand(cmd: string[]): boolean {
   }
 }
 
+/** `tmux -V` output, or null when tmux is not installed. */
+function tmuxVersionOutput(): string | null {
+  try {
+    const result = Bun.spawnSync(["tmux", "-V"], { stdout: "pipe", stderr: "pipe" });
+    if (result.exitCode !== 0) return null;
+    return new TextDecoder().decode(result.stdout).trim();
+  } catch {
+    return null;
+  }
+}
+
 async function preflight(): Promise<void> {
   const missing: string[] = [];
-  if (!hasCommand(["tmux", "-V"])) {
+  const version = tmuxVersionOutput();
+
+  if (version === null) {
     missing.push("tmux");
+  } else if (!tmuxVersionOk(version)) {
+    // Previously this only checked that `tmux -V` exited 0, so a user on 2.8
+    // sailed through and hit a confusing failure later. This path serves the
+    // brew and npm channels, which the shell installer never touches.
+    console.log(`\njmux requires tmux ${MIN_TMUX_VERSION} or newer (you have ${version.replace(/^tmux /, "")}).`);
+    console.log(
+      process.platform === "darwin"
+        ? "Upgrade with:\n\n  brew upgrade tmux\n"
+        : "Upgrade it with your package manager, or build from source.\n",
+    );
+    process.exit(1);
   }
+
   if (missing.length === 0) return;
 
   const isMac = process.platform === "darwin";
@@ -5917,6 +5981,18 @@ async function showVersionInfo(): Promise<void> {
     const currentTag = `v${VERSION}`;
     const lines: StyledLine[] = [[]];
 
+    // An update indicator with no way to act on it is a dead end, and the right
+    // command differs per channel — brew, the installer, and npm each want
+    // something different. Detection is channel.ts's job; this only renders it.
+    const latestTag = releases[0]?.tag_name;
+    if (latestTag && latestTag !== currentTag) {
+      lines.push([
+        { text: "Update available — run ", attrs: { ...neutralFg(8), bg: theme.surface, bgMode: 2 } },
+        { text: upgradeCommand(currentChannel()), attrs: { fg: 2, fgMode: 1, bold: true, bg: theme.surface, bgMode: 2 } },
+      ]);
+      lines.push([]);
+    }
+
     // Match ContentModal.preferredWidth() then subtract its 2-col padding each side.
     const termCols = process.stdout.columns || 80;
     const modalWidth = Math.min(Math.max(50, Math.round(termCols * 0.7)), 90);
@@ -6667,6 +6743,33 @@ async function start(): Promise<void> {
   // many %begin/%end blocks asynchronously, which scrambles the FIFO
   // pending-queue matching and corrupts subsequent command responses.
   await control.sendCommand("set-environment -g JMUX 1");
+
+  // Config generation. `-f` is honored only when tmux *starts* a server, so
+  // attaching to a server left running by an older jmux silently keeps that
+  // version's bindings. Read the stamp before writing ours, or every server
+  // looks current.
+  try {
+    const running = await control.sendCommand(`show-option -gqv ${GENERATION_OPTION}`);
+    const verdict = compareGeneration(Array.isArray(running) ? running.join("") : String(running ?? ""), jmuxDir);
+    if (verdict.kind === "stale") {
+      const notice = staleGenerationNotice(verdict);
+      logError("config-generation", `server ${verdict.running} != assets ${verdict.expected}`);
+      // Shown once, on the surface the user is already looking at. Silently
+      // logging it would reproduce the original bug: the upgrade appears to
+      // have worked and none of the new bindings do anything.
+      const lines: StyledLine[] = notice.map((text) => [
+        { text, attrs: { bg: theme.surface, bgMode: 2 } },
+      ]);
+      const modal = new ContentModal({ lines, title: "tmux is running an older config" });
+      modal.setTermRows(process.stdout.rows || 24);
+      modal.open();
+      openModal(modal, () => {});
+    }
+    await control.sendCommand(stampCommand(jmuxDir));
+  } catch {
+    // A server that won't answer about its generation is not a reason to fail
+    // startup — the check is a courtesy, not a dependency.
+  }
 
   // Start OTLP receiver and inject OTel env vars
   const otelPort = await otelReceiver.start();

@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same PR makes the first run irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned, not "latest": `bun build --compile` embeds whatever runtime
+          # built it, so the release runtime is a build input. Must stay at or
+          # above MIN_BUN_VERSION in src/main.ts.
+          bun-version: 1.3.13
+
+      # tmux is NOT preinstalled on GitHub runners. Without this the boot
+      # smoke tests call `test.skipIf(!TMUX)` and skip in silence — the suite
+      # goes green while the only tests that exercise main.ts never run.
+      - name: Install tmux
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew install tmux
+          else
+            sudo apt-get update && sudo apt-get install -y tmux
+          fi
+
+      # Fail loudly rather than degrade quietly. A missing or too-old tmux must
+      # be a red build, not a smaller test run.
+      - name: Assert tmux is usable
+        run: |
+          set -eu
+          command -v tmux >/dev/null || { echo "tmux missing after install"; exit 1; }
+          version=$(tmux -V | sed 's/^tmux //; s/[a-z]*$//')
+          echo "tmux $version"
+          major=${version%%.*}
+          minor=${version#*.}
+          minor=${minor%%.*}
+          if [ "$major" -lt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -lt 2 ]; }; then
+            echo "jmux requires tmux 3.2+, runner has $version"
+            exit 1
+          fi
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun run typecheck
+
+      # `bun test` only. test:snapshot-orphan and test:snapshot-coverage need
+      # Docker, and verify:agents needs real agent installs — naming them here
+      # would be claiming coverage this job does not have.
+      - run: bun test

@@ -1,0 +1,183 @@
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, resolve } from "node:path";
+
+import { dataHome, materializeAssets, skillIn } from "../assets";
+import { uninstallAllAgents } from "./registry";
+
+/**
+ * The jmux agent skill.
+ *
+ * Shipping `skills/jmux-control.md` in the npm package never worked: Claude
+ * Code discovers skills at `<config-dir>/skills/<name>/SKILL.md`, so a markdown
+ * file sitting inside a package install dir is never found. The README claimed
+ * agents auto-discovered it; on every machine but the author's — which had a
+ * hand-made symlink — they did not.
+ */
+
+const SKILL_NAME = "jmux-control";
+
+/**
+ * `$CLAUDE_CONFIG_DIR` when set, else `~/.claude`.
+ *
+ * The same rule `claude.ts` follows, for the same reason: writing to
+ * `~/.claude` for a user who relocated their config installs something that
+ * never fires. Resolved per call so tests and relocated configs both work.
+ */
+export function claudeConfigDir(env: NodeJS.ProcessEnv = process.env): string {
+  return env.CLAUDE_CONFIG_DIR ?? resolve(env.HOME ?? homedir(), ".claude");
+}
+
+export function skillTarget(env: NodeJS.ProcessEnv = process.env): string {
+  return resolve(claudeConfigDir(env), "skills", SKILL_NAME, "SKILL.md");
+}
+
+export type SkillState =
+  /** Nothing there. */
+  | "absent"
+  /** Byte-identical to what we ship. */
+  | "current"
+  /** A regular file that differs — an older jmux, or a user edit. */
+  | "stale"
+  /** A symlink. Someone wired this up deliberately; it is not ours to replace. */
+  | "symlink";
+
+export function detectSkill(shipped: string, env: NodeJS.ProcessEnv = process.env): SkillState {
+  const target = skillTarget(env);
+  let stat;
+  try {
+    stat = lstatSync(target);
+  } catch {
+    return "absent";
+  }
+  if (stat.isSymbolicLink()) return "symlink";
+  try {
+    return readFileSync(target, "utf-8") === shipped ? "current" : "stale";
+  } catch {
+    return "stale";
+  }
+}
+
+export interface SkillOutcome {
+  state: SkillState;
+  target: string;
+  wrote: boolean;
+  notes: string[];
+}
+
+/**
+ * Install the skill, and say what happened.
+ *
+ * A symlink is left alone: that is a developer pointing the skill at a working
+ * tree (this repo's own author does exactly that), and clobbering it would
+ * silently detach their edits. Everything else converges on the shipped copy.
+ */
+export function installSkillTo(
+  shipped: string,
+  env: NodeJS.ProcessEnv = process.env,
+): SkillOutcome {
+  const target = skillTarget(env);
+  const state = detectSkill(shipped, env);
+
+  if (state === "current") {
+    return { state, target, wrote: false, notes: ["already up to date"] };
+  }
+  if (state === "symlink") {
+    return {
+      state,
+      target,
+      wrote: false,
+      notes: [
+        `${target} is a symlink — leaving it alone.`,
+        "Delete it and re-run if you want the shipped copy.",
+      ],
+    };
+  }
+
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, shipped);
+
+  return {
+    state,
+    target,
+    wrote: true,
+    notes: state === "stale" ? [`replaced an older copy at ${target}`] : [`installed to ${target}`],
+  };
+}
+
+/** CLI entry point for `jmux --install-skill`. Returns success. */
+export function installSkill(): boolean {
+  try {
+    const shipped = readFileSync(skillIn(materializeAssets()), "utf-8");
+    const outcome = installSkillTo(shipped);
+    console.log(`jmux-control skill: ${outcome.notes[0]}`);
+    for (const note of outcome.notes.slice(1)) console.log(`  ${note}`);
+    if (outcome.wrote) {
+      console.log("");
+      console.log("Agents running inside jmux can now discover `jmux ctl`.");
+    }
+    return true;
+  } catch (err) {
+    process.stderr.write(`Could not install the jmux-control skill: ${(err as Error).message}\n`);
+    return false;
+  }
+}
+
+/** Exposed for the uninstall path, which must know what jmux created. */
+export function installedSkillPaths(env: NodeJS.ProcessEnv = process.env): string[] {
+  const target = skillTarget(env);
+  return existsSync(target) ? [target, dirname(target)] : [];
+}
+
+/**
+ * Reverse what jmux installed into other tools' config.
+ *
+ * Neither `brew uninstall` nor deleting the binary touches any of this — the
+ * hooks live in Claude Code's, Codex's and pi's own settings, and the skill
+ * lives under Claude Code's config dir. Without this, uninstalling jmux leaves
+ * three agents referencing a binary that is gone.
+ *
+ * A symlinked skill is left alone here for the same reason install refuses to
+ * overwrite it: jmux did not create it.
+ */
+export function uninstallIntegrations(env: NodeJS.ProcessEnv = process.env): boolean {
+  let ok = true;
+  const removed: string[] = [];
+
+  const target = skillTarget(env);
+  try {
+    // lstat, not existsSync: existsSync follows symlinks, so a *broken* symlink
+    // reads as absent — and a broken symlink is exactly what an uninstalled
+    // working tree leaves behind.
+    let stat: ReturnType<typeof lstatSync> | null = null;
+    try {
+      stat = lstatSync(target);
+    } catch {
+      stat = null;
+    }
+    if (stat?.isSymbolicLink()) {
+      console.log(`skill: ${target} is a symlink you created — left alone`);
+    } else if (stat) {
+      rmSync(dirname(target), { recursive: true, force: true });
+      removed.push(target);
+    }
+  } catch (err) {
+    console.error(`skill: could not remove ${target}: ${(err as Error).message}`);
+    ok = false;
+  }
+
+  for (const line of uninstallAllAgents()) {
+    if (line.removed) removed.push(...line.paths);
+    for (const note of line.notes) console.log(`${line.label}: ${note}`);
+  }
+
+  if (removed.length === 0) console.log("Nothing to remove.");
+  else for (const path of removed) console.log(`removed ${path}`);
+
+  console.log("");
+  console.log("jmux's own data is left in place. To remove it too:");
+  console.log(`  rm -rf ${resolve(dataHome(env), "jmux")}`);
+  console.log(`  rm -rf ${resolve(env.XDG_CONFIG_HOME ?? resolve(env.HOME ?? homedir(), ".config"), "jmux")}`);
+
+  return ok;
+}
