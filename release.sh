@@ -77,7 +77,28 @@ fi
 
 say "Verifying $TAG matches this tree"
 
-[ -z "$(git status --porcelain)" ] || require "working tree is dirty"
+# What matters is whether the *build inputs* differ from the tag, not whether
+# the directory is pristine. Uncommitted changes to tracked files always
+# disqualify. An untracked file only matters if it could enter the binary —
+# `bun build --compile` pulls in src/, and src/assets.ts embeds config/ and
+# skills/ — because a fresh clone of the tag would not have it, and the
+# published artifact would then be unreproducible.
+BUILD_INPUTS='^(src/|config/|skills/|scripts/|package\.json|bun\.lock)'
+
+dirty_tracked="$(git diff --name-only HEAD)"
+if [ -n "$dirty_tracked" ]; then
+  printf '    modified: %s\n' $dirty_tracked
+  require "tracked files have uncommitted changes"
+fi
+
+untracked="$(git ls-files --others --exclude-standard)"
+untracked_inputs="$(printf '%s\n' "$untracked" | grep -E "$BUILD_INPUTS" || true)"
+if [ -n "$untracked_inputs" ]; then
+  printf '    untracked build input: %s\n' $untracked_inputs
+  require "untracked files could change the binary but are not in the tag"
+elif [ -n "$untracked" ]; then
+  printf '    ! ignoring untracked non-build files: %s\n' $untracked
+fi
 
 HEAD_SHA="$(git rev-parse HEAD)"
 
