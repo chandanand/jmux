@@ -4,9 +4,9 @@
 
 # jmux
 
-### Run a fleet of coding agents in parallel — and always know which one needs you.
+### From ticket to shipped feature, in the terminal you already use.
 
-Claude Code, Codex, or any agent — each in its own isolated session. jmux is the mission control that shows you who's working, who finished, and who's blocked on you.
+Define the workflow stages you actually think in, then run your whole backlog through a fleet of coding agents on them — Claude Code, Codex, or any agent, each in its own isolated session. jmux shows you who's working, who finished, and who's blocked on you. **You're still the pilot.**
 
 [![npm](https://img.shields.io/npm/v/@jx0/jmux)](https://www.npmjs.com/package/@jx0/jmux)
 [![license](https://img.shields.io/github/license/jarredkenny/jmux)](LICENSE)
@@ -18,6 +18,8 @@ curl -fsSL https://jmux.build/install | sh && jmux
 ```
 
 **[▶ Watch the walkthrough](https://jmux.build/#demo)** — real agents, nothing staged.
+
+**Ticket in, MR out** — [Linear](https://linear.app) · [GitHub](https://github.com) · [GitLab](https://about.gitlab.com), self-hosted GitLab and GitHub Enterprise included.
 
 </div>
 
@@ -34,41 +36,6 @@ curl -fsSL https://jmux.build/install | sh && jmux
 ---
 
 ## Features
-
-### See every agent at a glance
-
-Kicking off five agents is easy. Keeping track of them is the hard part — which one is still thinking, which one stopped to ask you a question, which one quietly finished ten minutes ago.
-
-jmux answers that at a glance. The **sidebar** lists every session with live indicators, and the **Command Center** gives you a single grid of every agent you care about — each tile a live, drivable mirror of a pinned pane, its border colored by state so you see who needs you without hunting.
-
-![jmux Command Center: a grid of live Claude agent panes, borders colored by state](docs/screenshots/fleet.gif)
-
-- **Green `●`** — new output.  **Orange `!`** — an agent finished and needs your review.
-- **Pipeline glyphs** — `✓` passed, `⟳` running, `✗` failed, `◆` merged, right in the sidebar.
-- **Pin any pane** into a named Command Center tab (`Backend`, `Review`, …) — panes stay in their own session, never moved or broken.
-- **Jump between sessions** with `Ctrl-Shift-Up/Down`. Sessions sharing a project are grouped automatically.
-
-<details>
-<summary><b>Setup</b> — live agent state for Claude Code, Codex and pi</summary>
-
-`jmux --install-agent-hooks` installs a state emitter into every supported agent it finds, so the sidebar shows RUNNING / WAITING / COMPLETE per agent pane. [How it works](docs/agent-integration.md).
-</details>
-
-### From ticket to merged, without leaving the terminal
-
-Connect [Linear](https://linear.app) and [GitLab](https://about.gitlab.com) or [GitHub](https://github.com) — [five minutes, one page](docs/connecting.md) — open the info panel with `Ctrl-a g`, and the whole loop lives in your terminal:
-
-**Pick an issue → press `n` → jmux creates a worktree, opens a session, and launches your agent with the issue context.** One keystroke from ticket to working code.
-
-![jmux info panel showing Linear issues beside a live agent](docs/screenshots/ticket.gif)
-
-While it works, watch the sidebar. When it finishes, toggle the **integrated diff panel** to review the changes side-by-side with the agent's output.
-
-![jmux with diff panel in split mode showing code changes alongside Claude Code](docs/screenshots/diff-panel-split.webp)
-
-Then flip to the **MRs tab** — approve or update status without opening a browser. `o` opens anything in your browser, `s` updates an issue's status, `a` approves, `r` refreshes from the tracker.
-
-Each agent gets its own isolated branch via **[wtm](https://github.com/jarredkenny/worktree-manager)** — no stashing, no conflicts, no switching. `Ctrl-a n` → pick a project → **+ new worktree**.
 
 ### Define your own workflow
 
@@ -136,6 +103,22 @@ Each **stage** carries two more: `s` shows or hides it in the sidebar, `space` s
 Full guide: [docs/workflow.md](docs/workflow.md).
 </details>
 
+### From ticket to merged, without leaving the terminal
+
+Connect [Linear](https://linear.app) and [GitLab](https://about.gitlab.com) or [GitHub](https://github.com) — [five minutes, one page](docs/connecting.md) — open the info panel with `Ctrl-a g`, and the whole loop lives in your terminal:
+
+**Pick an issue → press `n` → jmux creates a worktree, opens a session, and launches your agent with the issue context.** One keystroke from ticket to working code.
+
+![jmux info panel showing Linear issues beside a live agent](docs/screenshots/ticket.gif)
+
+While it works, watch the sidebar. When it finishes, toggle the **integrated diff panel** to review the changes side-by-side with the agent's output.
+
+![jmux with diff panel in split mode showing code changes alongside Claude Code](docs/screenshots/diff-panel-split.webp)
+
+Then flip to the **MRs tab** — approve or update status without opening a browser. `o` opens anything in your browser, `s` updates an issue's status, `a` approves, `r` refreshes from the tracker.
+
+Each agent gets its own isolated branch via **[wtm](https://github.com/jarredkenny/worktree-manager)** — no stashing, no conflicts, no switching. `Ctrl-a n` → pick a project → **+ new worktree**.
+
 <details>
 <summary><b>Setup</b> — Linear + GitLab / GitHub / GitHub Enterprise</summary>
 
@@ -156,6 +139,25 @@ Full guide: [docs/workflow.md](docs/workflow.md).
 - **Then restart jmux** — adapters are the one setting that doesn't hot-reload.
 
 Full guide, including what to check when a tab doesn't appear: [docs/connecting.md](docs/connecting.md).
+</details>
+
+### See every agent at a glance
+
+Kicking off five agents is easy. Keeping track of them is the hard part — which one is still thinking, which one stopped to ask you a question, which one quietly finished ten minutes ago.
+
+jmux answers that at a glance. The **sidebar** lists every session with live indicators, and the **Command Center** gives you a single grid of every agent you care about — each tile a live, drivable mirror of a pinned pane, its border colored by state so you see who needs you without hunting.
+
+![jmux Command Center: a grid of live Claude agent panes, borders colored by state](docs/screenshots/fleet.gif)
+
+- **Green `●`** — new output.  **Orange `!`** — an agent finished and needs your review.
+- **Pipeline glyphs** — `✓` passed, `⟳` running, `✗` failed, `◆` merged, right in the sidebar.
+- **Pin any pane** into a named Command Center tab (`Backend`, `Review`, …) — panes stay in their own session, never moved or broken.
+- **Jump between sessions** with `Ctrl-Shift-Up/Down`. Sessions sharing a project are grouped automatically.
+
+<details>
+<summary><b>Setup</b> — live agent state for Claude Code, Codex and pi</summary>
+
+`jmux --install-agent-hooks` installs a state emitter into every supported agent it finds, so the sidebar shows RUNNING / WAITING / COMPLETE per agent pane. [How it works](docs/agent-integration.md).
 </details>
 
 ### Agents that command agents

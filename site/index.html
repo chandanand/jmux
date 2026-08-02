@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>jmux — Everyone else stops at the pane</title>
-  <meta name="description" content="Run a fleet of coding agents in your terminal — and run your backlog through them. Workflow stages, work that parks itself, and issue-to-merged without opening a browser.">
+  <title>jmux — from ticket to shipped, and you're still the pilot</title>
+  <meta name="description" content="You define the workflow stages. jmux runs your backlog through a fleet of coding agents on them and flags the one that needs you. Ticket to shipped — you're still the pilot.">
   <link rel="canonical" href="https://jmux.build">
   <meta name="theme-color" content="#f6f2ea" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#17130e" media="(prefers-color-scheme: dark)">
   <!-- Open Graph -->
-  <meta property="og:title" content="jmux — Everyone else stops at the pane">
-  <meta property="og:description" content="Run a fleet of coding agents in your terminal — and run your backlog through them. Workflow stages, work that parks itself, and issue-to-merged without opening a browser.">
+  <meta property="og:title" content="jmux — from ticket to shipped, and you're still the pilot">
+  <meta property="og:description" content="You define the workflow stages. jmux runs your backlog through a fleet of coding agents on them and flags the one that needs you. Ticket to shipped — you're still the pilot.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://jmux.build">
   <meta property="og:site_name" content="jmux">
@@ -25,8 +25,8 @@
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:site" content="@jarredkenny">
   <meta name="twitter:creator" content="@jarredkenny">
-  <meta name="twitter:title" content="jmux — Everyone else stops at the pane">
-  <meta name="twitter:description" content="Run a fleet of coding agents in your terminal — and run your backlog through them. Workflow stages, work that parks itself, and issue-to-merged without opening a browser.">
+  <meta name="twitter:title" content="jmux — from ticket to shipped, and you're still the pilot">
+  <meta name="twitter:description" content="You define the workflow stages. jmux runs your backlog through a fleet of coding agents on them and flags the one that needs you. Ticket to shipped — you're still the pilot.">
   <meta name="twitter:image" content="https://jmux.build/assets/og-command-center.jpg">
   <meta name="twitter:image:alt" content="jmux Command Center — parallel coding agents composited in one terminal">
   <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96">
@@ -42,7 +42,7 @@
     "@type": "SoftwareApplication",
     "name": "jmux",
     "url": "https://jmux.build",
-    "description": "Run a fleet of coding agents in your terminal — and run your backlog through them. Workflow stages, work that parks itself, and issue-to-merged without opening a browser.",
+    "description": "You define the workflow stages. jmux runs your backlog through a fleet of coding agents on them and flags the one that needs you. Ticket to shipped — you're still the pilot.",
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "macOS, Linux",
     "softwareRequirements": "tmux 3.2+",
@@ -200,7 +200,12 @@
   .badge{ display:inline-flex; align-items:center; gap:.5em; align-self:flex-start; margin-bottom:22px; padding:6px 14px; border:1px solid var(--bd2); border-radius:999px; color:var(--ink2); font-size:12.5px; font-weight:600; background:var(--tint); }
   .badge:hover{ border-color:var(--ink3); color:var(--ink); }
   .hero h1{ font-family:'Fraunces',serif; font-weight:400; letter-spacing:-.02em; line-height:1.04; font-size:56px; margin-bottom:26px; color:var(--ink); text-wrap:balance; }
-  /* the payoff line is one phrase — never let it break between "Merge" and "out." */
+  /* The payoff line is one phrase and never breaks mid-phrase. Note the cost:
+     `nowrap` gives this span a min-content width, and the grid's `fr` columns
+     honour min-content — so a long payoff line silently widens the copy column
+     and steals it from the video. At 56px the budget is ~474px (the column's
+     intended .96fr share); past that the split starts sliding. Measure before
+     rewriting this line. */
   .hero h1 .m{ text-wrap:nowrap; }
   .hero h1 .m{ display:block; color:var(--ink); }
   .hero .lead{ font-size:18px; max-width:44ch; margin-bottom:32px; }
@@ -211,6 +216,18 @@
   .link-u.subtle{ color:var(--ink2); font-weight:500; border-bottom-color:transparent; font-size:14px; }
   .link-u.subtle:hover{ border-bottom-color:color-mix(in srgb, var(--ink3) 50%, transparent); }
   .link-u.subtle .mono{ color:var(--ink); }
+  /* Hero integration strip — the tracker work comes from and the hosts it
+     ships to. The marks are monochrome and take `currentColor`: brand colours
+     would be the only saturated thing on the page and would read as badges
+     bolted on rather than part of the product. They link to #ecosystem rather
+     than out to the vendors — the hero's job is not to send people away. */
+  .integ{ margin-top:30px; }
+  .integ .lab{ display:block; margin-bottom:13px; font-family:'JetBrains Mono',monospace; font-size:10.5px; letter-spacing:.2em; text-transform:uppercase; font-weight:600; color:var(--ink3); }
+  .integ .row{ display:flex; align-items:center; gap:9px 22px; flex-wrap:wrap; }
+  .integ a{ display:inline-flex; align-items:center; gap:8px; color:var(--ink2); font-size:14px; font-weight:600; text-decoration:none; transition:color .18s ease; }
+  .integ a:hover{ color:var(--ink); }
+  .integ svg{ width:17px; height:17px; fill:currentColor; flex:none; }
+  .integ .note{ margin:12px 0 0; font-size:12.5px; color:var(--ink3); }
   .pill{ display:inline-flex; align-items:center; gap:11px; padding:12px 16px; border-radius:12px; background:var(--card); border:1px solid var(--bd2); box-shadow:var(--shadow-sm); font-family:'JetBrains Mono',monospace; font-size:14px; color:var(--ink); }
   .pill .d{ color:var(--ac); font-weight:700; }
   .cp{ background:none; border:none; cursor:pointer; color:var(--ink3); display:inline-flex; padding:2px; }
@@ -684,8 +701,8 @@
   <div class="wrap grid">
     <div class="hero-copy">
       <a href="#workflow" class="badge">&#x23F8;&#xFE0E;&nbsp;New · Work that parks itself&nbsp;→</a>
-      <h1>Everyone else stops at the pane.<span class="m serif"><em>Ticket in.</em> Merge out.</span></h1>
-      <p class="lead">Run a fleet of coding agents in the terminal you already use — then run your actual backlog through them. Stages you define, work that parks itself once it leaves your hands, and issue-to-merged without opening a browser.</p>
+      <h1>From ticket to shipped.<span class="m serif"><em>You're still</em> the pilot.</span></h1>
+      <p class="lead">jmux is where your backlog meets your agents — and you're the one flying them. Define the workflow stages you actually think in, and the whole fleet reports back on your ladder: what's up next, what's running, what's handed off, and which agent needs you right now.</p>
       <div class="installer">
         <div class="ipick" role="tablist" aria-label="Install method">
           <button role="tab" id="tab-script" aria-selected="true" data-key="script"
@@ -708,6 +725,18 @@
           <a href="#workflow" class="link-u">See the pipeline →</a>
           <a href="#install" class="link-u subtle">Or try it on mock data — <span class="mono">jmux --demo</span></a>
         </div>
+      </div>
+      <div class="integ">
+        <span class="lab">Ticket in, MR out</span>
+        <div class="row">
+          <a href="#ecosystem" aria-label="Linear issue tracking — see the integration">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.886 4.18A11.982 11.982 0 0 1 11.99 0C18.624 0 24 5.376 24 12.009c0 3.64-1.62 6.903-4.18 9.105L2.887 4.18ZM1.817 5.626l16.556 16.556c-.524.33-1.075.62-1.65.866L.951 7.277c.247-.575.537-1.126.866-1.65ZM.322 9.163l14.515 14.515c-.71.172-1.443.282-2.195.322L0 11.358a12 12 0 0 1 .322-2.195Zm-.17 4.862 9.823 9.824a12.02 12.02 0 0 1-9.824-9.824Z"/></svg>Linear</a>
+          <a href="#ecosystem" aria-label="GitHub pull requests — see the integration">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>GitHub</a>
+          <a href="#ecosystem" aria-label="GitLab merge requests — see the integration">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m23.6004 9.5927-.0337-.0862L20.3.9814a.851.851 0 0 0-.3362-.405.8748.8748 0 0 0-.9997.0539.8748.8748 0 0 0-.29.4399l-2.2055 6.748H7.5375l-2.2057-6.748a.8573.8573 0 0 0-.29-.4412.8748.8748 0 0 0-.9997-.0537.8585.8585 0 0 0-.3362.4049L.4332 9.5015l-.0325.0862a6.0657 6.0657 0 0 0 2.0119 7.0105l.0113.0087.03.0213 4.976 3.7264 2.462 1.8633 1.4995 1.1321a1.0085 1.0085 0 0 0 1.2197 0l1.4995-1.1321 2.4619-1.8633 5.006-3.7489.0125-.01a6.0682 6.0682 0 0 0 2.0094-7.003z"/></svg>GitLab</a>
+        </div>
+        <p class="note">Self-hosted GitLab and GitHub Enterprise included.</p>
       </div>
     </div>
     <div class="heroshot">
@@ -798,7 +827,7 @@
       <div class="ecocard animate-in"><div class="nm">Capture without losing your place</div><div class="tg">anywhere</div><p><span class="mono">Ctrl-a a</span> files an issue from wherever you are. <span class="mono">Ctrl-S</span> files it <em>and</em> starts work on it.</p></div>
       <div class="ecocard animate-in"><div class="nm">Progress, reported for you</div><div class="tg">opt-in</div><p>Move an issue along when work starts, an MR opens, or it merges — with <span class="mono">^a Z</span> to undo. Off until you say so.</p></div>
     </div>
-    <p class="termcap" style="margin-top:40px;max-width:640px">Every other tool's answer to a growing fleet is a bigger grid. This one gets <strong style="color:var(--ink)">quieter</strong> as work leaves your hands — and loud again the moment it comes back.</p>
+    <p class="termcap" style="margin-top:40px;max-width:640px">Every other tool's answer to a growing fleet is a bigger grid. This one gets <strong style="color:var(--ink)">quieter</strong> as work leaves your hands — and loud again the moment it comes back. No work starts and nothing moves in your tracker until you say so: the fleet reports, <strong style="color:var(--ink)">you decide</strong>.</p>
     <p class="termcap" style="margin-top:18px"><a href="https://github.com/jarredkenny/jmux/blob/main/docs/workflow.md" target="_blank" rel="noopener" class="link-u">Read the work-pipeline guide →</a></p>
   </div>
 </section>
