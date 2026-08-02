@@ -2,10 +2,10 @@ import { $ } from "bun";
 import { TmuxPty } from "./tmux-pty";
 import { clipboardCopyCommand } from "./platform";
 import { MIN_TMUX_VERSION, tmuxVersionOk } from "./tmux-version";
-import { configFileIn, materializeAssets } from "./assets";
+import { configFileIn, materializeAssets, skillIn } from "./assets";
 import { currentChannel, upgradeCommand } from "./channel";
 import { compareGeneration, GENERATION_OPTION, stampCommand, staleGenerationNotice } from "./config-generation";
-import { installSkill, uninstallIntegrations } from "./agent-hooks/skill";
+import { detectSkill, installSkill, uninstallIntegrations } from "./agent-hooks/skill";
 import { ScreenBridge } from "./screen-bridge";
 import { Renderer, getToolbarButtonRanges, getToolbarTabRanges, getModalPosition, buildToolbarButtons, type ToolbarConfig } from "./renderer";
 import { InputRouter } from "./input-router";
@@ -19,6 +19,9 @@ import {
 } from "./sidebar-sort";
 import { buildFooter, layoutFooter, type FooterModel } from "./footer";
 import { CommandPalette } from "./command-palette";
+import { HelpModal } from "./help-modal";
+import { SetupModal, type SetupRow } from "./setup-modal";
+import { KEYMAP, bindingsBySection, keysFor, shortKeys } from "./keymap";
 import { InputModal } from "./input-modal";
 import { ListModal, type ListItem } from "./list-modal";
 import { ContentModal, type StyledLine } from "./content-modal";
@@ -120,10 +123,10 @@ import { OtelReceiver } from "./otel-receiver";
 import { computeFrameLayout, sidebarBottomRow, type FrameLayout } from "./frame-layout";
 import { AgentStateTracker, coerceStaleAgentState } from "./agent-state";
 import { logError } from "./log";
-import { installAllAgents, screenTierMayWrite } from "./agent-hooks/registry";
+import { AGENT_INTEGRATIONS, installAllAgents, screenTierMayWrite } from "./agent-hooks/registry";
 import { BUILTIN_SIGNATURES, classifyPaneScreen, compileSignatures, hasSignatureFor } from "./agent-screen";
 import { resolve, dirname } from "path";
-import { writeFileSync, existsSync, mkdirSync, appendFileSync } from "fs";
+import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync } from "fs";
 import { homedir } from "os";
 import pkg from "../package.json" with { type: "json" };
 
@@ -182,6 +185,29 @@ function checkBunVersion(): void {
   }
 }
 
+/**
+ * The Keybindings block of `jmux --help`, built from src/keymap.ts. Written by
+ * hand it drifted; generated it cannot.
+ *
+ * Lists only bindings with no `context`: a chord that works solely inside the
+ * Command Center or a focused info panel means nothing to someone reading
+ * `--help` before they have started jmux. `Ctrl-a ?` shows those in place,
+ * which is what the section header points at.
+ */
+function helpKeybindings(): string {
+  return bindingsBySection()
+    .map(({ section, bindings }) => {
+      const rows = bindings.filter((b) => !b.context);
+      if (rows.length === 0) return null;
+      const body = rows
+        .map((b) => `    ${b.keys.padEnd(20)} ${b.label}`)
+        .join("\n");
+      return `  ${section}\n${body}`;
+    })
+    .filter((s): s is string => s !== null)
+    .join("\n\n");
+}
+
 const HELP = `jmux — the terminal workspace for agentic development
 
 Agents, editors, servers, logs.
@@ -219,18 +245,12 @@ Agent Control (JSON output):
   jmux ctl pane capture          Read pane contents
   jmux ctl --help                Show all ctl subcommands
 
-Keybindings:
-  Ctrl-Shift-Up/Down       Switch sessions
-  Ctrl-a n                 New session / worktree
-  Ctrl-a c                 New window
-  Ctrl-a z                 Toggle pane zoom
-  Ctrl-a Arrows            Resize panes
-  Ctrl-a p                 Command palette
-  Ctrl-a g                 Toggle diff panel (on/off)
-  Ctrl-a z                 Zoom diff panel (split ↔ full, when focused)
-  Ctrl-a Tab               Switch focus (tmux ↔ diff)
-  Ctrl-a i                 Settings
-  Click sidebar            Switch to session
+Keybindings (Ctrl-a ? shows these in the app, and everything else):
+${helpKeybindings()}
+
+  Mouse
+    Click sidebar        Switch to that session
+    Click ? in toolbar   Keyboard shortcuts
 
 https://github.com/jarredkenny/jmux`;
 
@@ -654,11 +674,30 @@ function snapshotChipLabel(h: import("./snapshot").SnapshotHealth): string | nul
   }
 }
 
+/**
+ * Name and key for the hovered toolbar button, read out of src/keymap.ts so
+ * the toolbar can never name a chord the keymap disagrees with.
+ *
+ * Button ids and binding ids line up for all but the panel toggle, whose
+ * button is `panel` and whose binding is the palette command `diff-toggle`.
+ * One alias beats renaming either, both of which are wired to live actions.
+ */
+const TOOLBAR_BUTTON_BINDING: Record<string, string> = { panel: "diff-toggle" };
+
+function toolbarHoverHint(): { label: string; keys: string } | null {
+  if (!hoveredToolbarButton) return null;
+  const id = TOOLBAR_BUTTON_BINDING[hoveredToolbarButton] ?? hoveredToolbarButton;
+  const binding = KEYMAP.find((b) => b.id === id);
+  if (!binding) return null;
+  return { label: binding.label, keys: shortKeys(binding.keys) };
+}
+
 function makeToolbar(): ToolbarConfig {
   return {
     buttons: buildToolbarButtons({ panelActive: diffPanel.isActive() }),
     mainCols,
     hoveredButton: hoveredToolbarButton,
+    hoverHint: toolbarHoverHint(),
     tabs: currentWindows,
     hoveredTabId,
     // A live undo takes the chip: it is transient and time-boxed, and being
@@ -2984,6 +3023,7 @@ const inputRouter = new InputRouter(
       if (changed) scheduleRender();
     },
     onModalToggle: () => togglePalette(),
+    onHelp: () => toggleHelp(),
     onNewSession: () => handlePaletteAction({ commandId: "new-session" }),
     onSettings: () => handleToolbarAction("settings"),
     onCaptureIssue: () => openCreateIssueModal(),
@@ -3481,6 +3521,7 @@ const inputRouter = new InputRouter(
 );
 
 const palette = new CommandPalette();
+const helpModal = new HelpModal();
 let activeModal: Modal | null = null;
 let onModalResult: ((value: unknown) => void) | null = null;
 
@@ -3538,6 +3579,163 @@ function togglePalette(): void {
   }
 }
 
+/**
+ * Rows for the first-run checklist, derived fresh on every render.
+ *
+ * Nothing here is persisted: each row asks the machine whether the thing is
+ * true right now. That is what lets the checklist open on first run, be
+ * reopened from the palette forever after, and never disagree with reality —
+ * uninstall an agent's hooks and the row goes back to `todo` by itself.
+ */
+/**
+ * The skill file as shipped, read once. detectSkill compares the installed
+ * copy against this byte for byte; the asset is materialized at startup and
+ * cannot change under a running process, so re-reading it per check would be
+ * pure I/O for a constant.
+ */
+let shippedSkillCache: string | null = null;
+function shippedSkill(): string {
+  if (shippedSkillCache !== null) return shippedSkillCache;
+  try {
+    shippedSkillCache = readFileSync(skillIn(jmuxDir), "utf-8");
+  } catch {
+    // No asset, no comparison to make. An empty string can never equal an
+    // installed file's contents, so the row reads "out of date" rather than
+    // falsely claiming the skill is current.
+    shippedSkillCache = "";
+  }
+  return shippedSkillCache;
+}
+
+function buildSetupRows(): SetupRow[] {
+  const rows: SetupRow[] = [];
+
+  // Agent state hooks. "Present" is per-agent: an agent that isn't installed
+  // on this machine is not a gap to nag about, so it doesn't count either way.
+  const present = AGENT_INTEGRATIONS.filter((a) => a.isPresent());
+  const stale = present.filter((a) => a.detect() !== "current");
+  rows.push({
+    id: "agent-hooks",
+    label: "Agent status in the sidebar",
+    detail: present.length === 0
+      ? "Install Claude Code, Codex or pi and this will light up."
+      : "Shows RUNNING / WAITING / COMPLETE per agent pane, so you can see who needs you.",
+    state: present.length === 0 ? "unavailable" : stale.length === 0 ? "done" : "todo",
+    note: present.length === 0
+      ? "no agents found"
+      : stale.length === 0
+        ? present.map((a) => a.label).join(", ")
+        : `${stale.length} to set up`,
+  });
+
+  // The jmux ctl skill, so agents can drive sibling sessions.
+  const skill = detectSkill(shippedSkill());
+  rows.push({
+    id: "agent-skill",
+    label: "Teach agents the jmux CLI",
+    detail: "Installs a Claude Code skill so agents inside jmux can manage sessions, windows and panes.",
+    // A symlink is someone's deliberate wiring and not ours to replace, so it
+    // reads as done rather than offering to overwrite it.
+    state: skill === "current" || skill === "symlink" ? "done" : "todo",
+    note: skill === "stale" ? "out of date" : skill === "symlink" ? "linked" : undefined,
+  });
+
+  // Issue tracker. jmux can't supply a token, so this routes to the settings
+  // screen rather than pretending to be able to connect on its own.
+  const tracker = adapters.issueTracker;
+  rows.push({
+    id: "tracker",
+    label: "Connect an issue tracker",
+    detail: "Puts your issues and merge requests in the info panel, and lets you start work from one.",
+    state: tracker?.authState === "ok" ? "done" : "todo",
+    note: tracker?.authState === "ok"
+      ? "connected"
+      : tracker
+        ? "not connected"
+        : "none configured",
+  });
+
+  // Project directories, which is what makes `Ctrl-a n` offer anything.
+  const dirs = configStore.config.projectDirs ?? [];
+  rows.push({
+    id: "project-dirs",
+    label: "Add your project directories",
+    detail: "Where Ctrl-a n looks for projects and worktrees when you make a new session.",
+    state: dirs.length > 0 ? "done" : "todo",
+    note: dirs.length > 0 ? `${dirs.length} dir${dirs.length === 1 ? "" : "s"}` : undefined,
+  });
+
+  // The diff viewer is a separate binary. jmux genuinely cannot install it, so
+  // the row says what to run instead of offering an Enter that would fail.
+  const hunkInstalled = Bun.which(hunkCommand) !== null;
+  rows.push({
+    id: "hunk",
+    label: "Install the diff viewer",
+    detail: "The info panel's Diff tab is powered by hunk, a separate program.",
+    state: hunkInstalled ? "done" : "unavailable",
+    note: hunkInstalled ? "installed" : "npm i -g hunkdiff",
+  });
+
+  return rows;
+}
+
+const setupModal = new SetupModal({
+  rows: () => buildSetupRows(),
+  onActivate: (id) => {
+    switch (id) {
+      case "agent-hooks": {
+        const reports = installAllAgents();
+        const failed = reports.filter((r) => r.kind === "failed");
+        showToast(failed.length > 0
+          ? `Agent hooks: ${failed.length} failed`
+          : "Agent hooks installed");
+        return;
+      }
+      case "agent-skill":
+        showToast(installSkill() ? "Skill installed" : "Skill install failed");
+        return;
+      case "tracker":
+        // Closes the checklist first: the settings screen is a full-area
+        // surface, and leaving a modal painted over it is the "surface open
+        // but deaf" failure closeModal() exists to avoid.
+        closeModal();
+        toggleSettingsScreen();
+        return;
+      case "project-dirs":
+        closeModal();
+        void handlePaletteAction({ commandId: "setting-project-dirs" });
+        return;
+    }
+  },
+});
+
+function openSetup(): void {
+  if (activeModal) closeModal();
+  setupModal.setTermRows(process.stdout.rows || 24);
+  setupModal.open();
+  openModal(setupModal, () => {});
+}
+
+/**
+ * The `Ctrl-a ?` keyboard reference, also reachable from the toolbar's `?`
+ * button and the palette.
+ *
+ * Toggling rather than stacking: a second `Ctrl-a ?` closes it, matching
+ * `Ctrl-a p`. Opening over another modal replaces it, since the two are
+ * alternatives rather than layers — and it means a user who opened the wrong
+ * one is never trapped.
+ */
+function toggleHelp(): void {
+  if (helpModal.isOpen()) {
+    closeModal();
+    return;
+  }
+  if (activeModal) closeModal();
+  helpModal.setTermRows(process.stdout.rows || 24);
+  helpModal.open();
+  openModal(helpModal, () => {});
+}
+
 function openPalette(): void {
   const commands = buildPaletteCommands();
   palette.open(commands);
@@ -3550,6 +3748,21 @@ function buildPaletteCommands(): PaletteCommand[] {
   const commands: PaletteCommand[] = [];
 
   const cfg = configStore.config;
+
+  /**
+   * Stamp each command with its keybinding, from src/keymap.ts.
+   *
+   * Applied once at the end over the whole list rather than at each push site:
+   * the palette's commands are assembled in a dozen places (some in helpers
+   * like buildCcCommands that have no business knowing about keys), and a
+   * per-site lookup would be a dozen chances to forget one. Commands with no
+   * binding simply keep `keys` undefined and render as they always have.
+   */
+  const withKeys = (list: PaletteCommand[]): PaletteCommand[] =>
+    list.map((cmd) => {
+      const bound = keysFor(cmd.id);
+      return bound ? { ...cmd, keys: shortKeys(bound) } : cmd;
+    });
 
   // Dynamic: switch to session (excluding current)
   for (const session of currentSessions) {
@@ -3662,6 +3875,8 @@ function buildPaletteCommands(): PaletteCommand[] {
     { id: "close-pane", label: "Close pane", category: "pane" },
     { id: "open-claude", label: "Open Claude", category: "other" },
     { id: "settings-screen", label: "Settings", category: "other" },
+    { id: "help", label: "Keyboard shortcuts", category: "other" },
+    { id: "setup", label: "Setup", category: "other" },
   );
 
   // Diff panel commands
@@ -3811,7 +4026,7 @@ function buildPaletteCommands(): PaletteCommand[] {
     sublist: FILTER_MODES.map((f) => ({ id: f, label: filterModeLabel(f), current: f === activeFilter })),
   });
 
-  return commands;
+  return withKeys(commands);
 }
 
 function currentStateColorName(state: AgentState): string {
@@ -5466,6 +5681,12 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
     case "settings-screen":
       toggleSettingsScreen();
       return;
+    case "help":
+      toggleHelp();
+      return;
+    case "setup":
+      openSetup();
+      return;
     case "setting-sidebar-width": {
       const modal = new InputModal({
         header: "Sidebar Width",
@@ -5806,6 +6027,9 @@ async function handleToolbarAction(id: string): Promise<void> {
     case "diff":
     case "panel":
       await toggleDiffPanel();
+      return;
+    case "help":
+      toggleHelp();
       return;
     case "claude":
       await control.sendCommand(`split-window -t ${ptyClientName} -h -c '#{pane_current_path}' ${currentRepoSettings().claudeCommand}`);
@@ -7056,50 +7280,12 @@ async function start(): Promise<void> {
 
   renderFrame();
 
-  // First-run welcome screen
+  // First run opens the setup checklist rather than a wall of keybindings.
+  // The chords it used to list now live in `Ctrl-a ?` (and the `?` button),
+  // where they can be re-read at any point instead of only in the thirty
+  // seconds before the modal was dismissed for good.
   if (configStore.ensureExists()) {
-
-    const g: CellAttrs = { fg: 2, fgMode: 1, bg: theme.surface, bgMode: 2 };
-    const b: CellAttrs = { bold: true, bg: theme.surface, bgMode: 2 };
-    const d: CellAttrs = { ...neutralFg(8), dim: true, bg: theme.surface, bgMode: 2 };
-    const n: CellAttrs = { bg: theme.surface, bgMode: 2 };
-    const c: CellAttrs = { fg: 6, fgMode: 1, bg: theme.surface, bgMode: 2 };
-    const y: CellAttrs = { fg: 3, fgMode: 1, bg: theme.surface, bgMode: 2 };
-
-    const welcomeLines: StyledLine[] = [
-      [{ text: "The terminal workspace for agentic development", attrs: d }],
-      [],
-      [{ text: "\u2500".repeat(44), attrs: d }],
-      [],
-      [{ text: "Essential keybindings", attrs: b }],
-      [],
-      [{ text: "Ctrl-Shift-Up/Down", attrs: g }, { text: "     Switch between sessions", attrs: n }],
-      [{ text: "Ctrl-a", attrs: g }, { text: " then ", attrs: n }, { text: "n", attrs: g }, { text: "          New session", attrs: n }],
-      [{ text: "Ctrl-a", attrs: g }, { text: " then ", attrs: n }, { text: "c", attrs: g }, { text: "          New window (tab)", attrs: n }],
-      [{ text: "Ctrl-a", attrs: g }, { text: " then ", attrs: n }, { text: "|", attrs: g }, { text: "          Split pane horizontally", attrs: n }],
-      [{ text: "Ctrl-a", attrs: g }, { text: " then ", attrs: n }, { text: "-", attrs: g }, { text: "          Split pane vertically", attrs: n }],
-      [{ text: "Shift-Arrow", attrs: g }, { text: "            Move between panes", attrs: n }],
-      [{ text: "Ctrl-a", attrs: g }, { text: " then ", attrs: n }, { text: "p", attrs: g }, { text: "          Command palette", attrs: n }],
-      [],
-      [{ text: "\u2500".repeat(44), attrs: d }],
-      [],
-      [{ text: "The sidebar", attrs: b }, { text: " on the left shows all your sessions.", attrs: n }],
-      [{ text: "\u25CF", attrs: g }, { text: " Green dot = new output    ", attrs: n }, { text: "!", attrs: y }, { text: " Orange = needs review", attrs: n }],
-      [{ text: "Click a session to switch to it.", attrs: n }],
-      [],
-      [{ text: "\u2500".repeat(44), attrs: d }],
-      [],
-      [{ text: "Next steps", attrs: b }],
-      [],
-      [{ text: "1.", attrs: c }, { text: " Try ", attrs: n }, { text: "Ctrl-a p", attrs: g }, { text: " to open the command palette", attrs: n }],
-      [{ text: "2.", attrs: c }, { text: " Run ", attrs: n }, { text: "jmux --install-agent-hooks", attrs: g }, { text: " for Claude Code notifications", attrs: n }],
-      [{ text: "3.", attrs: c }, { text: " Full guide: ", attrs: n }, { text: "github.com/jarredkenny/jmux", attrs: d }],
-    ];
-
-    const welcomeModal = new ContentModal({ lines: welcomeLines, title: "Welcome to jmux" });
-    welcomeModal.setTermRows(process.stdout.rows || 24);
-    welcomeModal.open();
-    openModal(welcomeModal, () => {});
+    openSetup();
   }
 
   // Subscribe to per-pane agent-state user options. These only ever act as a

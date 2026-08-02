@@ -46,6 +46,11 @@ export const CURRENT_TAG_ATTRS: CellAttrs = {};
 export const SELECTED_CURRENT_TAG_ATTRS: CellAttrs = {};
 export const BREADCRUMB_ATTRS: CellAttrs = {};
 export const NO_MATCHES_ATTRS: CellAttrs = {};
+// A command's keybinding, shown beside it in the palette. Uses the same
+// accentMuted tone footer.ts gives its own key hints, so "this is a key you
+// can press" reads identically wherever it appears.
+export const KEYS_ATTRS: CellAttrs = {};
+export const SELECTED_KEYS_ATTRS: CellAttrs = {};
 export const DIM_ATTRS: CellAttrs = {};
 export const BG_ATTRS: CellAttrs = {};
 export const SELECTED_BG_ATTRS: CellAttrs = {};
@@ -92,6 +97,8 @@ export function rebuildModalAttrs(): void {
   });
   assign(BREADCRUMB_ATTRS, { ...secondary, ...onSurface });
   assign(NO_MATCHES_ATTRS, { ...secondary, dim: true, ...onSurface });
+  assign(KEYS_ATTRS, { ...tokens.accentMuted, ...onSurface });
+  assign(SELECTED_KEYS_ATTRS, { ...tokens.accentMuted, ...onSelected });
   assign(DIM_ATTRS, { ...secondary, dim: true, ...onSurface });
   assign(BG_ATTRS, { ...onSurface });
   assign(SELECTED_BG_ATTRS, { ...onSelected });

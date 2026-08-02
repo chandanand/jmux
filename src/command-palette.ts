@@ -1,11 +1,11 @@
 import type { PaletteCommand, PaletteAction } from "./types";
 import type { CellGrid } from "./types";
-import { createGrid, writeString } from "./cell-grid";
+import { createGrid, writeString, textCols } from "./cell-grid";
 import { fuzzyMatch, truncateLabel, type FuzzyResult } from "./fuzzy";
 import {
   PROMPT_ATTRS, INPUT_ATTRS, RESULT_ATTRS, SELECTED_RESULT_ATTRS,
   MATCH_ATTRS, SELECTED_MATCH_ATTRS, CATEGORY_ATTRS, SELECTED_CATEGORY_ATTRS,
-  CURRENT_TAG_ATTRS, SELECTED_CURRENT_TAG_ATTRS,
+  CURRENT_TAG_ATTRS, SELECTED_CURRENT_TAG_ATTRS, KEYS_ATTRS, SELECTED_KEYS_ATTRS,
   BREADCRUMB_ATTRS, NO_MATCHES_ATTRS, BG_ATTRS, SELECTED_BG_ATTRS,
   modalContentRect, drawModalChrome, type ModalChrome,
 } from "./modal";
@@ -329,9 +329,22 @@ export class CommandPalette {
           writeString(grid, row, tagCol, category, tagAttrs);
         }
 
+        // Keybinding, between the label and the category tag. Measured with
+        // textCols, not .length: a compacted chord carries wide glyphs (⇧ ↑ ⇥)
+        // that the surrounding ASCII-only label and tag math never meets.
+        const keys = item.command.keys ?? "";
+        const keysWidth = keys ? textCols(keys) + 2 : 0;
+        // Dropped, not overlapped, when the row is too tight: a chord painted
+        // half over a label teaches a key that does not exist.
+        const keysFit = keys !== "" && width - 3 - tagWidth - keysWidth > 8;
+        if (keysFit) {
+          writeString(grid, row, width - tagWidth - keysWidth + 1, keys,
+            isSelected ? SELECTED_KEYS_ATTRS : KEYS_ATTRS);
+        }
+
         // Label with match highlighting
         const labelStart = 3;
-        const maxLabelLen = width - labelStart - tagWidth;
+        const maxLabelLen = width - labelStart - tagWidth - (keysFit ? keysWidth : 0);
         const rawLabel = item.command.hint
           ? `${item.command.label} — ${item.command.hint}`
           : item.command.label;

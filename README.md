@@ -66,7 +66,7 @@ While it works, watch the sidebar. When it finishes, toggle the **integrated dif
 
 ![jmux with diff panel in split mode showing code changes alongside Claude Code](docs/screenshots/diff-panel-split.webp)
 
-Then flip to the **MRs tab** — approve, undraft, or update status without opening a browser. `o` opens anything in your browser, `s` updates an issue's status, `a` approves, `r` undrafts.
+Then flip to the **MRs tab** — approve or update status without opening a browser. `o` opens anything in your browser, `s` updates an issue's status, `a` approves, `r` refreshes from the tracker.
 
 Each agent gets its own isolated branch via **[wtm](https://github.com/jarredkenny/worktree-manager)** — no stashing, no conflicts, no switching. `Ctrl-a n` → pick a project → **+ new worktree**.
 

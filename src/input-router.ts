@@ -97,6 +97,10 @@ export interface InputRouterOptions {
   panelSplit?: () => { row: number; minRow: number; maxRow: number } | null;
   onModalInput?: (data: string) => void;
   onModalToggle?: () => void;
+  // Ctrl-a ? — the keyboard-help overlay. Also reachable by mouse from the
+  // toolbar's `?` button, which is the path that needs no prior knowledge of
+  // the prefix concept at all.
+  onHelp?: () => void;
   onNewSession?: () => void;
   onSettings?: () => void;
   onCaptureIssue?: () => void;
@@ -395,6 +399,13 @@ export class InputRouter {
 
         // Glass owns the post-prefix byte: digits switch tabs, jmux chords
         // intercept, everything else flushes the deferred prefix to the tile.
+        //
+        // The sentinel comments below delimit this arm for keymap.test.ts,
+        // which regexes the `data === "…"` comparisons out of the source and
+        // asserts them against src/keymap.ts in both directions. A hand-kept
+        // manifest array would not have caught a chord added straight to the
+        // chain; reading the chain itself does. Same tactic as
+        // tmux-conf.test.ts regexing the .conf files it cannot type-check.
         if (this.opts.glassActive?.()) {
           const deferred = this.glassPrefixDeferred;
           this.glassPrefixDeferred = false;
@@ -402,9 +413,11 @@ export class InputRouter {
             this.opts.onGlassTabSwitch?.(parseInt(data, 10));
             return;
           }
+          // --- keymap:glass-prefix start ---
           if (data === "[") { this.opts.onGlassTabRelative?.(-1); return; }
           if (data === "]") { this.opts.onGlassTabRelative?.(1); return; }
           if (data === "d") { this.opts.onGlassDetach?.(); return; }
+          if (data === "?") { this.opts.onHelp?.(); return; }
           if (data === "p") { this.opts.onModalToggle?.(); return; }
           if (data === "n") { this.opts.onNewSession?.(); return; }
           if (data === "i") { this.opts.onSettings?.(); return; }
@@ -416,13 +429,25 @@ export class InputRouter {
           if (data === "G") { this.opts.onGroupCycle?.(); return; }
           if (data === "s") { this.opts.onSortCycle?.(); return; }
           if (data === "f") { this.opts.onFilterCycle?.(); return; }
+          // --- keymap:glass-prefix end ---
           // Not a jmux chord — flush the buffered prefix, then the key, to the tile.
           if (deferred) this.opts.onPtyData("\x01");
           this.opts.onPtyData(data);
           return;
         }
 
-        // Non-glass: existing intercepts.
+        // Non-glass: existing intercepts. Delimited for keymap.test.ts — see
+        // the note on the glass arm above.
+        // --- keymap:prefix start ---
+        // Keyboard help. Deliberately shadows tmux's own `list-keys`, on the
+        // same reasoning that lets `s` shadow choose-session: jmux already
+        // replaces the thing tmux's version would show, and a raw list-keys
+        // dump is precisely the wrong answer for someone who needed to press
+        // this key in the first place.
+        if (data === "?") {
+          this.opts.onHelp?.();
+          return;
+        }
         if (data === "p") {
           this.opts.onModalToggle?.();
           return;
@@ -484,6 +509,7 @@ export class InputRouter {
           this.opts.onDiffPanelFocusToggle?.();
           return;
         }
+        // --- keymap:prefix end ---
         // When diff panel is focused, swallow unrecognized post-prefix keys
         if (this.diffPanelFocused && this.layout.panel !== null) {
           return;

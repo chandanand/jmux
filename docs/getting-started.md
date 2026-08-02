@@ -106,8 +106,14 @@ No prefix key needed — these work instantly.
 |--------|------|
 | New session | `Ctrl-a` then `n` |
 | New window (tab) | `Ctrl-a` then `c` |
-| Split pane horizontally | `Ctrl-a` then `\|` |
-| Split pane vertically | `Ctrl-a` then `-` |
+| Split pane left / right | `Ctrl-a` then `\|` |
+| Split pane top / bottom | `Ctrl-a` then `-` |
+
+The split keys look like what they do: `|` gives you a vertical divider, `-` a
+horizontal one. "Horizontal" and "vertical" are avoided on purpose — tmux uses
+them to describe how the *panes* sit and jmux's own button ids use them to
+describe the *divider*, so the words point opposite ways depending on who is
+talking.
 
 ### Navigating windows and panes
 
@@ -118,7 +124,6 @@ No prefix key needed — these work instantly.
 | Switch pane | `Shift-Arrow` (any direction) |
 | Resize pane | `Ctrl-a` then arrow keys (repeatable) |
 | Toggle pane zoom | `Ctrl-a` then `z` |
-| Window picker | `Ctrl-a` then `j` |
 
 ### Info panel
 
@@ -137,6 +142,7 @@ The Diff tab is powered by [hunk](https://github.com/modem-dev/hunk) — install
 
 | Action | Keys |
 |--------|------|
+| Keyboard shortcuts | `Ctrl-a` then `?` (or click `?` in the toolbar) |
 | Command palette | `Ctrl-a` then `p` |
 | Settings | `Ctrl-a` then `i` |
 | Clear pane | `Ctrl-a` then `k` |

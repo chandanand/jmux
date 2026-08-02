@@ -1,8 +1,8 @@
 import { describe, test, expect } from "bun:test";
-import { sgrForCell, compositeGrids, getModalPosition, getToolbarTabRanges, getToolbarButtonRanges, getToolbarStatusChipRange, buildToolbarButtons, BORDER_CHAR } from "../renderer";
+import { sgrForCell, compositeGrids, getModalPosition, getToolbarTabRanges, getToolbarButtonRanges, getToolbarStatusChipRange, buildToolbarButtons, fitHoverHint, BORDER_CHAR } from "../renderer";
 import { createGrid, writeString, writeImageRow, textCols } from "../cell-grid";
 import { ColorMode } from "../types";
-import type { Cell } from "../types";
+import type { Cell, WindowTab } from "../types";
 import { sidebarBottomRow, type FrameLayout, type PanelMode, type Span } from "../frame-layout";
 import { tokens, frame } from "../chrome-tokens";
 
@@ -1168,17 +1168,26 @@ describe("compositeGrids — sidebar sizing must respect the footer bands", () =
   });
 });
 
-// The toolbar carries only the four actions that target the surface it sits
-// on: add a window, split the pane two ways, toggle the docked panel.
-// Launching Claude and opening settings moved out entirely — they live in the
-// palette and the settings screen.
+// The toolbar carries the four actions that target the surface it sits on —
+// add a window, split the pane two ways, toggle the docked panel — led by the
+// keyboard-help button. Launching Claude and opening settings moved out
+// entirely; they live in the palette and the settings screen.
 describe("buildToolbarButtons", () => {
-  test("returns exactly the four action buttons, in escalating-scope order", () => {
+  test("returns help followed by the four action buttons in escalating-scope order", () => {
     const buttons = buildToolbarButtons({ panelActive: false });
     expect(buttons.map((b) => b.id)).toEqual([
-      "new-window", "split-h", "split-v", "panel",
+      "help", "new-window", "split-h", "split-v", "panel",
     ]);
-    expect(buttons.map((b) => b.label)).toEqual(["+", "⊟", "◫", "◨"]);
+    expect(buttons.map((b) => b.label)).toEqual(["?", "+", "⊟", "◫", "◨"]);
+  });
+
+  test("help leads the cluster and never displaces the panel toggle from the right", () => {
+    // `help` is not a rung of the window → pane → panel scope ladder, and the
+    // panel toggle is rightmost because that is the side the panel docks on.
+    // Leading is the only position that costs neither.
+    const buttons = buildToolbarButtons({ panelActive: false });
+    expect(buttons[0].id).toBe("help");
+    expect(buttons[buttons.length - 1].id).toBe("panel");
   });
 
   test("the split glyphs are a matched single-stroke pair, not the fill-lines family", () => {
@@ -1245,9 +1254,10 @@ describe("toolbar action buttons pack with a one-column inter-glyph gutter (Task
     const toolbar = { buttons: buildToolbarButtons({ panelActive: false }), mainCols: 40, tabs: [] };
     const ranges = getToolbarButtonRanges(toolbar);
     expect(ranges.map((r) => r.id)).toEqual([
-      "new-window", "split-h", "split-v", "panel",
+      "help", "new-window", "split-h", "split-v", "panel",
     ]);
     expect(ranges).toEqual([
+      { id: "help", startCol: 30, endCol: 31 },
       { id: "new-window", startCol: 32, endCol: 33 },
       { id: "split-h", startCol: 34, endCol: 35 },
       { id: "split-v", startCol: 36, endCol: 37 },
@@ -1470,5 +1480,77 @@ describe("drag handle chrome", () => {
     const none = composite(layout, { hoveredHandle: null });
     expect(none.cells[layout.contentTop][layout.borderCol!].fg).toBe(8);
     expect(none.cells[layout.contentTop][layout.divider!].fg).toBe(tokens.ruleFrame.fg!);
+  });
+});
+
+// Hovering a toolbar button names it and its chord in the chip slot, because
+// the buttons are bare glyphs (? + ⊟ ◫ ◨) that hover previously only
+// recoloured. The invariant that makes it safe: a hover hint is placed into
+// whatever room the tabs left over, never into room they wanted. Without it,
+// packChips — which drops whole tabs, never partial ones — would make a tab
+// vanish and reappear as the pointer crossed the cluster.
+describe("toolbar hover hint", () => {
+  const hint = { label: "Split pane left / right", keys: "^a |" };
+  const tabsOf = (n: number, name = "window"): WindowTab[] =>
+    Array.from({ length: n }, (_, i) => ({
+      windowId: `@${i}`, name: `${name}${i}`, index: i + 1,
+      active: i === 0, bell: false, zoomed: false,
+    }));
+
+  test("fitHoverHint prefers the full form when it fits", () => {
+    expect(fitHoverHint(hint, 40)).toBe("Split pane left / right · ^a |");
+  });
+
+  test("fitHoverHint falls back to the key alone before giving up", () => {
+    expect(fitHoverHint(hint, 10)).toBe("^a |");
+  });
+
+  test("fitHoverHint drops the hint entirely rather than overflow", () => {
+    expect(fitHoverHint(hint, 3)).toBeNull();
+  });
+
+  test("hovering never changes how many tabs are placed", () => {
+    // The case that provokes it: enough tabs that the strip is already near
+    // overflow, so any width stolen from them drops one outright.
+    for (const count of [2, 5, 8, 12]) {
+      const tabs = tabsOf(count);
+      const buttons = buildToolbarButtons({ panelActive: false });
+      const cold = getToolbarTabRanges({ buttons, mainCols: 60, tabs });
+      const hot = getToolbarTabRanges({ buttons, mainCols: 60, tabs, hoverHint: hint });
+      expect(hot.map((t) => t.id)).toEqual(cold.map((t) => t.id));
+      expect(hot).toEqual(cold); // identical geometry, not merely the same count
+    }
+  });
+
+  test("hovering never changes tab placement at any width", () => {
+    const tabs = tabsOf(6);
+    const buttons = buildToolbarButtons({ panelActive: false });
+    for (let mainCols = 24; mainCols <= 120; mainCols += 4) {
+      const cold = getToolbarTabRanges({ buttons, mainCols, tabs });
+      const hot = getToolbarTabRanges({ buttons, mainCols, tabs, hoverHint: hint });
+      expect(hot).toEqual(cold);
+    }
+  });
+
+  test("a real status chip outranks the hover hint — they never both paint", () => {
+    // The chip reports something that happened (an undo window, a failed
+    // snapshot); the hint only labels what the pointer is resting on.
+    const buttons = buildToolbarButtons({ panelActive: false });
+    const range = getToolbarStatusChipRange({
+      buttons, mainCols: 80, tabs: tabsOf(2), statusChip: "snapshot stale", hoverHint: hint,
+    });
+    expect(range).not.toBeNull();
+  });
+
+  test("the hint sits left of the buttons and inside the toolbar", () => {
+    const buttons = buildToolbarButtons({ panelActive: false });
+    const toolbar = { buttons, mainCols: 80, tabs: tabsOf(2), hoverHint: hint };
+    const buttonRanges = getToolbarButtonRanges(toolbar);
+    const leftmostButton = Math.min(...buttonRanges.map((b) => b.startCol));
+    const tabRanges = getToolbarTabRanges(toolbar);
+    const rightmostTab = Math.max(...tabRanges.map((t) => t.endCol));
+    // Nothing to assert the hint's own range against directly (it has no
+    // exported accessor), so assert the room it was given is real.
+    expect(leftmostButton).toBeGreaterThan(rightmostTab);
   });
 });

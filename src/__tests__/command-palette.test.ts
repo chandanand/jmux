@@ -413,3 +413,59 @@ describe("disabled palette rows", () => {
     expect(row).toContain("Unpin tile — auto-pinned; disable auto-pin");
   });
 });
+
+// The palette teaches the chord rather than merely standing in for it: a row
+// whose command has a keybinding renders it, so a user who found the action
+// here can stop coming here. Keys are supplied by main.ts from src/keymap.ts —
+// the palette itself never spells one out.
+describe("palette keybinding column", () => {
+  const withKeys: PaletteCommand[] = [
+    { id: "split-h", label: "Split horizontal", category: "pane", keys: "^a |" },
+    { id: "new-window", label: "New window", category: "window", keys: "^a c" },
+    { id: "kill-session", label: "Kill session", category: "session" },
+  ];
+
+  const rowAt = (p: CommandPalette, width: number, i: number): string =>
+    p.getGrid(width).cells[RESULTS_TOP_ROW + i].map((c) => c.char).join("");
+
+  test("renders the keys of a command that has them", () => {
+    const p = new CommandPalette();
+    p.open(withKeys);
+    expect(rowAt(p, 60, 0)).toContain("^a |");
+    expect(rowAt(p, 60, 1)).toContain("^a c");
+  });
+
+  test("a command with no binding renders exactly as before", () => {
+    const p = new CommandPalette();
+    p.open(withKeys);
+    const row = rowAt(p, 60, 2);
+    expect(row).toContain("Kill session");
+    expect(row).toContain("session"); // its category tag still lands
+  });
+
+  test("keys never overwrite the category tag", () => {
+    const p = new CommandPalette();
+    p.open(withKeys);
+    const row = rowAt(p, 60, 0);
+    expect(row).toContain("pane");
+    // The tag owns the right edge; the keys sit to its left, not through it.
+    expect(row.indexOf("^a |")).toBeLessThan(row.indexOf("pane"));
+  });
+
+  test("keys are dropped, not overlapped, when the row is too tight", () => {
+    // A chord half-painted over a label would teach a key that does not exist.
+    const p = new CommandPalette();
+    p.open([{ id: "x", label: "Some quite long command label", category: "pane", keys: "^a |" }]);
+    const row = rowAt(p, 20, 0);
+    expect(row).not.toContain("^a |");
+  });
+
+  test("every row still fits the grid width", () => {
+    const p = new CommandPalette();
+    for (const width of [40, 60, 80]) {
+      p.open(withKeys);
+      const grid = p.getGrid(width);
+      for (const row of grid.cells) expect(row.length).toBe(width);
+    }
+  });
+});

@@ -116,8 +116,8 @@ you — see [Parking](workflow.md#parking-the-back-burner).
 
 | Key | Action |
 |-----|--------|
-| `Ctrl-a \|` | Split horizontally |
-| `Ctrl-a -` | Split vertically |
+| `Ctrl-a \|` | Split pane left / right |
+| `Ctrl-a -` | Split pane top / bottom |
 | `Shift-Left/Right/Up/Down` | Navigate between panes |
 | `Ctrl-a Left/Right/Up/Down` | Resize pane (repeatable) |
 | `Ctrl-a z` | Toggle pane zoom (⤢ shown in tab) |
@@ -157,7 +157,10 @@ Press `Ctrl-a p` to open the command palette — a floating overlay for fuzzy-se
 | `Escape` | Back out of sub-list, or close palette |
 | `Ctrl-a p` | Close palette |
 
-**Available commands:** switch sessions, switch windows, new session/window, kill session, close window/pane, split horizontal/vertical, zoom pane, rename session, move window, window picker, open Claude, Command Center (pin/unpin, move tile to tab, switch tab, new/rename/delete/reorder tab), sidebar width, Claude command, project directories.
+**Available commands:** switch sessions, switch windows, new session/window, kill session, close window/pane, split a pane either way, zoom pane, rename session, move window, open Claude, keyboard shortcuts, setup, Command Center (pin/unpin, move tile to tab, switch tab, new/rename/delete/reorder tab), sidebar width, Claude command, project directories.
+
+Commands that also have a keybinding show it beside the row, so you can stop
+reaching for the palette once you have learned the chord.
 
 ---
 
@@ -189,10 +192,13 @@ In split mode, the panel docks to the right (~40% width). In full mode, it repla
 | `l` | Link to current session |
 | `s` | Update issue status |
 | `a` | Approve MR |
-| `r` | Mark MR ready (undraft) |
 | `c` | Copy issue prompt |
+| `C` | Create an issue |
+| `r` | Refresh from the tracker |
+| `/` | Filter by text |
+| `F` | Filter by state, stage, label or priority |
 | `g` / `G` | Cycle group-by / sub-group-by |
-| `/` / `?` | Cycle sort field / toggle sort order |
+| `S` / `?` | Cycle sort field / reverse sort order |
 
 See [connecting.md](connecting.md) for setup, [issue-tracking.md](issue-tracking.md) for the panel, and [workflow.md](workflow.md) for stages and parking.
 
@@ -202,6 +208,7 @@ See [connecting.md](connecting.md) for setup, [issue-tracking.md](issue-tracking
 
 | Key | Action |
 |-----|--------|
+| `Ctrl-a ?` | Keyboard shortcuts — every binding on this page, in the app |
 | `Ctrl-a p` | Command palette (fuzzy search all actions) |
 | `Ctrl-a k` | Clear pane content + scrollback |
 | `Ctrl-a y` | Copy entire pane content to clipboard |
@@ -269,6 +276,6 @@ config/defaults.conf      <- jmux defaults (baseline)
 config/core.conf          <- jmux core (always wins)
 ```
 
-Override any default in your `~/.tmux.conf` — prefix key, colors, keybindings, plugins. Only a few core settings are enforced: `detach-on-destroy off`, `mouse on`, the `prefix + n` binding, and `status off` (jmux renders its own toolbar).
+Override any default in your `~/.tmux.conf` — prefix key, colors, keybindings, plugins. Only a few core settings are enforced: `detach-on-destroy off`, `mouse on`, `allow-rename off` with automatic window naming, and `status off` (jmux renders its own toolbar). jmux's own chords (`Ctrl-a p`, `n`, `?` and the rest) are not tmux binds at all — jmux's input router intercepts them before tmux sees them, so they are unaffected by anything in your tmux config.
 
 See [configuration.md](configuration.md) for the full guide.

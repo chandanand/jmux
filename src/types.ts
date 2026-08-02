@@ -122,6 +122,13 @@ export interface PaletteCommand {
   disabled?: boolean;
   /** Explanatory suffix rendered after the label (e.g. on a disabled row). */
   hint?: string;
+  /**
+   * The keybinding for this command, compacted (`^a p`), rendered right of the
+   * label. Supplied from src/keymap.ts — never written out here — so the
+   * palette teaches the chord instead of merely substituting for it, and a
+   * user graduates off the palette rather than living in it.
+   */
+  keys?: string;
 }
 
 export interface PaletteSublistOption {

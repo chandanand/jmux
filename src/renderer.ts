@@ -26,6 +26,16 @@ export interface ToolbarConfig {
   /** When set, a dim status chip is rendered between tabs and buttons —
    * the toolbar's snapshot-health indicator (see main.ts's makeToolbar()). */
   statusChip?: string | null;
+  /**
+   * Name and keybinding of the button the pointer is currently over, rendered
+   * in the same slot as `statusChip` when that slot is free.
+   *
+   * The action buttons are bare glyphs (`? + ⊟ ◫ ◨`), and a terminal has no
+   * tooltip — without this there is no way to learn what one does short of
+   * clicking it. Passed as its parts rather than a finished string so
+   * layoutToolbar can shrink it (see fitHoverHint) instead of overflowing.
+   */
+  hoverHint?: { label: string; keys: string } | null;
 }
 
 // Builds the toolbar's fixed action-button set — pure, no live state beyond
@@ -36,20 +46,26 @@ export interface ToolbarConfig {
 // effects (main.ts spawns tmux at import time, so it can't be imported by a
 // unit test). Colours route through chrome-tokens' `tokens.accent`.
 //
-// The set is deliberately small: only the four actions whose target is the
-// surface the toolbar sits on — the window strip and the pane grid beneath
-// it. Everything else lives in the palette (`^a p`) or the settings screen
-// (`^a i`); a glyph here has to earn its column by being something you reach
-// for mid-flow, not merely something jmux can do. Launching Claude and
-// opening settings are both once-per-session actions with keyboard homes, so
-// they no longer occupy toolbar columns.
+// The set is deliberately small: the four actions whose target is the surface
+// the toolbar sits on — the window strip and the pane grid beneath it — plus
+// the keyboard-help button. Everything else lives in the palette (`^a p`) or
+// the settings screen (`^a i`); a glyph here has to earn its column by being
+// something you reach for mid-flow, not merely something jmux can do.
+// Launching Claude and opening settings are both once-per-session actions with
+// keyboard homes, so they no longer occupy toolbar columns. `help` earns its
+// column on the opposite ground: it is the only entry point here that a user
+// who knows no chords can find, which is exactly who needs it.
 //
-// Order runs left to right in escalating scope — add a window, then subdivide
-// the one you're in, then the panel toggle last. Buttons pack right-aligned
-// (see layoutToolbar), so the panel button lands flush against the terminal's
-// right edge, the side the diff panel itself docks on (frame-layout.ts places
-// `panel` after the divider); `◨`'s filled right half points at where the
-// panel will appear.
+// The four actions run left to right in escalating scope — add a window, then
+// subdivide the one you're in, then the panel toggle last. Buttons pack
+// right-aligned (see layoutToolbar), so the panel button lands flush against
+// the terminal's right edge, the side the diff panel itself docks on
+// (frame-layout.ts places `panel` after the divider); `◨`'s filled right half
+// points at where the panel will appear.
+//
+// Hovering any of them names it and its chord in the toolbar's chip slot (see
+// ToolbarConfig.hoverHint) — without that the glyphs are unreadable, since a
+// terminal has no tooltip and hover can only recolour.
 //
 // The two split glyphs are a deliberate stroke pair: `⊟` is a square with one
 // horizontal stroke (panes stacked — tmux `split-window -v`), `◫` the same
@@ -61,6 +77,13 @@ export interface ToolbarConfig {
 // from that packing, so a 2-column glyph would shift every button to its left.
 export function buildToolbarButtons(opts: { panelActive: boolean }): ToolbarButton[] {
   return [
+    // The keyboard reference leads the cluster rather than joining the end of
+    // it. The other four are a scope ladder (window → pane → pane → panel)
+    // that `help` is not a rung of, and the panel toggle has to stay rightmost
+    // because that is the side the panel docks on. Leading is the only spot
+    // that costs neither. It is also the one affordance here reachable with no
+    // prior knowledge of the prefix concept, which is the whole point of it.
+    { label: "?", id: "help" },
     { label: "+", id: "new-window" },
     { label: "⊟", id: "split-h" },
     { label: "◫", id: "split-v" },
@@ -125,7 +148,29 @@ interface PlacedToolbarTab extends PlacedChip {
 interface ToolbarLayout {
   tabs: PlacedToolbarTab[];
   statusChip: PlacedChip | null;
+  hoverHint: { x: number; width: number; text: string } | null;
   buttons: PlacedChip[];
+}
+
+/**
+ * Fit a hovered button's hint into `slack` columns, shrinking rather than
+ * overflowing: "Split pane left / right · ^a |" → "^a |" → nothing.
+ *
+ * The ladder exists because the hint must never cost a window tab. packChips
+ * drops whole tabs, so a hint competing with them for width would make a tab
+ * vanish and reappear as the pointer crossed the button cluster — and a
+ * pointer moving over chrome must not rearrange the chrome. Callers place tabs
+ * first and pass only what is left over. Same shrink ladder drawModalChrome
+ * uses for title/count/hint and layoutFooter for its segments.
+ */
+export function fitHoverHint(
+  hint: { label: string; keys: string },
+  slack: number,
+): string | null {
+  const full = hint.keys ? `${hint.label} · ${hint.keys}` : hint.label;
+  if (textCols(full) + 2 <= slack) return full;
+  if (hint.keys && textCols(hint.keys) + 2 <= slack) return hint.keys;
+  return null;
 }
 
 // Places the toolbar's three zones once — tabs packed left, action buttons
@@ -180,7 +225,26 @@ function layoutToolbar(toolbar: ToolbarConfig): ToolbarLayout {
     tab: tabs.find((t) => t.windowId === c.id)!,
   }));
 
-  return { tabs: placedToolbarTabs, statusChip, buttons };
+  // The hover hint is placed *after* tabs, into whatever room they left, and
+  // only when the status chip has not already claimed the slot. Placing it
+  // last is the whole point: tabs are packed against exactly the same budget
+  // whether a button is hovered or not, so hovering can never reflow them.
+  // A real status chip (an undo window, a toast, a degraded snapshot) outranks
+  // it — all three are things that happened, and this is only a label for
+  // something the pointer is resting on.
+  let hoverHint: ToolbarLayout["hoverHint"] = null;
+  if (!statusChip && toolbar.hoverHint) {
+    const lastTab = placedTabs[placedTabs.length - 1];
+    const tabsEnd = lastTab ? lastTab.x + lastTab.width : 1;
+    const slack = buttonsStart - tabsEnd;
+    const text = fitHoverHint(toolbar.hoverHint, slack);
+    if (text) {
+      const width = textCols(text) + 2; // " text "
+      hoverHint = { x: buttonsStart - width, width, text };
+    }
+  }
+
+  return { tabs: placedToolbarTabs, statusChip, hoverHint, buttons };
 }
 
 // Returns the column ranges for each toolbar button (relative to main area start)
@@ -496,6 +560,15 @@ export function compositeGrids(
         const label = ` ${toolbar.statusChip} `;
         const attrs: CellAttrs = { fg: 8, fgMode: ColorMode.Palette, dim: true };
         writeStyledLine(grid, 0, borderCol + 1 + chip.x, [{ text: label, attrs }], chip.width);
+      }
+
+      // Hover hint — same slot, and layoutToolbar only ever places one of the
+      // two. Rendered a shade brighter than the status chip: it answers a
+      // question the pointer is actively asking, where the chip is ambient.
+      const hint = toolbarLayout!.hoverHint;
+      if (hint) {
+        const attrs: CellAttrs = { fg: 8, fgMode: ColorMode.Palette };
+        writeStyledLine(grid, 0, borderCol + 1 + hint.x, [{ text: ` ${hint.text} `, attrs }], hint.width);
       }
       }
     } else if (layout.topRuleRow !== null && y === layout.topRuleRow) {
