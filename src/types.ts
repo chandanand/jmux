@@ -76,6 +76,14 @@ export interface SessionInfo {
   windowCount: number;
   directory?: string;
   project?: string; // wtm project name (bare repo basename)
+  /**
+   * The `@jmux-linear-issue` session option — the issue link `jmux ctl` writes.
+   *
+   * The CLI cannot use `state.json` (a running TUI holds it in memory and would
+   * clobber the write), so it keeps its links server-side in a tmux option.
+   * Reading it here is what lets the sidebar see work an agent started.
+   */
+  issueLink?: string;
 }
 
 export type ErrorState = {

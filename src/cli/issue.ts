@@ -1,4 +1,4 @@
-import { resolve, dirname, basename } from "path";
+import { resolve } from "path";
 import { homedir, tmpdir } from "os";
 import { existsSync, writeFileSync } from "fs";
 import { runTmuxDirect } from "./tmux";
@@ -9,7 +9,8 @@ import {
   loadUserConfig,
   type JmuxConfig,
 } from "../config";
-import { RepoFactsCache, resolveForRepo } from "../repo-settings";
+import { RepoFactsCache, resolveForRepo, worktreeCommandArgv } from "../repo-settings";
+import { resolveIssueSessionName, issueWorktreePath } from "../issue-session";
 import { INTERNAL_SESSION_FILTER } from "../glass/internal-sessions";
 import { LinearAdapter } from "../adapters/linear";
 import { buildLinearPrompt } from "../adapters/linear-prompt";
@@ -47,11 +48,20 @@ export function parseIssueLinkRow(line: string): IssueLinkRow | null {
   return { id: p[0], name: p[1], issue: p[2], path: p[3] };
 }
 
+/**
+ * Issue ids are compared case-insensitively throughout: the option stores
+ * whatever a human or an agent typed, so `tra-123` and `TRA-123` have to be one
+ * issue or the 1:1 invariant below is trivially defeated by a shift key.
+ */
+function sameIssue(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
 export function findSessionForIssue(
   rows: IssueLinkRow[],
   issueId: string,
 ): IssueLinkRow | null {
-  return rows.find((r) => r.issue === issueId) ?? null;
+  return rows.find((r) => r.issue && sameIssue(r.issue, issueId)) ?? null;
 }
 
 export type LinkDecision =
@@ -75,7 +85,9 @@ export function decideIssueLink(
   const target = rows.find((r) => r.name === session);
   if (!target) return { kind: "error", message: `session "${session}" not found` };
 
-  const other = rows.find((r) => r.issue === issueId && r.name !== session);
+  const other = rows.find(
+    (r) => r.issue && sameIssue(r.issue, issueId) && r.name !== session,
+  );
   if (other) {
     return {
       kind: "error",
@@ -83,54 +95,92 @@ export function decideIssueLink(
     };
   }
 
-  if (target.issue && target.issue !== issueId) {
+  if (target.issue && !sameIssue(target.issue, issueId)) {
     return {
       kind: "error",
       message: `session "${session}" already linked to issue "${target.issue}"; unlink first`,
     };
   }
 
-  if (target.issue === issueId) return { kind: "noop" };
+  if (target.issue && sameIssue(target.issue, issueId)) return { kind: "noop" };
   return { kind: "ok" };
+}
+
+export type StartReuse =
+  /** Nothing claims this issue — provision it. */
+  | { kind: "none" }
+  /** A session already carries this issue's link. */
+  | { kind: "linked"; row: IssueLinkRow }
+  /** A live session sits on the name, unlinked — take it and record the link. */
+  | { kind: "adopt"; row: IssueLinkRow }
+  | { kind: "conflict"; message: string };
+
+/**
+ * Whether `issue start` should provision, or hand back something that exists.
+ *
+ * Two passes, because the answer improves once the tracker has resolved the
+ * issue: the link check needs only the id, so it runs first and a repeat start
+ * costs no API call; the name check needs the derived session name, so it runs
+ * after. Pass `sessionName: null` for the first.
+ *
+ * The name pass is what keeps the command idempotent now that the CLI derives
+ * the *same* session name as the TUI. Work started in jmux records its link in
+ * `state.json` — which a running TUI holds in memory and would clobber if the
+ * CLI wrote there — so the CLI cannot see that link and would otherwise fall
+ * through to `new-session` and fail on a duplicate name.
+ *
+ * Adopting is deliberately limited to an *unlinked* session. Reaching this
+ * point means no row carries this issue, so a row that carries a different one
+ * is a genuine collision, and overwriting its link would silently detach
+ * somebody's work from its issue — the same 1:1 invariant `decideIssueLink`
+ * exists to protect.
+ */
+export function decideStartReuse(
+  rows: IssueLinkRow[],
+  issueId: string,
+  sessionName: string | null,
+): StartReuse {
+  const linked = findSessionForIssue(rows, issueId);
+  if (linked) return { kind: "linked", row: linked };
+  if (!sessionName) return { kind: "none" };
+
+  const byName = rows.find((r) => r.name === sessionName);
+  if (!byName) return { kind: "none" };
+  if (byName.issue) {
+    return {
+      kind: "conflict",
+      message: `session "${sessionName}" is where "${issueId}" would go, but it is already linked to issue "${byName.issue}"; unlink it first`,
+    };
+  }
+  return { kind: "adopt", row: byName };
 }
 
 // --- Pure helpers for `issue start` ------------------------------------------
 
-export function slugify(title: string): string {
-  return title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40)
-    .replace(/-+$/g, "");
-}
-
 /**
- * Branch/session name for an issue. The tracker's suggested `branchName` wins
- * when present; otherwise `<issueId>-<title-slug>`, falling back to the bare
- * issue id. Always normalized through `sanitizeTmuxSessionName`.
+ * Branch/session/worktree name for an issue — one name for all three, as
+ * everywhere else in jmux.
+ *
+ * Delegates to the shared resolver so the CLI provisions exactly what the TUI
+ * would, which is what lets the sidebar recognise a session an agent started.
+ * The one case the shared rule can't cover is offline mode: with no tracker
+ * configured there is no issue to feed a template, so the bare id is the only
+ * name available.
  */
-export function computeBranchName(issueId: string, issue: Issue | null): string {
-  if (issue?.branchName) return sanitizeTmuxSessionName(issue.branchName);
-  const slug = issue?.title ? slugify(issue.title) : "";
-  const raw = slug ? `${issueId}-${slug}` : issueId;
-  return sanitizeTmuxSessionName(raw);
+export function startSessionName(
+  issueId: string,
+  issue: Issue | null,
+  sessionNameTemplate: string,
+): string {
+  return issue
+    ? resolveIssueSessionName(issue, sessionNameTemplate)
+    : sanitizeTmuxSessionName(issueId);
 }
 
 export function expandTilde(p: string): string {
   if (p === "~") return homedir();
   if (p.startsWith("~/")) return resolve(homedir(), p.slice(2));
   return p;
-}
-
-/**
- * Deterministic sibling worktree location:
- *   <repoParent>/<repoBasename>-worktrees/<branchName>
- * Deterministic so we never parse opaque `wtm` output, and outside the repo so
- * git doesn't reject a worktree nested in the main working tree.
- */
-export function computeWorktreePath(repo: string, branchName: string): string {
-  return resolve(dirname(repo), `${basename(repo)}-worktrees`, branchName);
 }
 
 /**
@@ -178,6 +228,19 @@ export function validateIssueCreate(
 }
 
 /**
+ * Match a requested status against the ones the issue can actually move to.
+ *
+ * Case- and whitespace-insensitive, and it returns the tracker's *canonical*
+ * spelling: `LinearAdapter.updateStatus` matches state names exactly and
+ * silently does nothing when it can't, so passing through what the caller typed
+ * would turn a typo into a successful-looking no-op.
+ */
+export function matchStatus(input: string, available: readonly string[]): string | null {
+  const want = input.trim().toLowerCase();
+  return available.find((s) => s.trim().toLowerCase() === want) ?? null;
+}
+
+/**
  * Map a user-supplied team (id or name) onto a team id. With exactly one team
  * the flag is optional — most single-team workspaces should never have to
  * think about it.
@@ -217,11 +280,61 @@ export async function handleIssue(
       return await issueStart(ctx, parsed);
     case "create":
       return await issueCreate(ctx, parsed);
+    case "move":
+      return await issueMove(parsed);
     default:
       throw new CliError(
-        `Unknown issue action "${action}". Known actions: get, link, unlink, start, create`,
+        `Unknown issue action "${action}". Known actions: get, link, unlink, start, create, move`,
       );
   }
+}
+
+/**
+ * Move an issue along the workflow — the write that lets an agent hand its own
+ * work on when it finishes.
+ *
+ * This is an *explicit* command, so the per-repo `transitionConfirm` policy does
+ * not apply: that governs the transitions jmux performs on its own initiative
+ * (see transitions.ts), and its whole point is that jmux never writes to a
+ * shared tracker unasked. Here it was asked.
+ *
+ * The result is read back rather than assumed. `updateStatus` resolves the state
+ * name server-side and returns nothing, so reporting success from the absence of
+ * a thrown error would be reporting that the request was sent, not that the
+ * issue moved.
+ */
+async function issueMove(parsed: ParsedCtlArgs): Promise<unknown> {
+  const issueId = parsed.positional[0];
+  const status = parsed.positional[1];
+  if (!issueId || !status) {
+    throw new CliError("issue move requires <issue-id> <status>");
+  }
+
+  const adapter = new LinearAdapter({});
+  await adapter.authenticate();
+  if (adapter.authState !== "ok") {
+    throw new CliError(`issue tracker not authenticated (${adapter.authHint})`);
+  }
+
+  const issue = await adapter.getIssueByBranch(issueId);
+  if (!issue) throw new CliError(`issue "${issueId}" not found`);
+
+  const available = await adapter.getAvailableStatuses(issue.id);
+  const target = matchStatus(status, available);
+  if (!target) {
+    throw new CliError(
+      `"${status}" is not a status ${issue.identifier} can move to. Available: ${available.join(", ")}`,
+    );
+  }
+
+  const from = issue.status;
+  if (target === from) {
+    return { issue: issue.identifier, from, to: target, moved: false };
+  }
+
+  await adapter.updateStatus(issue.id, target);
+  const after = await adapter.pollIssue(issue.id);
+  return { issue: issue.identifier, from, to: target, moved: after.status === target, status: after.status };
 }
 
 async function issueCreate(
@@ -355,28 +468,50 @@ function activePane(ctx: CliContext, session: string): string | null {
   return r.ok && r.lines.length > 0 ? r.lines[0] : null;
 }
 
-function createWorktree(
-  repo: string,
-  worktreePath: string,
-  branch: string,
-  base: string,
-): void {
-  // Idempotent: an existing worktree directory is reused as-is.
-  if (existsSync(worktreePath)) return;
-
-  const verify = Bun.spawnSync(
+function branchExists(repo: string, branch: string): boolean {
+  const r = Bun.spawnSync(
     ["git", "-C", repo, "rev-parse", "--verify", "--quiet", branch],
     { stdout: "ignore", stderr: "ignore" },
   );
-  const branchExists = (verify.exitCode ?? 1) === 0;
+  return (r.exitCode ?? 1) === 0;
+}
 
-  const args = branchExists
-    ? ["-C", repo, "worktree", "add", worktreePath, branch]
-    : ["-C", repo, "worktree", "add", "-b", branch, worktreePath, base];
+/**
+ * Create the issue's worktree under the repo directory, with the same tool the
+ * TUI would use — `wtm` for a wtm-managed repo, plain git otherwise.
+ *
+ * Two departures from `worktreeCommandArgv`, both because this is a scripted
+ * API rather than a pane a human is watching:
+ *
+ *   * an existing worktree directory is reused rather than being an error, so a
+ *     retry is a no-op;
+ *   * an existing *branch* is checked out rather than re-created, so a second
+ *     `issue start` after a session was killed resumes the work. wtm resolves
+ *     that case itself, so only the git path needs the distinction.
+ */
+function createWorktree(o: {
+  repo: string;
+  worktreePath: string;
+  session: string;
+  baseBranch: string;
+  wtm: boolean;
+}): void {
+  if (existsSync(o.worktreePath)) return;
 
-  const r = Bun.spawnSync(["git", ...args], { stdout: "pipe", stderr: "pipe" });
+  const argv =
+    !o.wtm && branchExists(o.repo, o.session)
+      ? ["git", "worktree", "add", `./${o.session}`, o.session]
+      : worktreeCommandArgv({
+          wtm: o.wtm,
+          session: o.session,
+          baseBranch: o.baseBranch,
+          noShell: true,
+        });
+
+  const r = Bun.spawnSync(argv, { cwd: o.repo, stdout: "pipe", stderr: "pipe" });
   if ((r.exitCode ?? 1) !== 0) {
-    throw new CliError(`git worktree add failed: ${r.stderr.toString().trim()}`);
+    const detail = r.stderr.toString().trim() || r.stdout.toString().trim();
+    throw new CliError(`${argv[0]} failed to create the worktree: ${detail}`);
   }
 }
 
@@ -388,17 +523,17 @@ async function issueStart(
   if (!issueId) throw new CliError("issue start requires an <issue-id>");
   const { flags } = parsed;
 
-  // Idempotency: if a session is already linked to this issue, return it.
-  const existing = findSessionForIssue(listIssueLinkRows(ctx), issueId);
-  if (existing) {
-    return {
-      session: existing.name,
-      pane: activePane(ctx, existing.name),
-      cwd: existing.path || null,
-      issue: issueId,
-      reused: true,
-    };
-  }
+  const rows = listIssueLinkRows(ctx);
+  const reuse = (row: IssueLinkRow, id: string) => ({
+    session: row.name,
+    pane: activePane(ctx, row.name),
+    cwd: row.path || null,
+    issue: id,
+    reused: true,
+  });
+
+  const firstPass = decideStartReuse(rows, issueId, null);
+  if (firstPass.kind === "linked") return reuse(firstPass.row, issueId);
 
   const config = loadUserConfig();
 
@@ -432,17 +567,36 @@ async function issueStart(
     throw new CliError(`repo path does not exist: ${repo}`);
   }
 
-  const branchName = computeBranchName(issueId, issue);
-  const sessionName = sanitizeTmuxSessionName(branchName);
   // Settings resolve against the repo this issue routes to, not the CLI's cwd.
   const repoSettings = resolveForRepo(config, new RepoFactsCache().get(repo));
+  const sessionName = startSessionName(issueId, issue, repoSettings.sessionNameTemplate);
+
+  const reused = decideStartReuse(rows, issueId, sessionName);
+  if (reused.kind === "conflict") throw new CliError(reused.message);
+  if (reused.kind === "adopt") {
+    // Record the link the TUI never wrote, so the *next* lookup — here and in
+    // `workflow board` — resolves without depending on the name.
+    const linkId = issue?.identifier ?? issueId;
+    runTmuxDirect(
+      ["set-option", "-t", sessionName, "@jmux-linear-issue", linkId],
+      ctx.socket,
+    );
+    return reuse(reused.row, linkId);
+  }
+
   const baseBranch =
     typeof flags["base-branch"] === "string"
       ? flags["base-branch"]
       : repoSettings.defaultBaseBranch;
-  const worktreePath = computeWorktreePath(repo, branchName);
+  const worktreePath = issueWorktreePath(repo, sessionName);
 
-  createWorktree(repo, worktreePath, branchName, baseBranch);
+  createWorktree({
+    repo,
+    worktreePath,
+    session: sessionName,
+    baseBranch,
+    wtm: repoSettings.wtmIntegration,
+  });
 
   // Build the (optional) Claude launch command.
   const launchAgent = !flags["no-launch-agent"];
@@ -474,9 +628,12 @@ async function issueStart(
   if (launchCmd) createArgs.push(launchCmd);
   tmuxOrThrow(runTmuxDirect(createArgs, ctx.socket));
 
-  // Link the new session to the issue.
+  // Link the new session to the issue, under the tracker's own identifier when
+  // we have it — the option is what the TUI reads, so a predictable key there
+  // beats whatever casing the caller happened to type.
+  const linkId = issue?.identifier ?? issueId;
   runTmuxDirect(
-    ["set-option", "-t", sessionName, "@jmux-linear-issue", issueId],
+    ["set-option", "-t", sessionName, "@jmux-linear-issue", linkId],
     ctx.socket,
   );
   runTmuxDirect(
@@ -488,7 +645,7 @@ async function issueStart(
     session: sessionName,
     pane: activePane(ctx, sessionName),
     cwd: worktreePath,
-    issue: issueId,
+    issue: linkId,
     reused: false,
   };
 }

@@ -149,24 +149,36 @@ export function detectBareRepo(cwd: string, run: GitRun = defaultGitRun): boolea
   return run(["-C", cwd, "rev-parse", "--is-bare-repository"])?.trim() === "true";
 }
 
-/**
- * Build the worktree-creation command, run with cwd = the repo directory.
- * wtm on  → `wtm create <session> --from <base>` (wtm manages the bare repo).
- * wtm off → `git worktree add ./<session> -b <session> <base>` (sibling dir,
- *           same `<repo>/<session>` layout wtm produces, no bare-repo management).
- * Always creates a worktree — never an in-place checkout.
- */
-export function buildWorktreeCommand(o: {
+export interface WorktreeCommandOptions {
   wtm: boolean;
   session: string;
   baseBranch: string;
   noShell?: boolean;
-}): string {
+}
+
+/**
+ * The worktree-creation command as argv, run with cwd = the repo directory.
+ * wtm on  → `wtm create <session> --from <base>` (wtm manages the bare repo).
+ * wtm off → `git worktree add ./<session> -b <session> <base>` (sibling dir,
+ *           same `<repo>/<session>` layout wtm produces, no bare-repo management).
+ * Always creates a worktree — never an in-place checkout.
+ *
+ * argv is the primary form because `jmux ctl` spawns this directly, without a
+ * shell — see the note on `runTmuxDirect`. The TUI needs the string form
+ * instead, because it hands the command to tmux to run in a pane.
+ */
+export function worktreeCommandArgv(o: WorktreeCommandOptions): string[] {
   if (o.wtm) {
-    const base = `wtm create ${o.session} --from ${o.baseBranch}`;
-    return o.noShell ? `${base} --no-shell` : base;
+    const argv = ["wtm", "create", o.session, "--from", o.baseBranch];
+    if (o.noShell) argv.push("--no-shell");
+    return argv;
   }
-  return `git worktree add ./${o.session} -b ${o.session} ${o.baseBranch}`;
+  return ["git", "worktree", "add", `./${o.session}`, "-b", o.session, o.baseBranch];
+}
+
+/** The same command as one shell string, for the tmux pane that runs it. */
+export function buildWorktreeCommand(o: WorktreeCommandOptions): string {
+  return worktreeCommandArgv(o).join(" ");
 }
 
 /** The git-derived facts about a directory that settings resolution needs. */

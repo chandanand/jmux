@@ -6,6 +6,7 @@ import {
   resolveRepoRoot,
   detectBareRepo,
   buildWorktreeCommand,
+  worktreeCommandArgv,
   migrateLegacyConfig,
   migrateStagesIntoViews,
   RepoFactsCache,
@@ -105,6 +106,18 @@ describe("buildWorktreeCommand", () => {
   test("wtm off uses `git worktree add` into a sibling dir", () => {
     expect(buildWorktreeCommand({ wtm: false, session: "feat-x", baseBranch: "develop" }))
       .toBe("git worktree add ./feat-x -b feat-x develop");
+  });
+
+  test("is the argv form joined — one command, two shapes", () => {
+    // The CLI spawns argv directly (no shell); the TUI hands the string to
+    // tmux. They must never be able to describe different commands.
+    for (const o of [
+      { wtm: true, session: "feat-x", baseBranch: "main" },
+      { wtm: true, session: "feat-x", baseBranch: "main", noShell: true },
+      { wtm: false, session: "feat-x", baseBranch: "develop" },
+    ]) {
+      expect(buildWorktreeCommand(o)).toBe(worktreeCommandArgv(o).join(" "));
+    }
   });
 });
 

@@ -245,11 +245,10 @@ Unstarted rows are also reachable from the keyboard: `Ctrl-Shift-Up` /
 `Ctrl-Shift-Down` walk them alongside your sessions, so you can read down your
 backlog without touching the mouse.
 
-> **Known limitation.** A session created for an issue by `jmux ctl issue start`
-> in *another* jmux instance is not visible to the preview, which will still
-> offer **Start**. The CLI records its link in a tmux option that the TUI does
-> not read, and it names sessions by a different rule. The issues panel's `n`
-> key has the same blind spot; unifying the two is separate work.
+Work started by an agent counts as started. `jmux ctl issue start` provisions
+exactly what `↵` here would — same session name, same worktree, same tool — and
+records its link where the sidebar reads it, so an issue an agent picked up stops
+being offered as unstarted rather than being offered twice.
 
 Note `IN REVIEW` above: a stage with no sessions still gets a band when it has
 unstarted work. And a stage whose work is all in flight simply shows no `○` rows.

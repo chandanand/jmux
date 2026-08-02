@@ -45,8 +45,13 @@ If not set, you're outside jmux and most commands require explicit `--session` f
 | `jmux ctl issue create --title T [--description D] [--team T] [--start]` | File a new issue; `--start` also provisions the session |
 | `jmux ctl issue start <issue-id> [--repo P]` | Start (or resume) work for an issue |
 | `jmux ctl issue get <issue-id>` | Fetch issue details from the tracker |
+| `jmux ctl issue move <issue-id> <status>` | Move an issue along the workflow |
 | `jmux ctl issue link <session> <issue-id>` | Link a session to an issue |
 | `jmux ctl issue unlink <session>` | Remove a session's issue link |
+| `jmux ctl workflow stages` | The workflow stages and their counts |
+| `jmux ctl workflow board [--stage ID]` | Every stage with its sessions and unstarted work |
+| `jmux ctl workflow next [--start]` | The next thing to pick up (`Ctrl-a u`) |
+| `jmux ctl workflow statuses` | Every tracker status: its stage, whether it parks |
 
 ## Global Flags
 
@@ -71,6 +76,11 @@ If not set, you're outside jmux and most commands require explicit `--session` f
    `jmux ctl status` — never grep `pane capture` output for a shell prompt.
    Reach for `pane capture` only when you need the actual screen *text* (e.g. to
    read what an agent wrote), not to infer lifecycle.
+
+   For *what the work is* rather than *what the agents are doing* — which issue a
+   session is on, which stage it sits in, what hasn't been picked up — use
+   `jmux ctl workflow`. `status` is the flat session list; `workflow` is the same
+   sessions arranged the way the human's sidebar arranges them.
 
 5. **Parse JSON.** All output is structured JSON. Don't regex it.
 
@@ -129,6 +139,67 @@ jmux ctl agent watch --session TRA-123 | while read -r event; do
   esac
 done
 ```
+
+### `workflow` — the work pipeline
+
+jmux models work as **stages** the user defined (`Ctrl-a W`), each sitting on top
+of one or more of the tracker's own statuses. Stage order is priority order. A
+session belongs to the stage that claims its linked issue's status; an issue in a
+stage with no session yet is **unstarted** work anyone can pick up.
+
+`workflow` is how you read that model. It is derived from the config file, tmux
+and the tracker — the same sources the sidebar uses — so it works whether or not
+the TUI is running. It needs a configured tracker.
+
+```bash
+jmux ctl workflow stages                     # the stage table + counts
+jmux ctl workflow board                      # + each stage's sessions and unstarted work
+jmux ctl workflow board --stage in-progress  # one stage
+jmux ctl workflow next                       # what to pick up next
+jmux ctl workflow next --start               # ...and start it
+jmux ctl workflow statuses                   # every status: its stage, whether it parks
+```
+
+**Reach for `stages` first.** It is `board` without the item arrays, which is
+usually all you need to decide what to do next; pull `board` when you actually
+need the rows, and `board --stage <id>` when you only care about one.
+
+Key fields:
+
+- `counts.sessions` / `counts.parked` / `counts.unstarted` / `counts.issues` —
+  per stage. `issues` is everything in the stage; `unstarted` is the subset with
+  no session.
+- `upNextRank` — the stage's place in the `Ctrl-a u` rotation, or `null` if it
+  isn't in it. `workflow next` walks that order and returns the top item of the
+  first non-empty stage.
+- `ungrouped` — sessions with no issue, or whose status no stage claims. These
+  are ordinary work, not an error state; they are the flat list below the bands
+  in the sidebar.
+- `parked` — a session on the back burner (its status is one the user marked as
+  parking, or it was parked by hand, or it has no issue and has been idle past
+  `autoParkIdleDays`). It is a **field on the session, not a separate bucket**,
+  because parking keys off the status rather than the stage. Filter it out when
+  you are looking for live work.
+- `inSidebar` / `showsUnstarted` / `unstartedCap` — what the *human* currently
+  sees. `unstarted` is always the full list; `unstartedCap` is how many of them
+  per stage their sidebar is showing (`0` = none, `"all"` = every one). Use these
+  when you need to talk about what is on their screen.
+
+### `issue move` — hand work on
+
+```bash
+jmux ctl issue move TRA-123 "In Review"
+```
+
+Writes the status back to the tracker. Matching is case-insensitive and the
+tracker's canonical spelling is returned; a status the issue cannot move to is
+rejected with the list of ones it can. The result is read back after the write,
+so `moved` means the issue actually moved, not that the request was sent. Moving
+an issue to a status it is already on is a no-op (`moved: false`, no write).
+
+This is a **write to a shared team tracker** — use it for your own work when you
+genuinely finish a step, not to tidy up someone else's board. Run
+`workflow statuses` first if you don't know the workspace's status names.
 
 ### Attention — flag a session for the human
 
@@ -266,14 +337,91 @@ jmux ctl pane capture --target %12 --raw
 
 ### issue start
 ```json
-{"session": "TRA-123-fix-auth", "pane": "%12", "cwd": "/repo-worktrees/TRA-123-fix-auth", "issue": "TRA-123", "reused": false}
+{"session": "tra-123", "pane": "%12", "cwd": "/repo/tra-123", "issue": "TRA-123", "reused": false}
 ```
-`reused: true` means a session was already linked to the issue and is returned as-is (idempotent).
+The session name comes from the repo's `sessionNameTemplate` (default
+`{identifier}`) or the tracker's own suggested branch name, and the worktree
+lands at `<repo>/<session>` — the same name and place the TUI would pick, which
+is why work you start shows up as started in the human's sidebar.
+
+`reused: true` means nothing was provisioned and an existing session is returned
+as-is. Two ways that happens, and you don't need to tell them apart: a session
+already carries the issue's link, **or** a live session already sits on the name
+this issue resolves to — which is what jmux itself creates. So `issue start` is
+safe to call blind: it starts, resumes, or hands back, and never duplicates.
+
+It refuses in one case: a session on that name is already linked to a *different*
+issue. That is a real collision, and detaching somebody's work from its issue to
+resolve it is not a call the CLI makes — `issue unlink` it first if you're sure.
 
 ### issue link / unlink
 ```json
 {"session": "TRA-123", "issue": "TRA-456", "repo": "/repo", "linked": true}
 ```
+
+### issue move
+```json
+{"issue": "TRA-123", "from": "In Progress", "to": "MR Review", "moved": true, "status": "MR Review"}
+```
+
+### workflow stages
+```json
+{
+  "stages": [
+    {
+      "id": "in-progress", "label": "In Progress", "rank": 3,
+      "statuses": ["In Progress", "In Review", "MR Review"],
+      "inSidebar": true, "showsUnstarted": true, "upNextRank": null,
+      "counts": { "issues": 11, "sessions": 2, "parked": 0, "unstarted": 9 }
+    }
+  ],
+  "ungrouped": 17,
+  "upNext": { "stageId": "todo", "stageLabel": "To do", "issue": { "identifier": "TRA-1647", "…": "…" } },
+  "unstartedCap": 10
+}
+```
+
+### workflow board
+Same, plus the rows. `ungrouped` is an array here rather than a count.
+```json
+{
+  "stages": [
+    {
+      "id": "in-progress", "label": "In Progress", "…": "…",
+      "sessions": [
+        {
+          "id": "$4", "name": "tra-1610-planning-page-500s", "path": "/repo/tra-1610-planning-page-500s",
+          "branch": "tra-1610-planning-page-500s",
+          "agent": { "state": "running", "since": 1781480000, "ageSeconds": 123 },
+          "attention": false, "attentionReason": null, "pinned": false, "parked": false,
+          "issue": { "id": "uuid", "identifier": "TRA-1610", "title": "…", "status": "MR Review",
+                     "priority": 2, "team": "Core Engineering", "url": "https://linear.app/…" }
+        }
+      ],
+      "unstarted": [{ "identifier": "TRA-1622", "title": "…", "status": "In Progress", "…": "…" }]
+    }
+  ],
+  "ungrouped": [{ "name": "dotfiles", "issue": null, "…": "…" }],
+  "upNext": { "…": "…" },
+  "unstartedCap": 10
+}
+```
+
+### workflow next
+```json
+{"upNext": {"stageId": "todo", "stageLabel": "To do", "issue": {"identifier": "TRA-1647", "…": "…"}}, "started": null}
+```
+`upNext` is `null` when the rotation is empty or every queue in it is — an
+ordinary answer, not an error. With `--start`, `started` carries the
+`issue start` result.
+
+### workflow statuses
+```json
+{"statuses": [{"name": "QA (RELEASE BR)", "type": "started", "stage": {"id": "waiting", "label": "Waiting"}, "parks": true, "issues": 8}]}
+```
+`stage` is `null` for a status no stage claims — it simply won't appear in the
+panel. `parks` and `stage` are independent: a status can park while belonging to
+no stage, which is the right answer for something like **Done**.
 
 ## Limitations
 
@@ -281,6 +429,7 @@ jmux ctl pane capture --target %12 --raw
 - `session switch` only works from inside tmux (not from external processes).
 - `run-claude` confirms the command was dispatched, not that Claude actually started — check `agent state` to confirm it began.
 - The CLI does not manage tmux config, keybindings, or display settings.
-- `issue get` / `issue start` need a configured tracker (`LINEAR_API_KEY` or `LINEAR_TOKEN`). `issue start` resolves the repo from `--repo` or `issueWorkflow.teamRepoMap`, creates a worktree with `git worktree add`, links it via the `@jmux-linear-issue` tmux option, and (unless `--no-launch-agent`) launches Claude with the issue context. When a tracker is configured, an issue id that doesn't resolve is rejected (no silent worktree for a typo); only with no tracker configured does `issue start` proceed offline, and only when `--repo` is given explicitly.
-- `jmux ctl status` is the orchestrator's source of truth for issue/MR links. Links set via `jmux ctl issue link` / `issue start` are stored as tmux session options and always appear in `status`; a running TUI does not yet re-render them in its sidebar (it reads its own in-memory link store), so Jarred's sidebar and your `status` view can differ until a later pass teaches the TUI to read the tmux-option links.
+- `issue get` / `issue move` / `issue start` and every `workflow` command need a configured tracker (`LINEAR_API_KEY` or `LINEAR_TOKEN`). `issue start` resolves the repo from `--repo` or `issueWorkflow.teamRepoMap`, creates the worktree with the same tool the TUI would (`wtm` or `git worktree add`) at `<repo>/<session>`, links it via the `@jmux-linear-issue` tmux option, and (unless `--no-launch-agent`) launches Claude with the issue context. When a tracker is configured, an issue id that doesn't resolve is rejected (no silent worktree for a typo); only with no tracker configured does `issue start` proceed offline, and only when `--repo` is given explicitly.
+- `workflow` sees a session's issue through explicit links (both stores) and the derived session name — the same resolution the sidebar uses. A session whose issue is reachable only by traversing its branch's merge request appears under `ungrouped`; that traversal costs an API call per session, which a one-shot command doesn't make.
+- `parked` in `workflow board` is a conservative superset of what the sidebar shows. Four of the five unpark triggers (a new comment, MR activity, a red pipeline, a state regression) are edges measured against a baseline captured when the session parked, and that history lives in the running TUI's memory. The `agent-attention` trigger and idle auto-park are read from tmux and are exact. So a session the human's sidebar has already pulled back out may still read as `parked` here — never the reverse.
 - `session attention` survives jmux TUI restarts. (Older builds cleared `@jmux-attention` on every launch; that cleanup is now a one-time-per-tmux-server legacy migration, so orchestrator-set flags persist.)

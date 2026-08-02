@@ -16,12 +16,11 @@ import {
   type DetailLine,
 } from "./issue-detail";
 
-export type IssueSessionState = "none" | "worktree" | "session";
-
-export interface IssueSessionInfo {
-  state: IssueSessionState;
-  sessionName: string;  // tmux session name; for "worktree", the name a session would take
-}
+// Defined where they are resolved, so a renderer import doesn't drag rendering
+// into the CLI paths that only need the resolution. Re-exported because this is
+// where every existing caller imports them from.
+import type { IssueSessionState, IssueSessionInfo } from "./issue-session";
+export type { IssueSessionState, IssueSessionInfo };
 
 export interface RenderableItem {
   id: string;

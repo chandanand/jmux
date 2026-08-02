@@ -4,9 +4,9 @@ import {
   parseIssueLinkRow,
   findSessionForIssue,
   decideIssueLink,
-  slugify,
-  computeBranchName,
-  computeWorktreePath,
+  decideStartReuse,
+  startSessionName,
+  matchStatus,
   resolveRepoForIssue,
   expandTilde,
   validateIssueCreate,
@@ -69,6 +69,11 @@ describe("findSessionForIssue", () => {
   test("returns null when no session is linked", () => {
     expect(findSessionForIssue([linkRow({ issue: "" })], "TRA-9")).toBeNull();
   });
+
+  test("matches regardless of case — the option holds whatever was typed", () => {
+    const rows = [linkRow({ name: "b", issue: "TRA-9" })];
+    expect(findSessionForIssue(rows, "tra-9")?.name).toBe("b");
+  });
 });
 
 describe("decideIssueLink (strict 1:1 invariant)", () => {
@@ -98,43 +103,86 @@ describe("decideIssueLink (strict 1:1 invariant)", () => {
     const rows = [linkRow({ name: "a", issue: "" })];
     expect(decideIssueLink(rows, "a", "TRA-1")).toEqual({ kind: "ok" });
   });
-});
 
-describe("slugify", () => {
-  test("lowercases, collapses non-alphanumerics, trims dashes", () => {
-    expect(slugify("Fix the Auth! Bug")).toBe("fix-the-auth-bug");
-  });
-
-  test("truncates long titles without a trailing dash", () => {
-    const s = slugify("a".repeat(30) + " " + "b".repeat(30));
-    expect(s.length).toBeLessThanOrEqual(40);
-    expect(s.endsWith("-")).toBe(false);
+  test("a case difference is the same issue, not a second one", () => {
+    // Otherwise the 1:1 invariant is defeated by a shift key: `tra-1` would
+    // link happily to a second session while `TRA-1` already owned one.
+    expect(decideIssueLink([linkRow({ name: "a", issue: "TRA-1" })], "a", "tra-1"))
+      .toEqual({ kind: "noop" });
+    const twoSessions = [linkRow({ name: "a", issue: "" }), linkRow({ name: "b", issue: "TRA-1" })];
+    expect(decideIssueLink(twoSessions, "a", "tra-1").kind).toBe("error");
   });
 });
 
-describe("computeBranchName", () => {
+describe("decideStartReuse", () => {
+  test("a session carrying the link is reused, before the session name is known", () => {
+    const rows = [linkRow({ name: "whatever", issue: "TRA-1" })];
+    expect(decideStartReuse(rows, "TRA-1", null)).toEqual({ kind: "linked", row: rows[0]! });
+  });
+
+  test("nothing to reuse before the name is known means keep going", () => {
+    expect(decideStartReuse([linkRow({ name: "a", issue: "" })], "TRA-1", null))
+      .toEqual({ kind: "none" });
+  });
+
+  test("an unlinked session on the derived name is adopted, not duplicated", () => {
+    // The TUI records its link in state.json, which the CLI cannot read, so a
+    // session jmux started looks unlinked here. Now that both derive the same
+    // name, this is the path that stops `new-session` failing on a duplicate.
+    const rows = [linkRow({ name: "tra-1-fix", issue: "" })];
+    expect(decideStartReuse(rows, "TRA-1", "tra-1-fix"))
+      .toEqual({ kind: "adopt", row: rows[0]! });
+  });
+
+  test("a session on the name linked to a different issue is a conflict, not a clobber", () => {
+    const rows = [linkRow({ name: "tra-1-fix", issue: "TRA-999" })];
+    const decision = decideStartReuse(rows, "TRA-1", "tra-1-fix");
+    expect(decision.kind).toBe("conflict");
+    expect((decision as { message: string }).message).toContain("TRA-999");
+  });
+
+  test("no session on the name means provision", () => {
+    expect(decideStartReuse([linkRow({ name: "other", issue: "" })], "TRA-1", "tra-1-fix"))
+      .toEqual({ kind: "none" });
+  });
+});
+
+describe("startSessionName", () => {
   test("prefers the tracker's branchName, sanitized", () => {
-    expect(computeBranchName("TRA-1", issue({ branchName: "jarred/tra-1.fix" }))).toBe(
-      "jarred/tra-1_fix",
-    );
+    expect(startSessionName("TRA-1", issue({ branchName: "jarred/tra-1.fix" }), "{identifier}"))
+      .toBe("jarred/tra-1_fix");
   });
 
-  test("falls back to <issueId>-<slug>", () => {
-    expect(computeBranchName("TRA-1", issue({ title: "Fix Auth", branchName: undefined }))).toBe(
-      "TRA-1-fix-auth",
-    );
+  test("uses the repo's session name template — the TUI's rule, not a second one", () => {
+    expect(
+      startSessionName("TRA-123", issue({ title: "Fix Auth", branchName: undefined }), "{identifier}"),
+    ).toBe("tra-123");
+    expect(
+      startSessionName(
+        "TRA-123",
+        issue({ title: "Fix Auth", branchName: undefined }),
+        "{identifier}-{title}",
+      ),
+    ).toBe("tra-123-fix-auth");
   });
 
-  test("falls back to the bare id with no issue", () => {
-    expect(computeBranchName("TRA-1", null)).toBe("TRA-1");
+  test("falls back to the bare id offline, where there is no issue to template", () => {
+    expect(startSessionName("TRA-1", null, "{identifier}-{title}")).toBe("TRA-1");
   });
 });
 
-describe("computeWorktreePath", () => {
-  test("places the worktree in a sibling -worktrees directory", () => {
-    expect(computeWorktreePath("/Users/j/code/webapp", "TRA-1-fix")).toBe(
-      "/Users/j/code/webapp-worktrees/TRA-1-fix",
-    );
+describe("matchStatus", () => {
+  const available = ["To do", "In Progress", "QA (RELEASE BR)"];
+
+  test("returns the tracker's canonical spelling, not what was typed", () => {
+    // updateStatus matches exactly and no-ops silently on a miss, so echoing
+    // the caller's casing back at it would turn a typo into a silent success.
+    expect(matchStatus("in progress", available)).toBe("In Progress");
+    expect(matchStatus("  QA (release br) ", available)).toBe("QA (RELEASE BR)");
+  });
+
+  test("returns null for a status the issue cannot move to", () => {
+    expect(matchStatus("Shipped", available)).toBeNull();
   });
 });
 

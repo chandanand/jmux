@@ -6,6 +6,7 @@ import { handleRunClaude } from "./cli/run-claude";
 import { handleAgent, runAgentWatch } from "./cli/agent";
 import { handleStatus } from "./cli/status";
 import { handleIssue } from "./cli/issue";
+import { handleWorkflow } from "./cli/workflow";
 import { handleCc } from "./cli/cc";
 
 export interface ParsedCtlArgs {
@@ -22,6 +23,7 @@ const KNOWN_GROUPS = [
   "run-claude",
   "agent",
   "issue",
+  "workflow",
   "status",
   "cc",
 ] as const;
@@ -50,6 +52,7 @@ const VALUE_FLAGS = new Set([
   "title",
   "description",
   "team",
+  "stage",
 ]);
 const BOOL_FLAGS = new Set([
   "force",
@@ -76,7 +79,8 @@ GROUPS
   pane       Manage tmux panes
   run-claude Run a Claude Code agent in a session
   agent      Inspect agent state (agent state | agent watch)
-  issue      Capture/link/start work from issues (issue get|link|unlink|start|create)
+  issue      Work with issues (issue get|link|unlink|start|create|move)
+  workflow   The work pipeline (workflow stages|board|next|statuses)
   status     One-shot orchestration snapshot of the whole workspace
   cc         Command Center tabs (cc tabs)
 
@@ -104,8 +108,9 @@ FLAGS
   --base-branch <val>  Base branch for new worktree (issue start)
   --interval <val>     Poll interval in ms (agent watch)
   --tab <val>          Command Center tab id or name (pane pin)
+  --stage <val>        Narrow to one workflow stage id (workflow board)
   --all                Operate on all sessions (agent state/watch)
-  --start              Start work immediately after creating (issue create)
+  --start              Start the work immediately (issue create, workflow next)
   --no-launch-agent    Don't auto-launch Claude (issue start)
   --force              Skip confirmation prompts
   --no-enter           Don't send Enter after keys
@@ -174,7 +179,18 @@ export function parseCtlArgs(argv: string[]): ParsedCtlArgs {
   const positional: string[] = [];
   while (i < argv.length) {
     const arg = argv[i];
-    if (arg.startsWith("--")) {
+    if (arg === "-L") {
+      // Also accepted after the group. `--socket` already was (it is in
+      // GLOBAL_VALUE_FLAGS), so `-L` landing in `positional` instead meant
+      // `ctl workflow board -L other` silently read the *default* server —
+      // a wrong answer rather than an error, which is the worst shape for a
+      // command an agent is going to act on.
+      if (i + 1 >= argv.length) {
+        throw new CliError("Flag -L requires a value");
+      }
+      flags.socket = argv[++i];
+      i++;
+    } else if (arg.startsWith("--")) {
       const name = arg.slice(2);
       if (BOOL_FLAGS.has(name)) {
         flags[name] = true;
@@ -242,6 +258,9 @@ export async function runCtl(argv: string[]): Promise<void> {
         break;
       case "issue":
         result = await handleIssue(ctx, parsed);
+        break;
+      case "workflow":
+        result = await handleWorkflow(ctx, parsed);
         break;
       case "status":
         result = handleStatus(ctx, parsed);

@@ -108,9 +108,13 @@ Modals implement the `Modal` interface in `src/modal.ts` and are rendered as an 
 
 ### Agent control CLI
 
-`src/cli/*.ts` implements the `jmux ctl` subcommand — a structured JSON API for agents running inside jmux sessions to manage sibling sessions, windows, and panes programmatically. Subcommands: `session` (list/create/kill/rename/switch), `window` (list/create/select/kill), `pane` (list/split/send-keys/capture/kill), `run-claude` (dispatch Claude Code in a new session).
+`src/cli/*.ts` implements the `jmux ctl` subcommand — a structured JSON API for agents running inside jmux sessions to manage sibling sessions, windows, and panes programmatically. Subcommands: `session` (list/create/kill/rename/switch), `window` (list/create/select/kill), `pane` (list/split/send-keys/capture/kill), `run-claude` (dispatch Claude Code in a new session), `issue` (get/link/unlink/start/create/move), `workflow` (stages/board/next/statuses), `status`, `agent`, `cc`.
 
 All output is JSON to stdout. Context resolution (`src/cli/context.ts`) auto-detects the current tmux socket and session from the environment, or accepts `--socket` / `--session` flags.
+
+**There is no IPC to the running TUI**, so `workflow` re-derives the whole work pipeline from config + tmux + tracker. Agreeing with what the human sees is therefore bought by reusing the *same modules* the TUI renders from — `effectiveFilter`/`matchesIssueFilter` then `transformIssues`/`buildViewNodes` for membership and order, `stageForState` for which stage claims a status, `isParked`, `selectGhosts` — never by reimplementing their rules. A new pipeline command that computes its own answer is a bug waiting to be reported as "the CLI disagrees with my sidebar". The two honest gaps (parking's four poll-driven unpark signals, and session→issue links only reachable by MR traversal) are documented at the top of `cli/workflow.ts` and in the skill file.
+
+**`src/issue-session.ts` is the one implementation of issue→session**, shared by the TUI and the CLI: the session name (`sessionNameTemplate`, or the tracker's own `branchName`), the worktree path (`<repoDir>/<session>`), and the resolution to `none`/`worktree`/`session`. It exists because those rules lived in two places and disagreed, so a session `ctl issue start` created was invisible to the sidebar, which kept offering to start the same work. Two link stores feed it and neither adopts the other's key: `state.json` holds the tracker's id (the TUI can't move off it) and `@jmux-linear-issue` holds an identifier (the CLI can't use `state.json` — a running TUI holds it in memory and would clobber the write). `linkKey` normalizes both and `resolveIssueSession` looks up both forms.
 
 The skill file `skills/jmux-control.md` documents usage patterns for agents — it's loaded as a Claude Code skill so agents inside jmux can discover and use the CLI.
 

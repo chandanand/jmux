@@ -104,6 +104,42 @@ describe("parseCtlArgs", () => {
     expect(result.flags.reason).toBe("ci failed");
   });
 
+  test("-L is honored after the group, not swallowed as a positional", () => {
+    // Otherwise it silently reads the default server instead of the named one.
+    const result = parseCtlArgs(["workflow", "board", "-L", "other"]);
+    expect(result.flags.socket).toBe("other");
+    expect(result.positional).toEqual([]);
+  });
+
+  test("-L after the group still requires a value", () => {
+    expect(() => parseCtlArgs(["workflow", "board", "-L"])).toThrow();
+  });
+
+  test("parses workflow actions", () => {
+    for (const action of ["stages", "board", "next", "statuses"]) {
+      const result = parseCtlArgs(["workflow", action]);
+      expect(result.group).toBe("workflow");
+      expect(result.action).toBe(action);
+    }
+  });
+
+  test("parses workflow board --stage as a value flag, not a boolean", () => {
+    const result = parseCtlArgs(["workflow", "board", "--stage", "in-progress"]);
+    expect(result.flags.stage).toBe("in-progress");
+  });
+
+  test("parses workflow next --start", () => {
+    const result = parseCtlArgs(["workflow", "next", "--start"]);
+    expect(result.flags.start).toBe(true);
+  });
+
+  test("parses issue move with two positional args", () => {
+    const result = parseCtlArgs(["issue", "move", "TRA-1", "In Review"]);
+    expect(result.group).toBe("issue");
+    expect(result.action).toBe("move");
+    expect(result.positional).toEqual(["TRA-1", "In Review"]);
+  });
+
   test("parses issue link with two positional args", () => {
     const result = parseCtlArgs(["issue", "link", "TRA-1", "session-name"]);
     expect(result.group).toBe("issue");

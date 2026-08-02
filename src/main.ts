@@ -70,6 +70,12 @@ import { DEFAULT_VIEW, parseSupportedFlags, sameView, spawnArgs, viewLabel, view
 import { InfoPanel, rebuildInfoPanelColors } from "./info-panel";
 import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, parkedStages, toggleParkedState, effectiveFilter, stageForState, stageInSidebar, stageShowsUnstarted, type PanelView } from "./panel-view";
 import { transformIssues, transformMrs, buildViewNodes, renderView, createViewState, filterItems, rebuildPanelViewColors, computeViewLayout, splitRatioForSepRow, DEFAULT_PANEL_SPLIT_RATIO, type ViewState, type ViewNode, type IssueSessionInfo } from "./panel-view-renderer";
+import {
+  linkKey,
+  issueWorktreePath,
+  resolveIssueSession,
+  resolveIssueSessionName as sharedIssueSessionName,
+} from "./issue-session";
 import { createAdapters } from "./adapters/registry";
 import { PollCoordinator } from "./adapters/poll-coordinator";
 import { SessionState } from "./session-state";
@@ -255,6 +261,8 @@ Agent Control (JSON output):
   jmux ctl session create        Create a session
   jmux ctl run-claude            Launch Claude Code in a new session
   jmux ctl pane capture          Read pane contents
+  jmux ctl workflow board        Your stages, their sessions and unstarted work
+  jmux ctl workflow next --start Start the next thing in the queue
   jmux ctl --help                Show all ctl subcommands
 
 Keybindings (Ctrl-a ? shows these in the app, and everything else):
@@ -2659,15 +2667,29 @@ async function zoomDiffPanel(): Promise<void> {
 
 // --- Session data helpers ---
 
+/**
+ * US-separated rather than colon-separated because the last field is a user
+ * option: `jmux ctl issue link <session> <anything>` puts arbitrary text in
+ * `@jmux-linear-issue`, and a colon in it would shift every field after it.
+ */
+const SESSION_LIST_FORMAT = [
+  "#{session_id}",
+  "#{session_name}",
+  "#{session_activity}",
+  "#{session_attached}",
+  "#{session_windows}",
+  "#{@jmux-linear-issue}",
+].join(US);
+
 async function fetchSessions(): Promise<void> {
   try {
     const lines = await control.sendCommand(
-      `list-sessions -f "${INTERNAL_SESSION_FILTER}" -F '#{session_id}:#{session_name}:#{session_activity}:#{session_attached}:#{session_windows}'`,
+      `list-sessions -f "${INTERNAL_SESSION_FILTER}" -F '${SESSION_LIST_FORMAT}'`,
     );
     const sessions: SessionInfo[] = lines
       .filter((l) => l.length > 0)
       .map((line) => {
-        const [id, name, activity, attached, windows] = line.split(":");
+        const [id, name, activity, attached, windows, issueLink] = splitFields(line);
         const cached = sessionDetailsCache.get(id);
         return {
           id,
@@ -2678,6 +2700,7 @@ async function fetchSessions(): Promise<void> {
           directory: cached?.directory,
           gitBranch: cached?.gitBranch,
           project: cached?.project,
+          ...(issueLink ? { issueLink } : {}),
         };
       });
     currentSessions = sessions;
@@ -5328,21 +5351,16 @@ function handleSettingsInput(data: string): void {
   scheduleRender();
 }
 
-function resolveIssueSessionName(issue: import("./adapters/types").Issue): string | null {
-  const workflow = configStore.config.issueWorkflow;
-  const repoDir = workflow?.teamRepoMap?.[issue.team ?? ""];
-  if (!repoDir) return null;
+/** The repo an issue routes to, home-expanded, or null when its team is unmapped. */
+function issueRepoDir(issue: Pick<import("./adapters/types").Issue, "team">): string | null {
+  const repoDir = configStore.config.issueWorkflow?.teamRepoMap?.[issue.team ?? ""];
+  return repoDir ? repoDir.replace("~", homedir()) : null;
+}
 
-  let branchName: string;
-  if (issue.branchName) {
-    branchName = issue.branchName;
-  } else {
-    const template = repoSettingsFor(repoDir.replace("~", homedir())).sessionNameTemplate;
-    branchName = template
-      .replace("{identifier}", issue.identifier.toLowerCase())
-      .replace("{title}", issue.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40));
-  }
-  return sanitizeTmuxSessionName(branchName);
+function resolveIssueSessionName(issue: import("./adapters/types").Issue): string | null {
+  const repoDir = issueRepoDir(issue);
+  if (!repoDir) return null;
+  return sharedIssueSessionName(issue, repoSettingsFor(repoDir).sessionNameTemplate);
 }
 
 /**
@@ -5405,7 +5423,7 @@ async function startWorkOnIssue(
 
           // STATE 2: Worktree exists but no session → launch claude directly
           if (issueState === "worktree") {
-            const wtPath = `${expandedDir}/${session}`;
+            const wtPath = issueWorktreePath(expandedDir, session);
             await control.sendCommand(
               `new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(wtPath)} ${tq(claudeFragment)}`,
             );
@@ -5419,7 +5437,7 @@ async function startWorkOnIssue(
           // gets a worktree; `wtmIntegration` picks the mechanism only, so
           // both paths land the same `<repo>/<session>` directory and the
           // session name doubles as the branch name (the one-name rule).
-          const wtPath = `${expandedDir}/${session}`;
+          const wtPath = issueWorktreePath(expandedDir, session);
           // Main (left) pane runs claude — but first it has to wait for the
           // sibling setup pane to materialize the worktree directory. Tmux
           // wants a cwd that exists at split time, so we open the pane in
@@ -5590,7 +5608,13 @@ async function startUpNext(): Promise<void> {
 }
 
 /**
- * Explicit issue→session links, keyed by issue id.
+ * Explicit issue→session links, from both stores that hold them.
+ *
+ * `state.json` is the TUI's own store, keyed by the tracker's issue id; the
+ * `@jmux-linear-issue` tmux option is what `jmux ctl` writes, keyed by whatever
+ * identifier the agent passed. Both are indexed here through `linkKey` and
+ * `resolveIssueSession` looks up both forms, which is what lets the sidebar see
+ * work an agent started without either store adopting the other's key.
  *
  * An explicit link (set with the L key) wins over the workflow-derived name so
  * re-linking an issue to a different session is honoured. If several live
@@ -5599,11 +5623,15 @@ async function startUpNext(): Promise<void> {
 function explicitIssueLinks(): Map<string, string> {
   const currentName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
   const links = new Map<string, string>();
+  const add = (rawKey: string, sessionName: string) => {
+    const key = linkKey(rawKey);
+    if (!key) return;
+    const existing = links.get(key);
+    if (!existing || sessionName === currentName) links.set(key, sessionName);
+  };
   for (const session of currentSessions) {
-    for (const id of sessionState.getLinkedIssueIds(session.name)) {
-      const existing = links.get(id);
-      if (!existing || session.name === currentName) links.set(id, session.name);
-    }
+    for (const id of sessionState.getLinkedIssueIds(session.name)) add(id, session.name);
+    if (session.issueLink) add(session.issueLink, session.name);
   }
   return links;
 }
@@ -5617,36 +5645,31 @@ function explicitIssueLinks(): Map<string, string> {
  * poll, a synchronous scan of the whole backlog per frame when pty output is
  * driving repaints.
  *
- * `links` is optional so the batch caller builds the reverse index once instead
- * of once per issue.
+ * `links` and `liveSessions` are optional so the batch caller builds each index
+ * once instead of once per issue.
  */
 function issueSessionStateFor(
   issue: import("./adapters/types").Issue,
   links?: Map<string, string>,
+  liveSessions?: Set<string>,
 ): IssueSessionInfo | undefined {
-  const explicit = (links ?? explicitIssueLinks()).get(issue.id);
-  if (explicit) return { state: "session", sessionName: explicit };
-
-  const workflow = configStore.config.issueWorkflow;
-  if (!workflow?.teamRepoMap) return undefined;
-  const session = resolveIssueSessionName(issue);
-  if (!session) return undefined;
-
-  if (currentSessions.some((s) => s.name === session)) {
-    return { state: "session", sessionName: session };
-  }
-
-  const repoDir = workflow.teamRepoMap[issue.team ?? ""];
-  if (!repoDir) return undefined;
-  const wtPath = `${repoDir.replace("~", homedir())}/${session}`;
-  return existsSync(wtPath) ? { state: "worktree", sessionName: session } : undefined;
+  const repoDir = issueRepoDir(issue);
+  return resolveIssueSession({
+    issue,
+    links: links ?? explicitIssueLinks(),
+    liveSessions: liveSessions ?? new Set(currentSessions.map((s) => s.name)),
+    repoDir,
+    sessionNameTemplate: repoDir ? repoSettingsFor(repoDir).sessionNameTemplate : "",
+    worktreeExists: existsSync,
+  });
 }
 
 function getIssueSessionStates(): Map<string, IssueSessionInfo> {
   const states = new Map<string, IssueSessionInfo>();
   const links = explicitIssueLinks();
+  const liveSessions = new Set(currentSessions.map((s) => s.name));
   for (const issue of pollCoordinator.getGlobalIssues()) {
-    const info = issueSessionStateFor(issue, links);
+    const info = issueSessionStateFor(issue, links, liveSessions);
     if (info) states.set(issue.id, info);
   }
   return states;
