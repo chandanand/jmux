@@ -150,3 +150,44 @@ describe("InfoPanel tab counts", () => {
     expect(panel(new Map([["diff", 9]])).tabLabel("diff")).toBe(" Diff ");
   });
 });
+
+describe("InfoPanel — the diff badge", () => {
+  const fresh = () => new InfoPanel({ viewIds: [], viewLabels: new Map() });
+
+  test("no badge renders the plain label", () => {
+    expect(fresh().tabLabel("diff")).toBe(" Diff ");
+  });
+
+  test("a badge renders beside the label", () => {
+    const p = fresh();
+    p.setDiffBadge("+13 −4");
+    expect(p.tabLabel("diff")).toBe(" Diff +13 −4 ");
+  });
+
+  test("clearing returns to the plain label", () => {
+    const p = fresh();
+    p.setDiffBadge("+13 −4");
+    p.setDiffBadge(null);
+    expect(p.tabLabel("diff")).toBe(" Diff ");
+  });
+
+  // The badge is live state from hunk's daemon; a config reload rebuilding the
+  // view tabs has nothing to do with it and must not drop it.
+  test("survives a config reload", () => {
+    const p = fresh();
+    p.setDiffBadge("+13 −4 ●2");
+    p.updateConfig({ viewIds: ["urgent"], viewLabels: new Map([["urgent", "Urgent"]]) });
+    expect(p.tabLabel("diff")).toBe(" Diff +13 −4 ●2 ");
+  });
+
+  // The strip is hit-tested from the same layout it is painted from, so a
+  // widened label has to move the tabs that follow it.
+  test("a badge widens the tab and shifts the ones after it", () => {
+    const p = new InfoPanel({ viewIds: ["urgent"], viewLabels: new Map([["urgent", "Urgent"]]) });
+    const before = p.getTabRanges();
+    p.setDiffBadge("+13 −4");
+    const after = p.getTabRanges();
+    expect(after[0].endCol).toBeGreaterThan(before[0].endCol);
+    expect(after[1].startCol).toBeGreaterThan(before[1].startCol);
+  });
+});

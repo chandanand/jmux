@@ -130,6 +130,8 @@ export interface InputRouterOptions {
   onDiffPanelFocusToggle?: () => void;
   onDiffToggle?: () => void;
   onDiffZoom?: () => void;  // Ctrl-a z when diff panel is focused — toggles split/full
+  onDiffSendReview?: () => void;  // Ctrl-a r — hunk review notes → this session's agent
+  onDiffViewPicker?: () => void;  // Ctrl-a v — pick the changeset the Diff tab shows
   onPaneNavRight?: () => void;  // Shift+Right when diff panel is open — main.ts queries pane_at_right
   // Info panel tab / action callbacks
   onPanelPrevTab?: () => void;
@@ -503,6 +505,19 @@ export class InputRouter {
         }
         if (data === "z" && this.diffPanelFocused && this.layout.panel !== null) {
           this.opts.onDiffZoom?.();
+          return;
+        }
+        // Hand the review notes you left in the diff panel to the agent that
+        // wrote the code. Unconditional rather than gated on the panel being
+        // open: the notes live in hunk, not in the panel's visibility, and
+        // requiring the panel to be focused would mean reopening it just to
+        // send a review you already finished writing.
+        if (data === "r") {
+          this.opts.onDiffSendReview?.();
+          return;
+        }
+        if (data === "v") {
+          this.opts.onDiffViewPicker?.();
           return;
         }
         if (data === "\t" && this.layout.panel !== null) {

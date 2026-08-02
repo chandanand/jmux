@@ -118,6 +118,18 @@ The skill file `skills/jmux-control.md` documents usage patterns for agents — 
 
 **`src/diff-panel.ts`** provides an integrated hunk diff viewer that docks to the right side of the terminal or zooms to full width. It spawns an external `hunk` process and captures its output. The panel has focus toggling (keyboard input routes to hunk when focused) and survives session switches by re-spawning.
 
+**`src/hunk/`** talks to hunk's session daemon, which is what makes the panel more than a picture. `protocol.ts` is pure — wire shapes, defensive parsers, the badge and the review-prompt formatter; `client.ts` is the loopback HTTP transport; `view.ts` is the argv table for what the panel shows. Full write-up in `docs/diff-panel.md`; the rules that are easy to undo:
+
+- **The control plane is optional and "off" is a path that already ships.** No daemon, an older hunk, or `controlPlane: false` all land on the pre-daemon behaviour — a hunk pty and nothing more. There is no third mode.
+- **Sessions are matched by pid.** The daemon's pid for a jmux-spawned hunk *is* the pty child pid. Repo matching looks equivalent and isn't: dead sessions linger 45s and worktrees share a repo root, so `--repo` is stale-prone and ambiguous. Resolution retries for ~3s because the daemon is started by the TUI and isn't up yet on a cold start.
+- **Content changes by respawning, never by `hunk session reload`.** Reload is cheaper and wrong: after it retargets a session `--watch` stops firing, so the panel goes stale while an agent edits. One mechanism therefore covers session switches and view switches alike.
+- **Flags are probed, not assumed.** hunk 0.9 has `--watch` but not `--transparent-bg`, and an unknown flag makes hunk exit before drawing — the panel then shows only its "Diff viewer closed" state. `hunk diff --help` is parsed once per binary; presentation flags are dropped silently when absent, content flags (`--staged`, `--exclude-untracked`) refuse the view instead of substituting a different changeset.
+- **jmux does not manage hunk's layout.** `--mode auto` re-lays out live on resize and jmux already resizes the diff pty on relayout and drag. Only `--transparent-bg` is passed, because theme blending is the one thing hunk can't infer.
+- **Review notes are deleted by id, never in bulk**, or a note written while the confirm modal was open would be destroyed with the ones being sent.
+- **The tab strip appears for a lone Diff tab when the badge has something to say.** Otherwise the stats are invisible to every user with no tracker configured — which is everyone on first run.
+
+Two test paths, for the same reason `main.ts` has boot-smoke: `hunk-integration.test.ts` asserts the handshake inside `bun test` (skipped without tmux/hunk), and `scripts/review-loop-e2e.ts` drives the whole review loop by hand. The unit tests either side of the glue all passed while the feature was broken end to end, which is why the integration test exists.
+
 ### Agent state tracking
 
 The sidebar's RUNNING / WAITING / COMPLETE badges come from four tmux user

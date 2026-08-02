@@ -97,6 +97,30 @@ export interface JmuxConfig {
   diffPanel?: {
     splitRatio?: number;
     hunkCommand?: string;
+    /**
+     * Launch hunk with `--watch` so the panel follows the working tree instead
+     * of being a snapshot from whenever it opened. On by default; the only
+     * reason to turn it off is a filesystem where hunk's watcher misbehaves.
+     */
+    watch?: boolean;
+    /**
+     * Launch hunk with `--transparent-bg` so the panel reads as part of jmux's
+     * frame rather than a rectangle pasted onto it. On by default.
+     */
+    transparentBg?: boolean;
+    /**
+     * Talk to hunk's session daemon for diff stats, review notes and the
+     * review-to-agent send. On by default; off falls back to exactly the
+     * behaviour jmux had before the daemon existed — a hunk pty and nothing
+     * more — which is also what happens when no daemon answers.
+     */
+    controlPlane?: boolean;
+    /**
+     * Delete review notes from hunk once they have been sent to an agent, so
+     * the note badge always means "written but not yet sent". Off keeps them as
+     * a record, at the cost of every send re-sending everything.
+     */
+    clearNotesOnSend?: boolean;
   };
   adapters?: AdapterConfig;
   panelViews?: PanelView[];

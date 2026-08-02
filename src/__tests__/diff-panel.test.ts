@@ -77,13 +77,31 @@ describe("DiffPanel state machine", () => {
 });
 
 describe("DiffPanel empty panel", () => {
-  test("getEmptyGrid renders hint text", () => {
+  const textOf = (grid: ReturnType<DiffPanel["getEmptyGrid"]>) =>
+    grid.cells.flatMap((row) => row.map((c) => c.char)).join("");
+
+  test("getEmptyGrid says the viewer closed and how to get it back", () => {
     const panel = new DiffPanel();
     const grid = panel.getEmptyGrid(40, 10);
     expect(grid.cols).toBe(40);
     expect(grid.rows).toBe(10);
-    const allChars = grid.cells.flatMap(row => row.map(c => c.char)).join("");
-    expect(allChars).toContain("Ctrl-a");
+    const allChars = textOf(grid);
+    expect(allChars).toContain("Diff viewer closed");
+    expect(allChars).toContain("Enter");
+  });
+
+  // hunk now runs with --watch and follows the working tree on its own, so
+  // this hint would be an instruction to do something that achieves nothing.
+  test("getEmptyGrid no longer tells the user to switch sessions to reload", () => {
+    const panel = new DiffPanel();
+    expect(textOf(panel.getEmptyGrid(40, 10))).not.toContain("reload");
+  });
+
+  test("hint text survives a panel narrower than the hint", () => {
+    const panel = new DiffPanel();
+    const grid = panel.getEmptyGrid(12, 6);
+    expect(grid.cols).toBe(12);
+    expect(() => textOf(grid)).not.toThrow();
   });
 
   test("getEmptyGrid for not-found renders install hint", () => {

@@ -357,6 +357,22 @@ export const KEYMAP: readonly Binding[] = [
     prefixKey: "\t",
   },
   {
+    id: "diff-send-review",
+    keys: "Ctrl-a r",
+    label: "Send your review notes to this session's agent",
+    section: "Info panel",
+    source: "jmux",
+    prefixKey: "r",
+  },
+  {
+    id: "diff-view-picker",
+    keys: "Ctrl-a v",
+    label: "Choose what the Diff tab shows",
+    section: "Info panel",
+    source: "jmux",
+    prefixKey: "v",
+  },
+  {
     id: "panel-prev-tab",
     keys: "[",
     label: "Previous tab",

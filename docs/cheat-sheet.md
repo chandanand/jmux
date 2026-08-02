@@ -172,6 +172,8 @@ reaching for the palette once you have learned the chord.
 | `[` / `]` | Cycle tabs (Diff, Issues, MRs, Review) |
 | `Ctrl-a z` | Zoom panel (split ↔ full, when focused) |
 | `Ctrl-a Tab` | Switch focus between tmux and panel |
+| `Ctrl-a v` | Choose what the Diff tab shows |
+| `Ctrl-a r` | Send your review notes to this session's agent |
 | `Shift-Right` | Focus panel from rightmost pane |
 | `Shift-Left` | Return focus to tmux from panel |
 | Click panel | Focus panel for keyboard navigation |
@@ -179,7 +181,22 @@ reaching for the palette once you have learned the chord.
 
 The **Diff** tab is powered by [hunk](https://github.com/modem-dev/hunk). Install with `npm i -g hunkdiff`.
 
-In split mode, the panel docks to the right (~40% width). In full mode, it replaces the main area. Switching sessions reloads the diff automatically.
+In split mode, the panel docks to the right (~40% width). In full mode, it replaces the main area. The panel follows the working tree as an agent edits it, and switching sessions repoints it.
+
+### Reviewing an agent's work
+
+hunk 0.17+ runs a local session daemon, which lets jmux read the diff's shape
+and the notes you write on it. See [diff-panel.md](diff-panel.md) for the whole
+loop; the short version:
+
+1. `Ctrl-a g` — open the panel. The tab shows live `+N −M` for the changeset.
+2. `c` in the panel — write a note on the hunk under the cursor.
+3. `Ctrl-a r` — jmux shows what it will send, and on Enter types the notes into
+   the pane running this session's agent. Sent notes are cleared, so the `●N`
+   count on the tab always means "written but not sent yet".
+
+`Ctrl-a v` repoints the panel: working tree, staged, last commit, or everything
+your branch has added since it forked.
 
 ### Issue & MR views (when on Issues/MRs/Review tab)
 

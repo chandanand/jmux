@@ -3,7 +3,14 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 
-import { claudeConfigDir, detectSkill, installSkillTo, skillTarget } from "../../agent-hooks/skill";
+import {
+  claudeConfigDir,
+  detectSkill,
+  hunkSkillSource,
+  installSkillTo,
+  installedSkillPaths,
+  skillTarget,
+} from "../../agent-hooks/skill";
 
 const roots: string[] = [];
 
@@ -121,5 +128,78 @@ describe("installSkillTo", () => {
     expect(outcome.wrote).toBe(false);
     expect(lstatSync(target).isSymbolicLink()).toBe(true);
     expect(readFileSync(source, "utf-8")).toBe("live working tree\n");
+  });
+});
+
+// hunk ships its own review skill and prints its path; jmux installs a copy so
+// an agent in a jmux session can drive the Diff panel the user is reading.
+describe("the hunk-review skill", () => {
+  const HUNK_SHIPPED = "---\nname: hunk-review\n---\n\nsession CLI\n";
+
+  test("installs under hunk's own name, beside jmux's", () => {
+    const env = envWith(scratch());
+    installSkillTo(SHIPPED, env);
+    installSkillTo(HUNK_SHIPPED, env, "hunk-review");
+
+    expect(skillTarget(env, "hunk-review")).toBe(resolve(env.CLAUDE_CONFIG_DIR!, "skills/hunk-review/SKILL.md"));
+    expect(readFileSync(skillTarget(env), "utf-8")).toBe(SHIPPED);
+    expect(readFileSync(skillTarget(env, "hunk-review"), "utf-8")).toBe(HUNK_SHIPPED);
+  });
+
+  // Two skills, two independent states — installing one must not make the
+  // other look current.
+  test("each skill tracks its own state", () => {
+    const env = envWith(scratch());
+    installSkillTo(HUNK_SHIPPED, env, "hunk-review");
+
+    expect(detectSkill(HUNK_SHIPPED, env, "hunk-review")).toBe("current");
+    expect(detectSkill(SHIPPED, env)).toBe("absent");
+  });
+
+  // hunk upgrades on its own schedule, so a copy from an older hunk has to be
+  // replaceable by re-running the install.
+  test("a copy from an older hunk is stale and gets replaced", () => {
+    const env = envWith(scratch());
+    installSkillTo("---\nname: hunk-review\n---\n\nold\n", env, "hunk-review");
+
+    expect(detectSkill(HUNK_SHIPPED, env, "hunk-review")).toBe("stale");
+    const outcome = installSkillTo(HUNK_SHIPPED, env, "hunk-review");
+    expect(outcome.wrote).toBe(true);
+    expect(readFileSync(skillTarget(env, "hunk-review"), "utf-8")).toBe(HUNK_SHIPPED);
+  });
+
+  test("installedSkillPaths reports both, so uninstall removes both", () => {
+    const env = envWith(scratch());
+    installSkillTo(SHIPPED, env);
+    installSkillTo(HUNK_SHIPPED, env, "hunk-review");
+
+    const paths = installedSkillPaths(env);
+    expect(paths).toContain(skillTarget(env));
+    expect(paths).toContain(skillTarget(env, "hunk-review"));
+  });
+
+  test("only what is actually installed is reported", () => {
+    const env = envWith(scratch());
+    installSkillTo(SHIPPED, env);
+
+    const paths = installedSkillPaths(env);
+    expect(paths).toContain(skillTarget(env));
+    expect(paths).not.toContain(skillTarget(env, "hunk-review"));
+  });
+});
+
+describe("hunkSkillSource", () => {
+  // hunk is an optional dependency: no hunk is a normal outcome the install
+  // path reports and shrugs off, not an error.
+  test("a missing hunk yields null rather than throwing", () => {
+    expect(hunkSkillSource("definitely-not-a-real-binary-xyz")).toBeNull();
+  });
+
+  test("a real hunk yields its skill with jmux's addendum appended", () => {
+    const real = hunkSkillSource();
+    if (real === null) return; // hunk isn't installed on this machine
+    expect(real).toContain("name: hunk-review");
+    expect(real).toContain("Inside jmux");
+    expect(real).toContain("Ctrl-a g");
   });
 });

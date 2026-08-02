@@ -55,6 +55,18 @@ import { ImagePlane } from "./images/plane";
 import { StoreImagePort, setImagePort } from "./images/port";
 import { TmuxControl, type ControlEvent } from "./tmux-control";
 import { DiffPanel } from "./diff-panel";
+import { HunkClient } from "./hunk/client";
+import {
+  diffStats,
+  formatDiffBadge,
+  formatReviewPrompt,
+  sessionByPid,
+  supportsControlPlane,
+  userNotes,
+  type HunkNote,
+  type HunkSession,
+} from "./hunk/protocol";
+import { DEFAULT_VIEW, parseSupportedFlags, sameView, spawnArgs, viewLabel, viewRequiredFlag, type HunkView } from "./hunk/view";
 import { InfoPanel, rebuildInfoPanelColors } from "./info-panel";
 import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, parkedStages, toggleParkedState, effectiveFilter, stageForState, stageInSidebar, stageShowsUnstarted, type PanelView } from "./panel-view";
 import { transformIssues, transformMrs, buildViewNodes, renderView, createViewState, filterItems, rebuildPanelViewColors, computeViewLayout, splitRatioForSepRow, DEFAULT_PANEL_SPLIT_RATIO, type ViewState, type ViewNode, type IssueSessionInfo } from "./panel-view-renderer";
@@ -1166,22 +1178,31 @@ let lastActiveTabId: string = activeTabId;
 let currentStripChips: PlacedChip[] = [];
 let summaryByTab = new Map<string, AgentState | null>();
 
-const glassRunner = {
-  run: (args: string[]): { ok: boolean; lines: string[] } => {
-    const socketArgs = socketName ? ["-L", socketName] : [];
-    const proc = Bun.spawnSync(["tmux", ...socketArgs, ...args], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const ok = (proc.exitCode ?? 1) === 0;
-    const lines = proc.stdout
-      .toString()
-      .split("\n")
-      .map((l) => l.trim())
-      .filter(Boolean);
-    return { ok, lines };
-  },
-};
+/**
+ * Run one tmux command with argv rather than a command string.
+ *
+ * The control channel takes a *string*, so anything containing user or agent
+ * text has to be quoted into it correctly. This path takes an argument vector
+ * straight to the process, which is why the review send uses it: a review note
+ * is arbitrary prose and quoting it into a control-mode line is a bug waiting
+ * to be written.
+ */
+function runTmux(args: string[]): { ok: boolean; lines: string[] } {
+  const socketArgs = socketName ? ["-L", socketName] : [];
+  const proc = Bun.spawnSync(["tmux", ...socketArgs, ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const ok = (proc.exitCode ?? 1) === 0;
+  const lines = proc.stdout
+    .toString()
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  return { ok, lines };
+}
+
+const glassRunner = { run: runTmux };
 
 const otelReceiver = new OtelReceiver({
   onAgentResumeHint: (sessionName) => {
@@ -1223,6 +1244,26 @@ const diffPanel = new DiffPanel();
 let diffBridge: ScreenBridge | null = null;
 let diffPty: import("bun-pty").Terminal | null = null;
 let diffPanelFocused = false;
+
+// --- hunk control plane ---
+//
+// A hunk session is more than the bytes it paints: its daemon can say which
+// files changed, by how much, and what the user has written on them. jmux is
+// the only thing that knows *both* that and which agent produced the diff, so
+// this is what turns the panel from a viewer into a review loop.
+//
+// All of it is optional. `hunkSessionId` stays null when hunk is older than the
+// daemon, when the daemon isn't answering, or when the user turns it off, and
+// every consumer below treats that as "no control plane" — which lands on
+// exactly the behaviour the panel had before any of this existed.
+const hunkClient = new HunkClient();
+/** Our own hunk's daemon id, resolved from the pty child pid. */
+let hunkSessionId: string | null = null;
+/** Latest poll, for the tab badge and the review send. */
+let hunkSessionState: HunkSession | null = null;
+let hunkPollTimer: ReturnType<typeof setInterval> | null = null;
+/** The changeset the panel is pointed at. Per-panel, not per-session. */
+let diffView: HunkView = DEFAULT_VIEW;
 const settingsScreen = new SettingsScreen();
 const workflowScreen = new WorkflowScreen();
 const ghostPreview = new GhostPreview();
@@ -1905,6 +1946,46 @@ function killDiffProcess(): void {
     diffPty = null;
   }
   diffBridge = null;
+  // The poll follows the process, and this is the one place that owns that:
+  // resolveHunkSession starts it again once a new hunk registers. The daemon
+  // keeps dead sessions for up to 45s, so anything still holding this id would
+  // be polling a corpse — dropping it here is what makes "no control plane"
+  // the honest answer between kill and the next resolve.
+  stopHunkPoll();
+  hunkSessionId = null;
+  hunkSessionState = null;
+  infoPanel.setDiffBadge(null);
+}
+
+/**
+ * Which optional flags this hunk accepts, read from its own `--help` and cached
+ * per binary.
+ *
+ * jmux supports whatever hunk the user has installed, and they don't all take
+ * the same flags: hunk 0.9 exits with "unknown option" on `--transparent-bg`
+ * before drawing anything, which turns the panel into a blank "Diff viewer
+ * closed" the moment jmux passes a flag it happens to know about. Asking costs
+ * one subprocess the first time a given binary is used.
+ *
+ * Keyed on the resolved path, so a user who changes which hunk is on PATH gets
+ * re-probed rather than inheriting the previous binary's answer.
+ */
+const hunkFlagCache = new Map<string, Set<string>>();
+
+function hunkFlags(hunkPath: string): Set<string> {
+  const cached = hunkFlagCache.get(hunkPath);
+  if (cached) return cached;
+
+  let flags = new Set<string>();
+  try {
+    const proc = Bun.spawnSync([hunkPath, "diff", "--help"], { stdout: "pipe", stderr: "pipe" });
+    // Some builds print help on stderr; read both rather than guess.
+    flags = parseSupportedFlags(proc.stdout.toString() + proc.stderr.toString());
+  } catch {
+    // An empty set yields the bare command, which every hunk has accepted.
+  }
+  hunkFlagCache.set(hunkPath, flags);
+  return flags;
 }
 
 async function spawnHunk(cols: number, rows: number): Promise<void> {
@@ -1923,9 +2004,38 @@ async function spawnHunk(cols: number, rows: number): Promise<void> {
     return;
   }
 
+  // Content is chosen here, at spawn, and changed by respawning — never by
+  // `hunk session reload`. Reload looks like the cheaper option and isn't:
+  // once it retargets a session, `--watch` stops firing, so the panel goes
+  // quietly stale while an agent keeps editing. A visible respawn beats a
+  // panel that lies. See src/hunk/view.ts.
+  const args = spawnArgs(
+    diffView,
+    {
+      watch: configStore.config.diffPanel?.watch ?? true,
+      transparentBg: configStore.config.diffPanel?.transparentBg ?? true,
+    },
+    hunkFlags(hunkPath),
+  );
+  if (!args) {
+    // Either an unusable ref or a view this hunk is too old to render. Fall
+    // back to the working tree rather than leaving the panel dark, and reset
+    // the view so the picker's mark matches what is actually on screen.
+    const refused = diffView;
+    diffView = DEFAULT_VIEW;
+    showNotice({
+      title: "Can't show that diff",
+      message: `hunk can't render "${viewLabel(refused)}" here.`,
+      hint: "Showing the working tree instead. An older hunk may not support this view.",
+      tone: "warn",
+    });
+    await spawnHunk(cols, rows);
+    return;
+  }
+
   const { Terminal } = await import("bun-pty");
   diffBridge = new ScreenBridge(cols, rows);
-  const pty_ = new Terminal(hunkPath, ["diff"], {
+  const pty_ = new Terminal(hunkPath, args, {
     name: "xterm-256color",
     cols,
     rows,
@@ -1933,6 +2043,7 @@ async function spawnHunk(cols: number, rows: number): Promise<void> {
     cwd,
   });
   diffPty = pty_;
+  void resolveHunkSession(pty_);
 
   pty_.onData((data: string) => {
     if (diffPty !== pty_ || !diffBridge) return;
@@ -1944,8 +2055,93 @@ async function spawnHunk(cols: number, rows: number): Promise<void> {
     if (diffPty !== pty_) return;
     diffPanel.setHunkExited(true);
     diffPty = null;
+    stopHunkPoll();
+    hunkSessionId = null;
+    hunkSessionState = null;
+    infoPanel.setDiffBadge(null);
     scheduleRender();
   });
+}
+
+/** ~3s of resolve window, which comfortably covers a cold daemon start. */
+const HUNK_RESOLVE_ATTEMPTS = 15;
+const HUNK_RESOLVE_INTERVAL_MS = 200;
+/**
+ * Poll cadence for diff stats and review notes. Slow on purpose: hunk's own
+ * `--watch` keeps the *picture* current, and this only feeds a tab badge, so
+ * there is nothing to gain from chasing frame rate.
+ */
+const HUNK_POLL_INTERVAL_MS = 1500;
+
+/**
+ * Find the daemon's record of the hunk we just spawned, then start polling it.
+ *
+ * Retried rather than asked once, because the daemon is started *by* the hunk
+ * TUI: on the first hunk of a session there is nothing listening yet, and a
+ * single probe would decide "no control plane" for a daemon that comes up
+ * 200ms later. Bounded so a machine with no hunk daemon at all doesn't retry
+ * forever — after the window, the panel simply runs without a control plane.
+ *
+ * Matching is by pid, never by repo: the daemon keeps dead sessions for 45s
+ * and several sessions routinely share a repo root, so repo matching is both
+ * stale-prone and ambiguous. The pid is exact.
+ */
+async function resolveHunkSession(pty_: import("bun-pty").Terminal): Promise<void> {
+  if (configStore.config.diffPanel?.controlPlane === false) return;
+  if (!supportsControlPlane(await hunkClient.probe())) {
+    // One retry after a beat: a cold daemon is the expected first-run state.
+    await Bun.sleep(HUNK_RESOLVE_INTERVAL_MS);
+    if (diffPty !== pty_) return;
+    if (!supportsControlPlane(await hunkClient.probe())) return;
+  }
+
+  for (let attempt = 0; attempt < HUNK_RESOLVE_ATTEMPTS; attempt++) {
+    // A newer hunk replaced us mid-resolve — abandon rather than binding this
+    // poll to a process that is already gone.
+    if (diffPty !== pty_) return;
+    const session = sessionByPid(await hunkClient.list(), pty_.pid);
+    if (session) {
+      if (diffPty !== pty_) return;
+      hunkSessionId = session.sessionId;
+      applyHunkSession(session);
+      startHunkPoll();
+      return;
+    }
+    await Bun.sleep(HUNK_RESOLVE_INTERVAL_MS);
+  }
+}
+
+function startHunkPoll(): void {
+  if (hunkPollTimer) return;
+  hunkPollTimer = setInterval(() => void pollHunkSession(), HUNK_POLL_INTERVAL_MS);
+}
+
+function stopHunkPoll(): void {
+  if (!hunkPollTimer) return;
+  clearInterval(hunkPollTimer);
+  hunkPollTimer = null;
+}
+
+async function pollHunkSession(): Promise<void> {
+  const id = hunkSessionId;
+  if (!id) return;
+  const session = await hunkClient.get(id);
+  // Don't clear on a miss. A momentary daemon hiccup would otherwise blank the
+  // badge and re-add it a second later, which reads as flicker rather than as
+  // information; the process exiting is what clears it, and that path is
+  // explicit above.
+  if (!session || hunkSessionId !== id) return;
+  applyHunkSession(session);
+}
+
+/** Push a fresh poll into the surfaces that show it. */
+function applyHunkSession(session: HunkSession): void {
+  hunkSessionState = session;
+  // Width drives how tightly the badge is packed. The panel is always open
+  // while this polls (closing it kills hunk), so the fallback is belt-and-braces.
+  const badge = formatDiffBadge(diffStats(session), userNotes(session.notes).length, getDiffPanelCols() || 80);
+  infoPanel.setDiffBadge(badge);
+  scheduleRender();
 }
 
 /**
@@ -2203,6 +2399,249 @@ async function toggleDiffPanel(): Promise<void> {
     relayout();
     setDiffFocus(false);
   }
+}
+
+/**
+ * Point the panel at a different changeset.
+ *
+ * Resets to the default whenever the *session* changes rather than carrying the
+ * choice across: a view is built from one worktree's refs, and "Branch vs main"
+ * is a different diff in every session — silently reinterpreting it against the
+ * session the user just switched to would show them a changeset they never
+ * asked for.
+ */
+async function setDiffView(view: HunkView): Promise<void> {
+  if (sameView(view, diffView) && diffPty) return;
+  diffView = view;
+  if (!diffPanel.isActive()) {
+    await toggleDiffPanel();
+    return;
+  }
+  infoPanel.setActiveTab("diff");
+  inputRouter.setPanelTabsActive(false);
+  await spawnHunk(getDiffPanelCols(), layout.ptyRows);
+  scheduleRender();
+}
+
+// --- Review notes → the agent that wrote the diff ---
+//
+// The whole reason the control plane is worth having. hunk knows what the user
+// wrote on each hunk; jmux knows which pane is running the agent that produced
+// those hunks. Neither can close the loop alone.
+
+/**
+ * The pane to type at for a session.
+ *
+ * `@jmux-agent-pane` is the protocol's own answer and is preferred. The
+ * fallback reads `@jmux-agent-kind` per pane, which is the only trustworthy
+ * pane-level identity: `@jmux-agent-state` *inherits* from the session, so
+ * "has state" is true of every pane including editors and shells, while
+ * nothing writes `kind` at session scope. Order matters — an explicit pane
+ * beats a guess.
+ */
+function resolveAgentPane(sessionId: string): string | null {
+  const explicit = runTmux(["show-options", "-v", "-t", sessionId, "@jmux-agent-pane"]);
+  if (explicit.ok && explicit.lines[0]) return explicit.lines[0];
+
+  const panes = runTmux(["list-panes", "-s", "-t", sessionId, "-F", "#{pane_id} #{@jmux-agent-kind}"]);
+  if (!panes.ok) return null;
+  for (const line of panes.lines) {
+    const [paneId, kind] = line.split(" ");
+    if (paneId && kind) return paneId;
+  }
+  return null;
+}
+
+/**
+ * Type text into a pane as a single paste.
+ *
+ * Bracketed paste, not a bare send-keys: a multi-note review contains newlines,
+ * and every one of them would otherwise arrive as Enter and submit the prompt a
+ * third of the way through. Wrapped in the paste markers, an agent's readline
+ * takes the whole thing as one block and the trailing Enter submits it once.
+ */
+function pasteIntoPane(paneId: string, text: string): boolean {
+  const bracketed = `\x1b[200~${text}\x1b[201~`;
+  if (!runTmux(["send-keys", "-t", paneId, "-l", "--", bracketed]).ok) return false;
+  return runTmux(["send-keys", "-t", paneId, "Enter"]).ok;
+}
+
+/**
+ * Show the review, then send it on confirm.
+ *
+ * Confirmed rather than fired directly because this is the one action here that
+ * puts words into an agent's context and sets it working — the user should see
+ * exactly what lands before it does.
+ */
+async function sendReviewToAgent(): Promise<void> {
+  const sessionId = currentSessionId;
+  if (!sessionId) return;
+
+  if (!hunkSessionId) {
+    showNotice({
+      title: "No review to send",
+      message: diffPanel.isActive()
+        ? "hunk's session daemon isn't answering, so jmux can't read your notes."
+        : "Open the Diff tab with Ctrl-a g and leave notes with c first.",
+    });
+    return;
+  }
+
+  // Read fresh rather than using the last poll: a note written in the second
+  // before the keypress would otherwise be left behind without a trace.
+  const notes = userNotes(await hunkClient.notes(hunkSessionId, "user"));
+  if (notes.length === 0) {
+    showNotice({
+      title: "No review to send",
+      message: "Press c in the diff panel to write a note on a hunk, then send.",
+    });
+    return;
+  }
+
+  const pane = resolveAgentPane(sessionId);
+  if (!pane) {
+    showNotice({
+      title: "No agent to send to",
+      message: "This session has no agent pane.",
+      hint: "Run jmux --install-agent-hooks so agents report which pane they run in.",
+    });
+    return;
+  }
+
+  const sessionName = currentSessions.find((s) => s.id === sessionId)?.name ?? "";
+  const prompt = formatReviewPrompt(notes, { title: hunkSessionState?.title });
+  openReviewConfirm(notes, pane, sessionName, prompt);
+}
+
+function openReviewConfirm(
+  notes: readonly HunkNote[],
+  pane: string,
+  sessionName: string,
+  prompt: string,
+): void {
+  const onSurface = { bg: theme.surface, bgMode: 2 as const };
+  const dim = { ...neutralFg(8), dim: true, ...onSurface };
+  const lines: StyledLine[] = [[]];
+
+  for (const note of notes) {
+    const where = note.line === null ? note.filePath : `${note.filePath}:${note.line}`;
+    const body = note.body.trim().split("\n")[0] ?? "";
+    lines.push([
+      { text: `  ${where}`, attrs: { ...neutralFg(6), ...onSurface } },
+      { text: `  ${body}`, attrs: { ...neutralFg(7), ...onSurface } },
+    ]);
+  }
+
+  lines.push([]);
+  lines.push([
+    { text: `  Sends to ${pane}`, attrs: dim },
+    { text: sessionName ? ` in ${sessionName}` : "", attrs: dim },
+  ]);
+  lines.push([]);
+  lines.push([{ text: "  Enter to send · Esc to cancel", attrs: dim }]);
+
+  const modal = new ContentModal({
+    lines,
+    title: `Send ${notes.length} review note${notes.length === 1 ? "" : "s"}`,
+    // Enter is the send; without it ContentModal's only outcome is dismissal.
+    confirmOnEnter: true,
+  });
+  modal.setTermRows(process.stdout.rows || 24);
+  modal.open();
+  openModal(modal, (value) => {
+    if (value !== true) return;
+    void deliverReview(notes, pane, prompt);
+  });
+  scheduleRender();
+}
+
+async function deliverReview(
+  notes: readonly HunkNote[],
+  pane: string,
+  prompt: string,
+): Promise<void> {
+  if (!pasteIntoPane(pane, prompt)) {
+    showNotice({ title: "Couldn't reach the agent", message: `tmux refused to send to ${pane}.`, tone: "error" });
+    return;
+  }
+
+  // Clear only after the send succeeded, and only the notes that were sent —
+  // by id, so a note written while the modal was open survives. Losing a note
+  // the user just typed is silent and unrecoverable, which is exactly the kind
+  // of failure a bulk clear invites.
+  if (hunkSessionId && (configStore.config.diffPanel?.clearNotesOnSend ?? true)) {
+    await hunkClient.removeNotes(hunkSessionId, notes.map((n) => n.noteId));
+    await pollHunkSession();
+  }
+  scheduleRender();
+}
+
+/**
+ * Pick what the Diff tab shows.
+ *
+ * "Branch vs base" is the entry that only jmux can offer: it already resolves a
+ * session's base branch to create the worktree, so it can show the whole of an
+ * agent's work rather than just whatever is currently uncommitted.
+ */
+async function openDiffViewPicker(): Promise<void> {
+  const cwd = await getSessionCwd();
+  const base = cwd ? await resolveBaseBranch(cwd) : null;
+
+  const all: Array<{ view: HunkView; hint: string }> = [
+    { view: { kind: "worktree" }, hint: "uncommitted, including untracked" },
+    { view: { kind: "worktree-tracked" }, hint: "uncommitted, tracked files only" },
+    { view: { kind: "staged" }, hint: "what a commit would record" },
+    { view: { kind: "commit", ref: "HEAD" }, hint: "the most recent commit" },
+  ];
+  if (base) {
+    all.push({ view: { kind: "branch", base }, hint: "every commit since this branch forked" });
+  }
+
+  // Offer only what this hunk can render. A menu entry that errors on selection
+  // is worse than one that was never there.
+  const hunkPath = Bun.which(hunkCommand);
+  const supported = hunkPath ? hunkFlags(hunkPath) : new Set<string>();
+  const choices = all.filter((c) => {
+    const required = viewRequiredFlag(c.view);
+    return required === null || supported.has(required);
+  });
+
+  const items: ListItem[] = choices.map((c, i) => ({
+    id: String(i),
+    label: viewLabel(c.view),
+    // Marking the current view is what stops the picker being a guess about
+    // what is already on screen.
+    annotation: sameView(c.view, diffView) ? "current" : c.hint,
+  }));
+
+  const modal = new ListModal({ header: "Show in the Diff tab", items });
+  modal.open();
+  openModal(modal, (value) => {
+    const picked = value as ListItem | undefined;
+    if (!picked) return;
+    const choice = choices[Number(picked.id)];
+    if (choice) void setDiffView(choice.view);
+  });
+  scheduleRender();
+}
+
+/**
+ * The branch this worktree forked from, preferring what the repo is configured
+ * to use over a guess. Falls back to whichever of the usual names exists, and
+ * to null when neither does — the picker then simply omits the entry rather
+ * than offering a comparison against a ref that isn't there.
+ */
+async function resolveBaseBranch(cwd: string): Promise<string | null> {
+  const configured = repoSettingsFor(cwd).defaultBaseBranch;
+  const candidates = [configured, "main", "master"].filter((b): b is string => !!b);
+  for (const branch of candidates) {
+    const check = Bun.spawnSync(["git", "-C", cwd, "rev-parse", "--verify", "--quiet", branch], {
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    if ((check.exitCode ?? 1) === 0) return branch;
+  }
+  return null;
 }
 
 async function zoomDiffPanel(): Promise<void> {
@@ -2565,7 +3004,12 @@ function renderFrame(): void {
       }
     }
 
-    const tabBar = infoPanel.hasMultipleTabs ? infoPanel.getTabBarGrid(dpCols, hoveredPanelTabId) : undefined;
+    // A lone unlabelled tab is pure chrome, which is why the strip hides for
+    // it. A lone tab *carrying live diff stats* is not — it's the panel's
+    // header. Without this the badge is invisible to exactly the users who
+    // have no tracker configured, which is every user on their first run.
+    const showTabBar = infoPanel.hasMultipleTabs || infoPanel.hasDiffBadge;
+    const tabBar = showTabBar ? infoPanel.getTabBarGrid(dpCols, hoveredPanelTabId) : undefined;
     diffPanelArg = {
       grid: contentGrid,
       mode: diffPanel.state as "split" | "full",
@@ -2633,23 +3077,46 @@ function resolvePreselectedTeamId(): string | null {
   return null;
 }
 
-/** Explain, rather than no-op, when capture can't run. A key that silently
- *  does nothing is indistinguishable from a broken one. */
-function explainCaptureUnavailable(reason: string, hint: string): void {
+/**
+ * The dismissable "here's why nothing happened" modal. jmux has no toast, so
+ * this is how every surface explains itself — a key that silently does nothing
+ * is indistinguishable from a broken one.
+ *
+ * One helper because there were six hand-rolled copies of these same four
+ * lines, already drifting: some indented, some not, three different ways of
+ * writing the same dim attrs. `tone` is the only real variation — red for
+ * something that failed, yellow for something unavailable, plain for a state
+ * the user can simply act on.
+ */
+function showNotice(opts: {
+  title: string;
+  message: string;
+  /** Second line, dim. Usually what to do about it. */
+  hint?: string;
+  tone?: "error" | "warn" | "plain";
+}): void {
   const onSurface = { bg: theme.surface, bgMode: 2 as const };
-  const lines: StyledLine[] = [
-    [],
-    [{ text: reason, attrs: { fg: 3, fgMode: 1, ...onSurface } }],
-    [],
-    [{ text: hint, attrs: { ...neutralFg(8), dim: true, ...onSurface } }],
-    [],
-    [{ text: "Press q or Esc to close.", attrs: { ...neutralFg(8), dim: true, ...onSurface } }],
-  ];
-  const modal = new ContentModal({ lines, title: "Can't capture an issue" });
+  const dim = { ...neutralFg(8), dim: true, ...onSurface };
+  const message =
+    opts.tone === "error"
+      ? { fg: 1, fgMode: 1 as const, ...onSurface }
+      : opts.tone === "warn"
+        ? { fg: 3, fgMode: 1 as const, ...onSurface }
+        : { ...neutralFg(7), ...onSurface };
+
+  const lines: StyledLine[] = [[], [{ text: opts.message, attrs: message }]];
+  if (opts.hint) lines.push([], [{ text: opts.hint, attrs: dim }]);
+  lines.push([], [{ text: "Press q or Esc to close.", attrs: dim }]);
+
+  const modal = new ContentModal({ lines, title: opts.title });
   modal.setTermRows(process.stdout.rows || 24);
   modal.open();
   openModal(modal, () => {});
   scheduleRender();
+}
+
+function explainCaptureUnavailable(reason: string, hint: string): void {
+  showNotice({ title: "Can't capture an issue", message: reason, hint, tone: "warn" });
 }
 
 /**
@@ -3146,6 +3613,8 @@ const inputRouter = new InputRouter(
     onGlassDetach: () => detachClient(),
     onDiffToggle: () => toggleDiffPanel(),
     onDiffZoom: () => zoomDiffPanel(),
+    onDiffSendReview: () => void sendReviewToAgent(),
+    onDiffViewPicker: () => void openDiffViewPicker(),
     onPaneNavRight: async () => {
       // Shift+Right intercepted — check if we're at the rightmost pane
       try {
@@ -3163,6 +3632,13 @@ const inputRouter = new InputRouter(
       }
     },
     onDiffPanelData: (data) => {
+      // Enter revives a hunk the user quit with `q`. Without it the only way
+      // back was toggling the whole panel off and on, which also throws away
+      // the tab you were on.
+      if (diffPanel.hunkExited && (data === "\r" || data === "\n")) {
+        void spawnHunk(getDiffPanelCols(), layout.ptyRows);
+        return;
+      }
       if (diffPty) diffPty.write(data);
     },
     onDiffPanelFocusToggle: () => {
@@ -3556,19 +4032,7 @@ function showNewSessionError(result: NewSessionResult, err: unknown): void {
   const hint = result.type === "new_worktree"
     ? "The worktree, branch, or session name may already exist."
     : "The session name may already exist.";
-  const lines: StyledLine[] = [
-    [],
-    [{ text: message, attrs: { fg: 1, fgMode: 1, bg: theme.surface, bgMode: 2 } }],
-    [],
-    [{ text: hint, attrs: { ...neutralFg(8), dim: true, bg: theme.surface, bgMode: 2 } }],
-    [],
-    [{ text: "Press q or Esc to close.", attrs: { ...neutralFg(8), dim: true, bg: theme.surface, bgMode: 2 } }],
-  ];
-  const modal = new ContentModal({ lines, title });
-  modal.setTermRows(process.stdout.rows || 24);
-  modal.open();
-  openModal(modal, () => {});
-  scheduleRender();
+  showNotice({ title, message, hint, tone: "error" });
 }
 
 function togglePalette(): void {
@@ -3883,6 +4347,8 @@ function buildPaletteCommands(): PaletteCommand[] {
   commands.push(
     { id: "diff-toggle", label: "Toggle diff panel", category: "diff" },
     { id: "diff-zoom", label: "Zoom diff panel", category: "diff" },
+    { id: "diff-view-picker", label: "Choose what the Diff tab shows", category: "diff" },
+    { id: "diff-send-review", label: "Send review notes to this session's agent", category: "diff" },
   );
 
   // Settings
@@ -4987,18 +5453,12 @@ async function startWorkOnIssue(
           return "created";
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          const lines: StyledLine[] = [
-            [],
-            [{ text: `Failed to create session for ${issue.identifier}`, attrs: { fg: 1, fgMode: 1, bg: theme.surface, bgMode: 2 } }],
-            [],
-            [{ text: message, attrs: { ...neutralFg(8), dim: true, bg: theme.surface, bgMode: 2 } }],
-            [],
-            [{ text: "Press q or Esc to close.", attrs: { ...neutralFg(8), dim: true, bg: theme.surface, bgMode: 2 } }],
-          ];
-          const errorModal = new ContentModal({ lines, title: "Session Creation Failed" });
-          errorModal.setTermRows(process.stdout.rows || 24);
-          errorModal.open();
-          openModal(errorModal, () => {});
+          showNotice({
+            title: "Session Creation Failed",
+            message: `Failed to create session for ${issue.identifier}`,
+            hint: message,
+            tone: "error",
+          });
         }
         // The catch swallowed the error into a modal, so the promise resolves
         // normally — callers can only tell this apart from success by the
@@ -6003,6 +6463,12 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
     case "diff-zoom":
       await zoomDiffPanel();
       return;
+    case "diff-view-picker":
+      await openDiffViewPicker();
+      return;
+    case "diff-send-review":
+      await sendReviewToAgent();
+      return;
   }
 }
 
@@ -6373,6 +6839,12 @@ control.onEvent((event: ControlEvent) => {
           await syncControlClient();
           fetchWindows();
           if (diffPanel.isActive() && !diffPanel.hunkExited) {
+            // Back to the working tree for the new session. A view is built
+            // from one worktree's refs — "Branch vs main" is a different diff
+            // in every session — so carrying the choice across would show a
+            // changeset the user never asked for under a label they chose
+            // somewhere else.
+            diffView = DEFAULT_VIEW;
             const dpCols = getDiffPanelCols();
             const dpRows = layout.ptyRows;
             await spawnHunk(dpCols, dpRows);
@@ -6898,17 +7370,7 @@ function switchCommandCenterTabRelative(delta: number): void {
  * as session-creation failures — jmux has no toast system.
  */
 function showCcError(message: string): void {
-  const lines: StyledLine[] = [
-    [],
-    [{ text: message, attrs: { fg: 1, fgMode: 1, bg: theme.surface, bgMode: 2 } }],
-    [],
-    [{ text: "Press q or Esc to close.", attrs: { ...neutralFg(8), dim: true, bg: theme.surface, bgMode: 2 } }],
-  ];
-  const modal = new ContentModal({ lines, title: "Command Center" });
-  modal.setTermRows(process.stdout.rows || 24);
-  modal.open();
-  openModal(modal, () => {});
-  scheduleRender();
+  showNotice({ title: "Command Center", message, tone: "error" });
 }
 
 function persistTabs(next: TabEntry[]): void {

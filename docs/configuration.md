@@ -140,7 +140,11 @@ the settings row says `restart to apply` until you do. See
   "projectDirs": ["~/Code", "~/Projects"],
   "diffPanel": {
     "splitRatio": 0.4,
-    "hunkCommand": "hunk"
+    "hunkCommand": "hunk",
+    "watch": true,
+    "transparentBg": true,
+    "controlPlane": true,
+    "clearNotesOnSend": true
   },
   "adapters": {
     "codeHost": { "type": "gitlab" },

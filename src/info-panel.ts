@@ -58,6 +58,10 @@ export class InfoPanel {
   private _activeTab: InfoTab = "diff";
   private _viewLabels = new Map<string, string>();
   private _viewCounts = new Map<string, number>();
+  // Survives rebuildTabs deliberately: a config reload rebuilds the view tabs,
+  // and blanking the diff badge there would drop live state for a change that
+  // has nothing to do with it.
+  private _diffBadge: string | null = null;
 
   constructor(config: InfoPanelConfig) {
     this.rebuildTabs(config);
@@ -73,6 +77,16 @@ export class InfoPanel {
 
   get hasMultipleTabs(): boolean {
     return this._tabs.length > 1;
+  }
+
+  /**
+   * Whether the Diff tab has anything live to report. The tab strip hides
+   * itself for a lone tab, so this is what earns the strip a row when Diff is
+   * the only one — otherwise the badge would be invisible to every user with
+   * no tracker configured.
+   */
+  get hasDiffBadge(): boolean {
+    return this._diffBadge !== null;
   }
 
   updateConfig(config: InfoPanelConfig): void {
@@ -101,9 +115,23 @@ export class InfoPanel {
     this._activeTab = this._tabs[(idx - 1 + this._tabs.length) % this._tabs.length];
   }
 
+  /**
+   * The Diff tab's live badge — "+142 −38 ●2" — or null for none.
+   *
+   * Arrives pre-formatted from main.ts rather than being derived here, for the
+   * same reason `setSessionStages` exists on the sidebar: composing it needs
+   * hunk's daemon and the panel's current width, and neither belongs in a
+   * module whose job is a tab strip. See `formatDiffBadge` in hunk/protocol.ts.
+   */
+  setDiffBadge(badge: string | null): void {
+    this._diffBadge = badge;
+  }
+
   /** Public so tab-strip rendering can be asserted without pixel-peeping. */
   tabLabel(tab: InfoTab): string {
-    if (tab === "diff") return " Diff ";
+    // Same rule as a view's count: the badge is what makes "is there anything
+    // to look at?" answerable without switching to the tab to find out.
+    if (tab === "diff") return this._diffBadge ? ` Diff ${this._diffBadge} ` : " Diff ";
     const label = this._viewLabels.get(tab) ?? tab;
     // A count on the tab itself is what makes an attention-model layout work:
     // "is anything urgent?" shouldn't require switching tabs to find out.

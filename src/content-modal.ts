@@ -10,6 +10,18 @@ export type { StyledLine, StyledSegment };
 export interface ContentModalConfig {
   lines: StyledLine[];
   title?: string;
+  /**
+   * Make Enter a confirmation that resolves `true`, turning this into a confirm
+   * dialog over arbitrary rendered content.
+   *
+   * Off by default, because every other ContentModal is purely informational
+   * and its only outcome is dismissal — a modal that reported a result from a
+   * key the user pressed to close it would fire actions nobody asked for. The
+   * one caller that needs it shows the user a review before it lands in an
+   * agent's context, which is exactly the case where the content *is* the thing
+   * being confirmed.
+   */
+  confirmOnEnter?: boolean;
 }
 
 function wrapStyledLine(line: StyledLine, maxWidth: number): StyledLine[] {
@@ -128,6 +140,11 @@ export class ContentModal {
     if (data === "q" || data === "\x1b") {
       this.close();
       return { type: "closed" };
+    }
+
+    if (this.config.confirmOnEnter && (data === "\r" || data === "\n")) {
+      this.close();
+      return { type: "result", value: true };
     }
 
     if (data === "j" || data === "\x1b[B") {
