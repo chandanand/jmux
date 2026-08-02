@@ -1,58 +1,46 @@
 # Issue Tracking & MR Integration
 
-jmux connects to your issue tracker and code host to show issues, merge requests, and pipeline status directly in the terminal. No browser tab required for triage, status updates, or MR approvals.
+jmux connects to your issue tracker and code host to show issues, merge requests,
+and pipeline status directly in the terminal. No browser tab required for triage,
+status updates, or MR approvals.
 
-Currently supported: **Linear** (issue tracking) and **GitLab** (code host / MRs).
+**Issue tracker:** Linear. **Code host:** GitLab or GitHub (including self-hosted
+GitLab and GitHub Enterprise Server).
 
----
+> **Setup lives on its own page.** Tokens, adapter config, and what to do when a
+> tab doesn't appear are all in **[Connecting](connecting.md)**. This page
+> assumes it's already working. Shaping the panel around your own process —
+> stages, parking, `Ctrl-a u`, status writes — is in **[Workflow](workflow.md)**.
+>
+> No credentials yet? `jmux --demo` runs the whole panel against mock data.
 
-## Quick Setup
-
-### 1. Set environment variables
-
-```bash
-# Linear — either one works
-export LINEAR_API_KEY="lin_api_..."
-# or
-export LINEAR_TOKEN="lin_api_..."
-
-# GitLab — any of these, or glab CLI auth
-export GITLAB_TOKEN="glpat-..."
-# or
-export GITLAB_PRIVATE_TOKEN="glpat-..."
-```
-
-### 2. Configure adapters
-
-Add to `~/.config/jmux/config.json` (or press `Ctrl-a I` and navigate to **Integrations**):
-
-```json
-{
-  "adapters": {
-    "codeHost": { "type": "gitlab" },
-    "issueTracker": { "type": "linear" }
-  }
-}
-```
-
-### 3. Restart jmux
-
-Adapters authenticate on startup. If auth fails, jmux runs normally without the integration — the panel tabs just won't populate.
+Throughout this page, "MR" means merge request on GitLab and pull request on
+GitHub — jmux treats them as one thing and so do the keybindings.
 
 ---
 
 ## The Info Panel
 
-Press `Ctrl-a g` to toggle the info panel. It docks to the right side of the terminal with tabbed views:
+Press `Ctrl-a g` to toggle the info panel. It docks to the right side of the
+terminal with tabbed views:
 
 | Tab | What it shows |
 |-----|---------------|
-| **Diff** | hunk diff viewer (same as before — this was the original panel) |
-| **Issues** | Your assigned issues from Linear, grouped by team and status |
-| **MRs** | Merge requests you authored, with pipeline and approval status |
+| **Diff** | hunk diff viewer — always present, needs no adapter |
+| **Issues** | Your assigned issues, grouped by team and status |
+| **My MRs** | Merge requests you authored, with pipeline and approval status |
 | **Review** | MRs awaiting your review |
 
-Click the panel or press `Shift-Right` to focus it. Use `[` and `]` to cycle between tabs.
+Those three are the defaults you get before configuring anything. Once you
+define workflow stages in `Ctrl-a W`, **the issue tabs become your stages** —
+`Urgent`, `To do`, `Waiting` — and the strip reads as your pipeline. See
+[Workflow](workflow.md).
+
+A tab appears only if the adapter behind it authenticated: no tracker means no
+issue tabs at all, rather than an empty one. Only **Diff** is unconditional.
+
+Click the panel or press `Shift-Right` to focus it. Use `[` and `]` to cycle
+between tabs.
 
 ### Navigation
 
@@ -100,8 +88,9 @@ While focused on an issue or MR tab, you can cycle the view's grouping and sorti
 
 `F` is what turns a generic list into a named queue, and it needs no knowledge
 of your workspace: the **States** list is pulled live from your tracker, and
-**Stages** are jmux's own four. `/` is a throwaway search; `F` is the durable
-definition of what belongs in the tab.
+**Stages** are jmux's own four
+[tracker categories](workflow.md#tracker-categories). `/` is a throwaway search;
+`F` is the durable definition of what belongs in the tab.
 
 Changes persist to `~/.config/jmux/config.json` automatically. Once a view looks
 right, **Save current view as tab** in the command palette (`Ctrl-a p`) clones
@@ -111,8 +100,8 @@ it under a new name — configuring by demonstration rather than by editing JSON
 
 When a terminal can draw pictures, jmux draws them: a screenshot pasted into a
 Linear issue or a GitHub comment renders inline in the detail pane and in the
-[ghost preview](#unstarted-work-in-the-sidebar), instead of a link you would
-have to open a browser to follow.
+[ghost preview](workflow.md#unstarted-work-in-the-sidebar), instead of a link you
+would have to open a browser to follow.
 
 This uses the **kitty graphics protocol**, so it works in kitty, Ghostty,
 WezTerm, Konsole and anything else that implements it. jmux asks the terminal at
@@ -266,7 +255,9 @@ If jmux detects a rate limit (HTTP 429), it backs off:
 - Background and global polling pause entirely
 - Normal polling resumes automatically when the limit clears
 
-Auth failures (401/403) disable the affected adapter until jmux restarts.
+Auth failures (401/403) disable the affected adapter until jmux restarts — its
+tabs disappear from the strip. See
+[Troubleshooting](connecting.md#troubleshooting).
 
 ---
 
@@ -284,11 +275,14 @@ When a session has a linked MR with a CI pipeline, the sidebar shows a glyph:
 
 If a session has multiple MRs, the worst status wins (failed > running > pending > passed).
 
+On GitLab this is the pipeline; on GitHub it's the head commit's check runs,
+rolled up the same way.
+
 ---
 
 ## Custom Panel Views
 
-The default tabs (Issues, MRs, Review) can be customized via `panelViews` in config:
+The default tabs (Issues, My MRs, Review) can be customized via `panelViews` in config:
 
 ```json
 {
@@ -306,7 +300,7 @@ The default tabs (Issues, MRs, Review) can be customized via `panelViews` in con
     },
     {
       "id": "my-mrs",
-      "label": "MRs",
+      "label": "My MRs",
       "source": "mrs",
       "filter": { "scope": "authored" },
       "groupBy": "none",
@@ -338,559 +332,14 @@ The default tabs (Issues, MRs, Review) can be customized via `panelViews` in con
 | `sortOrder` | `"asc"`, `"desc"` | Sort direction |
 | `sessionLinkedFirst` | `true`, `false` | Float items linked to the current session to the top |
 
----
-
-## Authentication
-
-### Linear
-
-Set one of these environment variables:
-
-| Variable | Description |
-|----------|-------------|
-| `LINEAR_API_KEY` | Personal API key from Linear Settings > API |
-| `LINEAR_TOKEN` | Same — either name works |
-
-Generate a key at [linear.app/settings/api](https://linear.app/settings/api).
-
-### GitLab
-
-Set one of these, or authenticate via `glab`:
-
-| Variable | Description |
-|----------|-------------|
-| `GITLAB_TOKEN` | Personal access token with `api` scope |
-| `GITLAB_PRIVATE_TOKEN` | Same — either name works |
-| `GITLAB_PERSONAL_ACCESS_TOKEN` | Same — either name works |
-
-If no env var is set, jmux falls back to `glab auth status` to extract a token from the GitLab CLI.
-
-For self-hosted GitLab, add a `url` field to the adapter config:
-
-```json
-{
-  "adapters": {
-    "codeHost": {
-      "type": "gitlab",
-      "url": "https://gitlab.yourcompany.com/api/v4"
-    }
-  }
-}
-```
-
-### Auth status
-
-The sidebar and panel show auth state. If authentication fails, jmux logs the error and continues without the integration. Check `~/.config/jmux/jmux.log` for details.
+An issues view can also carry a `states` list, which makes it a
+[workflow stage](workflow.md#queues-and-up-next-ctrl-a-u) — membership and
+subheadings both come from those statuses, and `groupBy` is ignored.
 
 ---
 
-## The Work Pipeline
-
-Your tracker has a lot of statuses. Ours has 25 — `QA (PRE-RELEASE WEB)`,
-`Promote (RELEASE BR)`, `Need ANDR Build` — most of them shared across teams and
-named for someone else's process. You do not think in 25 states. You think in
-four or five.
-
-So jmux has you **define your own workflow stages**, and sit each one on top of
-one or many of your tracker's statuses:
-
-```
-        your stages                    your tracker's statuses
-
-        Urgent        ───────────────  Release Blockers, QA Failed
-        To do         ───────────────  To do, Dev Confirm (PRE-RELEASE)
-        In Progress   ───────────────  In Progress, In Review, MR Review
-        Waiting       ───────────────  QA (PRE-RELEASE WEB), QA (RELEASE BR),
-                                       QA PASS, Need ANDR Build,  …
-```
-
-A stage shows up as a tab in the info panel, but that is how it *appears*, not
-what it *is*. It is one rung on the ladder you actually work by, and its order
-in the list is its priority — which is why the same stages also group your
-*sessions* in the sidebar (`Ctrl-a G` → `Stage`), not just your issues.
-
-Every status then has exactly two settings and no more:
-
-```
-which stage it belongs to  —  where it shows in the panel, and which
-                              sidebar group its session lands in
-whether it parks           —  whether its session leaves the sidebar
-```
-
-Both are independent, so a status can park while belonging to no stage at all —
-which is the right answer for something like **Done**.
-
-### The workflow screen (`Ctrl-a W`)
-
-Press `Ctrl-a W` (also: `Ctrl-a I` → **Workflow**, or "Configure workflow" in
-the palette). It is two blocks: your stages, then a table of every status your
-tracker offers.
-
-```
-Workflow                                    Linear · 25 statuses · 9 unmapped
-
-  Your workflow ────────────────────────────────────────────────────────
-    Urgent ····································· 1st up next  2 statuses
-    To do ······································ 2nd up next  3 statuses
-    In Progress ············································· 3 statuses
-    Waiting ······································ no unstarted  ⏸ 8  8 statuses
-    Done ··················································· hidden  1 status
-    + New stage
-
-  Statuses ─────────────────────────────────────────────────────────────
-    Status                     Stage                     Parks  Issues
-    Release Blockers           Urgent                                0
-    To do                      To do                                 5
-    In Progress                In Progress                           9
-    QA (PRE-RELEASE WEB)       Waiting                     ⏸        19
-    QA (RELEASE BR)            Waiting                     ⏸         8
-    Backlog                    —                                     5
-
-  QA (RELEASE BR) · 8 issues · Waiting · parks its sessions (3 now)
-  ↑↓ move · ↵ stage · space parks · d remove · ⇧↑↓ order · esc close
-```
-
-On a stage row the keys and the explain line change to match:
-
-```
-  Waiting · 4th of 5 · 8 statuses · 61 issues · in the sidebar, without its
-  unstarted work · not in Up next
-  ↑↓ move · ⇧↑↓ order · ↵ rename · s hide · space unstarted · u up next · d delete
-```
-
-Every row in the table is the same kind of thing and takes the same keys. The
-line above the keys says what the row under the cursor **will actually do**,
-including when it will do nothing.
-
-| Key | In **Statuses** | In **Your workflow** | On a setting |
-|-----|-----------------|----------------------|--------------|
-| `↑` `↓` | move the cursor | | |
-| `Enter` | choose its stage | rename the stage | edit |
-| `space` | park / don't park | show / hide its unstarted work | — |
-| `s` | — | show / hide the stage in the sidebar | — |
-| `u` | — | add to / drop from the `Ctrl-a u` rotation | — |
-| `d` | take it out of its stage | delete the stage (asks first) | clear a repo override |
-| `⇧↑` `⇧↓` | reorder within its stage | reorder the stage | — |
-| `◂` `▸` | — | — | step a counted value (e.g. how many unstarted) |
-| `g` | | | switch between this repo and the global defaults |
-| `Esc` | close | | |
-
-Order is priority order, top to bottom, for both stages and the statuses inside
-one. The order you add stages with `u` is the order `Ctrl-a u` checks them.
-
-A stage row only reports a sidebar setting when it is *off* its default, which is
-why most rows above say nothing about it: `hidden` (no band at all) or
-`no unstarted` (band, but no unstarted rows under it). See
-[Unstarted work in the sidebar](#unstarted-work-in-the-sidebar).
-
-**Starting from scratch?** With nothing configured the first row offers
-**⚑ Suggest a starting layout**, which builds `To do` / `In progress` / `Done`
-stages from your tracker's own categories and leaves anything you already have
-alone. Nothing it creates parks; that stays a decision you make.
-
-Merge-request tabs (`source: "mrs"`) are listed in the first block too, marked
-*not a stage* — they are panel tabs with no statuses to map. The screen shows
-them so it matches the panel's tab bar rather than pretending they don't exist.
-
-### Subheadings in the panel
-
-A stage holding more than one status groups its issues under those status names,
-with a count each:
-
-```
-▾ QA (PRE-RELEASE WEB) (19)
-    TRA-1241  Dashboard POC (baseline qa Diana)
-    …
-▾ QA (RELEASE BR) (8)
-    …
-```
-
-A stage holding a single status draws no subheading at all — the tab already
-names it, and a heading repeating it would be a row that says nothing.
-
-There is nothing to configure here. There used to be a **Heading** you named by
-hand, so that several statuses could share one; in practice its name only ever
-restated the status inside it, which is one more thing to name, maintain and get
-wrong for a result the status names already give you.
-
-### Your stages in the sidebar
-
-The panel groups your *issues* by stage. `Ctrl-a G` cycles the sidebar's
-grouping axis on to `Stage` and groups your *sessions* the same way — so the
-left rail reads as your pipeline, with the work in progress under `In Progress`
-and the handed-off work under `Waiting`:
-
-```
-  ⊞ Stage  ⇅ Name
-
-  URGENT (1)
-    TRA-1387 · payment-retry
-
-  IN PROGRESS (2)
-    TRA-1402 · search-index
-    TRA-1399 · session-replay
-
-  jmux
-  dotfiles
-```
-
-A session lands in the stage that claims its linked issue's status. Headers come
-out in your own stage order, not alphabetically — `Urgent` is above `In Progress`
-because that is where you put it in `Ctrl-a W`.
-
-Sessions with no linked issue (`jmux`, `dotfiles` above), or whose status no
-stage claims, list flat below the groups rather than under a "no stage" header:
-grouping should not give the work you have *not* classified a heading of its own,
-above the work you have. Pinned sessions still float to the top and parked ones
-still sink to the bottom band, in this mode as in every other.
-
-With no tracker connected, or before the first poll returns, no session resolves
-to a stage and the mode is simply a flat list.
-
-### Unstarted work in the sidebar
-
-The sidebar otherwise shows only what exists. Turn this on and it also shows the
-work sitting in each stage that **nobody has picked up** — issues with no session
-— as dimmed rows you can click to start:
-
-```
-  ⊞ Stage  ⇅ Name
-
-  URGENT (2)
-    TRA-1387 · payment-retry
-  ○ TRA-1402
-    Retry storms on the payment webhook
-
-  IN PROGRESS (1)
-    TRA-1399 · session-replay
-
-  IN REVIEW (1)
-  ○ TRA-1355
-    Cursor pagination for /events
-```
-
-A hollow `○` where a live session carries its filled activity dot. The row uses a
-session row's exact two-row shape — identifier where the name goes, title where
-the branch goes — because that is the row it turns into.
-
-**Clicking one previews it** — it does not start anything. The main area is
-replaced by the issue and, above the description, exactly what starting it would
-do:
-
-```
-  ENG-1255
-
-  ENG-1255 Add audit log for admin actions
-  Status: Todo   Priority: P3
-  Assignee: Jarred Kenny
-  Team: Platform
-
-  Starting will create
-    session  eng-1255-add-audit-log
-    worktree ~/Code/tracktile/eng-1255-add-audit-log
-    branch   eng-1255-add-audit-log (from main)
-    tool     wtm create
-    agent    claude
-
-  Description:
-  Compliance requires an immutable audit trail for all admin actions…
-
-  [↵] Start  [s] Status  [o] Open  [Esc] Back
-```
-
-`↵` runs the same flow as `n` in the issues panel: worktree, session, agent,
-issue linked. If a worktree already exists from an earlier attempt it is reused
-rather than recreated, and the action reads **Resume**; if a session already
-claims the issue it reads **Switch**. When the issue's team maps to no repo the
-pre-flight says so, and `↵` opens the manual session picker instead.
-
-`s` changes the issue's status without starting anything — which is also how you
-park it, since parking is a status. The row re-bands or disappears on its own.
-
-`Esc` returns you to whatever you were doing; the session underneath was never
-touched. `Ctrl-a u` still starts the top item of your first non-empty queue in
-one gesture, without previewing — it is an explicit start command, and what
-changed here is only that *selecting* a row no longer provisions.
-
-Unstarted rows are also reachable from the keyboard: `Ctrl-Shift-Up` /
-`Ctrl-Shift-Down` walk them alongside your sessions, so you can read down your
-backlog without touching the mouse.
-
-> **Known limitation.** A session created for an issue by `jmux ctl issue start`
-> in *another* jmux instance is not visible to the preview, which will still
-> offer **Start**. The CLI records its link in a tmux option that the TUI does
-> not read, and it names sessions by a different rule. The issues panel's `n`
-> key has the same blind spot; unifying the two is separate work.
-
-Note `IN REVIEW` above: a stage with no sessions still gets a band when it has
-unstarted work. And a stage whose work is all in flight simply shows no `○` rows.
-
-**Turn it on** in `Ctrl-a W` under **Unstarted work**:
-
-```
-  Unstarted work ───────────────────────────────────────────────────────
-    Show unstarted work in the sidebar ······················ ◂ 3 per stage ▸
-
-  Top 3 unstarted issues in each stage, under its own band. 1 stage opted out
-  (space above).
-  ↑↓ move · ◂▸ change · ↵ edit · esc close
-```
-
-Off by default — the sidebar is otherwise a truthful mirror of tmux, and rows for
-sessions that don't exist are something you opt into. `◂` `▸` walk
-`never → 1 → 2 … → 99 → all` and wrap, so `all` is one press left of `never`;
-`Enter` takes a typed number for anything else. The count is **per stage**, so
-`3` with four stages showing is up to twelve rows.
-
-Done and cancelled issues never appear. Nothing gives a completed issue a
-session, so those rows would pile up under a `Done` stage with no way to clear
-them. Parked statuses are left out for the same reason.
-
-#### Which stages participate
-
-Two keys on any stage row in **Your workflow**:
-
-| Key | Setting | Effect when off |
-|-----|---------|-----------------|
-| `s` | show the stage in the sidebar | no band; its sessions fall to the flat list at the bottom |
-| `space` | show its unstarted work | band and sessions stay; no `○` rows |
-
-Both are on for every stage until you say otherwise, and hiding a stage hides its
-**heading, never its sessions** — a stage setting must not be able to make an
-agent that is waiting on you disappear from the one surface always on screen.
-They land under that stage's own row in `panelViews`:
-
-```json
-{ "id": "done", "label": "Done", "source": "issues",
-  "states": ["Done", "Cancelled"],
-  "inSidebar": false }
-```
-
-Only `false` is ever written, so a stage you have never touched stays exactly as
-it was in your config.
-
-The count is the master switch and the per-stage keys are exceptions to it. With
-the count off, a stage row says **off globally** and names the setting rather
-than reporting a preference that currently does nothing — and your per-stage
-choices are kept, not cleared, so switching the count back on restores them.
-
-#### Grouped by something other than stage
-
-Stage bands only exist under `Ctrl-a G` → `Stage`. On the other axes an issue
-with no session has no project, no agent state and no activity to sort under, so
-the rows collect into a single **Up next** band above `Parked`, fed by the stages
-you marked with `u` for the `Ctrl-a u` rotation — minus any that opted out above,
-so a stage you switched off cannot come back through the other placement:
-
-```
-  jmux
-    TRA-1399 · session-replay
-
-  Up next ───────────────
-  ○ TRA-1402
-    Retry storms on the payment webhook
-
-  Parked ─────────────(8)
-```
-
-Ghost rows are click-activated in both placements and never join
-`Ctrl-Shift-↑`/`↓` session cycling — a navigation key that provisioned a worktree
-would be a nasty surprise. They are also hidden entirely by `Ctrl-a f`: both
-filters select on agent state, which unstarted work does not have.
-
-### Tracker categories
-
-Separately from your stages, jmux keeps a four-value view of where a status sits
-in *any* tracker's lifecycle. You never author it — it is read from your
-tracker's own state types:
-
-| Category | Where it comes from |
-|----------|---------------------|
-| `idea` | your tracker's `triage` / `backlog` states |
-| `active` | your tracker's `unstarted` / `started` states |
-| `done` | your tracker's `completed` / `canceled` / `duplicate` states |
-| `parked` | the **Parks** column — the one you do control |
-
-This is what makes a shipped default mean something in a workspace jmux has
-never seen. Nothing reaches `parked` except a status you ticked, so an
-unconfigured jmux never hides anything.
-
-> **Naming wart:** the config key for this is `panelViews[].filter.stages`, from
-> before "stage" came to mean *your* workflow stages. The key is unchanged so
-> existing configs keep working; read it as "categories".
-
-A stage with statuses is governed entirely by them: a `states` filter set from
-the panel's `F` menu is ignored for it, and `F` says so rather than offering a
-control that does nothing.
-
-### Parking (the back burner)
-
-Work that is merged and sitting in QA still owns a session you might need
-again, but it should not take up sidebar space. Tick the **Parks** column for
-that status, and any session whose issue reaches it collapses into a single
-`Parked (n)` row at the bottom of the sidebar. The session, its worktree and
-its scrollback are all untouched.
-
-One tick, in one place. There used to be a second setting listing "the stages
-that park", which could be switched off independently — so parking could look
-configured and do nothing, and the half-set state was indistinguishable from a
-broken feature.
-
-Parking is only safe because it reverses itself. Any configured signal pulls a
-session straight back out, flagged:
-
-| Trigger | Fires when |
-|---------|-----------|
-| the issue moves | Its stage changes — this is your **QA Failed** case |
-| someone comments | A new comment lands on the issue |
-| the MR is touched | Comment, push or review |
-| a pipeline goes red | CI fails |
-| the agent wants you | The agent in that session is waiting on you |
-
-`Ctrl-a p` → **Park session** / **Unpark session** overrides the derived
-answer for sessions with no issue, or when you disagree with your tracker. An
-override is remembered against the stage it was made at and drops once the
-issue moves on, so it can't silently suppress parking forever.
-
-Sessions with no linked issue can auto-park on idleness instead
-(`pipeline.autoParkIdleDays`).
-
-### Capture (`Ctrl-a a`)
-
-One composer, two commit keys:
-
-| Key | Action |
-|-----|--------|
-| `Enter` | File the issue and stay where you are |
-| `Ctrl-S` | File it, create the worktree + session, and launch the agent on it |
-| `Tab` | Move between title / team / description |
-
-Agents can file issues themselves without any UI at all:
-
-```bash
-jmux ctl issue create --title "Auth times out on cold start" \
-  --description "Noticed while working TRA-1200" --team Platform
-jmux ctl issue create --title "Fix flaky test" --start   # capture and start
-```
-
-### Queues and Up next (`Ctrl-a u`)
-
-Tabs are an attention model — **Urgent / To do / In Progress / Waiting** — and
-what varies per workspace is which of *your* tracker states roll up into each. A
-stage carries an ordered `states` list; which of its statuses park is a separate
-list under `pipeline`:
-
-```json
-{ "id": "waiting", "label": "Waiting", "source": "issues",
-  "filter": { "scope": "assigned" },
-  "states": ["QA (PROD WEB)", "QA (RELEASE BR)", "Need ANDR Build"] }
-```
-
-When `states` is present it drives **both** membership and the panel's
-subheadings, and `groupBy` is ignored. Config order is priority order — rendered
-verbatim rather than sorted. A status the stage does not list is not in it at all.
-
-**You don't have to write that by hand.** `Ctrl-a W` lists every status in a
-table with its stage beside it. Assigning a status moves it out of wherever it
-was, so a status has exactly one home. Stages show live counts (`Urgent 3`), so
-"is anything urgent?" never requires switching tabs.
-
-Panel views can be narrowed into named pull queues:
-
-```json
-{
-  "id": "qa-failed", "label": "QA Failed", "source": "issues",
-  "filter": { "scope": "assigned", "states": ["QA Failed"] },
-  "groupBy": "none", "subGroupBy": "none", "sortBy": "priority", "sortOrder": "asc"
-}
-```
-
-| Filter key | Meaning |
-|-----------|---------|
-| `states` | Raw tracker state names (case-insensitive) |
-| `stages` | Tracker categories (`idea`/`active`/`parked`/`done`) — tracker-agnostic |
-| `labels` | Any matching label name |
-| `priorityAtMost` | Keep issues at least this urgent (1=urgent … 4=low) |
-
-Rather than writing that by hand, shape a view live with the panel's `g` / `G`
-/ `/` / `?` keys and then run **Save current view as tab** from the palette.
-
-`pipeline.upNext` is an ordered list of stage ids. `Ctrl-a u` takes the first item
-from the first non-empty stage in that order and starts work on it, so the daily
-ritual is one keystroke. Press `u` on a stage in the workflow screen to add or
-remove it; the order you add them is the order they are checked, and each stage
-shows its place (`1st up next`).
-
-### Transitions (writes to your tracker)
-
-jmux can move an issue along as a byproduct of what you already did:
-
-| Event | Setting |
-|-------|---------|
-| Session created from an issue | `onSessionStartState` |
-| An MR appears on the session's branch | `onMrOpenState` |
-| That MR merges | `onMrMergedState` |
-
-All default to `null` — **jmux never writes to your tracker until you set
-these.** They are per-repo, since they name states; the workflow screen shows
-the value in force for the repo you are sitting in, and `g` switches to the
-global defaults. Every transition is an
-*edge*: an MR that was already merged the first time jmux sees it never fires,
-so attaching to an old session cannot replay history into your tracker.
-
-`pipeline.transitionConfirm` controls how much ceremony a write gets:
-
-| Mode | Behaviour |
-|------|-----------|
-| `undo-toast` (default) | Writes, then shows `TRA-123 → QA  ^a Z undo` in the toolbar for 20s |
-| `always` | Asks before every write |
-| `never` | Writes silently |
-
-`Ctrl-a Z` takes the last write back while the toast is up.
-
----
-
-## Settings Reference
-
-The pipeline — your stages, their statuses, parking, up next and tracker writes —
-is configured on the workflow screen (`Ctrl-a W`). Everything else lives in the
-settings screen (`Ctrl-a I` — capital I) under **Display**, **Integrations**,
-**Repo**, **Project** and **This repo**. Both write to
-`~/.config/jmux/config.json`:
-
-```json
-{
-  "adapters": {
-    "codeHost": { "type": "gitlab" },
-    "issueTracker": { "type": "linear" }
-  },
-  "issueWorkflow": {
-    "teamRepoMap": { "Platform": "~/repos/backend" }
-  },
-  "repoDefaults": {
-    "defaultBaseBranch": "main",
-    "autoLaunchAgent": true,
-    "sessionNameTemplate": "{identifier}",
-    "claudeCommand": "claude",
-    "onMrMergedState": "QA"
-  },
-  "pipeline": {
-    "parkedStates": ["QA (PROD WEB)", "MR Review"],
-    "unparkOn": ["state-regression", "issue-comment", "mr-activity", "pipeline-failed"],
-    "autoParkIdleDays": 2,
-    "transitionConfirm": "undo-toast",
-    "upNext": ["urgent", "todo"],
-    "showUnstartedInSidebar": 3
-  },
-  "panelViews": []
-}
-```
-
-`showUnstartedInSidebar` is a count *per stage*, `"all"`, or `null` for off (the
-default). It is stored as the literal `"all"` rather than a number, because
-`Infinity` does not survive a JSON round-trip — it is written as `null`, which is
-this field's "off". Per-stage exceptions live on the stage itself
-(`inSidebar` / `showUnstarted`); see
-[Unstarted work in the sidebar](#unstarted-work-in-the-sidebar).
-
-Settings are hot-reloaded — changes take effect without restarting jmux.
+## Next
+
+- **[Connecting](connecting.md)** — tokens, adapter config, troubleshooting
+- **[Workflow](workflow.md)** — your stages, parking, `Ctrl-a u`, status writes
+- **[Configuration](configuration.md)** — everything else in `config.json`

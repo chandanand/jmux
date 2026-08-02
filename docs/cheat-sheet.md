@@ -37,7 +37,7 @@ shadows tmux's `choose-session`, which the sidebar already replaces.
 `Stage` groups sessions by the workflow stages you defined in `Ctrl-a W` — a
 session sits under the stage that claims its linked issue's status, with headers
 in your own stage order. Sessions with no linked issue, or whose status no stage
-claims, list flat below the stage groups. See [Issue tracking](issue-tracking.md).
+claims, list flat below the stage groups. See [Workflow](workflow.md#your-stages-in-the-sidebar).
 
 | Mode | Meaning |
 |------|---------|
@@ -56,7 +56,7 @@ Four bands sit outside the grouping, in fixed positions:
   sidebar is grouped by anything other than `Stage`. Under `Stage` those rows sit
   in their own stage's band instead. Off until you set a count on the workflow
   screen; see
-  [Unstarted work in the sidebar](issue-tracking.md#unstarted-work-in-the-sidebar).
+  [Unstarted work in the sidebar](workflow.md#unstarted-work-in-the-sidebar).
   Selecting one opens a **preview** rather than starting it:
 
   | Key | Action |
@@ -74,7 +74,7 @@ Four bands sit outside the grouping, in fixed positions:
 - **Parked** is always last and **collapsed by default**, showing its count
   (`Parked (9)`). It holds sessions whose issue reached a status you marked as
   parked on the workflow screen — see
-  [Parking](issue-tracking.md#parking-the-back-burner). Press `Enter` on the
+  [Parking](workflow.md#parking-the-back-burner). Press `Enter` on the
   header to expand it.
 
 ---
@@ -96,7 +96,7 @@ opens its preview (below). The Command Center is the first stop in the cycle.
 Park a handed-off session (or bring one back) from the palette: **Park session**
 / **Unpark session**. Parked sessions collapse into a single row at the bottom of
 the sidebar and pop back out automatically when their issue, MR or agent needs
-you — see [Issue Tracking](issue-tracking.md#parking-the-back-burner).
+you — see [Parking](workflow.md#parking-the-back-burner).
 
 ---
 
@@ -194,7 +194,7 @@ In split mode, the panel docks to the right (~40% width). In full mode, it repla
 | `g` / `G` | Cycle group-by / sub-group-by |
 | `/` / `?` | Cycle sort field / toggle sort order |
 
-See [issue-tracking.md](issue-tracking.md) for setup and configuration.
+See [connecting.md](connecting.md) for setup, [issue-tracking.md](issue-tracking.md) for the panel, and [workflow.md](workflow.md) for stages and parking.
 
 ---
 

@@ -450,6 +450,61 @@ describe("SettingsScreen override marker", () => {
   });
 });
 
+// --- pending-value note ---
+//
+// The adapter rows write config that the running process does not pick up
+// (adapters are built once at startup), so the row has to say the change is
+// stored but not in force. The note is read every render and dropped the
+// moment it returns null, so it can't outlive the condition it describes.
+
+describe("SettingsScreen value note", () => {
+  function notedCategory(note: () => string | null): SettingsCategory[] {
+    return [{
+      label: "Integrations",
+      collapsed: false,
+      settings: [{
+        id: "issue-tracker",
+        label: "Issue tracker",
+        type: "list",
+        getValue: () => "linear",
+        options: ["linear", "none"],
+        onOptionSelect: () => {},
+        getNote: note,
+      }],
+    }];
+  }
+
+  test("a note renders after the value", () => {
+    const s = new SettingsScreen();
+    s.open(notedCategory(() => "restart to apply"));
+    const grid = s.render(100, 24);
+    const { left, right } = expectedBounds(100);
+    const text = rowText(grid, 3, left, right);
+    expect(text).toContain("linear");
+    expect(text).toContain("restart to apply");
+  });
+
+  test("a null note renders nothing", () => {
+    const s = new SettingsScreen();
+    s.open(notedCategory(() => null));
+    const grid = s.render(100, 24);
+    const { left, right } = expectedBounds(100);
+    expect(rowText(grid, 3, left, right)).not.toContain("restart");
+  });
+
+  test("a row with no getNote renders as before", () => {
+    const s = new SettingsScreen();
+    s.open([{
+      label: "Integrations",
+      collapsed: false,
+      settings: [{ id: "code-host", label: "Code host", type: "list", getValue: () => "gitlab", options: ["gitlab", "none"], onOptionSelect: () => {} }],
+    }]);
+    const grid = s.render(100, 24);
+    const { left, right } = expectedBounds(100);
+    expect(rowText(grid, 3, left, right)).toContain("gitlab");
+  });
+});
+
 // --- action rows ---
 //
 // Some settings aren't values — they open an editor. Without an action type

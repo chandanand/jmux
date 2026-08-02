@@ -27,9 +27,24 @@ describe("createAdapters", () => {
     expect(result.issueTracker!.type).toBe("linear");
   });
 
+  test("creates github code host adapter", () => {
+    const result = createAdapters({ codeHost: { type: "github" } });
+    expect(result.codeHost).not.toBeNull();
+    expect(result.codeHost!.type).toBe("github");
+  });
+
   test("returns null for unknown adapter type", () => {
     const result = createAdapters({ codeHost: { type: "bitbucket" } });
     expect(result.codeHost).toBeNull();
+  });
+
+  // GitHub is a code host and nothing else — there is no GitHub Issues tracker.
+  // The settings screen used to offer it as one, which persisted a type that
+  // resolved to null here and made every issue tab disappear with no error.
+  // The option is gone; this pins the asymmetry that made it wrong.
+  test("github is not an issue tracker", () => {
+    const result = createAdapters({ issueTracker: { type: "github" } });
+    expect(result.issueTracker).toBeNull();
   });
 
   test("creates both adapters", () => {

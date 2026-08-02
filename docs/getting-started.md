@@ -131,7 +131,7 @@ No prefix key needed — these work instantly.
 | Focus panel from rightmost pane | `Shift-Right` |
 | Return focus to tmux | `Shift-Left` (from panel) |
 
-The Diff tab is powered by [hunk](https://github.com/modem-dev/hunk) — install with `npm i -g hunkdiff`. The Issues and MRs tabs require adapter configuration — see [issue-tracking.md](issue-tracking.md).
+The Diff tab is powered by [hunk](https://github.com/modem-dev/hunk) — install with `npm i -g hunkdiff`. It's the only tab that needs no setup; the Issues and MRs tabs appear once an adapter connects — see [connecting.md](connecting.md).
 
 ### Utilities
 
@@ -249,40 +249,31 @@ Now when Claude Code completes a response in any session, that session gets an o
 
 ---
 
-## Issue tracking with Linear and GitLab
+## Issue tracking with Linear and GitLab or GitHub
 
 Connect your issue tracker and code host to see issues, MRs, and pipeline status directly in jmux.
 
-### 1. Set your API tokens
+### 1. Connect
+
+Export a token, name the adapters, restart. In brief:
 
 ```bash
-# Add to your shell profile (~/.zshrc, ~/.bashrc, etc.)
 export LINEAR_API_KEY="lin_api_..."    # from linear.app/settings/api
-export GITLAB_TOKEN="glpat-..."        # personal access token with api scope
+export GITLAB_TOKEN="glpat-..."        # api scope — or GH_TOKEN for GitHub
 ```
 
-### 2. Enable the adapters
+Then `Ctrl-a I` → **Integrations** → set **Code host** (`gitlab` or `github`)
+and **Issue tracker** (`linear`), and **restart jmux** — adapters are the one
+setting that doesn't hot-reload.
 
-Open settings with `Ctrl-a` then `I` (capital), navigate to **Integrations**, and set:
-- **Code host** → `gitlab`
-- **Issue tracker** → `linear`
+Press `Ctrl-a g` and use `[`/`]` to reach the Issues or MRs tab. If a tab isn't
+there, the adapter didn't connect.
 
-Or edit `~/.config/jmux/config.json` directly:
+**Full setup, self-hosted hosts, and what to check when a tab doesn't appear:
+[connecting.md](connecting.md).** Want to see it before getting credentials?
+`jmux --demo`.
 
-```json
-{
-  "adapters": {
-    "codeHost": { "type": "gitlab" },
-    "issueTracker": { "type": "linear" }
-  }
-}
-```
-
-### 3. Restart jmux
-
-Adapters authenticate on startup. Once connected, press `Ctrl-a g` and use `[`/`]` to cycle to the Issues or MRs tab.
-
-### 4. Map your teams to repos (optional)
+### 2. Map your teams to repos (optional)
 
 If you want to create sessions directly from issues (press `n` on an issue), tell jmux which Linear team maps to which local repository:
 
@@ -292,7 +283,7 @@ In settings (`Ctrl-a I` > **Repo** > **Team → repo mappings**), add entries li
 
 Now selecting an issue and pressing `n` will create a worktree, open a session, and optionally launch Claude Code with the issue context — all in one step.
 
-### 5. Define your workflow (optional)
+### 3. Define your workflow (optional)
 
 Your tracker probably has more statuses than you have steps. Press `Ctrl-a W` and
 define **your own stages** — Urgent, To do, In Progress, Waiting — each covering
@@ -318,7 +309,10 @@ Two keystrokes worth knowing once that's set up:
 | `Ctrl-a u` | Start the next issue from your stage rotation (press `u` on a stage to add it) |
 | `Ctrl-a a` | Capture a new issue — `Enter` files it, `Ctrl-S` files it *and* starts work |
 
-See [issue-tracking.md](issue-tracking.md) for the full reference including custom views, pipeline glyphs, status writes back to your tracker, and manual linking.
+See [workflow.md](workflow.md) for the full pipeline reference — stages, parking,
+`Ctrl-a u`, and status writes back to your tracker — and
+[issue-tracking.md](issue-tracking.md) for custom views, pipeline glyphs and
+manual linking.
 
 ---
 
@@ -327,16 +321,19 @@ See [issue-tracking.md](issue-tracking.md) for the full reference including cust
 Press `Ctrl-a` then `I` (capital) to open the settings screen:
 
 - **Display** — sidebar width, panel width, cache timers, state colours
-- **Integrations** — code host (GitLab), issue tracker (Linear)
+- **Integrations** — code host (GitLab or GitHub), issue tracker (Linear)
 - **Repo** — base branch, worktree creation, agent launch, team-to-repo mapping
 - **Project** — project directories for session creation
 - **Workflow** — opens the workflow screen (below)
+- **Diagnostics** — read-only: whether the tracker is connected, and what's parked
 
 The issue pipeline has a screen of its own: `Ctrl-a W` is where you define your
 own workflow stages and map your tracker's statuses onto them — two settings per
 status, plus parking and status writes back to your tracker.
 
-Settings are saved to `~/.config/jmux/config.json` and most take effect immediately.
+Settings are saved to `~/.config/jmux/config.json` and take effect immediately —
+with one exception. **Integrations → Code host / Issue tracker needs a restart**;
+the row reads `restart to apply` until you relaunch.
 
 ---
 
@@ -357,6 +354,7 @@ Settings are saved to `~/.config/jmux/config.json` and most take effect immediat
 
 - Read the [cheat sheet](cheat-sheet.md) for a complete keybinding reference
 - Set up [agent integration](agent-integration.md) for live Claude Code / Codex / pi state
-- Connect [Linear and GitLab](issue-tracking.md) for issue tracking and MR status in the panel
+- Connect [Linear and GitLab or GitHub](connecting.md) for issue tracking and MR status in the panel
+- Shape it around your own process with [workflow stages](workflow.md)
 - Try [wtm](https://github.com/jarredkenny/worktree-manager) for git worktree workflows
 - See [configuration](configuration.md) for advanced tmux config layering

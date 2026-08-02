@@ -62,6 +62,17 @@ export interface SettingDef {
   /** Clear this repo's override, falling back to the inherited value. */
   onClearOverride?: () => void;
   /**
+   * A short qualifier on the *effective* value, shown dim after it — for a row
+   * whose stored value is not yet the value in force ("restart to apply").
+   *
+   * Distinct from `describe`, which explains what the setting does and is the
+   * same every time. This says what is true right now, and returns null the
+   * moment it stops being true, so a row can never keep asserting a stale
+   * caveat. Kept out of `getValue` because a `list` row's displayed value has
+   * to match one of its `options` for the picker to open on the current choice.
+   */
+  getNote?: () => string | null;
+  /**
    * For `action`: run on Enter instead of editing anything. `getValue` still
    * supplies a right-hand summary, so the row reads like the others.
    */
@@ -454,6 +465,7 @@ export class SettingsScreen {
     // Per-repo rows carry a provenance marker after the value, so an override
     // is visible at a glance and the [d] clear key has something to point at.
     const scope = setting.getScope?.();
+    const note = setting.getNote?.() ?? null;
 
     drawSettingRow(grid, row, { left, right }, {
       label: setting.label,
@@ -466,6 +478,7 @@ export class SettingsScreen {
             : (selected ? VALUE_ACTIVE : VALUE_ATTRS),
         },
         ...(scope ? [{ text: ` (${scope})`, attrs: DIM_ATTRS }] : []),
+        ...(note ? [{ text: ` · ${note}`, attrs: DIM_ATTRS }] : []),
       ],
       selected,
       // A map row expands in place rather than carrying a value, so a leader

@@ -56,7 +56,7 @@ jmux answers that at a glance. The **sidebar** lists every session with live ind
 
 ### From ticket to merged, without leaving the terminal
 
-Connect [Linear](https://linear.app) and [GitLab](https://about.gitlab.com) or [GitHub](https://github.com), open the info panel with `Ctrl-a g`, and the whole loop lives in your terminal:
+Connect [Linear](https://linear.app) and [GitLab](https://about.gitlab.com) or [GitHub](https://github.com) — [five minutes, one page](docs/connecting.md) — open the info panel with `Ctrl-a g`, and the whole loop lives in your terminal:
 
 **Pick an issue → press `n` → jmux creates a worktree, opens a session, and launches your agent with the issue context.** One keystroke from ticket to working code.
 
@@ -133,7 +133,7 @@ Two blocks: your stages, then a table of every status your tracker offers. Each 
 
 Each **stage** carries two more: `s` shows or hides it in the sidebar, `space` shows or hides its unstarted work there. A row only mentions either when it's off its default, which is why most say nothing. Hiding a stage hides its heading, never its sessions — those fall to the flat list at the bottom, because no setting here should be able to make an agent that's waiting on you disappear.
 
-Full guide: [docs/issue-tracking.md](docs/issue-tracking.md).
+Full guide: [docs/workflow.md](docs/workflow.md).
 </details>
 
 <details>
@@ -149,11 +149,13 @@ Full guide: [docs/issue-tracking.md](docs/issue-tracking.md).
 }
 ```
 
-- **GitLab** — set `$LINEAR_API_KEY` and `$GITLAB_TOKEN`.
-- **GitHub** — set `$LINEAR_API_KEY` and `$GH_TOKEN` (or `$GITHUB_TOKEN`; falls back to `gh auth token`). Token needs `repo` scope for PRs, check runs, reviews, and branch protection.
-- **GitHub Enterprise** — add `"url": "https://github.mycompany.com/api/v3"` to the `github` adapter, or set `$GITHUB_ENTERPRISE_URL`.
+- **Linear** — set `$LINEAR_API_KEY`. It's the only issue tracker; GitHub is a code host here, not a tracker.
+- **GitLab** — set `$GITLAB_TOKEN` (`api` scope), or just be logged into `glab`.
+- **GitHub** — set `$GH_TOKEN` (`repo` scope), or just be logged into `gh`.
+- **Self-hosted** — add `"url"` to the adapter: `.../api/v4` for GitLab, `.../api/v3` for GitHub Enterprise.
+- **Then restart jmux** — adapters are the one setting that doesn't hot-reload.
 
-Full guide: [docs/issue-tracking.md](docs/issue-tracking.md).
+Full guide, including what to check when a tab doesn't appear: [docs/connecting.md](docs/connecting.md).
 </details>
 
 ### Agents that command agents

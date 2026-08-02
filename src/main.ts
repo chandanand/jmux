@@ -3955,6 +3955,24 @@ function currentRepoCategory(): SettingsCategory[] {
   }];
 }
 
+/**
+ * "restart to apply" for an adapter row whose config no longer matches the
+ * adapter this process is running.
+ *
+ * `adapters` is built once at startup (see `createAdapters` above) and the
+ * config watcher deliberately doesn't rebuild it — a live adapter owns polling
+ * state and in-flight requests. So changing the row here writes config that
+ * does nothing until the next launch, and the row has to say so rather than
+ * reading as applied. It clears itself: after a restart the two agree.
+ *
+ * Demo mode reports `demo` for both adapters against a config that names
+ * neither, which is not a pending change — hence the guard.
+ */
+function adapterRestartNote(configured: string | undefined, live: string | undefined): string | null {
+  if (demoCtx) return null;
+  return (configured ?? "none") === (live ?? "none") ? null : "restart to apply";
+}
+
 function buildSettingsCategories(): SettingsCategory[] {
   const wf = () => configStore.config.issueWorkflow;
   const adapterCfg = () => configStore.config.adapters;
@@ -4076,12 +4094,18 @@ function buildSettingsCategories(): SettingsCategory[] {
           getValue: () => adapterCfg()?.codeHost?.type ?? "none",
           options: ["gitlab", "github", "none"],
           onOptionSelect: (v) => configStore.setAdapter("codeHost", v === "none" ? null : { type: v }),
+          getNote: () => adapterRestartNote(adapterCfg()?.codeHost?.type, adapters.codeHost?.type),
         },
         {
+          // Only the trackers `createAdapters` can actually build. GitHub is a
+          // code host here and nothing more — offering it as a tracker wrote a
+          // type into config that resolved to no adapter, so every issue tab
+          // silently vanished with no error anywhere the user could see it.
           id: "issue-tracker", label: "Issue tracker", type: "list" as const,
           getValue: () => adapterCfg()?.issueTracker?.type ?? "none",
-          options: ["linear", "github", "none"],
+          options: ["linear", "none"],
           onOptionSelect: (v) => configStore.setAdapter("issueTracker", v === "none" ? null : { type: v }),
+          getNote: () => adapterRestartNote(adapterCfg()?.issueTracker?.type, adapters.issueTracker?.type),
         },
       ],
     },
