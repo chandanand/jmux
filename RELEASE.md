@@ -151,6 +151,22 @@ Steps 1–8 are idempotent. If one fails, fix the cause and run the script again
 **Before step 9** — just re-run `bun run release`. Nothing is permanent yet;
 uploads replace existing assets and a published release can be re-drafted.
 
+**Stopped at the npm OTP** — the common case, and the reason `--publish-only`
+exists. Steps 2–6 take about four minutes and a one-time password is valid for
+thirty seconds, so on a plain re-run the code has always expired by the time
+the script asks for it:
+
+```bash
+./release.sh --publish-only        # steps 9 and 10 only, in seconds
+```
+
+It does not weaken the ordering property. npm still goes last; the difference is
+that this run *verifies* the artifacts are built, checksummed and attached to a
+published release rather than making them so, and refuses if any of that is
+untrue. It still requires the tag to equal `HEAD` and the tree to be clean — so
+if you have committed since the tag, publish with `npm publish --otp=<code>`
+directly and bump the formula with `bun run scripts/bump-formula.ts`.
+
 **After step 9 (npm published, something later failed)** — an npm version can
 never be reused. Do not fight it:
 

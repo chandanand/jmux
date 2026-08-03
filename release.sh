@@ -11,13 +11,29 @@
 # so it goes LAST, after every artifact is built, verified and uploaded. Every
 # step before it is idempotent, so a failed run is re-run rather than unwound.
 #
-#   ./release.sh --dry-run     build and verify, publish nothing
-#   ./release.sh               full release
+#   ./release.sh --dry-run       build and verify, publish nothing
+#   ./release.sh                 full release
+#   ./release.sh --publish-only  finish a run that got as far as the artifacts
+#
+# `--publish-only` exists because of 2FA. Steps 2-6 take about four minutes,
+# and an npm one-time password is valid for thirty seconds — so on a re-run to
+# supply the OTP, the code has always expired long before the script reaches
+# `npm publish`. Skipping to steps 9-10 makes that re-run take seconds.
+#
+# It does NOT weaken the ordering property. npm still publishes last, after the
+# artifacts are live; the difference is that this run *verifies* they are live
+# rather than making them so, and refuses if they are not.
 #
 set -euo pipefail
 
 DRY_RUN=0
-[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+PUBLISH_ONLY=0
+case "${1:-}" in
+  --dry-run)      DRY_RUN=1 ;;
+  --publish-only) PUBLISH_ONLY=1 ;;
+  "")             ;;
+  *)              printf 'unknown option: %s\n' "$1" >&2; exit 2 ;;
+esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
@@ -126,6 +142,10 @@ REMOTE_TAG="$(git ls-remote --tags origin "refs/tags/$TAG" | awk '{print $1}')"
 [ -n "$REMOTE_TAG" ] || require "$TAG is not pushed — run: git push origin $TAG"
 
 [ "$DRY_RUN" = "1" ] || ok "$TAG = HEAD = origin ($HEAD_SHA)"
+
+# --- 2-8. Build, verify, upload, publish the release ------------------------
+# Skipped wholesale by --publish-only, which verifies the result instead.
+if [ "$PUBLISH_ONLY" = "0" ]; then
 
 # --- 2. Tests --------------------------------------------------------------
 
@@ -310,6 +330,44 @@ ok "artifacts attached"
 say "Publishing the GitHub Release"
 gh release edit "$TAG" --draft=false
 ok "$TAG is live"
+
+else
+
+# --- 2-8, verified rather than performed -----------------------------------
+# The ordering property says npm publishes only after the artifacts are live.
+# Skipping the steps that make them live means proving they already are —
+# otherwise --publish-only would happily publish an irreversible npm version
+# for a release nobody can download.
+
+say "Verifying $TAG is already built and published"
+
+[ -f "$DIST/SHA256SUMS" ] || die "no $DIST/SHA256SUMS — run ./release.sh first"
+while read -r _ name; do
+  [ -f "$DIST/$name" ] || die "$name is missing from $DIST — run ./release.sh first"
+done < "$DIST/SHA256SUMS"
+ok "local artifacts present, with checksums"
+
+# `shasum -c` rather than trusting the file: the formula bump copies these
+# checksums into the tap, so a stale SHA256SUMS beside rebuilt tarballs would
+# publish a formula that refuses to install.
+(cd "$DIST" && shasum -a 256 -c SHA256SUMS >/dev/null) \
+  || die "checksums in $DIST/SHA256SUMS do not match the tarballs — run ./release.sh first"
+ok "checksums match the tarballs"
+
+RELEASE_STATE="$(gh release view "$TAG" --repo "$REPO" --json isDraft,assets 2>/dev/null)" \
+  || die "no GitHub release for $TAG — run ./release.sh first"
+case "$RELEASE_STATE" in
+  *'"isDraft":true'*) die "$TAG is still a draft — run ./release.sh to publish it" ;;
+esac
+while read -r _ name; do
+  case "$RELEASE_STATE" in
+    *"\"$name\""*) ;;
+    *) die "$name is not attached to $TAG — run ./release.sh first" ;;
+  esac
+done < "$DIST/SHA256SUMS"
+ok "$TAG is published with every artifact attached"
+
+fi
 
 # --- 9. npm — the one irreversible step ------------------------------------
 # A published npm version can never be reused. Everything above is verified and
