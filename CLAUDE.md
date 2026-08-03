@@ -116,6 +116,19 @@ All output is JSON to stdout. Context resolution (`src/cli/context.ts`) auto-det
 
 **`src/issue-session.ts` is the one implementation of issue→session**, shared by the TUI and the CLI: the session name (`sessionNameTemplate`, or the tracker's own `branchName`), the worktree path (`<repoDir>/<session>`), and the resolution to `none`/`worktree`/`session`. It exists because those rules lived in two places and disagreed, so a session `ctl issue start` created was invisible to the sidebar, which kept offering to start the same work. Two link stores feed it and neither adopts the other's key: `state.json` holds the tracker's id (the TUI can't move off it) and `@jmux-linear-issue` holds an identifier (the CLI can't use `state.json` — a running TUI holds it in memory and would clobber the write). `linkKey` normalizes both and `resolveIssueSession` looks up both forms.
 
+**`src/issue-provision.ts` is the one implementation of "provision a session for this issue"**, and the ordering in it is the whole point: the session is created *first*, with the agent parked on a wait loop, and the worktree tool runs in a 30% setup pane beside it. That makes the work observable to the sidebar, `ctl status` and `workflow board` the instant provisioning starts, and it means nothing has to block.
+
+This existed twice and the copies had drifted into different failure modes. The CLI ran the worktree tool with a blocking `Bun.spawnSync` and created the session afterwards, so a wtm repo with install hooks gave a minute of silence with no session, no pane and nothing in `ctl status` — reported as a hang and interrupted as one, which left an orphan worktree that the *next* `issue start` mistook for a finished one (`existsSync` was standing in for "ready"). It also built its agent command with `claude -p` — print mode, headless, exits — where the human got a seeded interactive session.
+
+Four rules hold it together:
+
+- **A worktree directory means "resumable", never "ready".** It appears before install hooks run. Readiness is the setup pane *exiting*, which is what `--wait` polls and what the human reads off their screen.
+- **Failure raises the session's attention flag before `exec $SHELL`.** `exec` never returns, so ordering is load-bearing. The flag is the only way a caller who didn't wait ever learns setup died; the shell is what keeps the tool's own error on screen, and without it the main pane waits forever for a worktree that isn't coming.
+- **Waiting is opt-in and always bounded.** A timeout returns a live session, not an exception — a slow install is not a failed start.
+- **The CLI does not `switch-client`.** Starting work in the background must not move the human's cursor. This is the one deliberate difference from the `n` key.
+
+The `session-start` tracker transition fires from both. In the CLI the `transitionConfirm` policy does not apply, for the same reason it doesn't for `issue move`: that policy governs writes jmux makes on its own initiative, and this one was asked for. The result is read back, and a tracker failure never fails the start.
+
 The skill file `skills/jmux-control.md` documents usage patterns for agents — it's loaded as a Claude Code skill so agents inside jmux can discover and use the CLI.
 
 ### Diff panel

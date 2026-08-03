@@ -11,6 +11,8 @@ import {
   expandTilde,
   validateIssueCreate,
   resolveTeamId,
+  parseWaitFlag,
+  provisioningDone,
   type IssueLinkRow,
 } from "../../cli/issue";
 import type { Issue } from "../../adapters/types";
@@ -272,5 +274,47 @@ describe("resolveTeamId", () => {
 
   test("throws for an unknown team", () => {
     expect(() => resolveTeamId("Mobile", teams)).toThrow(/Mobile/);
+  });
+});
+
+describe("parseWaitFlag", () => {
+  test("absent means do not wait — the default is non-blocking", () => {
+    expect(parseWaitFlag(undefined)).toEqual({ wait: false, seconds: 0 });
+    expect(parseWaitFlag(false)).toEqual({ wait: false, seconds: 0 });
+  });
+
+  test("bare --wait gets a bounded default, never an open-ended block", () => {
+    const spec = parseWaitFlag(true);
+    expect(spec.wait).toBe(true);
+    expect(spec.seconds).toBeGreaterThan(0);
+    expect(Number.isFinite(spec.seconds)).toBe(true);
+  });
+
+  test("--wait 60 takes the caller's bound", () => {
+    expect(parseWaitFlag("60")).toEqual({ wait: true, seconds: 60 });
+  });
+
+  test("rejects a non-positive or non-numeric bound", () => {
+    for (const bad of ["0", "-5", "soon", ""]) {
+      expect(() => parseWaitFlag(bad)).toThrow(/--wait/);
+    }
+  });
+});
+
+describe("provisioningDone", () => {
+  // The directory appears the moment the worktree tool creates it, which is
+  // *before* any install hooks run. Treating that alone as "ready" is the bug
+  // that let an interrupted setup be resumed as a finished one.
+  test("a worktree directory alone is not ready", () => {
+    expect(provisioningDone({ worktreeExists: true, setupPaneAlive: true })).toBe(false);
+  });
+
+  test("ready only once the setup pane has exited", () => {
+    expect(provisioningDone({ worktreeExists: true, setupPaneAlive: false })).toBe(true);
+  });
+
+  test("no worktree is never ready, pane or not", () => {
+    expect(provisioningDone({ worktreeExists: false, setupPaneAlive: false })).toBe(false);
+    expect(provisioningDone({ worktreeExists: false, setupPaneAlive: true })).toBe(false);
   });
 });

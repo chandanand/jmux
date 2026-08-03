@@ -124,6 +124,7 @@ import {
   type WorkStage,
   type ResolvedRepoSettings,
 } from "./repo-settings";
+import { buildProvisionPlan, SETUP_PANE_SIZE } from "./issue-provision";
 import {
   resolveStateColors,
   STATE_COLOR_NAMES,
@@ -5643,56 +5644,38 @@ async function startWorkOnIssue(
             promptTmp = `/tmp/jmux-prompt-${Date.now()}.md`;
             writeFileSync(promptTmp, prompt);
           }
-          // `exec $SHELL` tail keeps the pane alive if claude exits so the user
-          // isn't ejected from the session. Use a double-quoted command sub so
-          // `cat` reads the prompt verbatim without word-splitting.
-          const claudeFragment = promptTmp
-            ? `${settings.claudeCommand} "$(cat ${promptTmp})"; rm -f ${promptTmp}; exec $SHELL`
-            : `exec $SHELL`;
 
-          // STATE 2: Worktree exists but no session → launch claude directly
-          if (issueState === "worktree") {
-            const wtPath = issueWorktreePath(expandedDir, session);
-            await control.sendCommand(
-              `new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(wtPath)} ${tq(claudeFragment)}`,
-            );
-            await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(session)}`);
-            sessionState.addLink(session, { type: "issue", id: issue.id });
-            void requestTransition(issue, "session-start");
-            return "created";
-          }
-
-          // STATE 1: Nothing exists → create worktree + session. Every issue
-          // gets a worktree; `wtmIntegration` picks the mechanism only, so
-          // both paths land the same `<repo>/<session>` directory and the
-          // session name doubles as the branch name (the one-name rule).
+          // Every issue gets a worktree; `wtmIntegration` picks the mechanism
+          // only, so both paths land the same `<repo>/<session>` directory and
+          // the session name doubles as the branch name (the one-name rule).
+          // STATE 2 (worktree exists, no session) and STATE 1 (nothing exists)
+          // differ only in whether a setup pane is needed, which is what
+          // `buildProvisionPlan` decides.
           const wtPath = issueWorktreePath(expandedDir, session);
-          // Main (left) pane runs claude — but first it has to wait for the
-          // sibling setup pane to materialize the worktree directory. Tmux
-          // wants a cwd that exists at split time, so we open the pane in
-          // the repo root and have the shell cd into the worktree once
-          // creation finishes.
-          const mainCmd = `while [ ! -d ${tq(wtPath)} ]; do sleep 0.2; done; cd ${tq(wtPath)}; ${claudeFragment}`;
-          await control.sendCommand(
-            `new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(expandedDir)} ${tq(mainCmd)}`,
-          );
-          // Setup (right) pane creates the worktree and exits on success — no
-          // trailing `exec $SHELL` so the pane auto-closes. On failure we drop
-          // to a shell so the user can see the error (without this, the pane
-          // would vanish and the main pane would wait forever for a worktree
-          // that never gets created). `-d` keeps focus on claude; `-l 30%`
-          // makes setup narrow and leaves claude with ~70%.
-          const createCmd = buildWorktreeCommand({
-            wtm: settings.wtmIntegration,
+          const plan = buildProvisionPlan({
             session,
+            repoDir: expandedDir,
+            worktreePath: wtPath,
             baseBranch,
-            noShell: true,
+            wtm: settings.wtmIntegration,
+            worktreeExists: issueState === "worktree",
+            agentCommand: shouldLaunchAgent ? settings.claudeCommand : null,
+            promptFile: promptTmp,
           });
+
           await control.sendCommand(
-            `split-window -h -d -l 30% -t ${tq(session)} -c ${tq(expandedDir)} ${tq(`${createCmd} || exec $SHELL`)}`,
+            `new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(plan.sessionCwd)} ${tq(plan.mainCommand)}`,
           );
-          // The new worktree changes what git reports for these paths.
-          repoFacts.clear();
+          if (plan.setupCommand) {
+            // Setup (right) pane creates the worktree and exits on success — no
+            // trailing `exec $SHELL` so the pane auto-closes. `-d` keeps focus
+            // on claude; `-l 30%` makes setup narrow and leaves claude ~70%.
+            await control.sendCommand(
+              `split-window -h -d -l ${SETUP_PANE_SIZE} -t ${tq(session)} -c ${tq(expandedDir)} ${tq(plan.setupCommand)}`,
+            );
+            // The new worktree changes what git reports for these paths.
+            repoFacts.clear();
+          }
 
           await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(session)}`);
           sessionState.addLink(session, { type: "issue", id: issue.id });

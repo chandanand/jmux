@@ -59,6 +59,14 @@ const VALUE_FLAGS = new Set([
   "team",
   "stage",
 ]);
+/**
+ * Flags whose value is optional and always numeric, so `--wait` and `--wait 60`
+ * both work. The next token is consumed only when it parses as a number —
+ * without that guard `issue start --wait TRA-1580` would eat the issue id as
+ * the flag's value and leave the command with no positional at all, the same
+ * class of silent misparse the `--` handling below exists to prevent.
+ */
+const OPTIONAL_NUMERIC_FLAGS = new Set(["wait"]);
 const BOOL_FLAGS = new Set([
   "force",
   "no-enter",
@@ -122,6 +130,10 @@ FLAGS
   --all                Operate on all sessions (agent state/watch, dev-servers)
   --start              Start the work immediately (issue create, workflow next)
   --no-launch-agent    Don't auto-launch Claude (issue start)
+  --wait [seconds]     Block until the worktree is provisioned (issue start).
+                       Off by default: the session and agent are created up
+                       front and the worktree lands in a setup pane beside
+                       them. Bounded — a timeout returns, it does not fail.
   --force              Skip confirmation prompts
   --no-enter           Don't send Enter after keys
   --enter              Send Enter after keys
@@ -212,6 +224,11 @@ export function parseCtlArgs(argv: string[]): ParsedCtlArgs {
       const name = arg.slice(2);
       if (BOOL_FLAGS.has(name)) {
         flags[name] = true;
+        i++;
+      } else if (OPTIONAL_NUMERIC_FLAGS.has(name)) {
+        const next = argv[i + 1];
+        const numeric = next !== undefined && next.trim() !== "" && Number.isFinite(Number(next));
+        flags[name] = numeric ? argv[++i] : true;
         i++;
       } else if (VALUE_FLAGS.has(name) || GLOBAL_VALUE_FLAGS.has(name)) {
         if (i + 1 >= argv.length) {

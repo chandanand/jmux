@@ -9,12 +9,21 @@ import {
   loadUserConfig,
   type JmuxConfig,
 } from "../config";
-import { RepoFactsCache, resolveForRepo, worktreeCommandArgv } from "../repo-settings";
+import {
+  RepoFactsCache,
+  resolveForRepo,
+  type ResolvedRepoSettings,
+} from "../repo-settings";
 import { resolveIssueSessionName, issueWorktreePath } from "../issue-session";
+import {
+  buildProvisionPlan,
+  SETUP_PANE_SIZE,
+  PROVISION_ATTENTION_REASON,
+} from "../issue-provision";
+import { transitionTarget } from "../transitions";
 import { INTERNAL_SESSION_FILTER } from "../glass/internal-sessions";
 import { LinearAdapter } from "../adapters/linear";
 import { buildLinearPrompt } from "../adapters/linear-prompt";
-import { buildClaudeLaunchCommand } from "./run-claude";
 import { US, splitFields } from "../tmux-fields";
 import type { Issue } from "../adapters/types";
 import type { ParsedCtlArgs } from "../cli";
@@ -468,63 +477,139 @@ function activePane(ctx: CliContext, session: string): string | null {
   return r.ok && r.lines.length > 0 ? r.lines[0] : null;
 }
 
-function branchExists(repo: string, branch: string): boolean {
-  const r = Bun.spawnSync(
-    ["git", "-C", repo, "rev-parse", "--verify", "--quiet", branch],
-    { stdout: "ignore", stderr: "ignore" },
-  );
-  return (r.exitCode ?? 1) === 0;
+/**
+ * How far a `--wait` poll gets between checks. Provisioning takes seconds at
+ * best (a bare `git worktree add`) and minutes at worst (wtm running install
+ * hooks), so there is nothing to gain from a tighter loop.
+ */
+const WAIT_POLL_MS = 500;
+
+/** `--wait` with no value: long enough for a dependency install, still bounded. */
+const WAIT_DEFAULT_SECONDS = 300;
+
+export interface WaitSpec {
+  wait: boolean;
+  seconds: number;
 }
 
 /**
- * Create the issue's worktree under the repo directory, with the same tool the
- * TUI would use — `wtm` for a wtm-managed repo, plain git otherwise.
+ * Parse `--wait` / `--wait <seconds>`.
  *
- * Two departures from `worktreeCommandArgv`, both because this is a scripted
- * API rather than a pane a human is watching:
- *
- *   * an existing worktree directory is reused rather than being an error, so a
- *     retry is a no-op;
- *   * an existing *branch* is checked out rather than re-created, so a second
- *     `issue start` after a session was killed resumes the work. wtm resolves
- *     that case itself, so only the git path needs the distinction.
+ * Waiting is opt-in and always bounded. The command this replaces blocked for
+ * however long the worktree tool took, with no output and no ceiling, which is
+ * indistinguishable from a hang to anything watching it — so a caller that
+ * genuinely needs the worktree on disk gets to say so *and* gets a definite
+ * answer either way, rather than an open-ended block by default.
  */
-function createWorktree(o: {
-  repo: string;
-  worktreePath: string;
-  session: string;
-  baseBranch: string;
-  wtm: boolean;
-}): void {
-  if (existsSync(o.worktreePath)) return;
-
-  const argv =
-    !o.wtm && branchExists(o.repo, o.session)
-      ? ["git", "worktree", "add", `./${o.session}`, o.session]
-      : worktreeCommandArgv({
-          wtm: o.wtm,
-          session: o.session,
-          baseBranch: o.baseBranch,
-          noShell: true,
-        });
-
-  const r = Bun.spawnSync(argv, { cwd: o.repo, stdout: "pipe", stderr: "pipe" });
-  if ((r.exitCode ?? 1) !== 0) {
-    const detail = r.stderr.toString().trim() || r.stdout.toString().trim();
-    throw new CliError(`${argv[0]} failed to create the worktree: ${detail}`);
+export function parseWaitFlag(raw: string | boolean | undefined): WaitSpec {
+  if (raw === undefined || raw === false) return { wait: false, seconds: 0 };
+  if (raw === true) return { wait: true, seconds: WAIT_DEFAULT_SECONDS };
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new CliError(`--wait expects a positive number of seconds, got "${raw}"`);
   }
+  return { wait: true, seconds: n };
+}
+
+/**
+ * Whether provisioning has finished, from the two facts the human reads off
+ * their own screen: the worktree directory is there, and the setup pane that
+ * was creating it has exited.
+ *
+ * Both are needed. The directory appears the moment the worktree tool creates
+ * it, which is *before* any install hooks run — so a directory alone means
+ * "started", not "ready". The setup pane closing is what means the tool exited
+ * 0, because the failure path replaces the exit with a shell.
+ */
+export function provisioningDone(o: {
+  worktreeExists: boolean;
+  setupPaneAlive: boolean;
+}): boolean {
+  return o.worktreeExists && !o.setupPaneAlive;
+}
+
+/**
+ * How the worktree is coming along, as reported to the caller.
+ *
+ * Optional fields rather than a discriminated union: this is a JSON payload,
+ * and modelling absent keys as absent keys keeps the type and the wire shape
+ * the same thing.
+ */
+export interface ProvisioningStatus {
+  ready: boolean;
+  /** The setup pane, or null once there is nothing left to watch. */
+  pane: string | null;
+  worktree: string;
+  /** Set when `--wait` saw it through. */
+  waited?: boolean;
+  /** Set when the setup pane reported its own failure. */
+  failed?: boolean;
+  /** Set when `--wait` hit its deadline with setup still running. */
+  timedOut?: boolean;
+  reason?: string;
+  note?: string;
+}
+
+/** The `session-start` tracker move, reported rather than assumed. */
+export interface TransitionResult {
+  moved: boolean;
+  reason?: string;
+  from?: string;
+  to?: string;
+  status?: string;
+}
+
+export interface IssueStartResult {
+  session: string;
+  pane: string | null;
+  /** Where the worktree is — or *will* be, until `provisioning.ready`. */
+  cwd: string | null;
+  issue: string;
+  reused: boolean;
+  /** Absent on the reuse paths: nothing was started, so nothing moved. */
+  transition?: TransitionResult;
+  provisioning?: ProvisioningStatus;
+}
+
+function paneAlive(ctx: CliContext, session: string, paneId: string): boolean {
+  // Scoped to the session rather than `-a`: the setup pane is in it by
+  // construction, and this runs twice a second for up to five minutes.
+  const r = runTmuxDirect(["list-panes", "-t", session, "-F", "#{pane_id}"], ctx.socket);
+  return r.ok && r.lines.includes(paneId);
+}
+
+/**
+ * Whether the setup pane reported *its own* failure.
+ *
+ * Matched against the exact reason the setup pane writes, not merely "the
+ * session has an attention flag". A session can be flagged by an agent hook or
+ * by a human running `ctl session attention set`, and treating either as
+ * evidence that provisioning died would abandon a healthy wait and tell the
+ * caller its start had failed.
+ */
+function provisioningFailed(ctx: CliContext, session: string): boolean {
+  const r = runTmuxDirect(
+    ["show-option", "-t", session, "-qv", "@jmux-attention-reason"],
+    ctx.socket,
+  );
+  const value = r.ok && r.lines.length > 0 ? r.lines[0].trim() : "";
+  return value === PROVISION_ATTENTION_REASON;
 }
 
 async function issueStart(
   ctx: CliContext,
   parsed: ParsedCtlArgs,
-): Promise<unknown> {
+): Promise<IssueStartResult> {
   const issueId = parsed.positional[0];
   if (!issueId) throw new CliError("issue start requires an <issue-id>");
   const { flags } = parsed;
+  // Validated before any lookup or side effect. Deferring it meant a typo cost
+  // a tracker round-trip first, and was skipped entirely on the reuse paths —
+  // validation that only fires sometimes is validation nobody can rely on.
+  const waitSpec = parseWaitFlag(flags.wait);
 
   const rows = listIssueLinkRows(ctx);
-  const reuse = (row: IssueLinkRow, id: string) => ({
+  const reuse = (row: IssueLinkRow, id: string): IssueStartResult => ({
     session: row.name,
     pane: activePane(ctx, row.name),
     cwd: row.path || null,
@@ -590,43 +675,55 @@ async function issueStart(
       : repoSettings.defaultBaseBranch;
   const worktreePath = issueWorktreePath(repo, sessionName);
 
-  createWorktree({
-    repo,
-    worktreePath,
-    session: sessionName,
-    baseBranch,
-    wtm: repoSettings.wtmIntegration,
-  });
+  // A worktree already on disk with no session is an abandoned attempt, and
+  // resuming into it is exactly what the TUI's "worktree" state does. Note this
+  // is the *only* thing the directory's existence is allowed to decide: it used
+  // to double as "the worktree is finished", which meant an interrupted setup
+  // left a half-installed tree that the next `issue start` happily launched an
+  // agent inside. Readiness is now the setup pane's business.
+  const worktreeExists = existsSync(worktreePath);
 
-  // Build the (optional) Claude launch command.
-  const launchAgent = !flags["no-launch-agent"];
-  let launchCmd: string | null = null;
-  if (launchAgent) {
-    const claudeCmd = repoSettings.claudeCommand;
-    const shell = process.env.SHELL ?? "/bin/sh";
-    let promptFile: string | null = null;
-    if (issue) {
-      const prompt = buildLinearPrompt(issue);
-      const rand = Math.random().toString(36).slice(2);
-      promptFile = resolve(tmpdir(), `jmux-prompt-${Date.now()}-${rand}`);
-      writeFileSync(promptFile, prompt, "utf-8");
-    }
-    launchCmd = buildClaudeLaunchCommand(claudeCmd, promptFile, shell);
+  // Seed the agent's first message from the issue, the same way the TUI does.
+  const launchAgent = !flags["no-launch-agent"] && repoSettings.autoLaunchAgent;
+  let promptFile: string | null = null;
+  if (launchAgent && issue) {
+    const rand = Math.random().toString(36).slice(2);
+    promptFile = resolve(tmpdir(), `jmux-prompt-${Date.now()}-${rand}`);
+    writeFileSync(promptFile, buildLinearPrompt(issue), "utf-8");
   }
 
-  const otel = buildOtelResourceAttrs(sessionName);
-  const createArgs = [
-    "new-session",
-    "-d",
-    "-e",
-    `OTEL_RESOURCE_ATTRIBUTES=${otel}`,
-    "-s",
-    sessionName,
-    "-c",
+  const plan = buildProvisionPlan({
+    session: sessionName,
+    repoDir: repo,
     worktreePath,
-  ];
-  if (launchCmd) createArgs.push(launchCmd);
-  tmuxOrThrow(runTmuxDirect(createArgs, ctx.socket));
+    baseBranch,
+    wtm: repoSettings.wtmIntegration,
+    worktreeExists,
+    agentCommand: launchAgent ? repoSettings.claudeCommand : null,
+    promptFile,
+  });
+
+  // The session comes first and the worktree is provisioned into it, so the
+  // work is visible to `ctl status`, `workflow board` and the human's sidebar
+  // from here on — including while a slow `wtm create` is still running its
+  // install hooks.
+  const otel = buildOtelResourceAttrs(sessionName);
+  tmuxOrThrow(
+    runTmuxDirect(
+      [
+        "new-session",
+        "-d",
+        "-e",
+        `OTEL_RESOURCE_ATTRIBUTES=${otel}`,
+        "-s",
+        sessionName,
+        "-c",
+        plan.sessionCwd,
+        plan.mainCommand,
+      ],
+      ctx.socket,
+    ),
+  );
 
   // Link the new session to the issue, under the tracker's own identifier when
   // we have it — the option is what the TUI reads, so a predictable key there
@@ -641,11 +738,173 @@ async function issueStart(
     ctx.socket,
   );
 
-  return {
+  const setupPane = plan.setupCommand
+    ? openSetupPane(ctx, { session: sessionName, repo, command: plan.setupCommand })
+    : null;
+
+  // The tracker move the human's `n` key fires. An explicit CLI invocation is
+  // explicit consent, so the `transitionConfirm` policy does not apply here for
+  // the same reason it does not apply to `issue move`: that policy governs the
+  // writes jmux performs on its own initiative, and this one was asked for.
+  // The already-authenticated adapter is reused — a second `authenticate()` is
+  // a network round-trip added to the path whose whole point is returning fast.
+  const transition = await applySessionStartTransition(adapter, issue, repoSettings);
+
+  const result: IssueStartResult = {
     session: sessionName,
     pane: activePane(ctx, sessionName),
     cwd: worktreePath,
     issue: linkId,
     reused: false,
+    transition,
   };
+
+  // Narrowing on the pane rather than on `plan.setupCommand` is what lets the
+  // wait path take a non-nullable pane id: the two are null together, and only
+  // this one carries the fact into the type.
+  if (setupPane === null) {
+    result.provisioning = { ready: true, pane: null, worktree: worktreePath };
+    return result;
+  }
+
+  result.provisioning = waitSpec.wait
+    ? await waitForProvisioning(ctx, {
+        session: sessionName,
+        worktreePath,
+        setupPane,
+        seconds: waitSpec.seconds,
+      })
+    : {
+        ready: false,
+        pane: setupPane,
+        worktree: worktreePath,
+        // Deliberately does not suggest re-running with --wait. A re-run finds
+        // the link this command just wrote, returns `reused: true` and does not
+        // wait for anything — advice that looks like it worked and does nothing
+        // is the failure this whole change exists to stop shipping.
+        note: "worktree is being created in the setup pane; cwd does not exist yet. Poll `jmux ctl status` — the session reports attention with reason \"worktree setup failed\" if setup dies. Do not re-run this command to wait; it will return the session as already started.",
+      };
+
+  return result;
+}
+
+/**
+ * Split the setup pane and return its id.
+ *
+ * The id is required, not best-effort. `-P -F` prints it whenever the split
+ * succeeds, so a success with no id is a broken assumption rather than a case
+ * to degrade through — and degrading would make the pane look already-exited to
+ * `waitForProvisioning`, which would then call a bare directory "ready". That
+ * is exactly the bug this change exists to remove.
+ */
+function openSetupPane(
+  ctx: CliContext,
+  o: { session: string; repo: string; command: string },
+): string {
+  const split = runTmuxDirect(
+    [
+      "split-window",
+      "-h",
+      "-d",
+      "-l",
+      SETUP_PANE_SIZE,
+      "-t",
+      o.session,
+      "-c",
+      o.repo,
+      "-P",
+      "-F",
+      "#{pane_id}",
+      o.command,
+    ],
+    ctx.socket,
+  );
+  tmuxOrThrow(split);
+  const pane = split.lines[0];
+  if (!pane) {
+    throw new CliError(
+      `tmux created the setup pane for "${o.session}" but reported no pane id`,
+    );
+  }
+  return pane;
+}
+
+/**
+ * Fire the `session-start` transition, honouring the repo's configured target.
+ *
+ * Reported rather than assumed, exactly as `issue move` does: `updateStatus`
+ * resolves the state name server-side and returns nothing, so treating "no
+ * exception" as "the issue moved" would report that a request was sent.
+ *
+ * A failure here is deliberately not fatal. The session exists and the worktree
+ * is being built; throwing away a successful start because a tracker write
+ * failed would be the CLI's most destructive possible response to its least
+ * important step.
+ */
+async function applySessionStartTransition(
+  adapter: LinearAdapter,
+  issue: Issue | null,
+  settings: ResolvedRepoSettings,
+): Promise<TransitionResult> {
+  const target = transitionTarget("session-start", settings);
+  // `issue` is only non-null when the adapter authenticated, so reaching the
+  // write below already implies a usable tracker.
+  if (!issue) return { moved: false, reason: "no tracker" };
+  if (!target) return { moved: false, reason: "not configured" };
+  if (issue.status === target) return { moved: false, reason: "already there", status: target };
+
+  try {
+    await adapter.updateStatus(issue.id, target);
+    const after = await adapter.pollIssue(issue.id);
+    return { moved: after.status === target, from: issue.status, to: target, status: after.status };
+  } catch (err) {
+    return { moved: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Block until the setup pane finishes, up to a bounded deadline.
+ *
+ * Returns rather than throws on timeout. A slow install is not an error, and a
+ * caller that asked to wait 60s for something that takes 90s should get back a
+ * session it can keep polling, not an exception that implies the start failed.
+ */
+async function waitForProvisioning(
+  ctx: CliContext,
+  o: { session: string; worktreePath: string; setupPane: string; seconds: number },
+): Promise<ProvisioningStatus> {
+  const deadline = Date.now() + o.seconds * 1000;
+  for (;;) {
+    const done = provisioningDone({
+      worktreeExists: existsSync(o.worktreePath),
+      setupPaneAlive: paneAlive(ctx, o.session, o.setupPane),
+    });
+    if (done) {
+      return { ready: true, pane: null, worktree: o.worktreePath, waited: true };
+    }
+
+    // The setup pane raises this before dropping to a shell, so a failure is
+    // reported as a failure instead of running out the clock.
+    if (provisioningFailed(ctx, o.session)) {
+      return {
+        ready: false,
+        failed: true,
+        pane: o.setupPane,
+        worktree: o.worktreePath,
+        reason: PROVISION_ATTENTION_REASON,
+        note: `the setup pane ${o.setupPane} is sitting on the error; \`jmux ctl pane capture --target ${o.setupPane}\` shows it`,
+      };
+    }
+
+    if (Date.now() >= deadline) {
+      return {
+        ready: false,
+        timedOut: true,
+        pane: o.setupPane,
+        worktree: o.worktreePath,
+        note: `still provisioning after ${o.seconds}s — the session is live and will start the agent when the worktree lands`,
+      };
+    }
+    await Bun.sleep(WAIT_POLL_MS);
+  }
 }

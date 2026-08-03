@@ -43,7 +43,7 @@ If not set, you're outside jmux and most commands require explicit `--session` f
 | `jmux ctl session attention set --target N [--reason "..."]` | Flag a session as needing the human |
 | `jmux ctl session attention clear --target N` | Clear the attention flag |
 | `jmux ctl issue create --title T [--description D] [--team T] [--start]` | File a new issue; `--start` also provisions the session |
-| `jmux ctl issue start <issue-id> [--repo P]` | Start (or resume) work for an issue |
+| `jmux ctl issue start <issue-id> [--repo P] [--wait [sec]]` | Start (or resume) work for an issue. Returns immediately; worktree setup continues in a pane |
 | `jmux ctl issue get <issue-id>` | Fetch issue details from the tracker |
 | `jmux ctl issue move <issue-id> <status>` | Move an issue along the workflow |
 | `jmux ctl issue link <session> <issue-id>` | Link a session to an issue |
@@ -379,12 +379,52 @@ message for the human, not something to work around.
 
 ### issue start
 ```json
-{"session": "tra-123", "pane": "%12", "cwd": "/repo/tra-123", "issue": "TRA-123", "reused": false}
+{
+  "session": "tra-123", "pane": "%12", "cwd": "/repo/tra-123", "issue": "TRA-123",
+  "reused": false,
+  "transition": {"moved": true, "from": "To do", "to": "In Progress", "status": "In Progress"},
+  "provisioning": {"ready": false, "pane": "%13", "worktree": "/repo/tra-123", "note": "…"}
+}
 ```
-The session name comes from the repo's `sessionNameTemplate` (default
-`{identifier}`) or the tracker's own suggested branch name, and the worktree
-lands at `<repo>/<session>` — the same name and place the TUI would pick, which
-is why work you start shows up as started in the human's sidebar.
+This is the same flow as the human pressing `n` in the issues panel or Enter on
+a sidebar ghost row — same session name, same worktree, same two-pane layout,
+same tracker move. It provisions *into* a session rather than before one, so it
+**returns in about a second even when setup takes minutes**:
+
+1. the session is created with the agent in the main pane, waiting;
+2. a 30% setup pane runs the worktree tool (`wtm create`, or `git worktree add`)
+   beside it;
+3. the agent starts by itself the moment the worktree lands.
+
+**`cwd` is where the worktree *will* be, not where it is.** Until
+`provisioning.ready` is true that directory may not exist. Do not `cd` into it,
+`git -C` it, or send keys to the session expecting a repo — the session is
+alive but its main pane is still parked in the wait loop.
+
+Three ways to handle that, in order of preference:
+
+- **Don't wait.** The agent launches itself with the issue prompt already
+  seeded. If your job was "kick this off", you are done — return the session
+  name and move on.
+- **`--wait [seconds]`** (default 300) blocks until setup finishes and returns
+  `{"ready": true, "waited": true}`. Always bounded: a timeout comes back as
+  `{"ready": false, "timedOut": true}` with the session still live and still
+  provisioning. **A timeout is not a failure** — do not kill the session or
+  retry the command over it. Note `ready` means *the worktree landed*, not that
+  the agent is up: the main pane notices within ~200ms and launches then. If
+  you need the agent running (rather than just the directory), check
+  `jmux ctl agent state --session <name>` — do not send keys on `ready` alone
+  or they land in the shell before the agent starts.
+- **Poll `jmux ctl status`.** When setup *fails*, the setup pane raises the
+  session's attention flag, so `status` reports
+  `attention: true, attentionReason: "worktree setup failed"`. The pane stays
+  open on the tool's own error — `jmux ctl pane capture --target <session>.1`
+  reads it. This is the only way to learn about a failure you didn't wait for.
+
+`transition` reports the tracker move that a human's start also fires (the
+repo's `onSessionStartState`). `moved: false` with a `reason` is normal and
+never fatal — the session is real either way, and a tracker write failing is
+not a reason to throw away a successful start.
 
 `reused: true` means nothing was provisioned and an existing session is returned
 as-is. Two ways that happens, and you don't need to tell them apart: a session
@@ -395,6 +435,9 @@ safe to call blind: it starts, resumes, or hands back, and never duplicates.
 It refuses in one case: a session on that name is already linked to a *different*
 issue. That is a real collision, and detaching somebody's work from its issue to
 resolve it is not a call the CLI makes — `issue unlink` it first if you're sure.
+
+It does **not** switch the human's view to the new session. Starting work in the
+background must not move somebody's cursor.
 
 ### issue link / unlink
 ```json

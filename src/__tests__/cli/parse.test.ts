@@ -198,3 +198,32 @@ describe("end-of-flags (`--`)", () => {
     expect(p.positional).toEqual(["eval", "--", "1 + 1"]);
   });
 });
+
+describe("optional-value flags (`--wait`)", () => {
+  test("bare --wait before the issue id does not eat it", () => {
+    // A plain value flag would take "TRA-1580" as the wait duration and leave
+    // the command with no positional at all — the same class of silent
+    // misparse the `--` handling exists to prevent.
+    const r = parseCtlArgs(["issue", "start", "--wait", "TRA-1580"]);
+    expect(r.flags.wait).toBe(true);
+    expect(r.positional).toEqual(["TRA-1580"]);
+  });
+
+  test("bare --wait at the end of the argv does not throw", () => {
+    const r = parseCtlArgs(["issue", "start", "TRA-1580", "--wait"]);
+    expect(r.flags.wait).toBe(true);
+    expect(r.positional).toEqual(["TRA-1580"]);
+  });
+
+  test("a numeric value is taken as the bound", () => {
+    const r = parseCtlArgs(["issue", "start", "TRA-1580", "--wait", "90"]);
+    expect(r.flags.wait).toBe("90");
+    expect(r.positional).toEqual(["TRA-1580"]);
+  });
+
+  test("--wait 90 before the id keeps both", () => {
+    const r = parseCtlArgs(["issue", "start", "--wait", "90", "TRA-1580"]);
+    expect(r.flags.wait).toBe("90");
+    expect(r.positional).toEqual(["TRA-1580"]);
+  });
+});
