@@ -198,11 +198,21 @@ describe("graphics drawn inside a pane", () => {
         // 4. A modal withdraws the placement rather than dimming it. The image
         // id lives in the cell's foreground colour, so a dimmed placeholder
         // still names an image and the terminal would draw it over the modal.
-        const beforeModal = output.length;
+        //
+        // Measured only from frames painted *after* the modal is up. Slicing
+        // from before the keystroke also catches the repaint `\x01` triggers on
+        // its own — a legitimate pre-modal frame, with its placeholders intact —
+        // and counting that as a failure made this pass or fail on how quickly
+        // the machine got between the two bytes.
         for (const ch of "\x01p") { // Ctrl-a p — command palette
           pty.write(ch);
           await Bun.sleep(60);
         }
+        await Bun.sleep(1500);
+
+        // The emitter repaints on a timer, so jmux keeps painting with the
+        // modal open; anything in this window is a settled modal frame.
+        const beforeModal = output.length;
         await Bun.sleep(1500);
         const withModal = output.slice(beforeModal);
         expect(withModal.length).toBeGreaterThan(0); // it did repaint
