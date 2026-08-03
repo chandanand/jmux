@@ -67,9 +67,32 @@ Six things about this are load-bearing and easy to undo by accident.
 
 - **jmux does not manage hunk's layout.** `--mode auto` already re-lays out
   live on resize, and jmux resizes the diff pty on every relayout and drag, so
-  narrow-vs-wide is handled better than jmux could do it. The only presentation
-  flag passed is `--transparent-bg`, because theme blending is the one thing
-  hunk cannot infer.
+  narrow-vs-wide is handled better than jmux could do it.
+
+- **jmux does manage hunk's theme, because hunk cannot detect it here.** The
+  two presentation flags passed are `--transparent-bg` and `--theme`, and the
+  second exists because of the first: with the surface transparent, hunk's text
+  is drawn straight onto *jmux's* background, so a dark theme over a light
+  terminal is unreadable rather than merely mismatched.
+
+  hunk has its own answer to this — `--theme auto` queries the terminal
+  background at startup — and it cannot work inside the panel. hunk runs in a
+  pty whose output jmux feeds to a headless xterm, and that feed is one-way:
+  nothing ever writes back to the pty, so the query gets no reply and `auto`
+  takes its "terminal didn't answer" fallback, which is dark. That is the wrong
+  half of the choice on precisely the terminals the flag is for.
+
+  So jmux resolves the name itself. It ran the same OSC 11 probe against the
+  real terminal at boot and already holds the answer, so it passes
+  `github-light-default` or `github-dark-default` — the ids hunk's own `auto`
+  resolves to — and `diffPanel.theme` overrides that with a fixed id, or with
+  `false` to pass nothing and leave hunk's config in charge. Before the probe
+  answers there is no way to tell "dark terminal" from "no reply yet", so jmux
+  passes nothing rather than commit hunk to a guess for the panel's lifetime.
+
+  hunk reads the theme only at startup, so a light/dark switch while the panel
+  is open respawns it — but only when the *resolved* name actually changes,
+  since a respawn costs the user hunk's scroll position.
 
 - **Notes are deleted by id, one at a time.** The bulk clear would also delete
   notes written between jmux reading the list and the send finishing. Losing a
@@ -102,6 +125,11 @@ notes back at it would be a loop carrying no new information.
   "clearNotesOnSend": true
 }
 ```
+
+`theme` is deliberately absent: unset, jmux passes the light or dark hunk theme
+matching the terminal background it detected at startup. Set an id
+(`"catppuccin-mocha"`, `"zenburn"`, …) to pin one regardless of the terminal, or
+`false` to pass none and let hunk's own config decide.
 
 ## Testing
 

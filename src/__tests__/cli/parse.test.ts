@@ -165,3 +165,36 @@ describe("parseCtlArgs", () => {
     expect(result.flags["no-launch-agent"]).toBe(true);
   });
 });
+
+describe("end-of-flags (`--`)", () => {
+  // `browser action` hands everything after `--` to another program's CLI.
+  // Parsing it as ours dropped the flag *names* and left their values as bare
+  // positionals — `click --ref e2` arrived as `click e2`, a different command
+  // delivered to a real browser without any error.
+  test("passes everything after -- through verbatim", () => {
+    const p = parseCtlArgs(["browser", "action", "--", "click", "--ref", "e2"]);
+    expect(p.positional).toEqual(["click", "--ref", "e2"]);
+  });
+
+  test("keeps values that would otherwise be eaten as flag arguments", () => {
+    const p = parseCtlArgs([
+      "browser", "action", "--", "fill", "--ref", "e3", "--text", "hello world",
+    ]);
+    expect(p.positional).toEqual(["fill", "--ref", "e3", "--text", "hello world"]);
+  });
+
+  test("does not leave a junk empty-named flag behind", () => {
+    expect(parseCtlArgs(["browser", "action", "--", "snapshot"]).flags).toEqual({});
+  });
+
+  test("still parses jmux's own flags before the --", () => {
+    const p = parseCtlArgs(["browser", "action", "--pane", "%3", "--", "click", "--ref", "e2"]);
+    expect(p.flags.pane).toBe("%3");
+    expect(p.positional).toEqual(["click", "--ref", "e2"]);
+  });
+
+  test("a second -- is the payload's, not ours", () => {
+    const p = parseCtlArgs(["browser", "action", "--", "eval", "--", "1 + 1"]);
+    expect(p.positional).toEqual(["eval", "--", "1 + 1"]);
+  });
+});

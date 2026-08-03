@@ -7,6 +7,8 @@ import { handleAgent, runAgentWatch } from "./cli/agent";
 import { handleStatus } from "./cli/status";
 import { handleIssue } from "./cli/issue";
 import { handleWorkflow } from "./cli/workflow";
+import { handleBrowser } from "./cli/browser";
+import { handleDevServers } from "./cli/dev";
 import { handleCc } from "./cli/cc";
 
 export interface ParsedCtlArgs {
@@ -17,6 +19,8 @@ export interface ParsedCtlArgs {
 }
 
 const KNOWN_GROUPS = [
+  "browser",
+  "dev-servers",
   "session",
   "window",
   "pane",
@@ -43,6 +47,7 @@ const VALUE_FLAGS = new Set([
   "lines",
   "window",
   "reason",
+  "pane",
   "repo",
   "base-branch",
   "issue",
@@ -62,6 +67,7 @@ const BOOL_FLAGS = new Set([
   "clear",
   "stdin",
   "all",
+  "new",
   "no-launch-agent",
   "launch-agent",
   "start",
@@ -83,6 +89,8 @@ GROUPS
   workflow   The work pipeline (workflow stages|board|next|statuses)
   status     One-shot orchestration snapshot of the whole workspace
   cc         Command Center tabs (cc tabs)
+  browser    Browser panes (browser list|open|action)
+  dev-servers What is listening in a session, and on which port
 
 GLOBAL FLAGS
   --session <name>   Target session name
@@ -108,8 +116,10 @@ FLAGS
   --base-branch <val>  Base branch for new worktree (issue start)
   --interval <val>     Poll interval in ms (agent watch)
   --tab <val>          Command Center tab id or name (pane pin)
+  --pane <val>         Target a specific browser pane (browser)
+  --new                Force a new browser pane instead of reusing one (browser open)
   --stage <val>        Narrow to one workflow stage id (workflow board)
-  --all                Operate on all sessions (agent state/watch)
+  --all                Operate on all sessions (agent state/watch, dev-servers)
   --start              Start the work immediately (issue create, workflow next)
   --no-launch-agent    Don't auto-launch Claude (issue start)
   --force              Skip confirmation prompts
@@ -190,6 +200,14 @@ export function parseCtlArgs(argv: string[]): ParsedCtlArgs {
       }
       flags.socket = argv[++i];
       i++;
+    } else if (arg === "--") {
+      // End of jmux's flags. Everything after belongs to whoever we are handing
+      // it to — `browser action` passes it to agent-browser — and parsing it as
+      // ours drops the flag *names* and leaves their values as bare positionals.
+      // `click --ref e2` became `click e2`: a different command, delivered to a
+      // real browser without complaint.
+      positional.push(...argv.slice(i + 1));
+      break;
     } else if (arg.startsWith("--")) {
       const name = arg.slice(2);
       if (BOOL_FLAGS.has(name)) {
@@ -267,6 +285,12 @@ export async function runCtl(argv: string[]): Promise<void> {
         break;
       case "cc":
         result = handleCc(ctx, parsed);
+        break;
+      case "browser":
+        result = await handleBrowser(ctx, parsed);
+        break;
+      case "dev-servers":
+        result = await handleDevServers(ctx, parsed);
         break;
       default:
         throw new CliError(`Unknown group: ${parsed.group}`);

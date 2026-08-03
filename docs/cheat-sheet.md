@@ -118,12 +118,97 @@ you — see [Parking](workflow.md#parking-the-back-burner).
 |-----|--------|
 | `Ctrl-a \|` | Split pane left / right |
 | `Ctrl-a -` | Split pane top / bottom |
+| `Ctrl-a b` | Open browser pane |
 | `Shift-Left/Right/Up/Down` | Navigate between panes |
 | `Ctrl-a Left/Right/Up/Down` | Resize pane (repeatable) |
 | `Ctrl-a z` | Toggle pane zoom (⤢ shown in tab) |
 
 
 Pane borders auto-show when a window has multiple panes and hide for single-pane windows.
+
+### Browser panes
+
+`Ctrl-a b` opens a real browser beside the current pane. The browser is
+[terminal-browser](https://github.com/zenbu-labs/terminal-browser) by
+[Zenbu Labs](https://github.com/zenbu-labs) (MIT) — a separate program jmux
+spawns rather than bundles, so install it yourself:
+
+```bash
+curl -fsSl https://terminal-browser.sh/install | bash
+```
+
+It needs a terminal that can draw pictures (Ghostty, kitty, WezTerm). The
+toolbar's `⊙` button appears only when both the program and the capability are
+present; the keybinding always answers and says what is missing.
+
+Once the pane is open, the browser has its own keys — these go to
+terminal-browser, not to jmux:
+
+| Key | Action |
+|-----|--------|
+| `⌘L` | Address bar (or click the active tab) |
+| `⌘T` | New tab (or click `+` in the tab strip) |
+| `⌘R` | Reload |
+| `⌥[` / `⌥]` | Back / forward (`⌘` and `Ctrl` also work) |
+| `⌘P` | The browser's own command palette |
+| `⌘⇧F` | Find in page |
+| `⌘⇧I` or `F12` | DevTools — `⌘⌥J` for the console |
+| `⌘+` / `⌘−` | Zoom |
+
+The browser's palette (`⌘P`) is also where mobile/tablet emulation and "close
+pane" live. Mouse works throughout: click to navigate, scroll to scroll.
+
+Agents drive browser panes through `jmux ctl browser` — `list`, `open <url>`,
+and `action -- <command>` for snapshot/click/fill/eval. That indirection is not
+decoration: `isolate` gives each pane a private registry, so `terminal-browser`
+run directly from an agent's pane finds nothing. jmux knows which registry
+belongs to which pane and points the CLI at it.
+
+`Ctrl-a p` → **Open dev server in a browser pane** finds whatever the current
+session is listening on and opens it. `jmux ctl dev-servers` is the same list as
+JSON.
+
+Five knobs in `~/.config/jmux/config.json`:
+
+```json
+{ "browser": { "paneSize": 0.62, "displayScale": 1, "fps": 60,
+              "isolate": true, "openLinks": "system" } }
+```
+
+`paneSize` (0.2–0.95) is the fraction of the current pane the browser takes.
+
+`displayScale` is the device pixel ratio it lays the page out at — jmux asks for
+`1` so sites choose a desktop layout, because terminal-browser otherwise uses
+the display's scale factor (2 on a Mac), which halves the CSS viewport and puts
+a phone layout in a pane wide enough for a desktop one.
+
+`fps` caps the frame rate. Left alone terminal-browser renders at the fastest
+refresh rate among *all* attached displays, so a single ProMotion laptop panel
+drives a pane on a 60Hz monitor at 120fps — and every frame is a whole-canvas
+image the terminal has to decode and blit. Drop it to `30` if a browser pane
+still makes the terminal feel heavy.
+
+`isolate` gives each browser pane its own browser process, and is on by default.
+Without it terminal-browser hosts every pane as a session of one process and
+gives them all the same image id, so two browser panes draw the same page — the
+sessions really are separate underneath, only the picture is shared. The cost of
+isolating is that `terminal-browser ls` and `terminal-browser action` run from
+another pane cannot see these browsers; turn it off to trade working multi-pane
+rendering for cross-pane agent control.
+
+`openLinks` decides where a clicked link goes: `"system"` (the default — your
+real browser, unchanged) or `"pane"`, which navigates the browser pane in the
+current window, opening one if there isn't one. It falls back to the system
+browser whenever a pane isn't possible, because a click that opens nothing is
+indistinguishable from a click that missed.
+
+`displayScale` and `fps` can each be `"auto"` to hand that choice back to
+terminal-browser. `paneSize` is always a number; a value it can't read falls
+back to the default rather than to the smallest pane the range allows.
+
+Nothing about this is browser-specific — jmux relays terminal graphics from any
+pane, so image previews in file managers, plotting libraries and `imgcat` all
+work in a pane too.
 
 Shift-arrow pane navigation is smart-splits.nvim aware — if the active pane is running vim/neovim, the key is forwarded to vim instead.
 
@@ -157,7 +242,7 @@ Press `Ctrl-a p` to open the command palette — a floating overlay for fuzzy-se
 | `Escape` | Back out of sub-list, or close palette |
 | `Ctrl-a p` | Close palette |
 
-**Available commands:** switch sessions, switch windows, new session/window, kill session, close window/pane, split a pane either way, zoom pane, rename session, move window, open Claude, keyboard shortcuts, setup, Command Center (pin/unpin, move tile to tab, switch tab, new/rename/delete/reorder tab), sidebar width, Claude command, project directories.
+**Available commands:** switch sessions, switch windows, new session/window, kill session, close window/pane, split a pane either way, open a browser pane, zoom pane, rename session, move window, open Claude, keyboard shortcuts, setup, Command Center (pin/unpin, move tile to tab, switch tab, new/rename/delete/reorder tab), sidebar width, Claude command, project directories.
 
 Commands that also have a keybinding show it beside the row, so you can stop
 reaching for the palette once you have learned the chord.

@@ -259,6 +259,14 @@ export const KEYMAP: readonly Binding[] = [
     conf: "S-Right",
   },
   {
+    id: "browser-pane",
+    keys: "Ctrl-a b",
+    label: "Open browser pane",
+    section: "Panes",
+    source: "jmux",
+    prefixKey: "b",
+  },
+  {
     id: "pane-up",
     keys: "Shift-Up",
     label: "Focus pane up",

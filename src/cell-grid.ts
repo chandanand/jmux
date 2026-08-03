@@ -61,8 +61,28 @@ export function textCols(text: string): number {
 // Must agree with terminal rendering for correct column tracking. The sole
 // width table — writeString, textCols, writeCell, and truncateToCols all
 // route through this rather than each keeping their own copy.
+/**
+ * The kitty protocol's image placeholder character.
+ *
+ * A program inside a pane positions a virtual placement by writing a grid of
+ * these, each carrying row/column diacritics and the image id in its truecolor
+ * foreground. They reach jmux as ordinary text and must survive the compositor
+ * byte-for-byte — see `src/images/passthrough.ts`.
+ */
+export const IMAGE_PLACEHOLDER_CP = 0x10eeee;
+
+/** Does this cell carry a foreign program's virtual image placement? */
+export function isImagePlaceholder(cell: Cell): boolean {
+  return cell.char.codePointAt(0) === IMAGE_PLACEHOLDER_CP;
+}
+
 export function cellWidth(cp: number): number {
   if (cp < 0x1100) return 1;
+  // One cell, always. It sits in a plane the emoji catch-all below would
+  // otherwise claim as wide, and a placeholder measured at two columns puts
+  // every subsequent cell in the row one column out — which shears the image
+  // it was drawn to position.
+  if (cp === IMAGE_PLACEHOLDER_CP) return 1;
   // CJK and wide character ranges
   if (
     (cp >= 0x1100 && cp <= 0x115F) ||   // Hangul Jamo

@@ -16,6 +16,12 @@ import { buildToolbarButtons } from "../renderer";
 // `Ctrl-a j` came to be advertised for a bind that was never written.
 
 const ROOT = resolve(import.meta.dir, "..", "..");
+
+// main.ts spawns tmux at import time and so cannot be imported by any unit
+// test — the gap boot-smoke.test.ts exists to cover. Several checks below read
+// its source instead, which is weaker than calling the function and strictly
+// stronger than the nothing that would otherwise be there.
+const mainSource = readFileSync(resolve(ROOT, "src", "main.ts"), "utf-8");
 const DEFAULTS_CONF = resolve(ROOT, "config", "defaults.conf");
 const INPUT_ROUTER = resolve(ROOT, "src", "input-router.ts");
 
@@ -156,17 +162,11 @@ describe("keymap ↔ command palette", () => {
   // the class of bug that let docs/cheat-sheet.md advertise a "window picker"
   // palette command that buildPaletteCommands has never built.
   //
-  // It has to be a source grep: buildPaletteCommands lives in main.ts, which
-  // spawns tmux at import time and so cannot be imported by any unit test —
-  // the same gap boot-smoke.test.ts exists to cover. Grepping the id literal
-  // is weaker than calling the function, but it is strictly stronger than the
-  // nothing that was here before.
+  // It has to be a source grep, for the reason given at `mainSource` above.
   const PALETTE_BACKED_IDS = [
-    "new-session", "new-window", "split-h", "split-v",
+    "new-session", "new-window", "split-h", "split-v", "browser-pane",
     "settings-screen", "help", "diff-toggle", "diff-zoom", "start-up-next",
   ] as const;
-
-  const mainSource = readFileSync(resolve(ROOT, "src", "main.ts"), "utf-8");
 
   test("the ids that are meant to carry a palette key all exist in the table", () => {
     const tabled = new Set(KEYMAP.map((b) => b.id));
@@ -191,9 +191,17 @@ describe("keymap ↔ toolbar buttons", () => {
   // the palette command `diff-toggle`. Mirrors main.ts's TOOLBAR_BUTTON_BINDING.
   const ALIASES: Record<string, string> = { panel: "diff-toggle" };
 
+  /**
+   * Every button jmux can draw, including the ones behind an availability
+   * flag. Asking for the default set would quietly stop covering a button the
+   * moment one is added conditionally — which is exactly how the browser
+   * button shipped with no click handler.
+   */
+  const allButtons = () => buildToolbarButtons({ panelActive: false, browserAvailable: true });
+
   test("every toolbar button resolves to a binding", () => {
     const tabled = new Set(KEYMAP.map((b) => b.id));
-    const unresolved = buildToolbarButtons({ panelActive: false })
+    const unresolved = allButtons()
       .map((b) => ALIASES[b.id] ?? b.id)
       .filter((id) => !tabled.has(id));
     expect(unresolved).toEqual([]);
@@ -201,9 +209,29 @@ describe("keymap ↔ toolbar buttons", () => {
 
   test("the alias map names only buttons that actually exist", () => {
     // A stale alias is dead weight that reads as a live constraint.
-    const buttonIds = new Set(buildToolbarButtons({ panelActive: false }).map((b) => b.id));
+    const buttonIds = new Set(allButtons().map((b) => b.id));
     const stale = Object.keys(ALIASES).filter((id) => !buttonIds.has(id));
     expect(stale).toEqual([]);
+  });
+
+  // Resolving to a *binding* only makes the hover hint work. Clicking goes
+  // somewhere else entirely — main.ts's handleToolbarAction — and a button
+  // missing from that switch looks completely normal until it is pressed and
+  // does nothing. That shipped: `browser-pane` was added to the palette's
+  // handler and the toolbar's, and only the palette dispatched it.
+  //
+  // A source grep for the same reason the palette check above is one: the
+  // switch lives in main.ts, which no unit test can import.
+  test("every toolbar button is dispatched by handleToolbarAction", () => {
+    const body = mainSource.slice(mainSource.indexOf("async function handleToolbarAction"));
+    const end = body.indexOf("\n}\n");
+    const dispatched = new Set(
+      [...body.slice(0, end).matchAll(/case "([^"]+)":/g)].map((m) => m[1]),
+    );
+    const undispatched = allButtons()
+      .map((b) => b.id)
+      .filter((id) => !dispatched.has(id));
+    expect(undispatched).toEqual([]);
   });
 });
 

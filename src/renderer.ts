@@ -1,6 +1,6 @@
 import type { Cell, CellGrid, CursorPosition, WindowTab } from "./types";
 import { ColorMode } from "./types";
-import { createGrid, DEFAULT_CELL, blit, textCols, writeCell, writeStyledLine, drawBox, truncateToCols, type CellAttrs, type StyledSegment } from "./cell-grid";
+import { createGrid, DEFAULT_CELL, blit, textCols, writeCell, writeStyledLine, drawBox, truncateToCols, isImagePlaceholder, type CellAttrs, type StyledSegment } from "./cell-grid";
 import { packChips, type PlacedChip } from "./band-layout";
 import { theme, neutralFg } from "./theme";
 import type { FrameLayout } from "./frame-layout";
@@ -75,7 +75,17 @@ export interface ToolbarConfig {
 // than its neighbours. Every label here must also be exactly one display
 // column — `layoutToolbar` packs on `textCols` and the mouse hit boxes derive
 // from that packing, so a 2-column glyph would shift every button to its left.
-export function buildToolbarButtons(opts: { panelActive: boolean }): ToolbarButton[] {
+export function buildToolbarButtons(opts: {
+  panelActive: boolean;
+  /**
+   * Whether a browser pane can actually be opened. The button is omitted rather
+   * than shown-and-refusing, because unlike the other four this one depends on
+   * a program jmux does not ship: an affordance that is only ever going to
+   * explain why it doesn't work has no business taking a column from the ones
+   * that do. `Ctrl-a b` still answers, and says what to install.
+   */
+  browserAvailable?: boolean;
+}): ToolbarButton[] {
   return [
     // The keyboard reference leads the cluster rather than joining the end of
     // it. The other four are a scope ladder (window → pane → pane → panel)
@@ -87,6 +97,9 @@ export function buildToolbarButtons(opts: { panelActive: boolean }): ToolbarButt
     { label: "+", id: "new-window" },
     { label: "⊟", id: "split-h" },
     { label: "◫", id: "split-v" },
+    // A pane like the two above it, so it belongs on that rung of the ladder —
+    // and ahead of the panel toggle, which stays rightmost.
+    ...(opts.browserAvailable ? [{ label: "⊙", id: "browser-pane" }] : []),
     {
       label: "◨",
       id: "panel",
@@ -642,11 +655,23 @@ export function compositeGrids(
     // would be the one bright thing on a screen whose whole point is that
     // everything but the modal has receded. Clearing the mark here is the same
     // occlusion signal writing text over a cell gives — see images/plane.ts.
+    //
+    // A pane's own image needs the same treatment by a different route. Its
+    // placement lives in U+10EEEE placeholder cells whose truecolor foreground
+    // *is* the image id, so dimming does not weaken it — it names a different
+    // image, or none. Only blanking the cell withdraws the placement, which is
+    // why these are cleared to a space rather than dimmed like everything else.
     const mainStart = layout.main.x;
     for (let y = 0; y < totalRows; y++) {
       for (let x = mainStart; x < totalCols; x++) {
-        grid.cells[y][x].dim = true;
-        grid.cells[y][x].image = undefined;
+        const cell = grid.cells[y][x];
+        cell.dim = true;
+        cell.image = undefined;
+        if (isImagePlaceholder(cell)) {
+          cell.char = " ";
+          cell.fgMode = ColorMode.Default;
+          cell.fg = 0;
+        }
       }
     }
 

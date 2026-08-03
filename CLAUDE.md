@@ -82,7 +82,7 @@ tmux PTY bytes → ScreenBridge (@xterm/headless) → CellGrid → Renderer → 
 
 - **`src/main.ts` `makeToolbar()` / renderer's toolbar logic** — the top row: window tabs on the left, action buttons (new window, splits, Claude, settings) on the right.
 
-Rendering is coalesced to ~60fps via `scheduleRender()`. `writesPending` gates rendering while `ScreenBridge.write()` promises are still resolving, otherwise we'd render mid-write and tear frames.
+Rendering is coalesced via `scheduleRender()`, at `RENDER_INTERVAL_ACTIVE` while something is happening and `RENDER_INTERVAL_IDLE` when nothing is. **"Something is happening" counts pane output as well as keystrokes** (`markOutputActivity`, called in `pty.onData` *before* the write so the burst that triggers the render is itself the activity). Keying the cadence on stdin alone meant a pane repainting on its own — a browser after a resize, an agent printing a result — could sit finished-but-undrawn for the whole idle interval: measured at ~220ms from the bytes arriving to jmux emitting them, against ~55ms once output counted. `writesPending` gates rendering while `ScreenBridge.write()` promises are still resolving, otherwise we'd render mid-write and tear frames.
 
 ### Input routing
 
@@ -128,7 +128,7 @@ The skill file `skills/jmux-control.md` documents usage patterns for agents — 
 - **Sessions are matched by pid.** The daemon's pid for a jmux-spawned hunk *is* the pty child pid. Repo matching looks equivalent and isn't: dead sessions linger 45s and worktrees share a repo root, so `--repo` is stale-prone and ambiguous. Resolution retries for ~3s because the daemon is started by the TUI and isn't up yet on a cold start.
 - **Content changes by respawning, never by `hunk session reload`.** Reload is cheaper and wrong: after it retargets a session `--watch` stops firing, so the panel goes stale while an agent edits. One mechanism therefore covers session switches and view switches alike.
 - **Flags are probed, not assumed.** hunk 0.9 has `--watch` but not `--transparent-bg`, and an unknown flag makes hunk exit before drawing — the panel then shows only its "Diff viewer closed" state. `hunk diff --help` is parsed once per binary; presentation flags are dropped silently when absent, content flags (`--staged`, `--exclude-untracked`) refuse the view instead of substituting a different changeset.
-- **jmux does not manage hunk's layout.** `--mode auto` re-lays out live on resize and jmux already resizes the diff pty on relayout and drag. Only `--transparent-bg` is passed, because theme blending is the one thing hunk can't infer.
+- **jmux does not manage hunk's layout, but it does manage hunk's theme.** `--mode auto` re-lays out live on resize and jmux already resizes the diff pty on relayout and drag, so no layout flag is passed. The two presentation flags that are passed are `--transparent-bg` and `--theme`, and the second follows from the first: transparent surfaces put hunk's text on jmux's background, so a dark theme over a light terminal is unreadable. hunk's own `--theme auto` can't do this job here — its startup OSC 11 query dies in a one-way pty feed and always takes the dark fallback — so jmux resolves the light/dark id from the probe it already ran against the real terminal, and respawns the panel when that resolved id changes (never merely when the background does; a respawn costs hunk's scroll position). `diffPanel.theme` pins an id, or `false` passes nothing and leaves hunk's own config in charge.
 - **Review notes are deleted by id, never in bulk**, or a note written while the confirm modal was open would be destroyed with the ones being sent.
 - **The tab strip appears for a lone Diff tab when the badge has something to say.** Otherwise the stats are invisible to every user with no tracker configured — which is everyone on first run.
 
@@ -243,6 +243,163 @@ so `request()` is synchronous and must never re-enter a fetch for a URL it has
 seen — **including a failed one**, or an open preview would hammer the tracker
 at 60fps. Credentials are allowlisted by host, never by which tracker the issue
 came from: issue text is written by anyone who can comment.
+
+### Graphics from inside a pane (browser panes)
+
+`src/images/passthrough.ts` is the mirror image of everything above. There jmux
+authors the picture; here it is a courier for one drawn by a program in a pane —
+terminal-browser (`Ctrl-a b`, `src/browser-pane.ts`), but equally an image
+previewer or a plotting library. **Nothing in the relay is browser-specific**,
+which is why the module is named for the mechanism and not the feature.
+
+**A courier is enough because those programs use virtual placements.** Under
+tmux they send the pixels (usually a shared-memory *name* pointing at them, so
+the payload stays a few hundred bytes at any frame size) with `U=1`, and put the
+*position* in a grid of U+10EEEE placeholder cells written as ordinary text.
+Those cells ride the normal path — tmux screen, ScreenBridge, CellGrid,
+compositor — so sidebar offset, clipping, scrolling and occlusion work on them
+with no image-specific code, exactly as they do for jmux's own `ImageMark`s.
+jmux only has to make sure the payload reaches the terminal, because
+@xterm/headless has no notion of the protocol and would otherwise swallow it.
+
+Five things hold it together, and each was a bug first:
+
+- **The relay strips the APC rather than copying it.** Leaving it in the feed
+  would bet on the headless terminal continuing to *silently discard* an APC it
+  does not implement; a parser that fell back to ground state would print
+  kilobytes of base64 into the grid. The screen model has no use for the bytes
+  either way.
+- **A changed placement is preceded by a delete** (`PlacementTracker`). A program
+  redefining a virtual placement re-transmits under the same id with a new
+  `c`/`r`; whether the terminal re-resolves the geometry from that is not
+  something the protocol pins down. terminal-browser only gets away with it
+  because *shrinking* takes a path that deletes the image first and growing does
+  not — which is exactly why "the browser doesn't resize" looks like it only
+  happens one way. jmux relays these, so it makes both cases identical. Costs a
+  few bytes per resize and nothing in the steady state, where the geometry is
+  unchanged 60 times a second.
+- **The introducer itself splits across reads.** At 60fps that is a certainty,
+  not an edge case, so a trailing fragment of `ESC _ G` is held back. Holding a
+  lone `ESC` is safe *here* precisely where `scanForImageProbe` refuses to —
+  this is tmux's output, not the user's input, so the cost is a frame of latency
+  rather than swallowing the Escape key.
+- **Relayed bytes go straight to stdout, not through the renderer's frame.**
+  They are inert with respect to the frame (`U=1` moves no cursor, `q=2`
+  suppresses the reply), and the shared-memory slot the sender named gets
+  recycled within a few frames — so holding one for the next repaint can relay a
+  pointer to pixels that have already been overwritten.
+- **ScreenBridge must use unicode `"15-graphemes"`, not `"15"`.** The addon
+  registers both: `"15"` is its width tables *without* the cluster joining they
+  exist to serve, so every combining mark lands in its own cell. That silently
+  broke all decomposed text long before it broke placements, where the row/column
+  diacritics *are* the placement.
+- **A modal blanks placeholder cells instead of dimming them.** The image id
+  lives in the cell's truecolor foreground, so dimming does not weaken the
+  placement — it names a different image. Only clearing the char withdraws it.
+
+**tmux learns the real cell geometry from `src/pty-pixels.ts`, and the route it
+takes is not the obvious one.** tmux answers a pane's `CSI 16 t` *itself* from
+its own figure and never forwards the query, so jmux cannot reply on the
+terminal's behalf; that figure comes solely from the client tty's
+`ws_xpixel`/`ws_ypixel`, and with them at zero tmux tells every pane a character
+is 16×32. Writing them needs `TIOCSWINSZ`, and **Bun cannot make that call** —
+`ioctl` is variadic, arm64 Darwin passes variadic arguments on the stack while
+Bun's FFI passes them in registers, and the call segfaults the process
+(measured). bun-pty exposes no fd either.
+
+The way through is that tmux's client tty is a *device file with a path* — the
+same string tmux reports as `#{client_name}` — so a separate process can open it
+and set its size. jmux keeps one long-lived interpreter helper alive and hands
+it sizes, which is why `resizeTmuxPty()` exists and why nothing calls
+`pty.resize()` directly any more. Four things are load-bearing, each of which
+silently produced no effect at all when it was wrong:
+
+- **tmux ignores a size write whose rows and columns are unchanged.** At startup
+  the size is already right, so priming has to bounce a column and come back.
+- **The bounce needs a pause.** tmux reads the size once per SIGWINCH; two
+  back-to-back writes are read after both, look like no change, and are dropped.
+- **The helper compares against the tty's real size**, not one it remembers, or
+  the very first write — the one that matters — never bounces.
+- **A resize that omits the pixel fields resets tmux to 16×32.** bun-pty writes
+  zeros there, so the helper must *own* the resize rather than patch it up
+  afterwards.
+
+**Each browser pane gets its own `XDG_RUNTIME_DIR`, and that is not tidiness.**
+terminal-browser keeps its daemon socket there, and without a private one every
+pane attaches to the same daemon — one process, one session per pane, and
+`frame_image_id` derived from `process::id()`, so every pane transmits under the
+*same* kitty image id and the terminal draws the last frame in all of them. Two
+browser panes show one page. The sessions are genuinely independent underneath
+(separate tabs, separate input), which is what makes it read as a rendering bug
+rather than a scoping one. `browser.isolate` turns it off; the honest fix is
+upstream, an image id per session rather than per process.
+
+**Two pane options are the protocol for reaching a browser**, for the same
+reason the agent-state options are: `ctl` has no IPC to the running TUI, and
+isolation makes a browser undiscoverable by any other route — its registry lives
+in a runtime directory only jmux knows. `@jmux-browser` marks the pane;
+`@jmux-browser-runtime` carries the directory. Both the TUI and `ctl browser
+open --new` set them, so a pane an agent made is found by exactly the lookup
+that finds one the human made.
+
+Three things there are easy to undo:
+
+- **Browsers are addressed by key, read off the pane title.** terminal-browser
+  names its pane `terminal-browser:<key>`, and `--browser <key>` names an
+  instance outright. Without it the CLI infers which browser is "here" from
+  `TMUX`/`TMUX_PANE`, which belong to whoever ran `ctl` — an agent shelling out
+  from one jmux while `ctl` targets another server then resolves confidently to
+  the wrong machine's browser, with no error.
+- **The runtime directory has to be short.** terminal-browser puts a unix socket
+  under it, macOS caps `sun_path` at 104 bytes, and going over fails with a bare
+  EINVAL that says nothing about length. `browserRuntimeBase()` follows tmux's
+  own `/tmp/tmux-<uid>` convention for exactly this; a runtime root under
+  `~/.local/state` is 26 characters before jmux adds anything, and that was
+  enough to break `ctl browser action` while `list` kept working.
+- **`open` on an existing browser navigates, it does not call
+  `terminal-browser open`.** That verb means "give me a browser": it goes to the
+  daemon, asks for a new session and waits for registration — which in a private
+  runtime directory has no daemon to reach and simply times out.
+
+Dev servers (`src/dev-servers.ts`) are found from **listening sockets, not
+scraped output**: `lsof` for ports by pid, `ps` for the process tree, and a
+pane's shell as the root. A server that printed its URL before you scrolled is
+invisible to scraping, and a URL in a log line is a false positive; a listening
+socket is a fact about now. `lsof` costs ~120ms, which is why this is a command
+and deliberately not a live sidebar indicator.
+
+Off is a path that already ships: no interpreter, or a helper that dies, falls
+back to `pty.resize()` exactly as before. `browser.displayScale` is unrelated
+and stays — it chooses which *layout* a page picks, not how big a cell is.
+
+**Focus events cannot reach panes, and the reason is the control channel.**
+jmux enables `?1004h` (it previously asked for nothing, so there was nothing to
+forward) and `InputRouter` passes `ESC [ I` / `ESC [ O` straight through — both
+verified. They still never arrive, because tmux decides a pane is focused by
+asking whether *any* client showing it is focused, and jmux's control-mode
+client never reports losing focus. It therefore holds every pane permanently
+focused, so there is no transition to report. Minimal reproduction: bare tmux
+delivers focus events to a pane; bare tmux with a second `tmux -C attach`
+client delivers none. No `refresh-client -f` flag governs this (`active-pane`,
+`ignore-size`, `no-detach-on-destroy`, `no-detached`, `no-output`,
+`pause-after` are the whole list), so the fix would have to be tmux's or a
+restructuring of the control channel. The `?1004h` enable is kept because it is
+correct and is the half jmux owns.
+
+`allow-passthrough on` lives in `defaults.conf`, not `core.conf`: jmux does not
+need it to function, and turning it off simply stops panes drawing pictures.
+Note that tmux forwards a passthrough sequence only for a pane the client can
+currently *see*, which is why `openBrowserPane` targets the pty client by name —
+an untargeted split lands in whichever session tmux last touched, reliably the
+parking session rather than the one on screen.
+
+Two test paths, for the same reason the diff panel has two:
+`graphics-passthrough-integration.test.ts` boots jmux under a pty and asserts
+the relay, the compositing and the modal occlusion against a *synthetic* emitter
+(deterministic, no Electron); `scripts/browser-pane-e2e.ts` runs the real
+terminal-browser, which is what would catch it changing transport or dropping
+virtual placements. The unit tests either side of the glue all passed while the
+integration test was finding a targeting bug, which is why it exists.
 
 ### OTEL receiver
 

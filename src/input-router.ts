@@ -113,6 +113,7 @@ export interface InputRouterOptions {
   onGroupCycle?: () => void;      // Ctrl-a G — cycle sidebar group mode
   onSortCycle?: () => void;       // Ctrl-a s — cycle sidebar sort mode
   onFilterCycle?: () => void;     // Ctrl-a f — cycle sidebar filter mode
+  onBrowserPane?: () => void;     // Ctrl-a b — open a terminal-browser pane
   onSessionPrev?: () => void;
   onSessionNext?: () => void;
   // Pane-of-glass (Overview) additions
@@ -431,6 +432,7 @@ export class InputRouter {
           if (data === "G") { this.opts.onGroupCycle?.(); return; }
           if (data === "s") { this.opts.onSortCycle?.(); return; }
           if (data === "f") { this.opts.onFilterCycle?.(); return; }
+          if (data === "b") { this.opts.onBrowserPane?.(); return; }
           // --- keymap:glass-prefix end ---
           // Not a jmux chord — flush the buffered prefix, then the key, to the tile.
           if (deferred) this.opts.onPtyData("\x01");
@@ -497,6 +499,13 @@ export class InputRouter {
         }
         if (data === "f") {
           this.opts.onFilterCycle?.();
+          return;
+        }
+        // Browser pane. `b` rather than anything closer to "web": `w` is
+        // tmux's window chooser and `B` reads as a variant of a `b` that
+        // wouldn't exist.
+        if (data === "b") {
+          this.opts.onBrowserPane?.();
           return;
         }
         if (data === "g") {

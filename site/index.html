@@ -978,6 +978,26 @@
   </div>
 </section>
 
+<!-- 6d · BROWSER PANES -->
+<section class="sec showcase" id="browser">
+  <div class="wrap showrow flip">
+    <div class="txt animate-in">
+      <div class="eyebrow">Browser panes <span class="new">NEW</span></div>
+      <h2>The app you're building.<br><em>Beside the agent building it.</em></h2>
+      <p class="lead"><span class="kbd">Ctrl-a b</span> splits the pane and puts <strong style="color:var(--ink)">Chromium</strong> in it. Not a text-mode renderer, not a screenshot — a live page you can click, scroll, fill in and open DevTools on, in the terminal you already have open.</p>
+      <p class="lead"><span class="kbd">Ctrl-a p</span> → <strong style="color:var(--ink)">Open dev server</strong> asks what the session is actually listening on and opens it. It reads listening sockets, not your scrollback — so the server that printed its URL four hundred lines ago is still found, and a URL sitting in a log line is never mistaken for one.</p>
+      <p class="lead">Every pane is its own browser, with its own tabs and its own history. And your agents can drive them — <span class="mono">snapshot</span>, <span class="mono">click</span>, <span class="mono">fill</span>, <span class="mono">eval</span> — so the thing writing the code can check its own work.</p>
+      <p class="lead">The browser itself is <a href="https://github.com/zenbu-labs/terminal-browser" target="_blank" rel="noopener" class="link-u">terminal-browser</a>, by <a href="https://github.com/zenbu-labs" target="_blank" rel="noopener" class="link-u">Zenbu Labs</a> — an open-source project (MIT) that put Chromium in a terminal. jmux doesn't ship it and doesn't reimplement it: you install it, and jmux relays its graphics, sizes its pane and hands it to your agents.</p>
+      <p class="lead">The relaying works for the same reason inline images do: jmux is the <em>outermost</em> program on your terminal, so the pixels never have to survive a multiplexer. Needs a terminal that can draw — and, for now, Apple Silicon macOS.</p>
+      <p><a href="https://github.com/jarredkenny/jmux/blob/main/docs/browser-panes.md" target="_blank" rel="noopener" class="link-u">How browser panes work →</a></p>
+    </div>
+    <div class="shot animate-in">
+      <figure class="main"><img src="assets/browser-pane.webp" alt="jmux with a dev server's request log in one pane and a live Chromium browser in the pane beside it, rendering the app's orders page; the sidebar lists four sessions with their agent states"></figure>
+      <figure class="detail dl"><img src="assets/detail-browser.webp" alt="The browser pane close up: a tab strip with the localhost address, and the page rendered underneath it"></figure>
+    </div>
+  </div>
+</section>
+
 <!-- 7 · CONTEXT & CACHE ECONOMICS -->
 <section class="sec showcase center">
   <div class="wrap">
@@ -1121,6 +1141,11 @@
         <img class="bigshot" src="assets/sidebar.webp" alt="jmux session sidebar showing grouped sessions, activity dots, and agent-state flags">
       </div>
       <div class="tile animate-in">
+        <div class="ico" aria-hidden="true">⊙</div>
+        <h3>Browser panes</h3>
+        <p><span class="kbd">Ctrl-a b</span> — real Chromium in a pane, beside the agent building the page. <span class="kbd">Ctrl-a p</span> → <strong style="color:var(--ink)">Open dev server</strong> finds what the session is serving and opens it. Your agents can drive it too.</p>
+      </div>
+      <div class="tile animate-in">
         <div class="ico" aria-hidden="true">⇋</div>
         <h3>Instant Switching</h3>
         <p><span class="kbd">Ctrl-Shift-↑/↓</span> — no prefix, no menu, no mode. Or click the sidebar.</p>
@@ -1160,7 +1185,8 @@
       <div class="ecocard animate-in"><div class="nm"><a href="https://linear.app" target="_blank" rel="noopener">Linear</a></div><div class="tg">Modern issue tracking</div><p>Your issues in the info panel, mapped onto workflow stages you define.</p></div>
       <div class="ecocard animate-in"><div class="nm"><a href="https://about.gitlab.com" target="_blank" rel="noopener">GitLab</a></div><div class="tg">MRs, pipelines, approvals</div><p>Pipeline glyphs in the sidebar. Self-hosted supported.</p></div>
       <div class="ecocard animate-in"><div class="nm"><a href="https://github.com" target="_blank" rel="noopener">GitHub</a></div><div class="tg">Pull requests &amp; checks</div><p>PR detection, CI glyphs, approve &amp; mark-ready from the panel. Enterprise supported.</p></div>
-      <div class="ecocard animate-in"><div class="nm"><a href="https://github.com/modem-dev/hunk" target="_blank" rel="noopener">hunk</a></div><div class="tg">Best terminal diff viewer</div><p>Powers the integrated diff panel — word-level, split &amp; full-screen.</p></div>
+      <div class="ecocard animate-in"><div class="nm"><a href="https://github.com/modem-dev/hunk" target="_blank" rel="noopener">hunk</a></div><div class="tg">Best terminal diff viewer</div><p><em>Is</em> the diff panel — word-level, split &amp; full-screen. By <a href="https://github.com/modem-dev" target="_blank" rel="noopener">Modem</a>, MIT.</p></div>
+      <div class="ecocard animate-in"><div class="nm"><a href="https://github.com/zenbu-labs/terminal-browser" target="_blank" rel="noopener">terminal-browser</a></div><div class="tg">A real browser in a pane</div><p><em>Is</em> <span class="mono">Ctrl-a b</span> — Chromium beside your agent, drivable by it. By <a href="https://github.com/zenbu-labs" target="_blank" rel="noopener">Zenbu Labs</a>, MIT.</p></div>
       <div class="ecocard animate-in"><div class="nm"><a href="https://github.com/jarredkenny/worktree-manager" target="_blank" rel="noopener">wtm</a></div><div class="tg">Git worktree manager</div><p>One worktree per agent, one session per branch.</p></div>
       <div class="ecocard dashed animate-in"><div class="nm">any other agent</div><div class="tg">Whatever you run</div><p>Every terminal agent works in a pane, with opt-in screen detection for run state. vim, emacs, lazygit, your scripts — it's a real terminal underneath.</p></div>
     </div>

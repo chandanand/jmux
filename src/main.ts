@@ -52,6 +52,10 @@ import { StdinGate } from "./stdin-gate";
 import { GRAPHICS_PROBE, CELL_SIZE_PROBE, DEFAULT_CELL_PIXELS, type CellPixels } from "./images/kitty";
 import { ImageStore } from "./images/store";
 import { ImagePlane } from "./images/plane";
+import { scanForGraphics, PlacementTracker } from "./images/passthrough";
+import { PtyPixels } from "./pty-pixels";
+import { devServerUrl, scanDevServers, type DevServerDeps } from "./dev-servers";
+import { BROWSER_BINARY, BROWSER_PANE_OPTION, BROWSER_PANE_FORMAT, BROWSER_RUNTIME_OPTION, browserSplitCommand, browserRuntimeBase, browserRuntimeDir, runtimeDirFits, browserActionArgv, browserActionEnv, parseBrowserPanes, pickBrowserPane, type BrowserPane } from "./browser-pane";
 import { StoreImagePort, setImagePort } from "./images/port";
 import { TmuxControl, type ControlEvent } from "./tmux-control";
 import { DiffPanel } from "./diff-panel";
@@ -110,7 +114,7 @@ import {
 import type { DemoContext } from "./demo/setup";
 import type { SessionInfo, WindowTab, PaletteCommand, PaletteResult, AgentState } from "./types";
 import { loadProjectDirsCache, saveProjectDirsCache } from "./project-dirs-cache";
-import { ConfigStore, sanitizeTmuxSessionName, DEFAULT_IMAGE_MAX_ROWS } from "./config";
+import { ConfigStore, sanitizeTmuxSessionName, DEFAULT_IMAGE_MAX_ROWS, DEFAULT_BROWSER_PANE_SIZE, DEFAULT_BROWSER_DISPLAY_SCALE, DEFAULT_BROWSER_FPS } from "./config";
 import {
   RepoFactsCache,
   resolveForRepo,
@@ -144,7 +148,7 @@ import { logError } from "./log";
 import { AGENT_INTEGRATIONS, installAllAgents, screenTierMayWrite } from "./agent-hooks/registry";
 import { BUILTIN_SIGNATURES, classifyPaneScreen, compileSignatures, hasSignatureFor } from "./agent-screen";
 import { resolve, dirname } from "path";
-import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync } from "fs";
+import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync, rmSync } from "fs";
 import { homedir } from "os";
 import pkg from "../package.json" with { type: "json" };
 
@@ -712,9 +716,78 @@ function toolbarHoverHint(): { label: string; keys: string } | null {
   return { label: binding.label, keys: shortKeys(binding.keys) };
 }
 
+/**
+ * Root for the private runtime directories browser panes get, one per pane.
+ *
+ * Under the real runtime home rather than a temp dir, so the sockets inside
+ * inherit the permissions and lifetime the user's system already gives that
+ * tree. Namespaced by pid so two jmux instances cannot hand out the same
+ * directory, and so shutdown knows which subtree is ours to remove.
+ */
+function browserRuntimeRoot(): string {
+  return `${browserRuntimeBase()}/browser/${process.pid}`;
+}
+
+let browserRuntimeSeq = 0;
+
+/**
+ * A directory no other browser pane will be given.
+ *
+ * Created here rather than left to terminal-browser: it makes the directory it
+ * needs, but only after deciding there is no daemon to attach to, and that
+ * decision is the whole point of handing it a fresh one.
+ */
+function allocBrowserRuntimeDir(): string {
+  const dir = browserRuntimeDir(`${process.pid}/${++browserRuntimeSeq}`);
+  if (!runtimeDirFits(dir)) {
+    // The socket terminal-browser puts under here would be over the platform's
+    // limit, and the failure it produces is a bare EINVAL that says nothing
+    // about path length. Sharing is the lesser wrong: panes mirror each other,
+    // which is at least visible.
+    logError("browser runtime dir", `too long for a unix socket: ${dir}`);
+    return "";
+  }
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  } catch (err) {
+    // Nothing to do but share, which is the pre-isolation behaviour: panes
+    // mirror each other, and that beats refusing to open a browser at all.
+    logError("browser runtime dir", String(err));
+    return "";
+  }
+  return dir;
+}
+
+/**
+ * Is terminal-browser on PATH? Memoized: makeToolbar runs on every frame, and
+ * a PATH walk per frame to answer a question whose answer changes at most once
+ * per install is not a question worth asking twice.
+ */
+let browserInstalled: boolean | null = null;
+function isBrowserInstalled(): boolean {
+  if (browserInstalled === null) browserInstalled = Bun.which(BROWSER_BINARY) !== null;
+  return browserInstalled;
+}
+
+/**
+ * Forget the cached answer. Called from the one place that discovers the
+ * truth the hard way — a keypress that found nothing installed — so a browser
+ * installed since startup surfaces the toolbar button instead of leaving it
+ * hidden until a restart while `Ctrl-a b` quietly works.
+ */
+function forgetBrowserInstalled(): void {
+  browserInstalled = null;
+}
+
 function makeToolbar(): ToolbarConfig {
   return {
-    buttons: buildToolbarButtons({ panelActive: diffPanel.isActive() }),
+    buttons: buildToolbarButtons({
+      panelActive: diffPanel.isActive(),
+      // Both conditions, because the button stands for an action that needs
+      // both — openBrowserPane refuses on either, and a button that opens a
+      // notice is not a button.
+      browserAvailable: isBrowserInstalled() && imagesOn(),
+    }),
     mainCols,
     hoveredButton: hoveredToolbarButton,
     hoverHint: toolbarHoverHint(),
@@ -913,6 +986,12 @@ process.stdout.write("\x1b[?1000h"); // mouse button tracking
 process.stdout.write("\x1b[?1003h"); // mouse motion tracking (hover)
 process.stdout.write("\x1b[?1006h"); // SGR extended mouse mode
 process.stdout.write("\x1b[?2004h"); // bracketed paste mode
+// Focus reporting. jmux does nothing with these itself — it enables them so it
+// has something to forward. `focus-events on` in defaults.conf only makes tmux
+// *relay* focus it has been told about, and nothing was ever telling it, so
+// every program in every pane believed it was permanently unfocused: no
+// FocusGained in vim, no focus event for a browser pane that asked for one.
+process.stdout.write("\x1b[?1004h"); // focus in/out reporting
 if (process.stdin.setRawMode) {
   process.stdin.setRawMode(true);
 }
@@ -960,6 +1039,20 @@ const stdinGate = new StdinGate({
     // the preview's body tracks the theme through the same call.
     rebuildPanelViewColors();
     applyPaneStyles(); // re-issue tmux window-style fades for the new theme
+    // hunk resolves its theme once, at startup, and the panel's content changes
+    // by respawning rather than reloading — so a live light/dark switch needs a
+    // respawn too, or the one surface jmux doesn't paint stays on the old
+    // theme. Skipped unless the resolved theme actually differs: a respawn
+    // costs the user hunk's scroll position, which is too much to spend on a
+    // background that changed to something the panel renders identically.
+    //
+    // `stdinReady` first, and not merely as an optimisation: this handler runs
+    // during `await performBoot`, when `diffPty` is still in its temporal dead
+    // zone, and reading it there kills the boot. Nothing is lost by skipping —
+    // the panel opens on a keystroke, so it cannot exist before stdin is live.
+    if (stdinReady && diffPty && resolveHunkTheme() !== spawnedHunkTheme) {
+      void spawnHunk(getDiffPanelCols(), layout.ptyRows);
+    }
     // Pre-ready, the first paint after boot reads the freshly themed values;
     // once live (startup done or a theme change), an explicit repaint is needed.
     if (stdinReady) scheduleRender();
@@ -972,8 +1065,13 @@ const stdinGate = new StdinGate({
   // declared — see probeTerminalGraphics().
   onImageProbe: ({ supported, cellPx }) => {
     if (supported !== null) imagesSupported = supported;
-    if (cellPx) imageCellPx = cellPx;
+    if (cellPx) {
+      imageCellPx = cellPx;
+      imageCellPxProbed = true;
+    }
     applyImageSupport();
+    // A new cell size only reaches tmux through a resize — see pty-pixels.ts.
+    if (cellPx && stdinReady) applyPtyPixels();
   },
   gridSize: () => ({ cols: process.stdout.columns || 80, rows: process.stdout.rows || 24 }),
 });
@@ -1049,6 +1147,15 @@ const imagePlane = new ImagePlane(
   () => imageStore.takeFreedIds(),
 );
 let imageCellPx: CellPixels = DEFAULT_CELL_PIXELS;
+/**
+ * Whether `imageCellPx` came from the terminal rather than from the fallback.
+ *
+ * Matters only where the figure is published to something else: telling tmux a
+ * guess is worse than telling it nothing, because tmux already has a guess and
+ * downstream cannot tell the two apart. Layout is happy either way, which is
+ * why DEFAULT_CELL_PIXELS exists at all.
+ */
+let imageCellPxProbed = false;
 let imagesSupported: boolean | null = null;
 const storeImagePort = new StoreImagePort(imageStore, {
   cellPx: () => imageCellPx,
@@ -1996,6 +2103,32 @@ function hunkFlags(hunkPath: string): Set<string> {
   return flags;
 }
 
+/**
+ * The two themes hunk's own `--theme auto` resolves to, and the reason jmux
+ * resolves them itself: hunk asks the terminal for its background at startup,
+ * but the panel's hunk talks to a headless xterm on a one-way feed, so nothing
+ * ever answers and `auto` always takes its dark fallback. jmux ran the same
+ * OSC 11 probe against the real terminal during boot, so it already holds the
+ * answer hunk is asking for.
+ */
+const HUNK_LIGHT_THEME = "github-light-default";
+const HUNK_DARK_THEME = "github-dark-default";
+
+/** The theme the running hunk was launched with, so a re-theme can skip a no-op respawn. */
+let spawnedHunkTheme: string | null = null;
+
+function resolveHunkTheme(): string | null {
+  const configured = configStore.config.diffPanel?.theme;
+  // Explicitly off: hunk's own config decides, and jmux passes nothing.
+  if (configured === false) return null;
+  if (typeof configured === "string" && configured.length > 0) return configured;
+  // No reply yet. `theme` still holds the dark defaults here and there is no
+  // way to tell that from a genuinely dark terminal, so pass nothing rather
+  // than assert a guess hunk would then be stuck with for the panel's life.
+  if (lastDetectedBg === null) return null;
+  return theme.isLight ? HUNK_LIGHT_THEME : HUNK_DARK_THEME;
+}
+
 async function spawnHunk(cols: number, rows: number): Promise<void> {
   killDiffProcess();
   diffPanel.setHunkExited(false);
@@ -2017,11 +2150,13 @@ async function spawnHunk(cols: number, rows: number): Promise<void> {
   // once it retargets a session, `--watch` stops firing, so the panel goes
   // quietly stale while an agent keeps editing. A visible respawn beats a
   // panel that lies. See src/hunk/view.ts.
+  const hunkTheme = resolveHunkTheme();
   const args = spawnArgs(
     diffView,
     {
       watch: configStore.config.diffPanel?.watch ?? true,
       transparentBg: configStore.config.diffPanel?.transparentBg ?? true,
+      theme: hunkTheme,
     },
     hunkFlags(hunkPath),
   );
@@ -2040,6 +2175,11 @@ async function spawnHunk(cols: number, rows: number): Promise<void> {
     await spawnHunk(cols, rows);
     return;
   }
+
+  // What was *applied*, not what was asked for: on a hunk with no `--theme`,
+  // every theme resolves to the same picture, and recording the request would
+  // make a background change respawn the panel to no visible effect.
+  spawnedHunkTheme = args.includes("--theme") ? hunkTheme : null;
 
   const { Terminal } = await import("bun-pty");
   diffBridge = new ScreenBridge(cols, rows);
@@ -2286,6 +2426,76 @@ function applyPanelSplit(pos: number): void {
   scheduleRender();
 }
 
+/**
+ * The helper that carries cell geometry to tmux, once there is a client tty to
+ * write to. Null whenever it can't run, which is an ordinary state and not an
+ * error — see src/pty-pixels.ts.
+ */
+let ptyPixels: PtyPixels | null = null;
+
+/**
+ * Resize the tmux pty, telling tmux how big a character is while we're there.
+ *
+ * The helper has to *own* the resize rather than patch it up afterwards:
+ * bun-pty writes zeros into the pixel fields, which resets tmux to its 16×32
+ * fallback, so a fix applied after the fact would both re-break on every
+ * relayout and race whatever is reading the size in between.
+ */
+function resizeTmuxPty(cols: number, rows: number): void {
+  if (ptyPixels?.apply(cols, rows, imageCellPx)) return;
+  pty.resize(cols, rows);
+}
+
+/**
+ * Bring the helper up (or take it down) for the current client tty.
+ *
+ * Called when the client name resolves and whenever the probed cell size
+ * changes — a font-size change makes the old figure wrong, and tmux only
+ * notices a new one through a resize, which `primeTmuxCellSize` provides.
+ */
+function applyPtyPixels(): void {
+  // Gated on having *asked and been told*, not on the images feature. How big a
+  // character is concerns every pane — mouse mapping, sixel, anything reading
+  // ws_xpixel — and is only tangled up with images because that is where the
+  // probe happens to live. It is also the difference between correcting tmux
+  // and replacing tmux's invention with our own: unprobed, `imageCellPx` is
+  // still DEFAULT_CELL_PIXELS, and asserting that is no better than the 16×32
+  // it would overwrite.
+  if (!ptyClientName || !imageCellPxProbed) {
+    ptyPixels?.stop();
+    ptyPixels = null;
+    return;
+  }
+  if (ptyPixels?.alive) {
+    primeTmuxCellSize();
+    return;
+  }
+  ptyPixels = PtyPixels.start(
+    ptyClientName,
+    {
+      which: (cmd) => Bun.which(cmd),
+      spawn: (cmd) => {
+        try {
+          const p = Bun.spawn(cmd, { stdin: "pipe", stdout: "ignore", stderr: "ignore" });
+          return { stdin: p.stdin, kill: () => p.kill(), exited: p.exited };
+        } catch {
+          return null;
+        }
+      },
+    },
+    // The helper died holding a size we told resizeTmuxPty was delivered. Hand
+    // that size to the pty it was allowed to skip, or the frame stays whatever
+    // it was before the resize with nothing left to correct it.
+    () => { pty.resize(layout.main.w, layout.ptyRows); },
+  );
+  if (ptyPixels) primeTmuxCellSize();
+}
+
+/** Re-send the current size so tmux picks up the cell geometry. */
+function primeTmuxCellSize(): void {
+  ptyPixels?.apply(layout.main.w, layout.ptyRows, imageCellPx);
+}
+
 function relayout(): void {
   const termCols = process.stdout.columns || 80;
   const termRows = process.stdout.rows || 24;
@@ -2340,7 +2550,7 @@ function relayout(): void {
   mainCols = layout.main.w;
   sidebarShown = layout.sidebar !== null;
 
-  pty.resize(layout.main.w, layout.ptyRows);
+  resizeTmuxPty(layout.main.w, layout.ptyRows);
   bridge.resize(layout.main.w, layout.ptyRows);
 
   if (diffPty && diffBridge && layout.panel) {
@@ -2775,6 +2985,7 @@ async function resolveClientName(): Promise<void> {
       const [name, clientPid, ...rest] = line.split(":");
       if (clientPid === pid) {
         ptyClientName = name;
+        applyPtyPixels();
         // rest[0] = session_id, rest.slice(1).join(":") = session_name (may contain colons)
         const sessionId = rest[0];
         if (sessionId) {
@@ -3057,14 +3268,29 @@ const RENDER_INTERVAL_ACTIVE = 33;  // ~30fps when focused
 const RENDER_INTERVAL_IDLE = 200;   // ~5fps when no recent input
 
 let lastInputTime = Date.now();
+/**
+ * When a pane last produced output.
+ *
+ * Tracked separately from keystrokes because the idle cadence is about whether
+ * *the screen* is changing, and a pane repainting on its own is exactly that.
+ * Keying the interval on stdin alone meant jmux would sit on a finished repaint
+ * for up to RENDER_INTERVAL_IDLE — measured at ~200ms between a browser pane's
+ * placement arriving on the pty and jmux emitting it, which is most of what a
+ * resize "not taking effect" looks like.
+ */
+let lastOutputTime = 0;
 
 function markInputActivity(): void {
   lastInputTime = Date.now();
 }
 
+function markOutputActivity(): void {
+  lastOutputTime = Date.now();
+}
+
 function scheduleRender(): void {
   if (renderTimer !== null) return;
-  const elapsed = Date.now() - lastInputTime;
+  const elapsed = Date.now() - Math.max(lastInputTime, lastOutputTime);
   const interval = elapsed < 2000 ? RENDER_INTERVAL_ACTIVE : RENDER_INTERVAL_IDLE;
   renderTimer = setTimeout(() => {
     renderTimer = null;
@@ -3375,7 +3601,7 @@ function openUrl(url: string): void {
 const inputRouter = new InputRouter(
   {
     getLinkAt: (x, y) => renderer.getLinkAt(x, y),
-    onOpenLink: openUrl,
+    onOpenLink: (url) => { void openLink(url); },
     onPtyData: (data) => {
       if (inGlass) {
         glassView?.writeFocused(data);
@@ -3524,6 +3750,7 @@ const inputRouter = new InputRouter(
     onGroupCycle: () => { applySidebarGroup(sidebar.cycleGroupMode()); scheduleRender(); },
     onSortCycle: () => { applySidebarSort(sidebar.cycleSortMode()); scheduleRender(); },
     onFilterCycle: () => { sidebar.cycleFilterMode(); scheduleRender(); },
+    onBrowserPane: () => { void openBrowserPane(); },
     onModalInput: (data) => {
       // Full-screen surfaces consume input while open, ahead of any modal.
       if (workflowScreen.isOpen) {
@@ -4360,6 +4587,8 @@ function buildPaletteCommands(): PaletteCommand[] {
     { id: "split-v", label: "Split vertical", category: "pane" },
     { id: "zoom-pane", label: "Zoom pane", category: "pane" },
     { id: "close-pane", label: "Close pane", category: "pane" },
+    { id: "browser-pane", label: "Open browser pane", category: "pane" },
+    { id: "dev-server", label: "Open dev server in a browser pane", category: "pane" },
     { id: "open-claude", label: "Open Claude", category: "other" },
     { id: "settings-screen", label: "Settings", category: "other" },
     { id: "help", label: "Keyboard shortcuts", category: "other" },
@@ -6158,6 +6387,12 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
     case "close-pane":
       await control.sendCommand("kill-pane");
       return;
+    case "browser-pane":
+      await openBrowserPane();
+      return;
+    case "dev-server":
+      await openDevServer();
+      return;
     case "open-claude":
       await handleToolbarAction("claude");
       return;
@@ -6497,6 +6732,198 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
 
 // --- Toolbar actions ---
 
+/**
+ * Open terminal-browser beside the current pane.
+ *
+ * Both refusals below explain themselves rather than doing nothing, for the
+ * reason showNotice exists: a key that silently no-ops is indistinguishable
+ * from a broken one. They are also genuinely different problems — one is a
+ * missing program, the other a terminal that cannot draw — and collapsing them
+ * into one message would send the user to install something that was never
+ * going to help.
+ */
+async function openBrowserPane(url?: string): Promise<void> {
+  forgetBrowserInstalled();
+  if (!isBrowserInstalled()) {
+    showNotice({
+      title: "No browser installed",
+      message: `Browser panes are powered by ${BROWSER_BINARY}, a separate program.`,
+      hint: "Install it with: curl -fsSl https://terminal-browser.sh/install | bash",
+      tone: "warn",
+    });
+    return;
+  }
+  // The browser is drawn with terminal graphics, so a terminal that can't show
+  // a picture would get a running browser it cannot see. Same switch the rest
+  // of the image layer hangs off — see applyImageSupport().
+  if (!imagesOn()) {
+    showNotice({
+      title: "This terminal can't show a browser",
+      message: "Browser panes need a terminal that supports the kitty graphics protocol.",
+      hint: "Ghostty, kitty and WezTerm all do. Setting images.enabled forces this either way.",
+      tone: "warn",
+    });
+    return;
+  }
+
+  if (!ptyClientName) await resolveClientName();
+  if (!ptyClientName) return;
+  const cfg = configStore.config.browser;
+  const runtimeDir = (cfg?.isolate ?? true) ? allocBrowserRuntimeDir() || undefined : undefined;
+  // `-P -F` so the split reports the pane it made. The pane options below are
+  // the only record that this pane is a browser and where its browser lives —
+  // `ctl` has no IPC to reach in here and ask.
+  const lines = await control.sendCommand(browserSplitCommand(ptyClientName, {
+    size: cfg?.paneSize ?? DEFAULT_BROWSER_PANE_SIZE,
+    displayScale: cfg?.displayScale ?? DEFAULT_BROWSER_DISPLAY_SCALE,
+    fps: cfg?.fps ?? DEFAULT_BROWSER_FPS,
+    runtimeDir,
+    printPaneId: true,
+    url,
+  }));
+  await markBrowserPane(lines[0]?.trim(), runtimeDir);
+}
+
+/**
+ * Tag a freshly created pane as a browser pane.
+ *
+ * Best-effort: a pane that misses its tag still shows a working browser, it is
+ * just invisible to `ctl browser`. That is worth a log line and not worth
+ * failing the split the user asked for.
+ */
+async function markBrowserPane(paneId: string | undefined, runtimeDir?: string): Promise<void> {
+  if (!paneId?.startsWith("%")) return;
+  try {
+    await control.sendCommand(`set-option -p -t ${paneId} ${BROWSER_PANE_OPTION} 1`);
+    if (runtimeDir) {
+      await control.sendCommand(
+        `set-option -p -t ${paneId} ${BROWSER_RUNTIME_OPTION} ${tq(runtimeDir)}`,
+      );
+    }
+  } catch (err) {
+    logError("mark browser pane", String(err));
+  }
+}
+
+/**
+ * How the TUI runs the dev-server scan.
+ *
+ * Through the control connection it already holds rather than shelling out to
+ * tmux, and `Bun.spawn` rather than `spawnSync` for the rest: `lsof` alone is
+ * ~120ms, and doing that synchronously would stop rendering, input and pty
+ * drain for longer than the render loop's whole latency budget.
+ */
+function devServerDeps(): DevServerDeps {
+  return {
+    listPanes: (format) => control.sendCommand(`list-panes -a -F '${format}'`),
+    run: async (cmd) => {
+      try {
+        const p = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore" });
+        return await new Response(p.stdout).text();
+      } catch {
+        return "";
+      }
+    },
+  };
+}
+
+/**
+ * Offer whatever this session is serving, and open it in a browser pane.
+ *
+ * Scoped to the current session by default: a list of every port on the machine
+ * is a list the user has to search, and the one they want is nearly always
+ * something they started in the session they are looking at. `lsof` costs about
+ * 120ms, which is why this is a command and not a live indicator.
+ */
+async function openDevServer(): Promise<void> {
+  const sessionName = currentSessions.find((s) => s.id === currentSessionId)?.name;
+  const servers = await scanDevServers({ session: sessionName }, devServerDeps());
+
+  if (servers.length === 0) {
+    showNotice({
+      title: "Nothing is listening",
+      // Names what was actually searched. Without a resolvable session the scan
+      // covers every one of them, and saying "this session" there is a claim
+      // about a search that did not happen.
+      message: sessionName
+        ? `No process in "${sessionName}" is listening on a local port.`
+        : "No process in any session is listening on a local port.",
+      hint: "Start your dev server first, then try again.",
+      tone: "warn",
+    });
+    return;
+  }
+
+  if (servers.length === 1) {
+    await openBrowserPane(devServerUrl(servers[0]));
+    return;
+  }
+
+  const modal = new ListModal({
+    header: "Open a dev server",
+    subheader: sessionName ? `Listening in ${sessionName}` : undefined,
+    items: servers.map((s, i) => ({
+      id: String(i),
+      label: `${devServerUrl(s)}${s.command ? `  ${s.command}` : ""}`,
+    })),
+  });
+  modal.open();
+  openModal(modal, (value) => {
+    const picked = value as ListItem | undefined;
+    if (!picked) return;
+    const server = servers[Number(picked.id)];
+    if (server) void openBrowserPane(devServerUrl(server));
+  });
+  scheduleRender();
+}
+
+/**
+ * Send a clicked link wherever the user asked for it.
+ *
+ * Falls back to the system browser on every route jmux can't complete — no
+ * browser installed, a terminal that can't draw one, isolation refusing a
+ * runtime dir. A click that opens nothing is indistinguishable from a click
+ * that missed, and the system browser always works.
+ */
+async function openLink(url: string): Promise<void> {
+  if ((configStore.config.browser?.openLinks ?? "system") !== "pane") {
+    openUrl(url);
+    return;
+  }
+  if (!isBrowserInstalled() || !imagesOn()) {
+    openUrl(url);
+    return;
+  }
+  const pane = await findBrowserPaneHere();
+  if (pane) {
+    // An open browser is navigated rather than joined by a second one: the
+    // point of routing links into a pane is one browser beside you, not a new
+    // pane per link.
+    // Spawned, not spawnSync: this runs from a mouse click, and a synchronous
+    // process spawn plus a CDP round trip freezes the frame for as long as
+    // terminal-browser takes to answer.
+    const proc = Bun.spawn(browserActionArgv(pane, ["navigate", url]), {
+      env: { ...process.env, ...browserActionEnv(pane) },
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    if ((await proc.exited) === 0) return;
+  }
+  await openBrowserPane(url);
+}
+
+/** The browser pane in the current window, if there is one. */
+async function findBrowserPaneHere(): Promise<BrowserPane | null> {
+  try {
+    const lines = await control.sendCommand(`list-panes -a -F '${BROWSER_PANE_FORMAT}'`);
+    const panes = parseBrowserPanes(lines);
+    const session = currentSessions.find((s) => s.id === currentSessionId)?.name;
+    return pickBrowserPane(panes, { session });
+  } catch {
+    return null;
+  }
+}
+
 async function handleToolbarAction(id: string): Promise<void> {
   if (!ptyClientName) await resolveClientName();
   if (!ptyClientName) return;
@@ -6512,6 +6939,9 @@ async function handleToolbarAction(id: string): Promise<void> {
       return;
     case "split-h":
       await control.sendCommand(`split-window -t ${ptyClientName} -v -c '#{pane_current_path}'`);
+      return;
+    case "browser-pane":
+      await openBrowserPane();
       return;
     case "diff":
     case "panel":
@@ -6582,11 +7012,59 @@ function forwardOsc52(data: string): void {
   }
 }
 
+// Graphics drawn by a program inside a pane — terminal-browser, an image
+// previewer, anything speaking the kitty protocol. tmux unwraps the passthrough
+// DCS these arrive in and hands jmux the bare APC, which the screen model has no
+// way to represent, so jmux lifts it out here and relays it to the real
+// terminal. The *placement* needs none of this: it rides in U+10EEEE
+// placeholder cells that travel the ordinary path and get composited like any
+// other text. See src/images/passthrough.ts.
+let graphicsPending = "";
+/**
+ * Geometry of every virtual placement being relayed, so a re-transmit that
+ * changes shape is preceded by the delete that makes the terminal adopt it.
+ * See PlacementTracker.
+ */
+const placementTracker = new PlacementTracker();
+
 pty.onData((data: string) => {
   forwardOsc52(data);
 
+  let feed = data;
+  if (imagesOn()) {
+    const scan = scanForGraphics(graphicsPending, data);
+    graphicsPending = scan.pending;
+    feed = scan.rest;
+    // Straight to stdout rather than through the renderer's frame buffer, which
+    // is where jmux's *own* graphics go. Two reasons it does not belong there.
+    // These sequences are inert with respect to the frame — `U=1` moves no
+    // cursor and `q=2` suppresses the reply — so there is nothing for the
+    // compositor to reconcile. And the payload is usually a shared-memory name
+    // whose slot the sender recycles within a few frames, so holding it for the
+    // next repaint risks relaying a pointer to pixels that have already been
+    // overwritten.
+    if (scan.relay) process.stdout.write(placementTracker.normalise(scan.relay));
+  } else if (graphicsPending) {
+    // Capability went away mid-sequence (config toggle, or a probe that came
+    // back negative). Release what was held rather than dropping it: these
+    // bytes are unreadable to the terminal but losing them silently would take
+    // the pane's real output with them.
+    feed = graphicsPending + data;
+    graphicsPending = "";
+  }
+
+  if (!feed) return;
+
+  // Only text that survived the graphics strip can change the grid, and the
+  // render cadence is about whether the grid is changing. A pane streaming
+  // pictures at 60fps is repainting the *terminal*, through a channel the
+  // compositor never sees — marking that as activity would hold jmux at the
+  // active interval forever, diffing identical frames for as long as the pane
+  // is open. Still before the write, so the burst that triggers this render is
+  // itself the activity.
+  markOutputActivity();
   writesPending++;
-  bridge.write(data).then(() => {
+  bridge.write(feed).then(() => {
     writesPending--;
     if (writesPending === 0) {
       scheduleRender();
@@ -6711,6 +7189,12 @@ try {
     infoPanelWidth = updated.infoPanelWidth ?? null;
     diffPanelSplitRatio = updated.diffPanel?.splitRatio ?? 0.4;
     hunkCommand = updated.diffPanel?.hunkCommand ?? "hunk";
+
+    // A theme edit takes effect on the running panel, since hunk reads its
+    // theme only at startup. Same no-op guard as the background handler.
+    if (diffPty && resolveHunkTheme() !== spawnedHunkTheme) {
+      void spawnHunk(getDiffPanelCols(), layout.ptyRows);
+    }
 
     if (prevPanelWidth !== infoPanelWidth && diffPanel.state === "split") {
       relayout();
@@ -7505,6 +7989,12 @@ async function start(): Promise<void> {
   controlStarted = true;
   applyPaneStyles();
 
+  // Resolve the pty client now rather than waiting for the first action that
+  // happens to need it. tmux learns its cell geometry only through a resize of
+  // this client's tty (see pty-pixels.ts), and a pane opened before that has
+  // already been told a character is 16×32.
+  await resolveClientName();
+
   // The tmux server has already loaded config at startup (TmuxPty and the
   // Restorer both pass `-f <configFile>`), and JMUX_DIR is exported in
   // process.env so tmux subprocesses inherit it. We do NOT source-file
@@ -7823,6 +8313,12 @@ function cleanupSync(): void {
   process.stdout.write("\x1b[?1000l"); // disable mouse button tracking
   process.stdout.write("\x1b[?1003l"); // disable mouse motion tracking
   process.stdout.write("\x1b[?1006l"); // disable SGR mouse mode
+  process.stdout.write("\x1b[?1004l"); // disable focus reporting
+  ptyPixels?.stop();
+  // Our per-pane browser runtime directories. The browsers themselves are
+  // gone with the tmux server or will idle out; what is left is empty
+  // directories that would otherwise accumulate one subtree per jmux run.
+  try { rmSync(browserRuntimeRoot(), { recursive: true, force: true }); } catch {}
   // Free every image the terminal is holding for us. Leaving the alternate
   // screen clears the placements, but the transmitted data outlives it — the
   // terminal keeps it until told otherwise, and jmux exiting is the last chance

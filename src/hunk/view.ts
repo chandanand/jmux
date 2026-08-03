@@ -42,6 +42,19 @@ export interface SpawnOptions {
    * as part of the frame rather than a rectangle pasted onto it.
    */
   transparentBg: boolean;
+  /**
+   * A named hunk theme, or null to pass nothing and let hunk choose.
+   *
+   * This is the *resolved* name, never `auto`. hunk's own `auto` queries the
+   * terminal background at startup, and inside the diff panel nothing answers:
+   * hunk runs in a pty jmux reads into a headless xterm, and that feed is
+   * one-way — no reply reaches hunk. `auto` would therefore always take hunk's
+   * "terminal didn't answer" fallback and pick a dark theme, which is the wrong
+   * half of the choice on exactly the terminals the flag exists for. jmux
+   * already ran the same probe against the real terminal at startup, so it
+   * resolves the name itself and passes the answer.
+   */
+  theme: string | null;
 }
 
 /**
@@ -117,6 +130,7 @@ export function spawnArgs(view: HunkView, opts: SpawnOptions, supported: Set<str
   const flags: string[] = [];
   if (opts.watch && supported.has("--watch")) flags.push("--watch");
   if (opts.transparentBg && supported.has("--transparent-bg")) flags.push("--transparent-bg");
+  if (opts.theme && supported.has("--theme")) flags.push("--theme", opts.theme);
 
   switch (view.kind) {
     case "worktree":

@@ -5,6 +5,7 @@ import { ColorMode } from "../types";
 import type { Cell, WindowTab } from "../types";
 import { sidebarBottomRow, type FrameLayout, type PanelMode, type Span } from "../frame-layout";
 import { tokens, frame } from "../chrome-tokens";
+import { KEYMAP } from "../keymap";
 
 // Hand-rolled FrameLayout fixtures for compositeGrids unit tests. These tests
 // use small grid sizes well below frame-layout's SIDEBAR_MIN_TERM_COLS gate
@@ -1179,6 +1180,31 @@ describe("buildToolbarButtons", () => {
       "help", "new-window", "split-h", "split-v", "panel",
     ]);
     expect(buttons.map((b) => b.label)).toEqual(["?", "+", "⊟", "◫", "◨"]);
+  });
+
+  test("omits the browser button unless a browser pane can actually be opened", () => {
+    // It depends on a program jmux does not ship. A button whose only possible
+    // outcome is a notice explaining why it doesn't work is worse than no
+    // button — Ctrl-a b still answers and says what to install.
+    expect(buildToolbarButtons({ panelActive: false }).map((b) => b.id))
+      .not.toContain("browser-pane");
+    expect(buildToolbarButtons({ panelActive: false, browserAvailable: false }).map((b) => b.id))
+      .not.toContain("browser-pane");
+  });
+
+  test("places the browser button on the pane rung, left of the panel toggle", () => {
+    const buttons = buildToolbarButtons({ panelActive: false, browserAvailable: true });
+    expect(buttons.map((b) => b.id)).toEqual([
+      "help", "new-window", "split-h", "split-v", "browser-pane", "panel",
+    ]);
+  });
+
+  test("the browser button's id matches its keymap binding so hover hints resolve", () => {
+    // toolbarHoverHint looks the button id up in KEYMAP directly; an id with no
+    // row there renders a button that explains nothing on hover.
+    const btn = buildToolbarButtons({ panelActive: false, browserAvailable: true })
+      .find((b) => b.id === "browser-pane")!;
+    expect(KEYMAP.some((k) => k.id === btn.id)).toBe(true);
   });
 
   test("help leads the cluster and never displaces the panel toggle from the right", () => {

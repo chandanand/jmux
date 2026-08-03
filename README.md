@@ -197,6 +197,32 @@ It works because jmux is the outermost program on your terminal: tmux runs insid
 
 See [Images in issue previews](docs/issue-tracking.md#images-in-issue-previews).
 
+### A real browser, in a pane
+
+`Ctrl-a b` splits the pane and puts **Chromium** in it. Not a text-mode renderer
+— a live page you can click, scroll, fill in and open DevTools on, beside the
+agent that's building it. Powered by
+[terminal-browser](https://github.com/zenbu-labs/terminal-browser).
+
+`Ctrl-a p` → **Open dev server** asks what the current session is actually
+listening on and opens it. It reads listening sockets rather than your
+scrollback, so a server that printed its URL before you scrolled is still found,
+and a URL in a log line isn't mistaken for one.
+
+Your agents can drive it:
+
+```bash
+jmux ctl browser action -- snapshot          # accessibility tree
+jmux ctl browser action -- click @e14
+jmux ctl browser open http://localhost:5173
+```
+
+Every pane is its own browser, with its own tabs and history. Requires a
+terminal that can draw pictures, and terminal-browser — currently Apple Silicon
+macOS only.
+
+See [Browser panes](docs/browser-panes.md).
+
 ### Also included
 
 - **Command palette** (`Ctrl-a p`) — fuzzy-search sessions, windows, pane actions, settings, and issue/MR commands. ([screenshot](docs/screenshots/command-palette.webp))
@@ -220,6 +246,7 @@ See [Images in issue previews](docs/issue-tracking.md#images-in-issue-previews).
 | `Ctrl-a u` | Start the next issue from your stage rotation |
 | `Ctrl-a W` | Workflow screen — your stages, their statuses, parking |
 | `Ctrl-a \|` / `Ctrl-a -` | Split pane horizontal / vertical |
+| `Ctrl-a b` | Open a browser pane |
 | `Ctrl-a z` | Zoom pane or diff panel |
 
 **Full keybinding reference → [docs/cheat-sheet.md](docs/cheat-sheet.md)**
@@ -234,7 +261,27 @@ jmux drives a real tmux process over two channels (an interactive PTY client and
 
 ### Built with
 
-[hunk](https://github.com/modem-dev/hunk) (diff viewer), [lazygit](https://github.com/jesseduffield/lazygit), [gh](https://cli.github.com/) / [glab](https://gitlab.com/gitlab-org/cli). Run any of them in a pane alongside your agent.
+Two features in jmux are somebody else's program doing the hard part. jmux
+spawns them, composites their output into its own chrome, and takes the credit
+on screen — so it belongs here:
+
+- **[terminal-browser](https://github.com/zenbu-labs/terminal-browser)** by
+  [Zenbu Labs](https://github.com/zenbu-labs) (MIT) — a real browser that runs
+  inside your terminal. It *is* the browser pane: `Ctrl-a b`, the dev-server
+  opener, and everything `jmux ctl browser` drives. jmux relays its graphics and
+  gets out of the way.
+- **[hunk](https://github.com/modem-dev/hunk)** by
+  [Modem](https://github.com/modem-dev) (MIT) — a terminal diff viewer. It is
+  the Diff tab: word-level diffs, split and full-screen, and the session daemon
+  the review loop talks to.
+
+Neither is bundled or redistributed — you install them yourself, and jmux works
+without either. Worktrees come from
+**[wtm](https://github.com/jarredkenny/worktree-manager)**.
+
+Also good in a pane beside your agent:
+[lazygit](https://github.com/jesseduffield/lazygit),
+[gh](https://cli.github.com/) / [glab](https://gitlab.com/gitlab-org/cli).
 
 ---
 

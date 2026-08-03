@@ -24,7 +24,14 @@ export class ScreenBridge {
     });
     const unicodeAddon = new UnicodeGraphemesAddon();
     this.terminal.loadAddon(unicodeAddon);
-    this.terminal.unicode.activeVersion = "15";
+    // "15-graphemes", not "15". The addon registers both: "15" is its width
+    // tables alone, while "15-graphemes" adds the cluster joining those tables
+    // exist to serve. Under plain "15" a combining mark is given its own cell
+    // instead of attaching to the character it modifies, so decomposed text
+    // ("e" + U+0301) occupies two columns and every cell after it on the row is
+    // displaced. That also breaks the kitty protocol's image placeholders,
+    // whose row/column diacritics are the placement — see images/passthrough.ts.
+    this.terminal.unicode.activeVersion = "15-graphemes";
   }
 
   write(data: string): Promise<void> {

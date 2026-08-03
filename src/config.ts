@@ -109,6 +109,23 @@ export interface JmuxConfig {
      */
     transparentBg?: boolean;
     /**
+     * The hunk theme the panel is launched with.
+     *
+     * Unset — the default — follows the terminal background jmux detected at
+     * startup, picking the same light/dark pair hunk's own `--theme auto`
+     * would. jmux resolves it rather than passing `auto` because hunk's probe
+     * gets no answer from inside the panel's pty and would always fall back to
+     * dark; on a light terminal that leaves hunk's own text unreadable, and
+     * `transparentBg` (on by default) makes it worse by removing the dark
+     * surface that text was drawn for.
+     *
+     * A theme id pins the panel to that theme regardless of the terminal.
+     * `false` passes no theme at all, which is the setting to use when hunk's
+     * own config should decide — jmux otherwise overrides it, the same way it
+     * already asserts `--transparent-bg` over hunk's config.
+     */
+    theme?: string | false;
+    /**
      * Talk to hunk's session daemon for diff stats, review notes and the
      * review-to-agent send. On by default; off falls back to exactly the
      * behaviour jmux had before the daemon existed — a hunk pty and nothing
@@ -145,7 +162,83 @@ export interface JmuxConfig {
   pipeline?: PipelineConfig;
   /** Inline image rendering in issue previews. */
   images?: ImagesConfig;
+  /** Browser panes (Ctrl-a b), powered by terminal-browser. */
+  browser?: BrowserConfig;
 }
+
+export interface BrowserConfig {
+  /**
+   * Fraction of the current pane a browser pane takes, 0.2–0.95.
+   *
+   * Wider than an even split by default. A browser is the thing you are
+   * reading while the terminal beside it is the thing you are typing into, and
+   * half of an area that is already short a sidebar leaves a page rendering in
+   * a column.
+   */
+  paneSize?: number;
+  /**
+   * Device pixel ratio the browser renders at, or `"auto"` for its own default.
+   *
+   * This decides the CSS viewport, and so which layout a site chooses. Left to
+   * itself terminal-browser uses the display's scale factor — 2 on a Mac — which
+   * halves the viewport and puts a phone layout in a pane wide enough for a
+   * desktop one. jmux asks for 1 instead, which is the same picture at the same
+   * sharpness, laid out for the width it is actually being shown at.
+   *
+   * `"auto"` restores terminal-browser's own choice. A number forces one.
+   */
+  displayScale?: number | "auto";
+  /**
+   * Frames per second a browser pane renders at, or `"auto"` for its own.
+   *
+   * terminal-browser otherwise picks the fastest refresh rate among *all*
+   * attached displays, so a single ProMotion laptop panel drives a pane on a
+   * 60Hz external at 120fps. Each frame is a whole-canvas image the terminal
+   * decodes and blits, and the stream does not stop when the page is static, so
+   * the machine pays for it continuously — and a resize has to push through the
+   * backlog before its own frames land, which is what makes catching up feel
+   * slow. 60 is a no-op on a 60Hz display and a halving on a ProMotion one.
+   */
+  fps?: number | "auto";
+  /**
+   * Give each browser pane its own browser process. On by default.
+   *
+   * terminal-browser otherwise runs one process hosting a *session* per pane,
+   * and derives its kitty image id from the process id — so every pane in a
+   * jmux window transmits under the same id, and the terminal draws whichever
+   * frame arrived last in all of them. Two browser panes show one page. The
+   * sessions are genuinely separate underneath (separate tabs, separate input),
+   * which is what makes it so confusing: only the picture is shared.
+   *
+   * jmux forces separation by handing each pane its own `XDG_RUNTIME_DIR`,
+   * which is where terminal-browser keeps the daemon socket it would otherwise
+   * attach to. The cost is real: the instance registry lives under that
+   * directory too, so `terminal-browser ls` and `terminal-browser action` run
+   * from another pane cannot see these browsers. Turn this off to trade working
+   * multi-pane rendering for cross-pane agent control.
+   *
+   * The actual fix belongs upstream — an image id per session rather than per
+   * process — at which point this can go.
+   */
+  isolate?: boolean;
+  /**
+   * Where a clicked link goes: the system browser, or a jmux browser pane.
+   *
+   * `"system"` by default, and deliberately so — links have opened in the
+   * user's real browser for as long as jmux has rendered them, and silently
+   * redirecting that would break every flow that depends on the browser you are
+   * already signed into. `"pane"` reuses the browser pane in the current window
+   * if there is one, and opens one otherwise.
+   */
+  openLinks?: "system" | "pane";
+}
+
+/** Fraction of the pane a browser split takes when the config doesn't say. */
+export const DEFAULT_BROWSER_PANE_SIZE = 0.62;
+/** Device pixel ratio a browser pane renders at when the config doesn't say. */
+export const DEFAULT_BROWSER_DISPLAY_SCALE = 1;
+/** Frame rate a browser pane renders at when the config doesn't say. */
+export const DEFAULT_BROWSER_FPS = 60;
 
 export interface ImagesConfig {
   /**

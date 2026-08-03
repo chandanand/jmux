@@ -176,6 +176,16 @@ the settings row says `restart to apply` until you do. See
 }
 ```
 
+`diffPanel.theme` is absent from the example for the same kind of reason:
+unset, jmux gives hunk the light or dark theme matching the terminal background
+it detected at startup. hunk has its own `--theme auto` for this and it cannot
+work inside the panel — hunk runs in a pty whose output jmux only reads, so its
+startup query gets no reply and always falls back to dark, which is unreadable
+on a light terminal once `transparentBg` removes the surface it was drawn for.
+Set a theme id to pin one regardless of the terminal, or `false` to pass no
+theme at all and leave hunk's own config in charge. See
+[Diff panel](diff-panel.md).
+
 `showUnstartedInSidebar` decides how many unstarted issues each workflow stage
 shows in the sidebar as startable rows: a count, `"all"`, or `null` for off.
 Per-stage exceptions (`inSidebar`, `showUnstarted`) live on the stage's own entry
@@ -256,6 +266,43 @@ A single click on the divider — press and release without moving — still
 toggles keyboard focus between the terminal and the panel, exactly as before.
 Pressing a key or scrolling during a drag ends it and keeps the size the drag
 had reached, rather than snapping back.
+
+### Browser panes (`browser`)
+
+Settings for `Ctrl-a b`. All optional; the defaults are what jmux uses when the
+key is absent.
+
+```json
+{
+  "browser": {
+    "paneSize": 0.62,
+    "displayScale": 1,
+    "fps": 60,
+    "isolate": true,
+    "openLinks": "system"
+  }
+}
+```
+
+| Key | Default | What it does |
+|-----|---------|--------------|
+| `paneSize` | `0.62` | Fraction of the current pane the browser takes (0.2–0.95) |
+| `displayScale` | `1` | Device pixel ratio the page is laid out at, or `"auto"` |
+| `fps` | `60` | Frame-rate cap, or `"auto"` |
+| `isolate` | `true` | Give each browser pane its own browser process |
+| `openLinks` | `"system"` | Where a clicked link goes — `"system"` or `"pane"` |
+
+`displayScale` decides which layout a site picks: left alone, terminal-browser
+uses the display's scale factor (2 on a Mac), which halves the CSS viewport and
+puts a phone layout in a pane wide enough for a desktop one.
+
+`fps` is worth knowing about — uncapped, terminal-browser renders at the fastest
+refresh among *all* attached displays, so one ProMotion panel drives a pane on a
+60Hz monitor at 120fps, and it does not stop when the page is static.
+
+`isolate` off means one shared browser: `terminal-browser`'s own CLI works
+across panes, but two browser panes render the same page. Full explanation in
+**[Browser panes](browser-panes.md#isolation)**.
 
 ### Agent-state colors
 

@@ -269,6 +269,17 @@ describe("ScreenBridge", () => {
     }
   });
 
+  // The unicode addon registers "15" (width tables) and "15-graphemes" (those
+  // tables plus cluster joining). Selecting "15" gives each combining mark its
+  // own cell, which silently displaces every cell after it on the row.
+  test("attaches a combining mark to the character it modifies", async () => {
+    const bridge = new ScreenBridge(10, 1);
+    await bridge.write("éX"); // decomposed "é" followed by X
+    const grid = bridge.getGrid();
+    expect(grid.cells[0][0].char).toBe("é");
+    expect(grid.cells[0][1].char).toBe("X");
+  });
+
   test("a live OSC 8 link written after an overwrite still resolves", async () => {
     // Guards against over-correcting: a genuinely-linked region must survive.
     const bridge = new ScreenBridge(40, 1);

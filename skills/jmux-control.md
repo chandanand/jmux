@@ -52,6 +52,9 @@ If not set, you're outside jmux and most commands require explicit `--session` f
 | `jmux ctl workflow board [--stage ID]` | Every stage with its sessions and unstarted work |
 | `jmux ctl workflow next [--start]` | The next thing to pick up (`Ctrl-a u`) |
 | `jmux ctl workflow statuses` | Every tracker status: its stage, whether it parks |
+| `jmux ctl browser list` | Browser panes, their tabs and current URLs |
+| `jmux ctl browser open <url>` | Point a browser at a URL, or open one beside you |
+| `jmux ctl browser action -- <cmd>` | Drive the browser — snapshot, click, fill, eval |
 
 ## Global Flags
 
@@ -278,6 +281,45 @@ jmux ctl pane capture --target %12 --lines 200
 # Raw capture with ANSI escape codes preserved
 jmux ctl pane capture --target %12 --raw
 ```
+
+### `browser` — use the web
+
+A browser pane is a real Chromium rendered into the terminal. You can read a
+page, click through it, fill forms and evaluate JavaScript in it.
+
+```bash
+jmux ctl browser list
+jmux ctl browser open https://localhost:3000
+jmux ctl browser action -- snapshot
+jmux ctl browser action -- click @e14
+jmux ctl browser action -- fill @e3 "hello"
+jmux ctl browser action -- eval "document.title"
+```
+
+`action` passes everything after `--` straight to terminal-browser's
+agent-browser CLI, so its vocabulary is that tool's, not jmux's — `snapshot`
+returns an accessibility tree whose entries carry `[ref=e14]` handles, and
+`click`/`fill` take those as `@e14`. Flags and quoted arguments survive
+verbatim, so `eval "a + b"` arrives as one argument.
+
+**Go through `jmux ctl browser`, not `terminal-browser` directly.** jmux gives
+each browser pane a private runtime directory so that two panes do not render
+the same page, and terminal-browser's registry lives inside it — so
+`terminal-browser ls` run from your pane finds nothing at all. jmux recorded
+which directory belongs to which pane and is the only thing that can point the
+CLI at the right one.
+
+With no `--pane`, commands target the nearest browser: same window, then same
+session, then anywhere. `jmux ctl browser list` gives you pane ids for `--pane`
+when several are open.
+
+`open` navigates a browser that already exists rather than opening a second one;
+pass `--new` to insist on a new pane. A new pane is split off *your* pane, so
+you can show the human something in your own workspace and cannot rearrange a
+session you are not in.
+
+If nothing is installed, `open` says so and how to install it — that is a
+message for the human, not something to work around.
 
 ## Response Shapes
 

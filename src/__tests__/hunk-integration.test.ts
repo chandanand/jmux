@@ -29,6 +29,9 @@ import { join } from "path";
 
 const TMUX = Bun.which("tmux");
 const HUNK = Bun.which("hunk");
+
+/** This machine's hunk help text, for the one assertion that depends on its age. */
+const HUNK_HELP = HUNK ? Bun.spawnSync([HUNK, "diff", "--help"]).stdout.toString() : "";
 const SOCKET = `jmux-hunk-int-${process.pid}`;
 
 const DAEMON = `http://${process.env.HUNK_MCP_HOST || "127.0.0.1"}:${process.env.HUNK_MCP_PORT || 47657}`;
@@ -120,7 +123,29 @@ describe.skipIf(!TMUX || !HUNK)("hunk control plane, against a real jmux", () =>
           cwd: repo,
         },
       );
-      pty.onData(() => {});
+      // Behave like a terminal with a white background: answer jmux's OSC 11
+      // probe. Light on purpose — a dark answer is indistinguishable from every
+      // way this can fail, since no reply, an unparsed reply and hunk's own
+      // auto-fallback all end at a dark theme too. Only a light terminal proves
+      // the detected background actually reached hunk's argv.
+      //
+      // Answered every time rather than once, because jmux re-probes to follow
+      // a live theme switch, and a real terminal keeps replying.
+      // Consumed as it is answered, exactly once per probe. Leaving a matched
+      // probe in the carry re-answers it on every subsequent frame, and jmux
+      // strips only the *first* reply out of a read — the rest reach the input
+      // router as raw escape bytes and eventually type something.
+      const PROBE = "\x1b]11;?";
+      let carry = "";
+      pty.onData((chunk: string) => {
+        let rest = carry + chunk;
+        for (let at = rest.indexOf(PROBE); at !== -1; at = rest.indexOf(PROBE)) {
+          pty.write("\x1b]11;rgb:ffff/ffff/ffff\x07");
+          rest = rest.slice(at + PROBE.length);
+        }
+        // Bounded: only enough to rejoin a probe split across two reads.
+        carry = rest.slice(-PROBE.length);
+      });
       pty.onExit((e: { exitCode: number }) => { exitCode = e.exitCode; });
 
       try {
@@ -160,6 +185,16 @@ describe.skipIf(!TMUX || !HUNK)("hunk control plane, against a real jmux", () =>
         const line = ps.split("\n").find((l) => l.trim().startsWith(String(mine!.pid))) ?? "";
         expect(line).toContain("--watch");
         expect(line).toContain("--transparent-bg");
+
+        // And the theme jmux resolved from the white background it was told
+        // about above. This is the assertion hunk's own `--theme auto` cannot
+        // satisfy: its startup query dies in a one-way pty feed, so it would
+        // land on the dark fallback here. Gated on this hunk having the flag,
+        // for the same reason jmux gates passing it — an older binary failing
+        // this would be a fact about the binary, not about jmux.
+        if (HUNK_HELP.includes("--theme")) {
+          expect(line).toContain("--theme github-light-default");
+        }
 
         // And it resolved the working tree, which is what the badge reports.
         const files = (mine!.files ?? []) as Array<{ path: string }>;

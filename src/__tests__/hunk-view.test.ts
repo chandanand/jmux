@@ -11,10 +11,10 @@ import {
 
 // Every flag jmux knows about. Real hunk help text is exercised separately
 // below, against the two versions that differ in the way that matters.
-const ALL = new Set(["--watch", "--transparent-bg", "--staged", "--exclude-untracked"]);
+const ALL = new Set(["--watch", "--transparent-bg", "--theme", "--staged", "--exclude-untracked"]);
 
-const OPTS = { watch: true, transparentBg: true };
-const BARE = { watch: false, transparentBg: false };
+const OPTS = { watch: true, transparentBg: true, theme: null };
+const BARE = { watch: false, transparentBg: false, theme: null };
 
 describe("spawnArgs", () => {
   test("working tree is hunk's own default, untracked files included", () => {
@@ -52,12 +52,29 @@ describe("spawnArgs", () => {
   });
 
   test("each flag is independently switchable", () => {
-    expect(spawnArgs({ kind: "staged" }, { watch: true, transparentBg: false }, ALL)).toEqual([
+    expect(spawnArgs({ kind: "staged" }, { watch: true, transparentBg: false, theme: null }, ALL)).toEqual([
       "diff", "--staged", "--watch",
     ]);
-    expect(spawnArgs({ kind: "staged" }, { watch: false, transparentBg: true }, ALL)).toEqual([
+    expect(spawnArgs({ kind: "staged" }, { watch: false, transparentBg: true, theme: null }, ALL)).toEqual([
       "diff", "--staged", "--transparent-bg",
     ]);
+  });
+
+  // hunk takes the theme as a value, so it is two argv entries and not one.
+  test("a theme is passed as a name", () => {
+    expect(spawnArgs({ kind: "worktree" }, { ...BARE, theme: "github-light-default" }, ALL)).toEqual([
+      "diff", "--theme", "github-light-default",
+    ]);
+    expect(spawnArgs({ kind: "commit", ref: "HEAD" }, { ...OPTS, theme: "github-dark-default" }, ALL)).toEqual([
+      "show", "HEAD", "--watch", "--transparent-bg", "--theme", "github-dark-default",
+    ]);
+  });
+
+  // No theme is the setting that leaves hunk's own config in charge, so it has
+  // to produce an argv with nothing to override it.
+  test("no theme passes no flag", () => {
+    expect(spawnArgs({ kind: "worktree" }, { ...BARE, theme: null }, ALL)).toEqual(["diff"]);
+    expect(spawnArgs({ kind: "worktree" }, { ...BARE, theme: "" }, ALL)).toEqual(["diff"]);
   });
 
   // Falling back to the working tree would show the user content they did not
@@ -163,6 +180,17 @@ describe("flags a given hunk actually accepts", () => {
   test("an older hunk is launched without the flag that would kill it", () => {
     expect(spawnArgs({ kind: "worktree" }, OPTS, older)).toEqual(["diff", "--watch"]);
     expect(spawnArgs({ kind: "worktree" }, OPTS, newer)).toEqual(["diff", "--watch", "--transparent-bg"]);
+  });
+
+  // Presentation, so it degrades silently — the same bucket as
+  // --transparent-bg, and for the same reason: an unknown option makes hunk
+  // exit before it draws a frame.
+  test("a hunk with no --theme is launched without it rather than killed by it", () => {
+    const themed = { ...OPTS, theme: "github-light-default" };
+    expect(spawnArgs({ kind: "worktree" }, themed, new Set(["--watch"]))).toEqual(["diff", "--watch"]);
+    expect(spawnArgs({ kind: "worktree" }, themed, newer)).toEqual([
+      "diff", "--watch", "--transparent-bg", "--theme", "github-light-default",
+    ]);
   });
 
   // A binary that couldn't be probed gets the one form every hunk has taken.
