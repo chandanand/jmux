@@ -54,4 +54,51 @@ describe("tmux config files", () => {
       expect(found).toEqual([]);
     });
   }
+
+  describe("pane border titles stay off", () => {
+    // jmux already names the window in its toolbar and the session in its
+    // sidebar. A per-pane title row is a third label, and it costs a line of
+    // every pane's height plus a rule across the top of the window — permanent
+    // chrome to name commands you can watch running.
+    //
+    // This was briefly automatic: a window-layout-changed hook switched titles
+    // on the moment a window held more than one pane. Splitting a pane then
+    // silently changed the shape of the window, which is why it is asserted
+    // rather than left to whoever edits the conf next.
+    test("defaults.conf sets pane-border-status off and nothing turns it back on", () => {
+      const text = confText("defaults.conf");
+      expect(text).toContain("set -g pane-border-status off");
+      expect(text).not.toMatch(/pane-border-status\s+(top|bottom)/);
+    });
+
+    test("no conf hooks pane-border-status to the layout", () => {
+      for (const name of CONF_FILES) {
+        const text = confText(name);
+        expect(text).not.toContain("window-layout-changed");
+      }
+    });
+  });
+
+  // core.conf is sourced last and overrides ~/.tmux.conf, so anything in it is
+  // a setting the user is not allowed to have an opinion about. That is only
+  // defensible for things jmux genuinely cannot run without — it held an
+  // `unbind P` and a hook-unset that existed solely to protect the border
+  // automation above, and which silently destroyed those bindings for any user
+  // who had bound them deliberately.
+  test("core.conf overrides only what jmux requires", () => {
+    const settings = confText("core.conf")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+    const allowed = [
+      "detach-on-destroy", // jmux switches sessions rather than detaching
+      "mouse", //            sidebar and toolbar click handling
+      "allow-rename", //     jmux owns window names
+      "automatic-rename",
+      "automatic-rename-format",
+      "status", //           jmux draws its own toolbar in that row
+    ];
+    const unexpected = settings.filter((line) => !allowed.some((s) => line.includes(s)));
+    expect(unexpected).toEqual([]);
+  });
 });
