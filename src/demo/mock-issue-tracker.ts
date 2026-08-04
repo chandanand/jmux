@@ -1,5 +1,5 @@
 import type { IssueTrackerAdapter, Issue, AdapterAuthState, IssueStateType, WorkflowState } from "../adapters/types";
-import { buildLinearPrompt } from "../adapters/linear-prompt";
+import { buildLinearPrompt, buildLinearGroupPrompt } from "../adapters/linear-prompt";
 import { DEMO_ISSUES, DEMO_TEAMS } from "./seed-data";
 
 /**
@@ -197,5 +197,9 @@ export class DemoIssueTrackerAdapter implements IssueTrackerAdapter {
 
   buildPrompt(issue: Issue): string {
     return buildLinearPrompt(issue);
+  }
+
+  buildGroupPrompt(issues: Issue[], label: string): string {
+    return buildLinearGroupPrompt(issues, label);
   }
 }

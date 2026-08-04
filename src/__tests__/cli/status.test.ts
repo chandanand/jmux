@@ -25,7 +25,7 @@ describe("parseStatusLine", () => {
       agentSince: "1781480000",
       attention: "1",
       attentionReason: "ci failed",
-      linearIssue: "",
+      linearIssues: [],
       path: "/repo/wt",
       active: true,
     });
@@ -45,7 +45,7 @@ describe("parseStatusLine", () => {
       agentSince: "1781480000",
       attention: "1",
       attentionReason: "ci failed",
-      linearIssue: "",
+      linearIssues: [],
       path: "/repo/wt",
       active: true,
     });
@@ -74,7 +74,7 @@ describe("buildStatusSnapshot", () => {
     agentSince: "",
     attention: "",
     attentionReason: "",
-    linearIssue: "",
+    linearIssues: [],
     path: "/repo/wt",
     active: true,
     ...o,
@@ -118,7 +118,7 @@ describe("buildStatusSnapshot", () => {
       { type: "mr", id: "5812" },
     ];
     const out = buildStatusSnapshot(
-      inputs([baseRow({ linearIssue: "TRA-123" })], {
+      inputs([baseRow({ linearIssues: ["TRA-123"] })], {
         linksByName: () => links,
       }),
     );
@@ -131,7 +131,7 @@ describe("buildStatusSnapshot", () => {
 
   test("adds the tmux-option issue link when SessionState has none", () => {
     const out = buildStatusSnapshot(
-      inputs([baseRow({ linearIssue: "TRA-999" })]),
+      inputs([baseRow({ linearIssues: ["TRA-999"] })]),
     );
     expect(out.sessions[0].links).toEqual([{ type: "issue", id: "TRA-999" }]);
   });
@@ -155,7 +155,7 @@ describe("collapseStatusRows", () => {
     agentSince: "",
     attention: "",
     attentionReason: "",
-    linearIssue: "",
+    linearIssues: [],
     path: "/p",
     active: false,
     ...o,
@@ -213,10 +213,10 @@ describe("collapseStatusRows", () => {
   test("sessions stay separate and preserve session-scoped fields", () => {
     const out = collapseStatusRows([
       row({ id: "$1", name: "a", agentState: "waiting", agentSince: "1", attention: "1", attentionReason: "ci", active: true }),
-      row({ id: "$2", name: "b", agentState: "running", agentSince: "1", linearIssue: "TRA-9", active: true }),
+      row({ id: "$2", name: "b", agentState: "running", agentSince: "1", linearIssues: ["TRA-9"], active: true }),
     ]);
     expect(out).toHaveLength(2);
     expect(out.find((r) => r.id === "$1")?.attentionReason).toBe("ci");
-    expect(out.find((r) => r.id === "$2")?.linearIssue).toBe("TRA-9");
+    expect(out.find((r) => r.id === "$2")?.linearIssues).toEqual(["TRA-9"]);
   });
 });

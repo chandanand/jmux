@@ -148,3 +148,34 @@ describe("buildProvisionPlan", () => {
     expect(plan.setupCommand).not.toBeNull();
   });
 });
+
+describe("buildSetupCommand quoting", () => {
+  // The bug this closes: the argv was joined raw, so a session name containing
+  // a space became several shell words. `wtm create Bulk Import / Importer V2`
+  // created a worktree called `Bulk`, and the main pane waited forever for a
+  // directory nobody was going to make.
+  test("a name with spaces stays one argument", () => {
+    const cmd = buildSetupCommand({
+      session: "Bulk Import / Importer V2",
+      baseBranch: "main",
+      wtm: true,
+    });
+    expect(cmd).toContain("'Bulk Import / Importer V2'");
+    // The bare, splittable form must not appear anywhere in the command.
+    expect(cmd).not.toContain("create Bulk Import");
+  });
+
+  test("the plain-git path quotes its path and branch too", () => {
+    const cmd = buildSetupCommand({ session: "my feature", baseBranch: "main", wtm: false });
+    expect(cmd).toContain("'./my feature'");
+    expect(cmd).toContain("'my feature'");
+    expect(cmd).not.toContain("add ./my feature");
+  });
+
+  test("an ordinary slug is unchanged in meaning", () => {
+    const cmd = buildSetupCommand({ session: "tra-123-fix", baseBranch: "main", wtm: true });
+    expect(cmd).toContain("wtm");
+    expect(cmd).toContain("tra-123-fix");
+    expect(cmd).toContain("--no-shell");
+  });
+});

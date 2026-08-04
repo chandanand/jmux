@@ -6,6 +6,7 @@ import { INTERNAL_SESSION_FILTER } from "../glass/internal-sessions";
 import { SessionState, type SessionLink } from "../session-state";
 import { type CtlAgentState } from "./agent";
 import { US, splitFields } from "../tmux-fields";
+import { ISSUE_LINK_OPTION, parseIssueLinkOption } from "../issue-session";
 import { outranks } from "../agent-state-rollup";
 import type { CliContext } from "./context";
 import type { ParsedCtlArgs } from "../cli";
@@ -23,7 +24,8 @@ export interface StatusSessionRow {
   agentSince: string;
   attention: string;
   attentionReason: string;
-  linearIssue: string;
+  /** Every issue the `@jmux-linear-issue` option carries, in stored order. */
+  linearIssues: string[];
   path: string;
   /** True for the session's active pane, whose path represents the session. */
   active: boolean;
@@ -42,7 +44,7 @@ const STATUS_FORMAT = [
   "#{@jmux-agent-state-since}",
   "#{@jmux-attention}",
   "#{@jmux-attention-reason}",
-  "#{@jmux-linear-issue}",
+  `#{${ISSUE_LINK_OPTION}}`,
   "#{pane_current_path}",
   "#{pane_active}",
 ].join(US);
@@ -57,7 +59,7 @@ export function parseStatusLine(line: string): StatusSessionRow | null {
     agentSince: p[3],
     attention: p[4],
     attentionReason: p[5],
-    linearIssue: p[6],
+    linearIssues: parseIssueLinkOption(p[6]),
     path: p[7],
     active: p[8] === "1",
   };
@@ -141,7 +143,7 @@ export interface StatusInputs {
  * clobber any CLI write to state.json, so CLI issue links live in tmux options
  * (see issue.ts) — `status` reads the union.
  */
-function mergeLinks(stateLinks: SessionLink[], linearIssue: string): StatusLink[] {
+function mergeLinks(stateLinks: SessionLink[], linearIssues: string[]): StatusLink[] {
   const out: StatusLink[] = [];
   const seen = new Set<string>();
   const add = (type: string, id: string) => {
@@ -152,7 +154,7 @@ function mergeLinks(stateLinks: SessionLink[], linearIssue: string): StatusLink[
     }
   };
   for (const l of stateLinks) add(l.type, l.id);
-  if (linearIssue) add("issue", linearIssue);
+  for (const id of linearIssues) add("issue", id);
   return out;
 }
 
@@ -187,7 +189,7 @@ export function buildStatusSnapshot(inp: StatusInputs): {
       path: row.path || null,
       branch: row.path ? inp.branchByPath(row.path) : null,
       agent,
-      links: mergeLinks(inp.linksByName(row.name), row.linearIssue),
+      links: mergeLinks(inp.linksByName(row.name), row.linearIssues),
       attention,
       attentionReason,
       pinned: inp.pinnedNames.has(row.name),

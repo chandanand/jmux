@@ -60,9 +60,32 @@ between tabs.
 |-----|--------|
 | `o` | Open in browser |
 | `n` | Create a new session from this issue |
-| `l` | Link this issue to the current session |
+| `l` | Add this issue to the current session |
 | `s` | Update status (picks from available workflow states) |
 | `c` | Copy issue prompt to clipboard (identifier + title + description) |
+
+**On a group header** (any grouping axis — project, team, status):
+
+| Key | Action |
+|-----|--------|
+| `n` | Start every issue under it as **one** session (confirms the name first) |
+| `l` | Add every issue under it to the current session (confirms the count first) |
+
+Both ask first, because a group header exists on every grouping axis — `l` on a
+status section is otherwise a bulk write of forty links from one keystroke.
+
+**Selecting issues directly** (works on every tab, including ones with no
+headers at all):
+
+| Key | Action |
+|-----|--------|
+| `Space` | Tick / untick the highlighted issue |
+| `n` | Start every ticked issue as **one** session |
+| `l` | Add every ticked issue to the current session |
+| `Esc` | Clear the ticks (then, pressed again, the filter) |
+
+Checkboxes only appear once something is ticked, so an untouched list looks
+exactly as it always has.
 
 **On a merge request:**
 
@@ -164,6 +187,12 @@ Linked items show in the sidebar on a third row beneath the branch name:
 
 The `✓` is the pipeline status glyph, `ENG-1234` is the linked issue, and `1M` means one linked merge request.
 
+A session can carry **several** issues, and then the badge reads `ENG-1234 +4`.
+The identifier shown is the *driving* issue — the least advanced one that isn't
+finished — which is also what decides the session's workflow stage band. So a
+session drops out of "In Review" only when its last ticket does, and a closed
+ticket can't hold a session in Done while four open ones sit under it.
+
 ### Manual linking from the command palette
 
 Press `Ctrl-a p` and search for:
@@ -237,6 +266,44 @@ Issues in the panel show their session state:
 | No session | No worktree or session exists | Creates worktree + session + launches agent |
 | Worktree exists | Worktree on disk but no tmux session | Creates session in existing worktree |
 | Session exists | Tmux session is running | Switches to that session |
+
+### Several issues, one session
+
+Product often files one feature as several tickets. One session, one worktree,
+one branch and one merge request is usually the right shape for that, so jmux
+lets a session carry any number of issues — while an issue still belongs to
+exactly one session, which is what keeps "where is this work?" a question with
+one answer.
+
+Three ways in:
+
+- **Tick the issues you want.** `Space` on each, then `n`. This is the one that
+  works everywhere — in particular on a **stage tab**, where `groupBy` does not
+  apply at all (sections come from the tab's statuses), so there is no project
+  header to press `n` on. It is also the only way to say "these three of those
+  five". If the ticked issues share a project, its name pre-fills the session
+  name.
+- **Start a group.** On a tab that groups (`g` cycles; `project` is the useful
+  one here) press `n` on the *group header*. jmux confirms the
+  session name — it is also the branch and worktree name, and unlike a single
+  issue there is no tracker-supplied branch name to inherit — then provisions
+  one session and seeds the agent with all of the issues at once. Issues that
+  already have a session are left where they are and reported, not moved.
+- **Add as you go.** Press `l` on an issue to add it to the session you're in,
+  or `a` in the ghost preview to pick a session for an unstarted issue.
+- **From an agent.** `jmux ctl issue link <session> <issue-id>` appends rather
+  than replacing; `jmux ctl issue unlink <session> [issue-id]` removes one link
+  or all of them.
+
+A group start refuses in one case: if the issues route to more than one repo via
+`teamRepoMap`, there is no single worktree to put them in, so jmux names the
+repos instead of guessing.
+
+When the session's MR merges, jmux offers to move **all** of its unfinished
+issues, as a checklist you can untick — a merge request that only covered three
+of five tickets is a normal thing to happen. This honours the existing
+`transitionConfirm` policy: set to `never` or `undo-toast`, the fan-out is
+silent, exactly like every other transition.
 
 ---
 

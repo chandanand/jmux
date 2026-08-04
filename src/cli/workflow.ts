@@ -66,7 +66,12 @@ import {
   type ParkOverride,
 } from "../parking";
 import { selectGhosts, ghostCapValue, type GhostQueue } from "../ghosts";
-import { linkKey, resolveIssueSession, type IssueSessionInfo } from "../issue-session";
+import {
+  linkKey,
+  resolveIssueSession,
+  ISSUE_LINK_OPTION,
+  type IssueSessionInfo,
+} from "../issue-session";
 import { collapseStatusRows, parseStatusLine, type StatusSessionRow } from "./status";
 import { handleIssue } from "./issue";
 import type { Issue, WorkflowState } from "../adapters/types";
@@ -449,7 +454,7 @@ const STATUS_FORMAT = [
   "#{@jmux-agent-state-since}",
   "#{@jmux-attention}",
   "#{@jmux-attention-reason}",
-  "#{@jmux-linear-issue}",
+  `#{${ISSUE_LINK_OPTION}}`,
   "#{pane_current_path}",
   "#{pane_active}",
 ].join(US);
@@ -520,7 +525,7 @@ async function gatherBoard(ctx: CliContext): Promise<Board> {
   };
   for (const row of rows) {
     for (const id of sessionState.getLinkedIssueIds(row.name)) addLink(id, row.name);
-    if (row.linearIssue) addLink(row.linearIssue, row.name);
+    for (const id of row.linearIssues) addLink(id, row.name);
   }
 
   const liveSessions = new Set(rows.map((r) => r.name));

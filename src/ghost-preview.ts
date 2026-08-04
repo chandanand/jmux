@@ -49,6 +49,15 @@ export interface GhostPreviewPort {
   onStart(issueId: string): Promise<StartOutcome>;
   onOpenInBrowser(issueId: string): void;
   onChangeStatus(issueId: string): void;
+  /**
+   * Put this issue into a session that already exists, instead of provisioning
+   * one for it. The counterpart to Start for work that belongs to a feature
+   * somebody is already on: no worktree, no branch, no second agent.
+   *
+   * Opens a picker, so it hands off exactly like the manual session modal does
+   * — which is why the preview stays open underneath rather than closing.
+   */
+  onAttachToSession(issueId: string): void;
 }
 
 /** The issue a preview is opened on. The identifier is cached — see `open`. */
@@ -127,6 +136,7 @@ export class GhostPreview {
     if (!port.getIssue(target.id)) return;
 
     if (data === "\r") { void this.start(); return; }
+    if (data === "a") { port.onAttachToSession(target.id); return; }
     if (data === "o") { port.onOpenInBrowser(target.id); return; }
     if (data === "s") { port.onChangeStatus(target.id); return; }
   }
@@ -217,6 +227,7 @@ export class GhostPreview {
       ? "Starting…"
       : preflightActionLabel(pf?.action ?? "start");
     col = this.writeAction(grid, row, col, "[↵]", ` ${primary}  `);
+    col = this.writeAction(grid, row, col, "[a]", " Add to session  ");
     col = this.writeAction(grid, row, col, "[s]", " Status  ");
     col = this.writeAction(grid, row, col, "[o]", " Open  ");
     this.writeAction(grid, row, col, "[Esc]", " Back");

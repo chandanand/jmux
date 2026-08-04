@@ -73,9 +73,16 @@ import {
 import { DEFAULT_VIEW, parseSupportedFlags, sameView, spawnArgs, viewLabel, viewRequiredFlag, type HunkView } from "./hunk/view";
 import { InfoPanel, rebuildInfoPanelColors } from "./info-panel";
 import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, parkedStages, toggleParkedState, effectiveFilter, stageForState, stageInSidebar, stageShowsUnstarted, type PanelView } from "./panel-view";
-import { transformIssues, transformMrs, buildViewNodes, renderView, createViewState, filterItems, rebuildPanelViewColors, computeViewLayout, splitRatioForSepRow, DEFAULT_PANEL_SPLIT_RATIO, type ViewState, type ViewNode, type IssueSessionInfo } from "./panel-view-renderer";
+import { transformIssues, transformMrs, buildViewNodes, itemsInGroup, checkedItems, renderView, createViewState, filterItems, rebuildPanelViewColors, computeViewLayout, splitRatioForSepRow, DEFAULT_PANEL_SPLIT_RATIO, type ViewState, type ViewNode, type IssueSessionInfo } from "./panel-view-renderer";
+import { formatIssueBadge } from "./session-view";
 import {
   linkKey,
+  drivingIssue,
+  isIssueFinished,
+  slugifyName,
+  sanitizeBranchName,
+  parseIssueLinkOption,
+  ISSUE_LINK_OPTION,
   issueWorktreePath,
   resolveIssueSession,
   resolveIssueSessionName as sharedIssueSessionName,
@@ -1531,9 +1538,9 @@ function derivedStages(): Record<WorkStage, string[]> {
   return parkedStages(parkedStates());
 }
 
-/** Stage of a session's linked issue, or null when it has none. */
+/** Stage of a session's driving issue, or null when it has none. */
 function stageOfSession(name: string): WorkStage | null {
-  const issue = pollCoordinator.getContext(name)?.issues[0];
+  const issue = drivingIssue(pollCoordinator.getContext(name)?.issues ?? []);
   if (!issue) return null;
   return stageForIssue(issue, derivedStages());
 }
@@ -1567,11 +1574,11 @@ function recomputeSessionBands(): void {
 
     const ctx = pollCoordinator.getContext(name);
 
-    // The stage band: the session's linked issue, projected through the user's
+    // The stage band: the session's driving issue, projected through the user's
     // own stage definitions. Rank is the stage's position in `panelViews`,
     // which is the priority order the workflow screen reorders — so the sidebar
     // headers read top-to-bottom in the order they arranged their workflow.
-    const issue = ctx?.issues[0];
+    const issue = drivingIssue(ctx?.issues ?? []);
     const stageView = issue ? stageForState(panelViews, issue.status) : null;
     // A stage hidden from the sidebar claims nothing for grouping: its sessions
     // fall to the flat remainder, exactly like a session whose status no stage
@@ -1735,11 +1742,20 @@ const UNDO_WINDOW_MS = 20_000;
 /** Last-seen MR states per session, for edge detection across polls. */
 const mrSnapshots = new Map<string, MrSnapshot[]>();
 
-interface PendingUndo {
+interface UndoMove {
   issueId: string;
   identifier: string;
   from: string;
   to: string;
+}
+/**
+ * A *batch*, because one event can move several issues: a merge request closing
+ * four tickets is one decision the user made and has to be able to take back as
+ * one. A single record here meant `^a Z` reverted whichever issue happened to
+ * be written last and silently stranded the rest.
+ */
+interface PendingUndo {
+  moves: UndoMove[];
   expiresAt: number;
 }
 let pendingUndo: PendingUndo | null = null;
@@ -1752,7 +1768,15 @@ function transitionConfirmMode(): "always" | "undo-toast" | "never" {
 function undoChipLabel(): string | null {
   if (!pendingUndo) return null;
   if (Date.now() > pendingUndo.expiresAt) { pendingUndo = null; return null; }
-  return `${pendingUndo.identifier} → ${pendingUndo.to}  ^a Z undo`;
+  const moves = pendingUndo.moves;
+  if (moves.length === 0) return null;
+  // A batch can span targets, so only the single-move case can name one. The
+  // count is the honest summary otherwise — and it is also what tells the user
+  // that undo covers all of them.
+  const what = moves.length === 1
+    ? `${moves[0]!.identifier} → ${moves[0]!.to}`
+    : `${moves.length} issues moved`;
+  return `${what}  ^a Z undo`;
 }
 
 // A transient confirmation in the toolbar chip. Actions that deliberately
@@ -1772,79 +1796,145 @@ function toastLabel(): string | null {
   return statusToast.text;
 }
 
+/**
+ * Move one issue, and report what was moved rather than recording it.
+ *
+ * The undo record is the *caller's* to write, because undo is per-decision and
+ * a decision can cover several issues. Recording it here made each write clobber
+ * the last, so a batch left an undo for one of its members.
+ */
 async function applyTransition(
   issue: import("./adapters/types").Issue,
   event: TransitionEvent,
   target: string,
-): Promise<void> {
+): Promise<UndoMove | null> {
   const tracker = adapters.issueTracker;
-  if (!tracker || tracker.authState !== "ok") return;
-  if (issue.status === target) return; // already there — nothing to say
+  if (!tracker || tracker.authState !== "ok") return null;
+  if (issue.status === target) return null; // already there — nothing to say
 
   const from = issue.status;
   try {
     await tracker.updateStatus(issue.id, target);
   } catch (e) {
     logError("jmux", `transition failed for ${issue.identifier}: ${(e as Error).message}`);
-    return;
+    return null;
   }
 
-  if (transitionConfirmMode() !== "never") {
-    pendingUndo = {
-      issueId: issue.id,
-      identifier: issue.identifier,
-      from,
-      to: target,
-      expiresAt: Date.now() + UNDO_WINDOW_MS,
-    };
-  }
   logError("jmux", `transition: ${issue.identifier} ${from} → ${target} (${TRANSITION_LABELS[event]})`);
   pollCoordinator.pollGlobal();
   scheduleRender();
+  return { issueId: issue.id, identifier: issue.identifier, from, to: target };
 }
 
-/** Revert the most recent transition, if the undo window is still open. */
+/** Offer the batch just written as one undo, unless the policy says never. */
+function recordUndo(moves: Array<UndoMove | null>): void {
+  const applied = moves.filter((m): m is UndoMove => m !== null);
+  if (applied.length === 0 || transitionConfirmMode() === "never") return;
+  pendingUndo = { moves: applied, expiresAt: Date.now() + UNDO_WINDOW_MS };
+  scheduleRender();
+}
+
+/** Revert the most recent transition batch, if the undo window is still open. */
 async function undoLastTransition(): Promise<void> {
   const undo = pendingUndo;
   if (!undo || Date.now() > undo.expiresAt) { pendingUndo = null; return; }
   pendingUndo = null;
   const tracker = adapters.issueTracker;
   if (!tracker || tracker.authState !== "ok") return;
-  try {
-    await tracker.updateStatus(undo.issueId, undo.from);
-    pollCoordinator.pollGlobal();
-  } catch (e) {
-    logError("jmux", `undo failed for ${undo.identifier}: ${(e as Error).message}`);
+  // Each revert is independent: one failing must not strand the others, so
+  // failures are logged per issue rather than aborting the batch.
+  for (const move of undo.moves) {
+    try {
+      await tracker.updateStatus(move.issueId, move.from);
+    } catch (e) {
+      logError("jmux", `undo failed for ${move.identifier}: ${(e as Error).message}`);
+    }
   }
+  pollCoordinator.pollGlobal();
   scheduleRender();
 }
 
 /**
- * Run a transition through the configured confirmation policy. "always" asks
- * first; "undo-toast" writes and leaves an undo on screen; "never" writes
- * silently.
+ * Run a transition for one or more issues through the configured confirmation
+ * policy. "always" asks first; "undo-toast" writes and leaves an undo on
+ * screen; "never" writes silently.
+ *
+ * The list form is what a session carrying several issues needs: one merge
+ * request closing four tickets is four tickets to move, and firing four
+ * separate confirmations would stack four modals over each other.
+ *
+ * The target is resolved per issue rather than once. Transitions are configured
+ * per repo, and while a group start guarantees one repo, hand-linked issues
+ * can come from teams that map elsewhere — so there is no single "→ Done" to
+ * put in a header, and each row carries its own.
+ *
+ * Two modal shapes, deliberately. A single issue keeps the yes/no question it
+ * has always had; only the genuinely new case — several issues, of which the
+ * user may want a subset — gets a checklist. Rewriting the common case as a
+ * one-row checklist would be a worse question asked more often.
  */
-async function requestTransition(
-  issue: import("./adapters/types").Issue,
+async function requestTransitions(
+  issues: readonly import("./adapters/types").Issue[],
   event: TransitionEvent,
 ): Promise<void> {
-  const dir = resolveIssueRepoDir(issue, configStore.config, homedir());
-  const target = transitionTarget(event, repoSettingsFor(dir));
-  if (!target || issue.status === target) return;
+  const moves = issues
+    .map((issue) => ({
+      issue,
+      target: transitionTarget(
+        event,
+        repoSettingsFor(resolveIssueRepoDir(issue, configStore.config, homedir())),
+      ),
+    }))
+    .filter((m): m is { issue: import("./adapters/types").Issue; target: string } =>
+      !!m.target && m.issue.status !== m.target);
+  if (moves.length === 0) return;
 
   if (transitionConfirmMode() !== "always") {
-    await applyTransition(issue, event, target);
+    const applied: Array<UndoMove | null> = [];
+    for (const m of moves) applied.push(await applyTransition(m.issue, event, m.target));
+    recordUndo(applied);
     return;
   }
 
+  if (moves.length === 1) {
+    const { issue, target } = moves[0]!;
+    const modal = new ListModal({
+      header: `${issue.identifier} → ${target}?`,
+      subheader: `${TRANSITION_LABELS[event]} · currently ${issue.status}`,
+      items: [{ id: "yes", label: `Move to ${target}` }, { id: "no", label: "Leave it" }],
+    });
+    modal.open();
+    openModal(modal, async (value) => {
+      if ((value as ListItem).id !== "yes") return;
+      recordUndo([await applyTransition(issue, event, target)]);
+    });
+    return;
+  }
+
+  // Everything starts checked: the reason all of these are being offered at
+  // once is that one piece of work covered them, so "all of them" is the
+  // answer far more often than not. Unticking is cheaper than ticking.
+  const byId = new Map(moves.map((m) => [m.issue.id, m]));
   const modal = new ListModal({
-    header: `${issue.identifier} → ${target}?`,
-    subheader: `${TRANSITION_LABELS[event]} · currently ${issue.status}`,
-    items: [{ id: "yes", label: `Move to ${target}` }, { id: "no", label: "Leave it" }],
+    header: `${TRANSITION_LABELS[event]} — move ${moves.length} issues?`,
+    subheader: "Enter applies the checked ones; Esc moves nothing",
+    multiSelect: true,
+    selectedIds: moves.map((m) => m.issue.id),
+    items: moves.map((m) => ({
+      id: m.issue.id,
+      label: `${m.issue.identifier}  ${m.issue.title}`,
+      annotation: `${m.issue.status} → ${m.target}`,
+    })),
   });
   modal.open();
   openModal(modal, async (value) => {
-    if ((value as ListItem).id === "yes") await applyTransition(issue, event, target);
+    const applied: Array<UndoMove | null> = [];
+    for (const picked of value as ListItem[]) {
+      const move = byId.get(picked.id);
+      if (move) applied.push(await applyTransition(move.issue, event, move.target));
+    }
+    // One undo for the whole checklist: the user approved it as one decision.
+    recordUndo(applied);
   });
 }
 
@@ -1862,10 +1952,14 @@ function checkMrTransitions(): void {
 
     const { opened, merged } = detectMrTransitions(prev, next);
     if (!opened && !merged) continue;
-    const issue = ctx.issues[0];
-    if (!issue) continue;
+    // Every issue the session carries, not just the driving one: the MR is the
+    // session's, and the session's work is all of them. Issues the tracker
+    // already considers finished are left alone — re-moving a closed ticket
+    // because a *later* MR merged is a write nobody asked for.
+    const live = ctx.issues.filter((i) => !isIssueFinished(i));
+    if (live.length === 0) continue;
     // Merged is the later edge, so it wins when both fire in one poll.
-    void requestTransition(issue, merged ? "mr-merged" : "mr-open");
+    void requestTransitions(live, merged ? "mr-merged" : "mr-open");
   }
   for (const name of mrSnapshots.keys()) {
     if (!currentSessions.some((s) => s.name === name)) mrSnapshots.delete(name);
@@ -2880,8 +2974,9 @@ async function zoomDiffPanel(): Promise<void> {
 
 /**
  * US-separated rather than colon-separated because the last field is a user
- * option: `jmux ctl issue link <session> <anything>` puts arbitrary text in
- * `@jmux-linear-issue`, and a colon in it would shift every field after it.
+ * option: `jmux ctl issue link <session> <issue>` puts caller-supplied
+ * identifiers in `@jmux-linear-issue`, and a colon in one would shift every
+ * field after it.
  */
 const SESSION_LIST_FORMAT = [
   "#{session_id}",
@@ -2889,7 +2984,7 @@ const SESSION_LIST_FORMAT = [
   "#{session_activity}",
   "#{session_attached}",
   "#{session_windows}",
-  "#{@jmux-linear-issue}",
+  `#{${ISSUE_LINK_OPTION}}`,
 ].join(US);
 
 async function fetchSessions(): Promise<void> {
@@ -2902,6 +2997,7 @@ async function fetchSessions(): Promise<void> {
       .map((line) => {
         const [id, name, activity, attached, windows, issueLink] = splitFields(line);
         const cached = sessionDetailsCache.get(id);
+        const issueLinks = parseIssueLinkOption(issueLink);
         return {
           id,
           name,
@@ -2911,7 +3007,7 @@ async function fetchSessions(): Promise<void> {
           directory: cached?.directory,
           gitBranch: cached?.gitBranch,
           project: cached?.project,
-          ...(issueLink ? { issueLink } : {}),
+          ...(issueLinks.length > 0 ? { issueLinks } : {}),
         };
       });
     currentSessions = sessions;
@@ -3969,6 +4065,7 @@ const inputRouter = new InputRouter(
     onPanelCycleGroupBy: () => {
       const view = panelViews.find((v) => v.id === infoPanel.activeTab);
       if (!view) return;
+      if (sectionedViewNotice(view)) return;
       view.groupBy = cycleGroupBy(view.groupBy);
       debouncedViewSave(view);
       scheduleRender();
@@ -3976,6 +4073,7 @@ const inputRouter = new InputRouter(
     onPanelCycleSubGroupBy: () => {
       const view = panelViews.find((v) => v.id === infoPanel.activeTab);
       if (!view) return;
+      if (sectionedViewNotice(view)) return;
       view.subGroupBy = cycleGroupBy(view.subGroupBy);
       debouncedViewSave(view);
       scheduleRender();
@@ -4019,20 +4117,77 @@ const inputRouter = new InputRouter(
         scheduleRender();
       }
     },
+    // Tick the highlighted item. Groups are not tickable: ticking is for
+    // building a set the headers cannot express, and a header already has its
+    // own whole-group action on `n`.
+    onPanelToggleCheck: () => {
+      const pc = activePanelContext();
+      if (!pc) return;
+      const node = pc.nodes[pc.viewState.selectedIndex];
+      if (node?.kind !== "item") return;
+      if (pc.viewState.checkedIds.has(node.item.id)) pc.viewState.checkedIds.delete(node.item.id);
+      else pc.viewState.checkedIds.add(node.item.id);
+      scheduleRender();
+    },
+
+    panelHasChecks: () => {
+      const vs = viewStates.get(infoPanel.activeTab);
+      return (vs?.checkedIds.size ?? 0) > 0;
+    },
+
+    onPanelClearChecks: () => {
+      const vs = viewStates.get(infoPanel.activeTab);
+      if (!vs || vs.checkedIds.size === 0) return;
+      vs.checkedIds.clear();
+      scheduleRender();
+    },
+
     onPanelCreateSession: async () => {
-      const view = panelViews.find((v) => v.id === infoPanel.activeTab);
-      if (!view || view.source !== "issues") return;
-      const viewState = viewStates.get(view.id);
-      if (!viewState) return;
-      const sessionName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
-      const ctx = pollCoordinator.getContext(sessionName);
-      const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
-      let rawItems = transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl());
-      if (viewState.filterQuery) rawItems = filterItems(rawItems, viewState.filterQuery);
-      const effectiveView = viewState.filterQuery ? { ...view, groupBy: "none" as const } : view;
-      const nodes = buildViewNodes(rawItems, effectiveView, viewState.collapsedGroups);
+      const pc = activePanelContext();
+      if (!pc || pc.view.source !== "issues") return;
+      const { viewState, rawItems, effectiveView, nodes } = pc;
+
+      // Ticked issues win over the highlighted row. This is the path that has
+      // to work on a stage tab, where `groupBy` is ignored and the only headers
+      // are statuses — grouping simply cannot name "these four tickets".
+      const ticked = checkedItems(nodes, viewState)
+        .filter((i) => i.type === "issue")
+        .map((i) => i.raw as import("./adapters/types").Issue);
+      if (ticked.length > 1) {
+        // Pre-fill from the project they share, when they share one. Falling
+        // back to "" makes the name prompt derive from the first identifier
+        // rather than inventing a label out of unrelated work.
+        const projects = new Set(ticked.map((i) => i.project ?? ""));
+        const label = projects.size === 1 ? [...projects][0]! : "";
+        viewState.checkedIds.clear();
+        await startIssueGroup(label, ticked);
+        return;
+      }
+      if (ticked.length === 1) {
+        // One ticked issue is a single start, not a group of one: the
+        // single-issue path inherits the tracker's own branch name, which the
+        // group prompt has no way to know about.
+        viewState.checkedIds.clear();
+        const state = issueSessionStateFor(ticked[0]!);
+        await startWorkOnIssue(ticked[0]!, state?.state ?? "none", state?.sessionName);
+        return;
+      }
+
       const selected = nodes[viewState.selectedIndex];
-      if (selected?.kind !== "item" || selected.item.type !== "issue") return;
+      if (!selected) return;
+
+      // A group header starts everything under it as one session — the same key
+      // on the same list, so "start this" means the row you are on whether that
+      // row is a ticket or the feature it belongs to.
+      if (selected.kind === "group") {
+        const members = itemsInGroup(rawItems, effectiveView, selected.key)
+          .filter((i) => i.type === "issue")
+          .map((i) => i.raw as import("./adapters/types").Issue);
+        await startIssueGroup(selected.label, members);
+        return;
+      }
+
+      if (selected.item.type !== "issue") return;
       await startWorkOnIssue(
         selected.item.raw as import("./adapters/types").Issue,
         selected.item.issueSessionState ?? "none",
@@ -4041,35 +4196,66 @@ const inputRouter = new InputRouter(
     },
 
     onPanelLinkToSession: () => {
-      const view = panelViews.find((v) => v.id === infoPanel.activeTab);
-      if (!view) return;
-      const viewState = viewStates.get(view.id);
-      if (!viewState) return;
-      const sessionName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
-      const ctx = pollCoordinator.getContext(sessionName);
-      const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
-      const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
-      let rawItems = view.source === "issues"
-        ? transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl())
-        : view.filter.scope === "reviewing"
-          ? transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds)
-          : transformMrs(pollCoordinator.getGlobalMrs(), linkedMrIds);
-      if (viewState.filterQuery) rawItems = filterItems(rawItems, viewState.filterQuery);
-      const effectiveView = viewState.filterQuery ? { ...view, groupBy: "none" as const } : view;
-      const nodes = buildViewNodes(rawItems, effectiveView, viewState.collapsedGroups);
+      const pc = activePanelContext();
+      if (!pc) return;
+      const { viewState, sessionName, rawItems, effectiveView, nodes } = pc;
       const selected = nodes[viewState.selectedIndex];
-      if (selected?.kind !== "item") return;
       if (!sessionName) return;
-      if (selected.item.type === "issue") {
-        const issue = selected.item.raw as import("./adapters/types").Issue;
-        sessionState.addLink(sessionName, { type: "issue", id: issue.id });
-        pollCoordinator.addLinkedIssue(sessionName, issue);
-      } else {
-        const mr = selected.item.raw as import("./adapters/types").MergeRequest;
-        sessionState.addLink(sessionName, { type: "mr", id: mr.id });
-        pollCoordinator.addLinkedMr(sessionName, mr);
+
+      const attach = (items: import("./panel-view-renderer").RenderableItem[]) => {
+        for (const item of items) {
+          if (item.type === "issue") {
+            attachIssueTo(sessionName, item.raw as import("./adapters/types").Issue);
+          } else {
+            const mr = item.raw as import("./adapters/types").MergeRequest;
+            sessionState.addLink(sessionName, { type: "mr", id: mr.id });
+            pollCoordinator.addLinkedMr(sessionName, mr);
+          }
+        }
+        scheduleRender();
+      };
+
+      // A group header attaches everything under it — the same gesture on the
+      // same key, so the row you are on is the work you are claiming whether it
+      // is one ticket or a whole project.
+      //
+      // But it asks first, and `n` on a group asking (via its name prompt) is
+      // why. A group is any header on any axis, so `l` on a status section is a
+      // bulk write of forty links from one keystroke, undone only by forty
+      // unlinks. Single-item attach stays instant: it is one link and `L`
+      // reverses it.
+      //
+      // Ticked items take the same confirmed path — a tick is a claim about
+      // the set, not about one row, so acting on it silently would be the same
+      // surprise at a different scale.
+      const ticked = checkedItems(nodes, viewState);
+      if (ticked.length === 0 && selected?.kind !== "group") {
+        if (selected) attach([selected.item]);
+        return;
       }
-      scheduleRender();
+
+      const members = ticked.length > 0
+        ? ticked
+        : itemsInGroup(rawItems, effectiveView, (selected as Extract<ViewNode, { kind: "group" }>).key);
+      if (members.length === 0) return;
+      const label = ticked.length > 0
+        ? `${members.length} selected`
+        : (selected as Extract<ViewNode, { kind: "group" }>).label;
+      const confirm = new ListModal({
+        header: `Add ${members.length} to ${sessionName}?`,
+        subheader: label,
+        items: [
+          { id: "yes", label: `Add all ${members.length}` },
+          { id: "no", label: "Leave them" },
+        ],
+      });
+      confirm.open();
+      openModal(confirm, (value) => {
+        if ((value as ListItem).id !== "yes") return;
+        attach(members);
+        viewState.checkedIds.clear();
+        showToast(`${members.length} → ${sessionName}`);
+      });
     },
     onPanelFilterStart: () => {
       const viewState = viewStates.get(infoPanel.activeTab);
@@ -5183,7 +5369,7 @@ function parkedCountsByStatus(): Map<string, number> {
   const out = new Map<string, number>();
   for (const session of currentSessions) {
     if (!sidebar.isParked(session.name)) continue;
-    const status = pollCoordinator.getContext(session.name)?.issues[0]?.status;
+    const status = drivingIssue(pollCoordinator.getContext(session.name)?.issues ?? [])?.status;
     const key = (status ?? "").trim().toLowerCase();
     if (key) out.set(key, (out.get(key) ?? 0) + 1);
   }
@@ -5421,6 +5607,8 @@ function buildGhostPreviewPort(): GhostPreviewPort {
       adapters.issueTracker?.openInBrowser(issueId);
     },
 
+    onAttachToSession: (issueId) => attachIssueToSession(issueId),
+
     onChangeStatus: (issueId) => {
       const tracker = adapters.issueTracker;
       const issue = pollCoordinator.getGlobalIssues().find((i) => i.id === issueId);
@@ -5594,6 +5782,100 @@ function resolveIssueSessionName(issue: import("./adapters/types").Issue): strin
 }
 
 /**
+ * Create the tmux session for one or more issues and link them to it.
+ *
+ * Extracted so a single issue and a whole group take the *same* path: the two
+ * differ only in what names the session and what seeds the agent, and letting
+ * them diverge is how `ctl issue start` and the `n` key ended up with different
+ * failure modes before `issue-provision.ts` existed.
+ *
+ * Every linked issue gets its own `session-start` transition. That is the point
+ * of the fan-out rather than an accident of the loop: five tickets moved into
+ * one session are five tickets somebody started.
+ */
+async function provisionIssueSession(o: {
+  session: string;
+  issues: import("./adapters/types").Issue[];
+  /** Home-expanded. */
+  repoDir: string;
+  settings: ReturnType<typeof repoSettingsFor>;
+  baseBranch: string;
+  worktreeExists: boolean;
+  prompt: (tracker: NonNullable<typeof adapters.issueTracker>) => string;
+  /** What the error modal names when creation fails. */
+  failureSubject: string;
+}): Promise<StartOutcome> {
+  try {
+    // Seed the first user message for Claude by writing the prompt to a temp
+    // file — the main pane reads it via $(cat ...) and claude takes its content
+    // as a positional argument (the documented interactive-seed form). Without
+    // this the pane falls back to `exec $SHELL` so the session is usable even
+    // if the agent is off.
+    const shouldLaunchAgent = o.settings.autoLaunchAgent && !!adapters.issueTracker;
+    let promptTmp: string | null = null;
+    if (shouldLaunchAgent) {
+      // Random suffix as well as the timestamp: the main pane `cat`s this file
+      // and then deletes it, so two starts landing in the same millisecond
+      // would have one seeding the other's agent. Matches `ctl issue start`.
+      const rand = Math.random().toString(36).slice(2);
+      promptTmp = `/tmp/jmux-prompt-${Date.now()}-${rand}.md`;
+      writeFileSync(promptTmp, o.prompt(adapters.issueTracker!));
+    }
+
+    // Every session gets a worktree; `wtmIntegration` picks the mechanism only,
+    // so both paths land the same `<repo>/<session>` directory and the session
+    // name doubles as the branch name (the one-name rule). A worktree that
+    // already exists and one that does not differ only in whether a setup pane
+    // is needed, which is what `buildProvisionPlan` decides.
+    const plan = buildProvisionPlan({
+      session: o.session,
+      repoDir: o.repoDir,
+      worktreePath: issueWorktreePath(o.repoDir, o.session),
+      baseBranch: o.baseBranch,
+      wtm: o.settings.wtmIntegration,
+      worktreeExists: o.worktreeExists,
+      agentCommand: shouldLaunchAgent ? o.settings.claudeCommand : null,
+      promptFile: promptTmp,
+    });
+
+    await control.sendCommand(
+      `new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${o.session}`)} -s ${tq(o.session)} -c ${tq(plan.sessionCwd)} ${tq(plan.mainCommand)}`,
+    );
+    if (plan.setupCommand) {
+      // Setup (right) pane creates the worktree and exits on success — no
+      // trailing `exec $SHELL` so the pane auto-closes. `-d` keeps focus
+      // on claude; `-l 30%` makes setup narrow and leaves claude ~70%.
+      await control.sendCommand(
+        `split-window -h -d -l ${SETUP_PANE_SIZE} -t ${tq(o.session)} -c ${tq(o.repoDir)} ${tq(plan.setupCommand)}`,
+      );
+      // The new worktree changes what git reports for these paths.
+      repoFacts.clear();
+    }
+
+    await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(o.session)}`);
+    for (const issue of o.issues) {
+      sessionState.addLink(o.session, { type: "issue", id: issue.id });
+    }
+    // One request for the whole group. Per-issue calls would stack a modal per
+    // issue under the "always" confirm policy — five tickets, five prompts.
+    void requestTransitions(o.issues, "session-start");
+    return "created";
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    showNotice({
+      title: "Session Creation Failed",
+      message: `Failed to create session for ${o.failureSubject}`,
+      hint: message,
+      tone: "error",
+    });
+  }
+  // The catch swallowed the error into a modal, so the promise resolves
+  // normally — callers can only tell this apart from success by the
+  // outcome, which is why one is returned at all.
+  return "failed";
+}
+
+/**
  * Provision (or return to) the session for an issue. Shared by the panel's `n`
  * key and the capture composer's "capture & start", so both go through exactly
  * one implementation of the three-state flow.
@@ -5631,69 +5913,16 @@ async function startWorkOnIssue(
         const settings = repoSettingsFor(expandedDir);
         const baseBranch = settings.defaultBaseBranch;
 
-        try {
-          // Seed the first user message for Claude by writing the issue prompt
-          // to a temp file — the main pane reads it via $(cat ...) and claude
-          // takes its content as a positional argument (the documented
-          // interactive-seed form). Without this the pane falls back to
-          // `exec $SHELL` so the session is usable even if the agent is off.
-          const shouldLaunchAgent = settings.autoLaunchAgent && !!adapters.issueTracker;
-          let promptTmp: string | null = null;
-          if (shouldLaunchAgent) {
-            const prompt = adapters.issueTracker!.buildPrompt(issue);
-            promptTmp = `/tmp/jmux-prompt-${Date.now()}.md`;
-            writeFileSync(promptTmp, prompt);
-          }
-
-          // Every issue gets a worktree; `wtmIntegration` picks the mechanism
-          // only, so both paths land the same `<repo>/<session>` directory and
-          // the session name doubles as the branch name (the one-name rule).
-          // STATE 2 (worktree exists, no session) and STATE 1 (nothing exists)
-          // differ only in whether a setup pane is needed, which is what
-          // `buildProvisionPlan` decides.
-          const wtPath = issueWorktreePath(expandedDir, session);
-          const plan = buildProvisionPlan({
-            session,
-            repoDir: expandedDir,
-            worktreePath: wtPath,
-            baseBranch,
-            wtm: settings.wtmIntegration,
-            worktreeExists: issueState === "worktree",
-            agentCommand: shouldLaunchAgent ? settings.claudeCommand : null,
-            promptFile: promptTmp,
-          });
-
-          await control.sendCommand(
-            `new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(plan.sessionCwd)} ${tq(plan.mainCommand)}`,
-          );
-          if (plan.setupCommand) {
-            // Setup (right) pane creates the worktree and exits on success — no
-            // trailing `exec $SHELL` so the pane auto-closes. `-d` keeps focus
-            // on claude; `-l 30%` makes setup narrow and leaves claude ~70%.
-            await control.sendCommand(
-              `split-window -h -d -l ${SETUP_PANE_SIZE} -t ${tq(session)} -c ${tq(expandedDir)} ${tq(plan.setupCommand)}`,
-            );
-            // The new worktree changes what git reports for these paths.
-            repoFacts.clear();
-          }
-
-          await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(session)}`);
-          sessionState.addLink(session, { type: "issue", id: issue.id });
-          void requestTransition(issue, "session-start");
-          return "created";
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          showNotice({
-            title: "Session Creation Failed",
-            message: `Failed to create session for ${issue.identifier}`,
-            hint: message,
-            tone: "error",
-          });
-        }
-        // The catch swallowed the error into a modal, so the promise resolves
-        // normally — callers can only tell this apart from success by the
-        // outcome, which is why one is returned at all.
-        return "failed";
+        return provisionIssueSession({
+          session,
+          issues: [issue],
+          repoDir: expandedDir,
+          settings,
+          baseBranch,
+          worktreeExists: issueState === "worktree",
+          prompt: (tracker) => tracker.buildPrompt(issue),
+          failureSubject: issue.identifier,
+        });
       }
 
       // Fallback: no config mapping — open manual modal
@@ -5732,6 +5961,72 @@ async function startWorkOnIssue(
       // The picker is now up and the user drives from here — neither a success
       // nor a failure, and specifically not something to close a surface over.
       return "handed-off";
+}
+
+/**
+ * Say so when grouping cannot apply, instead of storing a preference that does
+ * nothing. Returns true when the caller should stop.
+ *
+ * A view with `states` is sectioned by those statuses and `buildViewNodes`
+ * never consults `groupBy` at all — so `g` on a stage tab used to write a value
+ * to config.json, save it, and change nothing on screen. That is the same
+ * failure the workflow screen exists to prevent (a setting that looks
+ * configured and is inert), and it is worse here because the key gives no
+ * feedback at all: the only evidence was in the JSON.
+ *
+ * Existing stored values are left alone. They are already inert, and rewriting
+ * somebody's config as a side effect of pressing a key that now refuses to act
+ * would be its own surprise.
+ */
+function sectionedViewNotice(view: PanelView): boolean {
+  if (view.states === undefined) return false;
+  showToast(`${view.label}: sections come from its statuses — grouping doesn't apply (Ctrl-a W)`);
+  return true;
+}
+
+interface PanelContext {
+  view: PanelView;
+  viewState: ViewState;
+  /** "" when no session is focused — callers that need one check for it. */
+  sessionName: string;
+  rawItems: import("./panel-view-renderer").RenderableItem[];
+  /** The view as *drawn*: grouping is flattened while a fuzzy filter is on. */
+  effectiveView: PanelView;
+  nodes: ViewNode[];
+}
+
+/**
+ * Everything a panel key needs about what is currently on screen.
+ *
+ * Every action handler used to rebuild this inline — the same twelve lines,
+ * five times over. They agreed, but only by copy: a sixth handler is a sixth
+ * chance to forget the `filterQuery` flattening and act on a grouping the user
+ * cannot see. Rebuilt per keypress rather than cached, because the poll can
+ * change the item set between one and the next.
+ */
+function activePanelContext(): PanelContext | null {
+  const view = panelViews.find((v) => v.id === infoPanel.activeTab);
+  if (!view) return null;
+  const viewState = viewStates.get(view.id);
+  if (!viewState) return null;
+
+  const sessionName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
+  const ctx = pollCoordinator.getContext(sessionName);
+  const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
+  const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
+
+  let rawItems = view.source === "issues"
+    ? transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl())
+    : view.filter.scope === "reviewing"
+      ? transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds)
+      : transformMrs(pollCoordinator.getGlobalMrs(), linkedMrIds);
+  if (viewState.filterQuery) rawItems = filterItems(rawItems, viewState.filterQuery);
+
+  const effectiveView = viewState.filterQuery ? { ...view, groupBy: "none" as const } : view;
+  return {
+    view, viewState, sessionName, rawItems, effectiveView,
+    nodes: buildViewNodes(rawItems, effectiveView, viewState.collapsedGroups),
+  };
 }
 
 /**
@@ -5811,6 +6106,217 @@ async function startGhost(issueId: string): Promise<StartOutcome> {
   return startWorkOnIssue(issue, state?.state ?? "none", state?.sessionName);
 }
 
+/**
+ * Start every issue under a group header as one session.
+ *
+ * This is the native shape of the problem it solves: product files a feature as
+ * five tickets, and five tickets is one branch and one merge request, not five
+ * worktrees. The group is the tracker's own — whatever `groupBy` axis the panel
+ * is showing — so there is no new concept to learn and nothing to configure.
+ *
+ * Four rules, and each is a refusal to guess:
+ *
+ * **Issues already living in a session are dropped, not moved.** An issue
+ * belongs to one session (`resolveIssueSession`), so pulling one out of
+ * somebody's running work to satisfy a group start would silently detach it.
+ * They are reported, not swallowed.
+ *
+ * **All the remaining issues must route to one repo.** A session has one
+ * worktree, so a group spanning two `teamRepoMap` entries has no single answer
+ * and gets an error naming the repos rather than a session in the wrong one.
+ * This is also what catches two same-named projects in different teams being
+ * merged into one group by the grouping axis.
+ *
+ * **The name is confirmed, never derived silently.** The session name is also
+ * the branch name and the worktree directory, and unlike a single issue there
+ * is no tracker-supplied `branchName` to inherit — so the group label is a
+ * starting point the user edits, on screen, before anything is created.
+ *
+ * **The count is in the header.** Pressing `n` on a group is otherwise
+ * indistinguishable from pressing it on an issue, and a 40-issue team header is
+ * a group too.
+ */
+async function startIssueGroup(
+  label: string,
+  issues: import("./adapters/types").Issue[],
+): Promise<void> {
+  if (issues.length === 0) return;
+  if (!ptyClientName) await resolveClientName();
+  if (!ptyClientName) return;
+
+  const states = getIssueSessionStates();
+  const taken = issues.filter((i) => states.get(i.id)?.state === "session");
+  const fresh = issues.filter((i) => states.get(i.id)?.state !== "session");
+
+  if (fresh.length === 0) {
+    showNotice({
+      title: "Already Started",
+      message: `Every issue in ${label || "this group"} already has a session.`,
+      tone: "plain",
+    });
+    return;
+  }
+
+  const repos = new Map<string, string[]>();
+  for (const issue of fresh) {
+    const dir = issueRepoDir(issue);
+    if (!dir) {
+      showNotice({
+        title: "No Repo Mapped",
+        message: `${issue.identifier} belongs to team "${issue.team ?? "?"}", which maps to no repository.`,
+        hint: "Set one in Settings → Issue workflow, then try again.",
+        tone: "error",
+      });
+      return;
+    }
+    const seen = repos.get(dir);
+    if (seen) seen.push(issue.identifier);
+    else repos.set(dir, [issue.identifier]);
+  }
+  if (repos.size > 1) {
+    showNotice({
+      title: "Group Spans Several Repos",
+      message: `${label || "This group"} covers ${repos.size} repositories, and a session has one worktree.`,
+      hint: [...repos.entries()].map(([dir, ids]) => `${dir.replace(homedir(), "~")}: ${ids.join(", ")}`).join("  ·  "),
+      tone: "error",
+    });
+    return;
+  }
+
+  const repoDir = [...repos.keys()][0]!;
+  const settings = repoSettingsFor(repoDir);
+  const skipped = taken.length > 0 ? `  (${taken.length} already started)` : "";
+
+  const nameModal = new InputModal({
+    header: `Start ${fresh.length} issues in one session${skipped}`,
+    subheader: `${fresh.map((i) => i.identifier).join(", ")} — names the session, branch and worktree`,
+    // Slugified, not merely tmux-sanitized. The label is a tracker project
+    // name — arbitrary human text with spaces and punctuation — and this string
+    // becomes the branch and the worktree directory as well as the session.
+    value: slugifyName(label) || slugifyName(fresh[0]!.identifier),
+  });
+  nameModal.open();
+  openModal(nameModal, async (value) => {
+    // The typed value gets the same treatment. Pre-filling a safe name is not
+    // enough: the field is editable, and a space typed into it splits the
+    // worktree command into separate arguments — which is how a start once
+    // produced a worktree called `Bulk` and an agent waiting forever for a
+    // directory that was never going to exist.
+    const typed = String(value);
+    const session = sanitizeBranchName(typed);
+    if (!session) return;
+    if (session !== typed.trim()) showToast(`session named ${session}`);
+
+    // A live session on the name is somewhere to go, not something to create;
+    // a worktree without one is a resumable attempt. Same three states the
+    // single-issue flow resolves, decided here because the name is the user's
+    // rather than derived from an issue.
+    if (currentSessions.some((s) => s.name === session)) {
+      for (const issue of fresh) attachIssueTo(session, issue);
+      await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(session)}`);
+      return;
+    }
+
+    await provisionIssueSession({
+      session,
+      issues: fresh,
+      repoDir,
+      settings,
+      baseBranch: settings.defaultBaseBranch,
+      worktreeExists: existsSync(issueWorktreePath(repoDir, session)),
+      prompt: (tracker) => tracker.buildGroupPrompt(fresh, label),
+      failureSubject: label || `${fresh.length} issues`,
+    });
+  });
+}
+
+/**
+ * Attach an issue to a session that already exists, moving it off any session
+ * that already claimed it.
+ *
+ * The move is the point. A session carries many issues, but an issue belongs to
+ * *one* session — `resolveIssueSession` returns a single answer and everything
+ * downstream depends on that. Two explicit claims don't corrupt anything, but
+ * `explicitIssueLinks()` breaks the tie with "the current session wins", so the
+ * answer changes as you switch sessions: the sidebar shows the issue started
+ * here, then there. The CLI refuses this outright (`decideIssueLink`); the TUI
+ * has the user in front of it and an unambiguous instruction, so it honours the
+ * instruction and reports what it did.
+ *
+ * Only *explicit* links are moved. A claim by name derivation is not a link and
+ * needs no removal — an explicit link already outranks it.
+ *
+ * Provisioning does not go through here: it links a session that does not exist
+ * yet, and reaches that path only when nothing else claims the issue.
+ */
+function attachIssueTo(
+  sessionName: string,
+  issue: import("./adapters/types").Issue,
+): { movedFrom: string | null } {
+  let movedFrom: string | null = null;
+  for (const session of currentSessions) {
+    if (session.name === sessionName) continue;
+    const claims = sessionState
+      .getLinkedIssueIds(session.name)
+      .some((id) => linkKey(id) === linkKey(issue.id));
+    if (!claims) continue;
+    sessionState.removeLink(session.name, { type: "issue", id: issue.id });
+    pollCoordinator.removeLinkedIssue(session.name, issue.id);
+    movedFrom = session.name;
+  }
+  sessionState.addLink(sessionName, { type: "issue", id: issue.id });
+  pollCoordinator.addLinkedIssue(sessionName, issue);
+  return { movedFrom };
+}
+
+/**
+ * Add an issue to a session that already exists, instead of provisioning one.
+ *
+ * The write is the same `state.json` link the L key makes, which is what makes
+ * this cheap: everything downstream — the sidebar badge, the stage band, ghost
+ * suppression, `workflow board` — already reads a *list* of links per session,
+ * so there is nothing to teach about the second issue.
+ *
+ * Deliberately does not switch to the session. Claiming work is not the same as
+ * going to do it, and a picker that teleported you would make "which session is
+ * this?" an expensive question to ask.
+ */
+function attachIssueToSession(issueId: string): void {
+  const issue = pollCoordinator.getGlobalIssues().find((i) => i.id === issueId);
+  if (!issue) return;
+
+  // Current session first: it is the overwhelmingly likely target, and the
+  // annotation shows what each one already carries so the choice is made
+  // against the work, not against a list of names.
+  const currentName = currentSessions.find((s) => s.id === currentSessionId)?.name;
+  const ordered = [...currentSessions].sort((a, b) =>
+    (a.name === currentName ? 0 : 1) - (b.name === currentName ? 0 : 1),
+  );
+  const items = ordered.map((s) => ({
+    id: s.name,
+    label: s.name,
+    annotation: formatIssueBadge(pollCoordinator.getContext(s.name)?.issues ?? []) ?? "",
+  }));
+  if (items.length === 0) return;
+
+  const picker = new ListModal({
+    items,
+    header: `Add ${issue.identifier} to session`,
+    subheader: issue.title,
+  });
+  picker.open();
+  openModal(picker, (selected) => {
+    const sel = selected as { id: string };
+    if (!sel?.id) return;
+    const { movedFrom } = attachIssueTo(sel.id, issue);
+    showToast(
+      movedFrom
+        ? `${issue.identifier} → ${sel.id} (moved from ${movedFrom})`
+        : `${issue.identifier} → ${sel.id}`,
+    );
+  });
+}
+
 /** Start (or switch to) whatever is at the top of the queue rotation. */
 async function startUpNext(): Promise<void> {
   const next = upNextIssue();
@@ -5843,7 +6349,7 @@ function explicitIssueLinks(): Map<string, string> {
   };
   for (const session of currentSessions) {
     for (const id of sessionState.getLinkedIssueIds(session.name)) add(id, session.name);
-    if (session.issueLink) add(session.issueLink, session.name);
+    for (const id of session.issueLinks ?? []) add(id, session.name);
   }
   return links;
 }
@@ -6626,10 +7132,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
           const issue = results.find((i) => i.id === sel.id);
           if (issue) {
             const sName = currentSessions.find((s) => s.id === currentSessionId)?.name;
-            if (sName) {
-              sessionState.addLink(sName, { type: "issue", id: issue.id });
-              pollCoordinator.addLinkedIssue(sName, issue);
-            }
+            if (sName) attachIssueTo(sName, issue);
           }
         });
       });
@@ -8023,8 +8526,50 @@ async function start(): Promise<void> {
   await control.sendCommand("set-environment -g OTEL_EXPORTER_OTLP_PROTOCOL http/json");
   await control.sendCommand(`set-environment -g OTEL_EXPORTER_OTLP_ENDPOINT http://127.0.0.1:${otelPort}`);
 
-  // Resolve client and session — retry until the PTY client registers
-  await fetchSessions();
+  // Resolve client and session — retry until the PTY client registers.
+  //
+  // The session list is retried too, and it has to be. This is the *only* call
+  // that ever populates `currentSessions` during startup: the `%sessions-changed`
+  // and `%session-renamed` handlers both return early while `startupComplete` is
+  // false, so nothing refills it afterwards. One empty answer here and the
+  // sidebar has no sessions until the user creates, renames or kills one —
+  // silently, because an empty reply is not an error and nothing throws.
+  //
+  // Empty is definitionally wrong at this point: jmux attached with
+  // `new-session -A`, so the server has at least one non-internal session. The
+  // reply can still come back empty when the control client has not finished
+  // attaching — `TmuxControl` only accepts blocks with `flags=1`, and a command
+  // sent too early is answered by a block that doesn't carry it.
+  //
+  // Bounded, and waits on pty data between tries rather than a fixed delay —
+  // the same signal the client-name loop below uses, for the same reason: the
+  // bytes are the evidence that tmux is doing something. Giving up after the
+  // bound leaves exactly today's behaviour rather than blocking startup.
+  for (let i = 0; i < 10; i++) {
+    await fetchSessions();
+    if (currentSessions.length > 0) break;
+    // Whichever comes first: the next pty byte, or a short timer. Waiting on
+    // pty data *alone* would hang startup outright on a server that happens to
+    // be quiet — trading a sidebar with no sessions for a jmux that never
+    // draws, which is a far worse failure. The client-name loop below gets away
+    // with an unbounded wait because tmux is mid-draw when it runs.
+    await new Promise<void>((r) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        pty.offData(handler);
+        clearTimeout(timer);
+        r();
+      };
+      const handler = () => finish();
+      const timer = setTimeout(finish, 100);
+      pty.onData(handler);
+    });
+  }
+  if (currentSessions.length === 0) {
+    logError("jmux", "startup: session list still empty after retries");
+  }
 
   // Set per-session resource attributes for all existing sessions.
   // Note: set-environment only affects new panes/windows in these sessions —

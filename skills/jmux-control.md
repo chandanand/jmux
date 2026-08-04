@@ -46,8 +46,8 @@ If not set, you're outside jmux and most commands require explicit `--session` f
 | `jmux ctl issue start <issue-id> [--repo P] [--wait [sec]]` | Start (or resume) work for an issue. Returns immediately; worktree setup continues in a pane |
 | `jmux ctl issue get <issue-id>` | Fetch issue details from the tracker |
 | `jmux ctl issue move <issue-id> <status>` | Move an issue along the workflow |
-| `jmux ctl issue link <session> <issue-id>` | Link a session to an issue |
-| `jmux ctl issue unlink <session>` | Remove a session's issue link |
+| `jmux ctl issue link <session> <issue-id>` | Add an issue to a session (a session may carry several) |
+| `jmux ctl issue unlink <session> [issue-id]` | Remove one issue link, or all of them |
 | `jmux ctl workflow stages` | The workflow stages and their counts |
 | `jmux ctl workflow board [--stage ID]` | Every stage with its sessions and unstarted work |
 | `jmux ctl workflow next [--start]` | The next thing to pick up (`Ctrl-a u`) |
@@ -432,16 +432,27 @@ already carries the issue's link, **or** a live session already sits on the name
 this issue resolves to — which is what jmux itself creates. So `issue start` is
 safe to call blind: it starts, resumes, or hands back, and never duplicates.
 
-It refuses in one case: a session on that name is already linked to a *different*
-issue. That is a real collision, and detaching somebody's work from its issue to
-resolve it is not a call the CLI makes — `issue unlink` it first if you're sure.
+A session on that name already carrying *other* issues is not a collision: the
+issue is appended and the session is returned. One session can carry several
+issues, which is how a feature filed as several tickets gets one branch and one
+merge request.
 
 It does **not** switch the human's view to the new session. Starting work in the
 background must not move somebody's cursor.
 
 ### issue link / unlink
+An issue belongs to at most one session, but a session can carry any number.
+`link` therefore *appends* — it errors only when the issue is already linked
+somewhere else, and is a no-op when the pair already exists. `issues` is the
+session's full list after the write.
 ```json
-{"session": "TRA-123", "issue": "TRA-456", "repo": "/repo", "linked": true}
+{"session": "feat-bulk-import", "issue": "TRA-456", "issues": ["TRA-123", "TRA-456"], "repo": "/repo", "linked": true}
+```
+
+`unlink` takes an optional issue id: with one, only that link goes; without one,
+every link on the session does.
+```json
+{"session": "feat-bulk-import", "unlinked": ["TRA-456"], "issues": ["TRA-123"]}
 ```
 
 ### issue move

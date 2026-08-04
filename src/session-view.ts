@@ -1,5 +1,6 @@
 import type { SessionInfo, SessionOtelState, AgentState, AgentStateRecord } from "./types";
-import type { SessionContext, MergeRequest } from "./adapters/types";
+import type { SessionContext, MergeRequest, Issue } from "./adapters/types";
+import { drivingIssue } from "./issue-session";
 
 const CACHE_TIMER_TTL = 300; // seconds
 const COMPACTION_FLASH_MS = 30_000;
@@ -25,7 +26,11 @@ export interface SessionView {
   // Row 1, between name and Linear ID
   modeBadge: ModeBadge;
 
-  // Row 1, right-aligned
+  /**
+   * Row 1, right-aligned: the driving issue, suffixed with `+N` when the
+   * session carries more. One preformatted string rather than a pair of
+   * fields, so the sidebar's right-alignment math stays a single measurement.
+   */
   linearId: string | null;
 
   // Row 2, left-aligned
@@ -72,6 +77,22 @@ function formatMrId(mr: MergeRequest): string {
   return colonIdx >= 0 ? `!${mr.id.slice(colonIdx + 1)}` : `!${mr.id}`;
 }
 
+/**
+ * The row-1 issue badge: the driving issue, plus a count of the others.
+ *
+ * The count is of *other* issues rather than the total, so a one-issue session
+ * reads exactly as it always has — the suffix appears only when there is
+ * something it could otherwise be hiding.
+ */
+export function formatIssueBadge(
+  issues: readonly Pick<Issue, "identifier" | "stateType">[],
+): string | null {
+  const driving = drivingIssue(issues);
+  if (!driving) return null;
+  const others = issues.length - 1;
+  return others > 0 ? `${driving.identifier} +${others}` : driving.identifier;
+}
+
 export function buildSessionView(
   session: SessionInfo,
   ctx: SessionContext | undefined,
@@ -79,8 +100,7 @@ export function buildSessionView(
   activitySet: Set<string>,
   agentStateRecord?: AgentStateRecord | null,
 ): SessionView {
-  // Linear ID: first issue identifier
-  const linearId = ctx?.issues[0]?.identifier ?? null;
+  const linearId = formatIssueBadge(ctx?.issues ?? []);
 
   // MR: pick latest by createdAt, fall back to last in array
   let selectedMr = null;

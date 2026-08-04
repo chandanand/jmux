@@ -14,7 +14,15 @@ import {
   resolveForRepo,
   type ResolvedRepoSettings,
 } from "../repo-settings";
-import { resolveIssueSessionName, issueWorktreePath } from "../issue-session";
+import {
+  resolveIssueSessionName,
+  issueWorktreePath,
+  linkKey,
+  isWritableLinkId,
+  parseIssueLinkOption,
+  formatIssueLinkOption,
+  ISSUE_LINK_OPTION,
+} from "../issue-session";
 import {
   buildProvisionPlan,
   SETUP_PANE_SIZE,
@@ -34,57 +42,78 @@ import type { ParsedCtlArgs } from "../cli";
 // against the running TUI's in-memory SessionState, and discoverable via
 // `tmux show-options -t <session> | grep @jmux-`.
 //
-//   @jmux-linear-issue   the linked issue identifier (e.g. TRA-123)
+//   @jmux-linear-issue   the linked issue identifiers, space-separated
 //   @jmux-repo-path      the repo the session's worktree belongs to
+//
+// The link is many-to-one: an issue belongs to at most one session, but a
+// session can carry several. A feature that arrives as five tickets is one
+// branch, one worktree and one MR, so forcing five sessions would fragment work
+// the tracker had already grouped. The half that remains 1:1 is the half
+// `resolveIssueSession` depends on — see issue-session.ts.
 
 export interface IssueLinkRow {
   id: string;
   name: string;
-  issue: string;
+  issues: string[];
   path: string;
 }
 
 const ISSUE_LINK_FORMAT = [
   "#{session_id}",
   "#{session_name}",
-  "#{@jmux-linear-issue}",
+  `#{${ISSUE_LINK_OPTION}}`,
   "#{pane_current_path}",
 ].join(US);
 
 export function parseIssueLinkRow(line: string): IssueLinkRow | null {
   const p = splitFields(line);
   if (p.length < 4) return null;
-  return { id: p[0], name: p[1], issue: p[2], path: p[3] };
+  return { id: p[0], name: p[1], issues: parseIssueLinkOption(p[2]), path: p[3] };
 }
 
 /**
  * Issue ids are compared case-insensitively throughout: the option stores
  * whatever a human or an agent typed, so `tra-123` and `TRA-123` have to be one
- * issue or the 1:1 invariant below is trivially defeated by a shift key.
+ * issue or the one-session-per-issue invariant below is trivially defeated by a
+ * shift key.
  */
 function sameIssue(a: string, b: string): boolean {
-  return a.trim().toLowerCase() === b.trim().toLowerCase();
+  return linkKey(a) === linkKey(b);
+}
+
+function carriesIssue(row: IssueLinkRow, issueId: string): boolean {
+  return row.issues.some((i) => sameIssue(i, issueId));
 }
 
 export function findSessionForIssue(
   rows: IssueLinkRow[],
   issueId: string,
 ): IssueLinkRow | null {
-  return rows.find((r) => r.issue && sameIssue(r.issue, issueId)) ?? null;
+  return rows.find((r) => carriesIssue(r, issueId)) ?? null;
 }
 
 export type LinkDecision =
-  | { kind: "ok" }
+  /** Write `issues` back to the option — the session's links with this one added. */
+  | { kind: "ok"; issues: string[] }
   | { kind: "noop" }
   | { kind: "error"; message: string };
 
 /**
- * Pure decision for `issue link`, enforcing the strict 1:1 invariant
- * (spec §2.2 / §8.2):
- * - target session must exist;
- * - the issue must not already be linked to a *different* session;
- * - the session must not already be linked to a *different* issue;
- * - re-linking the same pair is a no-op (idempotent).
+ * Pure decision for `issue link`.
+ *
+ * One invariant survives from when this was strictly 1:1, and it is the one
+ * that matters: **an issue belongs to at most one session**. `resolveIssueSession`
+ * answers "where does this issue live" with a single session, so a second
+ * claimant would make the sidebar, `ctl status` and `workflow board` disagree
+ * depending on which they happened to read first.
+ *
+ * The other half — a session carrying at most one issue — is gone. It was never
+ * load-bearing (the TUI's own `state.json` store has always held a list, so the
+ * CLI was rejecting a state the human could already create with the link key),
+ * and it made the common case of one feature filed as several tickets
+ * unrepresentable.
+ *
+ * Linking is therefore an *append*, and re-linking the same pair stays a no-op.
  */
 export function decideIssueLink(
   rows: IssueLinkRow[],
@@ -94,9 +123,14 @@ export function decideIssueLink(
   const target = rows.find((r) => r.name === session);
   if (!target) return { kind: "error", message: `session "${session}" not found` };
 
-  const other = rows.find(
-    (r) => r.issue && sameIssue(r.issue, issueId) && r.name !== session,
-  );
+  if (!isWritableLinkId(issueId)) {
+    return {
+      kind: "error",
+      message: `issue id "${issueId}" contains whitespace, which the link option cannot store`,
+    };
+  }
+
+  const other = rows.find((r) => r.name !== session && carriesIssue(r, issueId));
   if (other) {
     return {
       kind: "error",
@@ -104,15 +138,8 @@ export function decideIssueLink(
     };
   }
 
-  if (target.issue && !sameIssue(target.issue, issueId)) {
-    return {
-      kind: "error",
-      message: `session "${session}" already linked to issue "${target.issue}"; unlink first`,
-    };
-  }
-
-  if (target.issue && sameIssue(target.issue, issueId)) return { kind: "noop" };
-  return { kind: "ok" };
+  if (carriesIssue(target, issueId)) return { kind: "noop" };
+  return { kind: "ok", issues: [...target.issues, issueId] };
 }
 
 export type StartReuse =
@@ -120,9 +147,8 @@ export type StartReuse =
   | { kind: "none" }
   /** A session already carries this issue's link. */
   | { kind: "linked"; row: IssueLinkRow }
-  /** A live session sits on the name, unlinked — take it and record the link. */
-  | { kind: "adopt"; row: IssueLinkRow }
-  | { kind: "conflict"; message: string };
+  /** A live session sits on the name — take it and record the link alongside any others. */
+  | { kind: "adopt"; row: IssueLinkRow; issues: string[] };
 
 /**
  * Whether `issue start` should provision, or hand back something that exists.
@@ -138,11 +164,12 @@ export type StartReuse =
  * CLI wrote there — so the CLI cannot see that link and would otherwise fall
  * through to `new-session` and fail on a duplicate name.
  *
- * Adopting is deliberately limited to an *unlinked* session. Reaching this
- * point means no row carries this issue, so a row that carries a different one
- * is a genuine collision, and overwriting its link would silently detach
- * somebody's work from its issue — the same 1:1 invariant `decideIssueLink`
- * exists to protect.
+ * Adopting used to refuse a session that already carried a *different* issue,
+ * on the grounds that overwriting its link would detach somebody's work. That
+ * reasoning was about the overwrite, not the sharing: the link is now a list,
+ * so adopting appends and detaches nothing. Two issues deriving one session
+ * name means the name says they belong together, and the session is the thing
+ * the name identifies.
  */
 export function decideStartReuse(
   rows: IssueLinkRow[],
@@ -155,13 +182,7 @@ export function decideStartReuse(
 
   const byName = rows.find((r) => r.name === sessionName);
   if (!byName) return { kind: "none" };
-  if (byName.issue) {
-    return {
-      kind: "conflict",
-      message: `session "${sessionName}" is where "${issueId}" would go, but it is already linked to issue "${byName.issue}"; unlink it first`,
-    };
-  }
-  return { kind: "adopt", row: byName };
+  return { kind: "adopt", row: byName, issues: [...byName.issues, issueId] };
 }
 
 // --- Pure helpers for `issue start` ------------------------------------------
@@ -431,18 +452,23 @@ function issueLink(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
   const decision = decideIssueLink(rows, session, issueId);
   if (decision.kind === "error") throw new CliError(decision.message);
 
-  // ok and noop both (re)assert the option — set-option is idempotent.
-  tmuxOrThrow(
-    runTmuxDirect(
-      ["set-option", "-t", session, "@jmux-linear-issue", issueId],
-      ctx.socket,
-    ),
-  );
+  // A noop must not rewrite the option: the id it would write is whatever the
+  // caller typed, and re-asserting it would let `tra-1` overwrite the tracker's
+  // own `TRA-1` spelling for no gain.
+  const target = rows.find((r) => r.name === session)!;
+  const issues = decision.kind === "ok" ? decision.issues : target.issues;
+  if (decision.kind === "ok") {
+    tmuxOrThrow(
+      runTmuxDirect(
+        ["set-option", "-t", session, ISSUE_LINK_OPTION, formatIssueLinkOption(issues)],
+        ctx.socket,
+      ),
+    );
+  }
 
   // Best-effort repo discovery from the session's working directory.
   let repoPath: string | null = null;
-  const target = rows.find((r) => r.name === session);
-  const gitRoot = target ? findGitRoot(target.path) : null;
+  const gitRoot = findGitRoot(target.path);
   if (gitRoot) {
     repoPath = gitRoot;
     runTmuxDirect(
@@ -451,22 +477,54 @@ function issueLink(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
     );
   }
 
-  return { session, issue: issueId, repo: repoPath, linked: true };
+  return { session, issue: issueId, issues, repo: repoPath, linked: true };
 }
 
+/**
+ * `issue unlink <session> [issue-id]`.
+ *
+ * With an id, exactly that link goes; without one, every link on the session
+ * does. Deleting by id matters now that a session can carry several: dropping
+ * one ticket from a five-ticket session must not detach the other four, and a
+ * caller who means "all of them" still has the bare form to say so.
+ *
+ * `@jmux-repo-path` is only unset when the last issue leaves, since it
+ * describes the session rather than any one link.
+ */
 function issueUnlink(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
   const session = parsed.positional[0];
-  if (!session) throw new CliError("issue unlink requires <session>");
+  const issueId = parsed.positional[1];
+  if (!session) throw new CliError("issue unlink requires <session> [issue-id]");
 
   const rows = listIssueLinkRows(ctx);
   const target = rows.find((r) => r.name === session);
   if (!target) throw new CliError(`session "${session}" not found`);
 
-  // Idempotent: -u on an unset option is a no-op.
-  runTmuxDirect(["set-option", "-t", session, "-u", "@jmux-linear-issue"], ctx.socket);
-  runTmuxDirect(["set-option", "-t", session, "-u", "@jmux-repo-path"], ctx.socket);
+  const remaining = issueId
+    ? target.issues.filter((i) => !sameIssue(i, issueId))
+    : [];
+  if (issueId && remaining.length === target.issues.length) {
+    throw new CliError(`session "${session}" is not linked to issue "${issueId}"`);
+  }
 
-  return { session, unlinked: true };
+  if (remaining.length > 0) {
+    tmuxOrThrow(
+      runTmuxDirect(
+        ["set-option", "-t", session, ISSUE_LINK_OPTION, formatIssueLinkOption(remaining)],
+        ctx.socket,
+      ),
+    );
+  } else {
+    // Idempotent: -u on an unset option is a no-op.
+    runTmuxDirect(["set-option", "-t", session, "-u", ISSUE_LINK_OPTION], ctx.socket);
+    runTmuxDirect(["set-option", "-t", session, "-u", "@jmux-repo-path"], ctx.socket);
+  }
+
+  // Always a list, even for the one-id form: a field whose type depends on
+  // which arguments were passed makes every consumer branch before it can read
+  // it.
+  const unlinked = issueId ? target.issues.filter((i) => sameIssue(i, issueId)) : target.issues;
+  return { session, unlinked, issues: remaining };
 }
 
 function activePane(ctx: CliContext, session: string): string | null {
@@ -602,6 +660,16 @@ async function issueStart(
 ): Promise<IssueStartResult> {
   const issueId = parsed.positional[0];
   if (!issueId) throw new CliError("issue start requires an <issue-id>");
+  // Validated here, not only in `decideIssueLink`: this command writes the link
+  // option itself. With a tracker configured a malformed id would be rejected
+  // by the lookup below, but offline mode (`--repo`, no tracker) passes argv
+  // straight through — and an id containing a space becomes two links on the
+  // next read.
+  if (!isWritableLinkId(issueId)) {
+    throw new CliError(
+      `issue id "${issueId}" contains whitespace, which the link option cannot store`,
+    );
+  }
   const { flags } = parsed;
   // Validated before any lookup or side effect. Deferring it meant a typo cost
   // a tracker round-trip first, and was skipped entirely on the reuse paths —
@@ -657,13 +725,17 @@ async function issueStart(
   const sessionName = startSessionName(issueId, issue, repoSettings.sessionNameTemplate);
 
   const reused = decideStartReuse(rows, issueId, sessionName);
-  if (reused.kind === "conflict") throw new CliError(reused.message);
   if (reused.kind === "adopt") {
     // Record the link the TUI never wrote, so the *next* lookup — here and in
-    // `workflow board` — resolves without depending on the name.
+    // `workflow board` — resolves without depending on the name. Appended to
+    // whatever the session already carries: adopting must not detach the
+    // issues that got there first.
     const linkId = issue?.identifier ?? issueId;
     runTmuxDirect(
-      ["set-option", "-t", sessionName, "@jmux-linear-issue", linkId],
+      [
+        "set-option", "-t", sessionName, ISSUE_LINK_OPTION,
+        formatIssueLinkOption([...reused.row.issues, linkId]),
+      ],
       ctx.socket,
     );
     return reuse(reused.row, linkId);
@@ -730,7 +802,7 @@ async function issueStart(
   // beats whatever casing the caller happened to type.
   const linkId = issue?.identifier ?? issueId;
   runTmuxDirect(
-    ["set-option", "-t", sessionName, "@jmux-linear-issue", linkId],
+    ["set-option", "-t", sessionName, ISSUE_LINK_OPTION, linkId],
     ctx.socket,
   );
   runTmuxDirect(

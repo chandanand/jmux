@@ -152,6 +152,10 @@ export interface InputRouterOptions {
   onPanelToggleCollapse?: () => void;
   onPanelCreateSession?: () => void;  // 'n' key
   onPanelLinkToSession?: () => void;  // 'l' key
+  onPanelToggleCheck?: () => void;    // space — tick the highlighted item
+  /** True when the active view has ticked items, so Escape clears them first. */
+  panelHasChecks?: () => boolean;
+  onPanelClearChecks?: () => void;
   onPanelFilterStart?: () => void;
   onPanelFilterInput?: (char: string) => void;
   onPanelFilterBackspace?: () => void;
@@ -832,8 +836,15 @@ export class InputRouter {
         }
       }
       if (this.panelTabsActive) {
-        // Esc clears a persisted filter (when not in filter input mode)
+        // Esc clears the most recent transient state first: ticks, then the
+        // persisted filter. Clearing the filter out from under a half-made
+        // selection would throw away the more expensive of the two.
+        if (data === "\x1b" && this.opts.panelHasChecks?.() && this.opts.onPanelClearChecks) {
+          this.opts.onPanelClearChecks();
+          return;
+        }
         if (data === "\x1b" && this.opts.onPanelFilterClear) { this.opts.onPanelFilterClear(); return; }
+        if (data === " " && this.opts.onPanelToggleCheck) { this.opts.onPanelToggleCheck(); return; }
         if (data === "g" && this.opts.onPanelCycleGroupBy) { this.opts.onPanelCycleGroupBy(); return; }
         if (data === "G" && this.opts.onPanelCycleSubGroupBy) { this.opts.onPanelCycleSubGroupBy(); return; }
         if (data === "/" && this.opts.onPanelFilterStart) { this.panelFilterActive = true; this.opts.onPanelFilterStart(); return; }

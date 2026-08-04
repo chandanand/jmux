@@ -24,7 +24,21 @@ export interface ListModalConfig {
   subheader?: string;
   items: ListItem[];
   defaultQuery?: string;
+  /**
+   * Turn the list into a checklist: space toggles, Enter returns every checked
+   * item as a `ListItem[]` instead of the single focused `ListItem`.
+   *
+   * Exists because some confirmations are per-row rather than yes/no — one
+   * merge request can close four tickets and cover only three of them, so the
+   * question is *which*, and a modal that can only answer all-or-nothing forces
+   * the wrong answer.
+   */
+  multiSelect?: boolean;
+  /** Ids checked when the modal opens. Ignored unless `multiSelect`. */
+  selectedIds?: string[];
 }
+
+const MULTI_HINT = "space toggles";
 
 interface FilteredItem {
   item: ListItem;
@@ -38,6 +52,8 @@ export class ListModal {
   private scrollOffset = 0;
   private config: ListModalConfig;
   private filtered: FilteredItem[] = [];
+  /** Checked ids. Only meaningful when `config.multiSelect`. */
+  private checked = new Set<string>();
 
   constructor(config: ListModalConfig) {
     this.config = config;
@@ -48,6 +64,7 @@ export class ListModal {
     this.query = this.config.defaultQuery ?? "";
     this.selectedIndex = 0;
     this.scrollOffset = 0;
+    this.checked = new Set(this.config.multiSelect ? this.config.selectedIds ?? [] : []);
     this.refilter();
   }
 
@@ -57,6 +74,7 @@ export class ListModal {
     this.selectedIndex = 0;
     this.scrollOffset = 0;
     this.filtered = [];
+    this.checked.clear();
   }
 
   isOpen(): boolean {
@@ -92,9 +110,30 @@ export class ListModal {
 
     // Enter
     if (data === "\r") {
+      if (this.config.multiSelect) {
+        // Returns the checked items in the *config's* order, not the order they
+        // were ticked in: the caller gave a list with a meaning to its order,
+        // and a click sequence is not new information about it.
+        return {
+          type: "result",
+          value: this.config.items.filter((i) => this.checked.has(i.id)),
+        };
+      }
       if (this.filtered.length === 0) return { type: "consumed" };
       const selected = this.filtered[this.selectedIndex];
       return { type: "result", value: selected.item };
+    }
+
+    // Space toggles the focused row when checkboxes are on. Falls through to
+    // the printable-character branch otherwise, so a single-select list keeps
+    // treating space as part of the fuzzy query.
+    if (data === " " && this.config.multiSelect) {
+      const entry = this.filtered[this.selectedIndex];
+      if (entry) {
+        if (this.checked.has(entry.item.id)) this.checked.delete(entry.item.id);
+        else this.checked.add(entry.item.id);
+      }
+      return { type: "consumed" };
     }
 
     // Arrow down
@@ -164,8 +203,16 @@ export class ListModal {
       writeString(grid, r, 0, " ".repeat(width), BG_ATTRS);
     }
 
-    // Row 0: header
+    // Row 0: header, with the checklist's own instructions right-aligned. The
+    // checkbox shows that rows *can* be toggled but not with what, and putting
+    // it here means no caller has to remember to say so in its subheader.
     writeString(grid, 0, 2, this.config.header, HEADER_ATTRS);
+    if (this.config.multiSelect) {
+      const hintCol = width - textCols(MULTI_HINT) - 2;
+      if (hintCol > textCols(this.config.header) + 4) {
+        writeString(grid, 0, hintCol, MULTI_HINT, SUBHEADER_ATTRS);
+      }
+    }
 
     // Row 1 (optional): subheader
     if (hasSubheader) {
@@ -210,8 +257,15 @@ export class ListModal {
             isSelected ? SELECTED_CATEGORY_ATTRS : CATEGORY_ATTRS);
         }
 
+        // Checkbox, before the label so every row's text starts at one column.
+        let labelStart = 3;
+        if (this.config.multiSelect) {
+          const box = this.checked.has(entry.item.id) ? "[x]" : "[ ]";
+          writeString(grid, row, labelStart, box, baseAttrs);
+          labelStart += textCols(box) + 1;
+        }
+
         // Label with match highlighting
-        const labelStart = 3;
         const maxLabelLen = Math.max(1, width - labelStart - annCols);
         const label = truncateLabel(entry.item.label, maxLabelLen);
         const matchIndices = new Set(entry.match.indices);

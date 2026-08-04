@@ -1861,3 +1861,52 @@ describe("work-pipeline prefix chords", () => {
     expect(chord("I").calls).toEqual(["settings"]);
   });
 });
+
+describe("panel multi-select keys", () => {
+  function panelRouter(over: Record<string, unknown> = {}) {
+    const calls = { toggle: 0, clearChecks: 0, clearFilter: 0 };
+    const router = new InputRouter(
+      {
+        onPtyData: () => {},
+        onSidebarClick: () => {},
+        onPanelToggleCheck: () => { calls.toggle++; },
+        onPanelClearChecks: () => { calls.clearChecks++; },
+        onPanelFilterClear: () => { calls.clearFilter++; },
+        ...over,
+      } as any,
+      baseLayout(24, "split"),
+    );
+    // The panel key block is gated on keyboard focus *and* real panel geometry.
+    router.setPanelFocused(true);
+    router.setPanelTabsActive(true);
+    return { router, calls };
+  }
+
+  test("space toggles the highlighted item", () => {
+    const { router, calls } = panelRouter();
+    router.handleInput(" ");
+    expect(calls.toggle).toBe(1);
+  });
+
+  // Escape has two jobs here; the more expensive state goes first.
+  test("Escape clears ticks before the filter when ticks exist", () => {
+    const { router, calls } = panelRouter({ panelHasChecks: () => true });
+    router.handleInput("\x1b");
+    expect(calls.clearChecks).toBe(1);
+    expect(calls.clearFilter).toBe(0);
+  });
+
+  test("Escape clears the filter when nothing is ticked", () => {
+    const { router, calls } = panelRouter({ panelHasChecks: () => false });
+    router.handleInput("\x1b");
+    expect(calls.clearChecks).toBe(0);
+    expect(calls.clearFilter).toBe(1);
+  });
+
+  test("space does nothing when the panel is not focused", () => {
+    const { router, calls } = panelRouter();
+    router.setPanelTabsActive(false);
+    router.handleInput(" ");
+    expect(calls.toggle).toBe(0);
+  });
+});

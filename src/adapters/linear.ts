@@ -1,6 +1,6 @@
 // src/adapters/linear.ts
 import { HttpError, type IssueTrackerAdapter, type AdapterAuthState, type Issue, type IssueStateType, type WorkflowState } from "./types";
-import { buildLinearPrompt } from "./linear-prompt";
+import { buildLinearPrompt, buildLinearGroupPrompt } from "./linear-prompt";
 import { logError } from "../log";
 import { openUrl } from "../platform";
 
@@ -181,6 +181,10 @@ export class LinearAdapter implements IssueTrackerAdapter {
 
   buildPrompt(issue: Issue): string {
     return buildLinearPrompt(issue);
+  }
+
+  buildGroupPrompt(issues: Issue[], label: string): string {
+    return buildLinearGroupPrompt(issues, label);
   }
 
   private mapIssue(raw: any): Issue {

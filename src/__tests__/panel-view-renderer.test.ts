@@ -3,6 +3,8 @@ import {
   transformIssues,
   transformMrs,
   buildViewNodes,
+  itemsInGroup,
+  checkedItems,
   renderView,
   createViewState,
   pickSessionIndicator,
@@ -471,5 +473,99 @@ describe("buildViewNodes for a stage with no statuses", () => {
     const { states, ...plain } = view;
     const nodes = buildViewNodes([item("a", "Anything")], plain, new Set());
     expect(nodes.filter((n) => n.kind === "item")).toHaveLength(1);
+  });
+});
+
+describe("itemsInGroup", () => {
+  const items = () => transformIssues([ISSUE, ISSUE2, ISSUE3], new Set());
+
+  test("collects a group's items through its sub-groups", () => {
+    // VIEW groups by team and sub-groups by status, so Platform's two issues
+    // sit under two different sub-headers.
+    const found = itemsInGroup(items(), VIEW, "Platform");
+    expect(found.map((i) => i.id).sort()).toEqual(["i1", "i2"]);
+  });
+
+  test("stops at the next group", () => {
+    expect(itemsInGroup(items(), VIEW, "Frontend").map((i) => i.id)).toEqual(["i3"]);
+  });
+
+  test("an unknown key selects nothing", () => {
+    expect(itemsInGroup(items(), VIEW, "Nope")).toEqual([]);
+  });
+
+  // The group a user acts on is the one they can see, which may be collapsed.
+  test("a collapsed group still yields its members", () => {
+    const collapsed = buildViewNodes(items(), VIEW, new Set(["Platform"]));
+    expect(collapsed.some((n) => n.kind === "item" && n.item.id === "i1")).toBe(false);
+    expect(itemsInGroup(items(), VIEW, "Platform").map((i) => i.id).sort()).toEqual(["i1", "i2"]);
+  });
+
+  test("works on a sub-group header too", () => {
+    const found = itemsInGroup(items(), VIEW, "Platform:In Progress");
+    expect(found.map((i) => i.id)).toEqual(["i1"]);
+  });
+
+  test("finds members of a status-sectioned view", () => {
+    const sectioned: PanelView = { ...VIEW, states: ["In Progress", "Todo"] };
+    expect(itemsInGroup(items(), sectioned, "Todo").map((i) => i.id)).toEqual(["i2"]);
+  });
+});
+
+describe("checkedItems", () => {
+  const items = () => transformIssues([ISSUE, ISSUE2, ISSUE3], new Set());
+  const nodes = () => buildViewNodes(items(), VIEW, new Set());
+
+  test("nothing ticked is an empty set, not the whole list", () => {
+    expect(checkedItems(nodes(), createViewState())).toEqual([]);
+  });
+
+  // Node order carries meaning (priority, or a stage's own status order); the
+  // order rows were ticked in does not.
+  test("returns node order, not tick order", () => {
+    const st = createViewState();
+    st.checkedIds = new Set(["i3", "i1"]);
+    const order = nodes().filter((n) => n.kind === "item").map((n: any) => n.item.id);
+    const got = checkedItems(nodes(), st).map((i) => i.id);
+    expect(got).toEqual(order.filter((id: string) => id === "i1" || id === "i3"));
+  });
+
+  // An issue can be ticked and then filtered away by a poll or a search.
+  test("ids with no visible row are dropped, not carried", () => {
+    const st = createViewState();
+    st.checkedIds = new Set(["i1", "does-not-exist"]);
+    expect(checkedItems(nodes(), st).map((i) => i.id)).toEqual(["i1"]);
+  });
+
+  // The case the whole feature exists for: a stage tab ignores groupBy, so the
+  // set has to be expressible without any group header.
+  test("works on a sectioned view, which has no groupBy headers at all", () => {
+    const sectioned: PanelView = { ...VIEW, states: ["In Progress"] };
+    const st = createViewState();
+    st.checkedIds = new Set(["i1", "i3"]);
+    const n = buildViewNodes(items(), sectioned, new Set());
+    expect(n.some((x) => x.kind === "group")).toBe(false);
+    expect(checkedItems(n, st).map((i) => i.id).sort()).toEqual(["i1", "i3"]);
+  });
+});
+
+describe("renderView checkbox column", () => {
+  const items = () => transformIssues([ISSUE, ISSUE2, ISSUE3], new Set());
+
+  // Reserving the column permanently would cost four columns of title on a
+  // narrow panel for a mode most users are never in.
+  test("no checkbox column until something is ticked", () => {
+    const st = createViewState();
+    const text = extractText(renderView(buildViewNodes(items(), VIEW, new Set()), 60, 30, st) as any);
+    expect(text).not.toContain("[ ]");
+    expect(text).not.toContain("[x]");
+  });
+
+  test("one tick reveals the column for every row", () => {
+    const st = createViewState();
+    st.checkedIds = new Set(["i1"]);
+    const text = extractText(renderView(buildViewNodes(items(), VIEW, new Set()), 60, 30, st) as any);
+    expect(text).toContain("[x]");
+    expect(text).toContain("[ ]");
   });
 });

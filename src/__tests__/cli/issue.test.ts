@@ -33,19 +33,28 @@ const issue = (o: Partial<Issue>): Issue => ({
 const linkRow = (o: Partial<IssueLinkRow>): IssueLinkRow => ({
   id: "$1",
   name: "TRA-123",
-  issue: "",
+  issues: [],
   path: "/repo/wt",
   ...o,
 });
 
 describe("parseIssueLinkRow", () => {
-  test("parses session id, name, issue and path", () => {
+  test("parses session id, name, issues and path", () => {
     expect(parseIssueLinkRow(["$1", "TRA-1", "TRA-1", "/p"].join(US))).toEqual({
       id: "$1",
       name: "TRA-1",
-      issue: "TRA-1",
+      issues: ["TRA-1"],
       path: "/p",
     });
+  });
+
+  test("parses several issues out of one option", () => {
+    expect(parseIssueLinkRow(["$1", "feat", "TRA-1 TRA-2 TRA-3", "/p"].join(US))?.issues)
+      .toEqual(["TRA-1", "TRA-2", "TRA-3"]);
+  });
+
+  test("an unset option is no issues, not one empty one", () => {
+    expect(parseIssueLinkRow(["$1", "feat", "", "/p"].join(US))?.issues).toEqual([]);
   });
 
   test("returns null on a short line", () => {
@@ -56,7 +65,7 @@ describe("parseIssueLinkRow", () => {
     expect(parseIssueLinkRow(["$1", "TRA-1", "TRA-1", "/p"].join("\\037"))).toEqual({
       id: "$1",
       name: "TRA-1",
-      issue: "TRA-1",
+      issues: ["TRA-1"],
       path: "/p",
     });
   });
@@ -64,66 +73,80 @@ describe("parseIssueLinkRow", () => {
 
 describe("findSessionForIssue", () => {
   test("finds the session linked to an issue", () => {
-    const rows = [linkRow({ name: "a", issue: "" }), linkRow({ name: "b", issue: "TRA-9" })];
+    const rows = [linkRow({ name: "a" }), linkRow({ name: "b", issues: ["TRA-9"] })];
+    expect(findSessionForIssue(rows, "TRA-9")?.name).toBe("b");
+  });
+
+  test("finds it among several the session carries", () => {
+    const rows = [linkRow({ name: "b", issues: ["TRA-1", "TRA-9", "TRA-4"] })];
     expect(findSessionForIssue(rows, "TRA-9")?.name).toBe("b");
   });
 
   test("returns null when no session is linked", () => {
-    expect(findSessionForIssue([linkRow({ issue: "" })], "TRA-9")).toBeNull();
+    expect(findSessionForIssue([linkRow({})], "TRA-9")).toBeNull();
   });
 
   test("matches regardless of case — the option holds whatever was typed", () => {
-    const rows = [linkRow({ name: "b", issue: "TRA-9" })];
+    const rows = [linkRow({ name: "b", issues: ["TRA-9"] })];
     expect(findSessionForIssue(rows, "tra-9")?.name).toBe("b");
   });
 });
 
-describe("decideIssueLink (strict 1:1 invariant)", () => {
+describe("decideIssueLink (one session per issue; many issues per session)", () => {
   test("errors when the session does not exist", () => {
     const d = decideIssueLink([], "ghost", "TRA-1");
     expect(d).toEqual({ kind: "error", message: 'session "ghost" not found' });
   });
 
   test("errors when the issue is already linked to another session", () => {
-    const rows = [linkRow({ name: "a", issue: "" }), linkRow({ name: "b", issue: "TRA-1" })];
+    const rows = [linkRow({ name: "a" }), linkRow({ name: "b", issues: ["TRA-1"] })];
     const d = decideIssueLink(rows, "a", "TRA-1");
     expect(d.kind).toBe("error");
   });
 
-  test("errors when the session is already linked to a different issue", () => {
-    const rows = [linkRow({ name: "a", issue: "TRA-2" })];
-    const d = decideIssueLink(rows, "a", "TRA-1");
-    expect(d.kind).toBe("error");
+  // The invariant that went away. A session already carrying work is exactly
+  // the case this feature exists for.
+  test("appends to a session that already carries other issues", () => {
+    const rows = [linkRow({ name: "a", issues: ["TRA-2"] })];
+    expect(decideIssueLink(rows, "a", "TRA-1"))
+      .toEqual({ kind: "ok", issues: ["TRA-2", "TRA-1"] });
   });
 
   test("is a no-op when re-linking the same pair (idempotent)", () => {
-    const rows = [linkRow({ name: "a", issue: "TRA-1" })];
+    const rows = [linkRow({ name: "a", issues: ["TRA-1"] })];
     expect(decideIssueLink(rows, "a", "TRA-1")).toEqual({ kind: "noop" });
   });
 
   test("is ok for an unlinked session and a free issue", () => {
-    const rows = [linkRow({ name: "a", issue: "" })];
-    expect(decideIssueLink(rows, "a", "TRA-1")).toEqual({ kind: "ok" });
+    const rows = [linkRow({ name: "a" })];
+    expect(decideIssueLink(rows, "a", "TRA-1")).toEqual({ kind: "ok", issues: ["TRA-1"] });
+  });
+
+  // Space is the separator, so an id containing one would silently become two
+  // links on the next read.
+  test("refuses an id it could not store unambiguously", () => {
+    const rows = [linkRow({ name: "a" })];
+    expect(decideIssueLink(rows, "a", "TRA-1 TRA-2").kind).toBe("error");
   });
 
   test("a case difference is the same issue, not a second one", () => {
-    // Otherwise the 1:1 invariant is defeated by a shift key: `tra-1` would
+    // Otherwise one-session-per-issue is defeated by a shift key: `tra-1` would
     // link happily to a second session while `TRA-1` already owned one.
-    expect(decideIssueLink([linkRow({ name: "a", issue: "TRA-1" })], "a", "tra-1"))
+    expect(decideIssueLink([linkRow({ name: "a", issues: ["TRA-1"] })], "a", "tra-1"))
       .toEqual({ kind: "noop" });
-    const twoSessions = [linkRow({ name: "a", issue: "" }), linkRow({ name: "b", issue: "TRA-1" })];
+    const twoSessions = [linkRow({ name: "a" }), linkRow({ name: "b", issues: ["TRA-1"] })];
     expect(decideIssueLink(twoSessions, "a", "tra-1").kind).toBe("error");
   });
 });
 
 describe("decideStartReuse", () => {
   test("a session carrying the link is reused, before the session name is known", () => {
-    const rows = [linkRow({ name: "whatever", issue: "TRA-1" })];
+    const rows = [linkRow({ name: "whatever", issues: ["TRA-1"] })];
     expect(decideStartReuse(rows, "TRA-1", null)).toEqual({ kind: "linked", row: rows[0]! });
   });
 
   test("nothing to reuse before the name is known means keep going", () => {
-    expect(decideStartReuse([linkRow({ name: "a", issue: "" })], "TRA-1", null))
+    expect(decideStartReuse([linkRow({ name: "a" })], "TRA-1", null))
       .toEqual({ kind: "none" });
   });
 
@@ -131,20 +154,19 @@ describe("decideStartReuse", () => {
     // The TUI records its link in state.json, which the CLI cannot read, so a
     // session jmux started looks unlinked here. Now that both derive the same
     // name, this is the path that stops `new-session` failing on a duplicate.
-    const rows = [linkRow({ name: "tra-1-fix", issue: "" })];
+    const rows = [linkRow({ name: "tra-1-fix" })];
     expect(decideStartReuse(rows, "TRA-1", "tra-1-fix"))
-      .toEqual({ kind: "adopt", row: rows[0]! });
+      .toEqual({ kind: "adopt", row: rows[0]!, issues: ["TRA-1"] });
   });
 
-  test("a session on the name linked to a different issue is a conflict, not a clobber", () => {
-    const rows = [linkRow({ name: "tra-1-fix", issue: "TRA-999" })];
-    const decision = decideStartReuse(rows, "TRA-1", "tra-1-fix");
-    expect(decision.kind).toBe("conflict");
-    expect((decision as { message: string }).message).toContain("TRA-999");
+  test("adopting a session that carries other issues appends rather than clobbers", () => {
+    const rows = [linkRow({ name: "tra-1-fix", issues: ["TRA-999"] })];
+    expect(decideStartReuse(rows, "TRA-1", "tra-1-fix"))
+      .toEqual({ kind: "adopt", row: rows[0]!, issues: ["TRA-999", "TRA-1"] });
   });
 
   test("no session on the name means provision", () => {
-    expect(decideStartReuse([linkRow({ name: "other", issue: "" })], "TRA-1", "tra-1-fix"))
+    expect(decideStartReuse([linkRow({ name: "other" })], "TRA-1", "tra-1-fix"))
       .toEqual({ kind: "none" });
   });
 });

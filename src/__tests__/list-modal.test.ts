@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { ListModal, type ListItem } from "../list-modal";
+import { ListModal, type ListItem, type ListModalConfig } from "../list-modal";
 
 const testItems: ListItem[] = [
   { id: "a", label: "Alpha" },
@@ -285,5 +285,87 @@ describe("ListModal annotations", () => {
     const text = grid([{ id: "a", label: long, annotation: "HERE" }]);
     expect(text).toContain("HERE");
     expect(text).not.toContain("x".repeat(60));
+  });
+});
+
+describe("ListModal multi-select", () => {
+  const multi = (over: Partial<ListModalConfig> = {}) => {
+    const m = new ListModal({
+      header: "Move issues?",
+      items: testItems,
+      multiSelect: true,
+      selectedIds: ["a", "b"],
+      ...over,
+    });
+    m.open();
+    return m;
+  };
+
+  const gridText = (m: ListModal, width = 50) =>
+    m.getGrid(width).cells.map((row) => row.map((c) => c.char).join("")).join("\n");
+
+  test("opens with selectedIds checked and the rest clear", () => {
+    const text = gridText(multi());
+    expect(text).toContain("[x] Alpha");
+    expect(text).toContain("[x] Beta");
+    expect(text).toContain("[ ] Charlie");
+  });
+
+  test("Enter returns every checked item", () => {
+    const result = multi().handleInput("\r");
+    expect(result.type).toBe("result");
+    expect((result as { value: ListItem[] }).value.map((i) => i.id)).toEqual(["a", "b"]);
+  });
+
+  test("space toggles the focused row", () => {
+    const m = multi();
+    expect(m.handleInput(" ").type).toBe("consumed"); // unticks "a"
+    m.handleInput("\x1b[B");
+    m.handleInput("\x1b[B");
+    m.handleInput(" ");                               // ticks "c"
+    const result = m.handleInput("\r");
+    expect((result as { value: ListItem[] }).value.map((i) => i.id)).toEqual(["b", "c"]);
+  });
+
+  // The caller's list order carries meaning; the order rows were ticked in
+  // does not.
+  test("results come back in config order, not tick order", () => {
+    const m = multi({ selectedIds: [] });
+    m.handleInput("\x1b[B");
+    m.handleInput("\x1b[B");
+    m.handleInput(" ");            // Charlie first
+    m.handleInput("\x1b[A");
+    m.handleInput("\x1b[A");
+    m.handleInput(" ");            // Alpha second
+    const result = m.handleInput("\r");
+    expect((result as { value: ListItem[] }).value.map((i) => i.id)).toEqual(["a", "c"]);
+  });
+
+  test("unticking everything returns an empty list rather than refusing", () => {
+    const m = multi();
+    m.handleInput(" ");
+    m.handleInput("\x1b[B");
+    m.handleInput(" ");
+    const result = m.handleInput("\r");
+    expect(result.type).toBe("result");
+    expect((result as { value: ListItem[] }).value).toEqual([]);
+  });
+
+  test("Escape closes without a result, so nothing is applied", () => {
+    expect(multi().handleInput("\x1b").type).toBe("closed");
+  });
+
+  // Space is a query character in a normal picker and must stay one.
+  test("space still types into a single-select list", () => {
+    const m = new ListModal({ header: "Pick", items: [{ id: "a", label: "al pha" }] });
+    m.open();
+    m.handleInput("a");
+    m.handleInput(" ");
+    expect(gridText(m)).toContain("a ");
+    expect((m.handleInput("\r") as { value: ListItem }).value.id).toBe("a");
+  });
+
+  test("the checklist says how to toggle", () => {
+    expect(gridText(multi())).toContain("space toggles");
   });
 });

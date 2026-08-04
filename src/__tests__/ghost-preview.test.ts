@@ -36,16 +36,18 @@ interface Calls {
   start: string[];
   open: string[];
   status: string[];
+  attach: string[];
 }
 
 function makePort(over: Partial<GhostPreviewPort> = {}): { port: GhostPreviewPort; calls: Calls } {
-  const calls: Calls = { start: [], open: [], status: [] };
+  const calls: Calls = { start: [], open: [], status: [], attach: [] };
   const port: GhostPreviewPort = {
     getIssue: () => ISSUE,
     getPreflight: () => PREFLIGHT,
     onStart: async (id) => { calls.start.push(id); return "created"; },
     onOpenInBrowser: (id) => { calls.open.push(id); },
     onChangeStatus: (id) => { calls.status.push(id); },
+    onAttachToSession: (id) => { calls.attach.push(id); },
     ...over,
   };
   return { port, calls };
@@ -115,6 +117,7 @@ describe("start reentrancy", () => {
         onStart: (id) => { started.push(id); return gate; },
         onOpenInBrowser: () => {},
         onChangeStatus: () => {},
+      onAttachToSession: () => {},
       },
       TARGET,
     );
@@ -141,6 +144,7 @@ describe("start reentrancy", () => {
         onStart: () => new Promise<StartOutcome>(() => {}),
         onOpenInBrowser: () => {},
         onChangeStatus: () => {},
+      onAttachToSession: () => {},
       },
       TARGET,
     );
@@ -170,6 +174,7 @@ describe("start outcomes", () => {
           onStart: async () => { queueMicrotask(settle); return outcome; },
           onOpenInBrowser: () => {},
           onChangeStatus: () => {},
+      onAttachToSession: () => {},
         },
         TARGET,
       );
@@ -189,6 +194,7 @@ describe("start outcomes", () => {
         onStart: async () => { throw new Error("boom"); },
         onOpenInBrowser: () => {},
         onChangeStatus: () => {},
+      onAttachToSession: () => {},
       },
       TARGET,
     );

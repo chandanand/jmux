@@ -26,7 +26,7 @@
 // disk. Callers decide how the strings reach tmux: the TUI wraps them with `tq`
 // for the control channel, the CLI passes them as argv.
 
-import { tq } from "./shell-quote";
+import { tq, shellArg } from "./shell-quote";
 import { worktreeCommandArgv } from "./repo-settings";
 
 /** How often the main pane checks whether the setup pane is done. */
@@ -105,12 +105,22 @@ export function buildSetupCommand(o: {
   baseBranch: string;
   wtm: boolean;
 }): string {
+  // Each argument quoted, not joined raw. The pieces are a session name, a
+  // branch name and a path, all of which can legitimately contain characters a
+  // shell splits on — and this string is handed to a shell. Joining them bare
+  // meant a name with a space became several arguments: `wtm create` read the
+  // first word as the whole name, built a worktree under it, and the main pane
+  // sat waiting for a directory nobody was ever going to create.
+  //
+  // `slugifyName` should keep such a name from getting here at all. This is the
+  // second line of defence, and it is the one that holds for names jmux did not
+  // derive — a hand-typed one, or a tracker's own `branchName`.
   const create = worktreeCommandArgv({
     wtm: o.wtm,
     session: o.session,
     baseBranch: o.baseBranch,
     noShell: true,
-  }).join(" ");
+  }).map(shellArg).join(" ");
 
   const target = tq(o.session);
   const flag =

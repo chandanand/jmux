@@ -1,8 +1,8 @@
 import { describe, test, expect } from "bun:test";
-import { buildSessionView, buildSessionRow3 } from "../session-view";
+import { buildSessionView, buildSessionRow3, formatIssueBadge } from "../session-view";
 import type { SessionInfo, SessionOtelState, AgentState } from "../types";
 import { makeSessionOtelState } from "../types";
-import type { SessionContext, MergeRequest, LinkSource } from "../adapters/types";
+import type { SessionContext, MergeRequest, LinkSource, Issue } from "../adapters/types";
 import type { AgentStateRecord } from "../types";
 
 function makeSession(overrides: Partial<SessionInfo> = {}): SessionInfo {
@@ -67,7 +67,7 @@ describe("buildSessionView", () => {
     expect(view.branch).toBe("feat/cool");
   });
 
-  test("populates linearId from first issue", () => {
+  test("populates linearId from the driving issue, counting the rest", () => {
     const ctx = makeCtx({
       issues: [
         { id: "i1", identifier: "ENG-1234", title: "T", status: "In Progress", assignee: null, linkedMrUrls: [], webUrl: "", source: "branch" as LinkSource },
@@ -75,7 +75,7 @@ describe("buildSessionView", () => {
       ],
     });
     const view = buildSessionView(makeSession(), ctx, undefined, new Set());
-    expect(view.linearId).toBe("ENG-1234");
+    expect(view.linearId).toBe("ENG-1234 +1");
   });
 
   test("selects latest MR by createdAt", () => {
@@ -360,5 +360,28 @@ describe("buildSessionRow3 — non-promoted session", () => {
     const result = buildSessionRow3(makeSessionOtelState(), 26, null);
     expect(result.text).toBe("");
     expect(result.labelCol).toBe(-1);
+  });
+});
+
+describe("formatIssueBadge", () => {
+  const at = (identifier: string, stateType?: Issue["stateType"]) => ({ identifier, stateType });
+
+  test("no issues means no badge", () => {
+    expect(formatIssueBadge([])).toBeNull();
+  });
+
+  // A one-issue session has to read exactly as it did before the badge existed,
+  // or every user gains a suffix for a feature they aren't using.
+  test("a lone issue carries no suffix", () => {
+    expect(formatIssueBadge([at("ENG-1")])).toBe("ENG-1");
+  });
+
+  test("the suffix counts the others, not the total", () => {
+    expect(formatIssueBadge([at("ENG-1"), at("ENG-2"), at("ENG-3")])).toBe("ENG-1 +2");
+  });
+
+  test("the driving issue leads, not the first-linked one", () => {
+    const badge = formatIssueBadge([at("ENG-9", "completed"), at("ENG-4", "backlog")]);
+    expect(badge).toBe("ENG-4 +1");
   });
 });

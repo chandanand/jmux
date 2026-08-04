@@ -3,9 +3,38 @@ import type { Issue } from "./types";
 type IssueComment = NonNullable<Issue["comments"]>[number];
 
 export function buildLinearPrompt(issue: Issue): string {
+  return [`Work on Linear issue ${issue.identifier}:`, "", ...issueBlock(issue)].join("\n");
+}
+
+/**
+ * The seed prompt for a session carrying several issues.
+ *
+ * The framing line is the whole point: the same issues stapled together read as
+ * N independent instructions, when what the session actually is is one piece of
+ * work that a tracker happened to file as several tickets — one branch, one
+ * worktree, one merge request. Saying so up front is what stops an agent
+ * opening three branches.
+ *
+ * Bodies come from the same {@link issueBlock} a single-issue prompt uses, so
+ * an issue reads identically whichever way the session was started.
+ */
+export function buildLinearGroupPrompt(issues: Issue[], label: string): string {
+  const ids = issues.map((i) => i.identifier).join(", ");
+  const out: string[] = [
+    `Work on ${issues.length} Linear issues${label ? ` from ${label}` : ""}: ${ids}.`,
+    "",
+    "They belong to one piece of work and share this branch and worktree — deliver them together in a single merge request rather than branching per issue.",
+    "",
+  ];
+  for (const issue of issues) {
+    out.push(...issueBlock(issue));
+    out.push("");
+  }
+  return out.join("\n").trimEnd();
+}
+
+function issueBlock(issue: Issue): string[] {
   const out: string[] = [];
-  out.push(`Work on Linear issue ${issue.identifier}:`);
-  out.push("");
   out.push(`<issue identifier="${issue.identifier}">`);
   out.push(`<title>${issue.title}</title>`);
   if (issue.description && issue.description.trim().length > 0) {
@@ -26,7 +55,7 @@ export function buildLinearPrompt(issue: Issue): string {
     out.push(renderThread(thread));
   }
 
-  return out.join("\n");
+  return out;
 }
 
 interface Thread {

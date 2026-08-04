@@ -77,16 +77,87 @@ export type ViewNode =
   | { kind: "group"; key: string; label: string; count: number; collapsed: boolean; depth: number }
   | { kind: "item"; item: RenderableItem; depth: number };
 
+/**
+ * Every item filed under a group header, including through sub-groups.
+ *
+ * Membership is read back off `buildViewNodes` with nothing collapsed rather
+ * than re-derived from `groupBy`, so it *is* the grouping the panel drew — the
+ * two cannot disagree about what "this project" contains. That matters because
+ * the two grouping mechanisms (a view's `states` sections and the `groupBy`
+ * axis) file items by different rules, and a caller acting on a group header
+ * should not have to know which one produced it.
+ *
+ * Works for a sub-group header too: collection runs until the next header at
+ * the same depth or shallower.
+ */
+export function itemsInGroup(
+  items: RenderableItem[],
+  view: PanelView,
+  groupKey: string,
+): RenderableItem[] {
+  const nodes = buildViewNodes(items, view, new Set());
+  const start = nodes.findIndex((n) => n.kind === "group" && n.key === groupKey);
+  if (start < 0) return [];
+  const depth = nodes[start]!.depth;
+  const out: RenderableItem[] = [];
+  for (let i = start + 1; i < nodes.length; i++) {
+    const node = nodes[i]!;
+    if (node.kind === "group" && node.depth <= depth) break;
+    if (node.kind === "item") out.push(node.item);
+  }
+  return out;
+}
+
 export interface ViewState {
   selectedIndex: number;
   collapsedGroups: Set<string>;
   scrollOffset: number;
   detailScrollOffset: number;
   filterQuery: string | null;  // null = filter off, "" = bar open but empty, "abc" = filtering
+  /**
+   * Ticked item ids — the set `n` and `l` act on instead of the highlighted row.
+   *
+   * Transient and per-view, never persisted: it is a selection, not a
+   * preference. It lives here rather than on the view because two tabs showing
+   * the same issue are two different places you might be part-way through
+   * choosing something.
+   *
+   * This exists because grouping cannot express the thing it needed to. A tab
+   * defined by `states` ignores `groupBy` entirely, so a workflow built out of
+   * stages — the configuration jmux steers everyone toward — has only status
+   * headers, and "every ticket in To do" is never the set you meant. Ticking is
+   * the only selection that works on every tab, including ones with no headers
+   * at all, and the only one that can say "these three of those five".
+   */
+  checkedIds: Set<string>;
 }
 
 export function createViewState(): ViewState {
-  return { selectedIndex: 0, collapsedGroups: new Set(), scrollOffset: 0, detailScrollOffset: 0, filterQuery: null };
+  return {
+    selectedIndex: 0,
+    collapsedGroups: new Set(),
+    scrollOffset: 0,
+    detailScrollOffset: 0,
+    filterQuery: null,
+    checkedIds: new Set(),
+  };
+}
+
+/**
+ * The ticked items, in the order the view draws them.
+ *
+ * Node order, not tick order: the list has a meaning to its sequence (priority,
+ * or the stage's own status order) and the order somebody happened to click in
+ * is not new information about it. Ids that no longer appear — filtered away,
+ * or gone from the tracker between polls — are dropped rather than carried.
+ */
+export function checkedItems(nodes: ViewNode[], state: ViewState): RenderableItem[] {
+  if (state.checkedIds.size === 0) return [];
+  const out: RenderableItem[] = [];
+  for (const node of nodes) {
+    if (node.kind === "item" && state.checkedIds.has(node.item.id)) out.push(node.item);
+  }
+  return out;
 }
 
 // --- Data Pipeline ---
@@ -533,6 +604,13 @@ export function renderView(
     const msgCol = Math.max(0, Math.floor((cols - msg.length) / 2));
     writeString(grid, listStartRow + Math.floor(listRows / 2), msgCol, msg, DIM_ATTRS);
   } else {
+    // The checkbox column appears only once something is ticked. Reserving it
+    // permanently would cost every user four columns of title on a panel that
+    // is already narrow, for a mode most of them are not in — and the first
+    // press revealing the boxes is what teaches the mode exists.
+    const checkMark = state.checkedIds.size > 0
+      ? (item: RenderableItem) => state.checkedIds.has(item.id)
+      : null;
     let visibleIdx = 0;
     for (let i = 0; i < nodes.length && visibleIdx < listRows + state.scrollOffset; i++) {
       if (visibleIdx < state.scrollOffset) { visibleIdx++; continue; }
@@ -544,7 +622,7 @@ export function renderView(
       if (node.kind === "group") {
         renderGroupHeader(grid, row, cols, node, isSelected);
       } else {
-        renderItem(grid, row, cols, node.item, node.depth, isSelected);
+        renderItem(grid, row, cols, node.item, node.depth, isSelected, checkMark);
       }
       visibleIdx++;
     }
@@ -609,7 +687,16 @@ export function pickSessionIndicator(item: RenderableItem): { glyph: string; gly
     : { glyph: "○", glyphAttrs: UNLINKED_ATTRS };
 }
 
-function renderItem(grid: CellGrid, row: number, cols: number, item: RenderableItem, depth: number, selected: boolean): void {
+function renderItem(
+  grid: CellGrid,
+  row: number,
+  cols: number,
+  item: RenderableItem,
+  depth: number,
+  selected: boolean,
+  /** null when nothing is ticked anywhere in the view — no column is drawn. */
+  checkMark: ((item: RenderableItem) => boolean) | null,
+): void {
   const indent = depth * 2;
   let col = indent;
 
@@ -619,6 +706,11 @@ function renderItem(grid: CellGrid, row: number, cols: number, item: RenderableI
     col += 2;
   } else {
     col += 2;
+  }
+
+  if (checkMark) {
+    writeString(grid, row, col, checkMark(item) ? "[x]" : "[ ]", selected ? CURSOR_ATTRS : DIM_ATTRS);
+    col += 4;
   }
 
   // Session indicator

@@ -136,6 +136,8 @@ export interface IssueTrackerAdapter {
   getMyIssues(): Promise<Issue[]>;
   getTeams(): Promise<Array<{ id: string; name: string }>>;
   buildPrompt(issue: Issue): string;
+  /** Seed prompt for a session carrying several issues; `label` names the group. */
+  buildGroupPrompt(issues: Issue[], label: string): string;
 }
 
 export interface AdapterConfig {
