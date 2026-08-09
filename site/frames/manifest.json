@@ -1,0 +1,41 @@
+{
+  "cols": 100,
+  "rows": 32,
+  "beats": [
+    {
+      "id": "fleet",
+      "label": "Five agents, one screen",
+      "file": "fleet.json",
+      "bytes": 13362,
+      "steps": 2
+    },
+    {
+      "id": "attention",
+      "label": "The one that stopped to ask",
+      "file": "attention.json",
+      "bytes": 37303,
+      "steps": 6
+    },
+    {
+      "id": "ladder",
+      "label": "Grouped by your workflow stages",
+      "file": "ladder.json",
+      "bytes": 28004,
+      "steps": 4
+    },
+    {
+      "id": "ghosts",
+      "label": "Work that has no session yet",
+      "file": "ghosts.json",
+      "bytes": 8255,
+      "steps": 1
+    },
+    {
+      "id": "preview",
+      "label": "A ticket, one keypress from being a session",
+      "file": "preview.json",
+      "bytes": 14530,
+      "steps": 2
+    }
+  ]
+}
