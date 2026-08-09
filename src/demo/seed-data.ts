@@ -648,7 +648,12 @@ export const DEMO_REVIEW_MR_IDS: Set<string> = new Set([
 // Manual session-to-issue links for state.json seeding
 // ---------------------------------------------------------------------------
 
+// `auth-refactor` carries two on purpose: a feature filed as several tickets is
+// one branch and one merge request, and it is the case the sidebar's issue
+// disclosure exists for. A demo where every session has exactly one issue never
+// shows the `+N` badge or what expanding it does.
 export const DEMO_MANUAL_LINKS: Array<{ session: string; issueId: string }> = [
   { session: "auth-refactor", issueId: "issue-1237" },
+  { session: "auth-refactor", issueId: "issue-1248" },
   { session: "ci-pipeline", issueId: "issue-48" },
 ];

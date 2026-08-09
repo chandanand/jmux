@@ -62,7 +62,9 @@ between tabs.
 | `n` | Create a new session from this issue |
 | `l` | Add this issue to the current session |
 | `s` | Update status (picks from available workflow states) |
-| `c` | Copy issue prompt to clipboard (identifier + title + description) |
+| `c` | Copy the issue prompt to the clipboard |
+| `p` | Send the issue prompt to this session's agent (shows it first) |
+| `{` / `}` | Previous / next issue in the preview strip |
 
 **On a group header** (any grouping axis — project, team, status):
 
@@ -82,10 +84,19 @@ headers at all):
 | `Space` | Tick / untick the highlighted issue |
 | `n` | Start every ticked issue as **one** session |
 | `l` | Add every ticked issue to the current session |
+| `s` | Move every ticked issue to one status |
+| `c` | Copy one prompt covering every ticked issue |
+| `p` | Send that prompt to this session's agent |
 | `Esc` | Clear the ticks (then, pressed again, the filter) |
 
 Checkboxes only appear once something is ticked, so an untouched list looks
 exactly as it always has.
+
+`s` on several issues offers only the statuses **all** of them can move to —
+issues on different teams can sit on entirely different workflows, and a status
+only some of them accept would half-apply and report nothing. If they share
+none, jmux says so rather than showing an empty list. The whole batch is one
+`Ctrl-a Z` undo, and cancelling the picker keeps your ticks.
 
 **On a merge request:**
 
@@ -193,6 +204,9 @@ finished — which is also what decides the session's workflow stage band. So a
 session drops out of "In Review" only when its last ticket does, and a closed
 ticket can't hold a session in Done while four open ones sit under it.
 
+Press `Ctrl-a e` to expand the badge into the full list — see
+[Seeing what a session carries](#seeing-what-a-session-carries).
+
 ### Manual linking from the command palette
 
 Press `Ctrl-a p` and search for:
@@ -200,7 +214,13 @@ Press `Ctrl-a p` and search for:
 - **"Link MR"** — fuzzy search MRs and link one to the current session
 - **"Unlink issue"** / **"Unlink MR"** — remove a manual link
 
-Manual links are stored in `~/.config/jmux/state.json` and survive restarts.
+Links the TUI makes are stored in `~/.config/jmux/state.json` and survive
+restarts. Links `jmux ctl issue link` makes live in a tmux option instead — a
+running TUI holds `state.json` in memory and would clobber a CLI write — but
+that is an implementation detail, not a split you should be able to feel:
+**"Unlink issue" lists both**, the sidebar badge counts both, and an issue an
+agent linked contributes to the stage band and the MR transition fan-out exactly
+as one you linked by hand.
 
 ---
 
@@ -298,6 +318,81 @@ Three ways in:
 A group start refuses in one case: if the issues route to more than one repo via
 `teamRepoMap`, there is no single worktree to put them in, so jmux names the
 repos instead of guessing.
+
+#### Seeing what a session carries
+
+The sidebar row shows the driving issue and a count of the rest — `TRA-123 +4`.
+Press **`Ctrl-a e`** (or click the badge) to expand that into a row per issue,
+with its status:
+
+```
+▎  bulk-import      ▾ TRA-123 +4
+▎  feat/bulk-import      !412 ✓
+   · TRA-123 Parse CSV     In Progress
+   · TRA-124 Column map      In Review
+   · TRA-125 Error surface        Done
+```
+
+The driving issue is always first, so the badge and the top row agree. Finished
+tickets stay on the list, dimmed — they are still part of what the session
+carries, and dropping them would make `+4` expand to three rows. Clicking a row
+switches to that session and opens *that* issue in the panel.
+
+The chevron appears only above one issue: with a single issue the badge already
+names it. On a narrow sidebar the status shrinks to a glyph and the title drops
+before the identifier is ever touched.
+
+#### Preview tabs
+
+When you're working with a set of issues, the detail pane grows a strip of tabs
+— one per issue — so you can read through them without hunting the list:
+
+```
+  ▸ TRA-1654 Cross-region pre-auth proxy times out
+    TRA-1653 Integration OAuth callbacks land wrong
+    TRA-743  Email notification: Shipment status
+────────────────────────────────────────────────────
+  TRA-743    TRA-742    TRA-1238    ✓ TRA-1237
+ ━━━━━━━━━  ─────────  ──────────  ────────────
+
+  TRA-743 Email notification: notify when Shipment...
+  Status: MR Review   Priority: P2
+```
+
+The tabs are styled like the window tabs in the top bar: the active one is
+filled and accent-coloured with a heavy rule beneath it, the rest sit plain. A
+`✓` marks an issue the tracker considers finished — it stays on the strip rather
+than disappearing, so the tabs don't renumber under you when a ticket closes.
+
+The strip appears in two situations:
+
+- **You've ticked issues** (`Space`) — one tab per ticked issue.
+- **The cursor is on one of the focused session's issues**, and that session
+  carries several. Ticks win when both apply.
+
+`{` and `}` move between tabs, or click one. **The preview has its own cursor**:
+switching a tab changes only the pane, leaving the list where it was. Move the
+list cursor and the pin releases — the pane follows the cursor again and the
+matching tab lights up (or none does, if you've moved off the set).
+
+That independence is the point. A session's linked issues routinely include ones
+that appear in no queue tab at all — a finished ticket while you're on "In
+Progress", or one assigned to a teammate and so absent from your issue list
+entirely. A strip that could only point at rows would quietly show fewer issues
+than the sidebar's `+4` promises.
+
+The keys act on what you're **reading**, not on the row you last arrowed past —
+the action bar sits under the detail pane and follows it. So `o`, `s`, `c` and
+`p` target the previewed issue. (When issues are ticked, the set-capable keys
+still act on the whole set, as they do everywhere else.)
+
+#### Telling the agent about a late arrival
+
+A session start seeds the agent with its issues. Anything linked *afterwards* —
+`l`, `ctl issue link`, a ticket that lands mid-feature — the agent knows nothing
+about. Press **`p`** on the issue (or on a ticked set) to hand it the same
+prompt a session start would have used. jmux shows you what will be sent and
+waits for Enter; it never writes into an agent's context on its own.
 
 When the session's MR merges, jmux offers to move **all** of its unfinished
 issues, as a checklist you can untick — a merge request that only covered three

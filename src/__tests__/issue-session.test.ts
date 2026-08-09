@@ -11,6 +11,10 @@ import {
   isIssueFinished,
   slugifyName,
   sanitizeBranchName,
+  mergeIssueLinkIds,
+  issueLinkSignature,
+  isIssueLinkFor,
+  withoutIssueLink,
   type IssueSessionInput,
 } from "../issue-session";
 import type { Issue } from "../adapters/types";
@@ -353,5 +357,105 @@ describe("sanitizeBranchName", () => {
   // The one-name rule: whatever comes out is also a tmux session name.
   test("still satisfies tmux's own rejects", () => {
     expect(sanitizeBranchName("a.b:c")).not.toMatch(/[.:]/);
+  });
+});
+
+// The two link stores hold different kinds of id — a tracker UUID in
+// state.json, whatever a human typed at `ctl issue link` in the tmux option —
+// and for a long time only resolveIssueSession consulted both. Everything else
+// read one, which is what made an agent-linked issue a half citizen.
+describe("mergeIssueLinkIds", () => {
+  test("unions both stores", () => {
+    expect(mergeIssueLinkIds(["uuid-a"], ["TRA-9"])).toEqual(["uuid-a", "TRA-9"]);
+  });
+
+  test("state.json's spelling wins when both name the same issue", () => {
+    expect(mergeIssueLinkIds(["TRA-9"], ["tra-9"])).toEqual(["TRA-9"]);
+  });
+
+  test("dedupes within a single store too", () => {
+    expect(mergeIssueLinkIds([], ["TRA-9", "tra-9", "TRA-10"])).toEqual(["TRA-9", "TRA-10"]);
+  });
+
+  test("either store may be empty", () => {
+    expect(mergeIssueLinkIds([], [])).toEqual([]);
+    expect(mergeIssueLinkIds(["a"], [])).toEqual(["a"]);
+    expect(mergeIssueLinkIds([], ["b"])).toEqual(["b"]);
+  });
+});
+
+describe("issueLinkSignature", () => {
+  test("re-ordering the same links is not a change", () => {
+    expect(issueLinkSignature(["a", "b"])).toBe(issueLinkSignature(["b", "a"]));
+  });
+
+  test("re-spelling the same link is not a change", () => {
+    expect(issueLinkSignature(["TRA-9"])).toBe(issueLinkSignature(["tra-9"]));
+  });
+
+  test("adding or removing a link is a change", () => {
+    const one = issueLinkSignature(["a"]);
+    expect(issueLinkSignature(["a", "b"])).not.toBe(one);
+    expect(issueLinkSignature([])).not.toBe(one);
+  });
+
+  // The signature is compared against a Map miss (`undefined`) for a session
+  // that has never resolved, so the empty set must not collide with that.
+  test("the empty set has a signature, and it is a string", () => {
+    expect(issueLinkSignature([])).toBe("");
+  });
+});
+
+// Matching a link to an issue has to try both of the issue's names, because
+// the two stores key on different ones. Testing only the id left a `TRA-123`
+// link in place and the issue came back on the next poll — an unlink that
+// reported success and did nothing.
+describe("isIssueLinkFor", () => {
+  const target = issue({ id: "uuid-1", identifier: "TRA-9" });
+
+  test("matches on the tracker id, which is what state.json stores", () => {
+    expect(isIssueLinkFor("uuid-1", target)).toBe(true);
+  });
+
+  test("matches on the identifier, which is what the tmux option stores", () => {
+    expect(isIssueLinkFor("TRA-9", target)).toBe(true);
+  });
+
+  test("matching is case-insensitive, as linkKey is", () => {
+    expect(isIssueLinkFor("tra-9", target)).toBe(true);
+  });
+
+  test("does not match another issue", () => {
+    expect(isIssueLinkFor("TRA-10", target)).toBe(false);
+    expect(isIssueLinkFor("uuid-2", target)).toBe(false);
+  });
+
+  // A blank stored id must not match everything — linkKey("") is "" and so is
+  // an absent identifier, so this would otherwise unlink an arbitrary issue.
+  test("a blank id matches nothing", () => {
+    expect(isIssueLinkFor("", target)).toBe(false);
+    expect(isIssueLinkFor("   ", target)).toBe(false);
+    expect(isIssueLinkFor("", issue({ id: "", identifier: "" }))).toBe(false);
+  });
+});
+
+describe("withoutIssueLink", () => {
+  const target = issue({ id: "uuid-1", identifier: "TRA-9" });
+
+  test("drops the link in whichever spelling it was stored", () => {
+    expect(withoutIssueLink(["uuid-1", "TRA-10"], target)).toEqual(["TRA-10"]);
+    expect(withoutIssueLink(["tra-9", "TRA-10"], target)).toEqual(["TRA-10"]);
+  });
+
+  test("drops every spelling of it at once", () => {
+    expect(withoutIssueLink(["uuid-1", "TRA-9", "TRA-10"], target)).toEqual(["TRA-10"]);
+  });
+
+  test("preserves order and leaves an unrelated set alone", () => {
+    expect(withoutIssueLink(["a", "b", "c"], target)).toEqual(["a", "b", "c"]);
+  });
+
+  test("removing the only link leaves nothing, which is the unset case", () => {
+    expect(withoutIssueLink(["TRA-9"], target)).toEqual([]);
   });
 });

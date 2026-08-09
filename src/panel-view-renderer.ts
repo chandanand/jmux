@@ -1,12 +1,13 @@
 // src/panel-view-renderer.ts
 import type { CellGrid } from "./types";
 import { ColorMode } from "./types";
-import { createGrid, writeString, truncateToCols, type CellAttrs } from "./cell-grid";
+import { createGrid, writeString, truncateToCols, textCols, type CellAttrs } from "./cell-grid";
+import { packChips, chipAtCol, type PlacedChip } from "./band-layout";
 import { stateIndexInView, type PanelView, type GroupByField } from "./panel-view";
 import type { Issue, IssueStateType, MergeRequest, PipelineStatus } from "./adapters/types";
 import { fuzzyMatch } from "./fuzzy";
-import { neutralFg } from "./theme";
-import { tokens } from "./chrome-tokens";
+import { neutralFg, theme } from "./theme";
+import { tokens, frame, space } from "./chrome-tokens";
 import {
   buildIssueDetailLines,
   paintDetailLines,
@@ -130,6 +131,22 @@ export interface ViewState {
    * at all, and the only one that can say "these three of those five".
    */
   checkedIds: Set<string>;
+  /**
+   * The issue the detail pane is pinned to, when the preview strip is driving
+   * it rather than the list cursor. `null` means "follow the cursor", which is
+   * the behaviour that predates the strip and is still the common case.
+   *
+   * The preview having its own cursor is what lets the strip show an issue the
+   * list cannot: a session's linked issues routinely include ones absent from
+   * every queue tab — a finished ticket on an "In Progress" tab, or one
+   * assigned to a teammate and so missing from `getMyIssues()` entirely. A
+   * strip that could only point at rows would quietly have fewer tabs than the
+   * sidebar's `+N` promises.
+   *
+   * Moving the list cursor clears it. Two cursors are tolerable only while the
+   * newer one yields to the older on any deliberate move of the older.
+   */
+  previewIssueId: string | null;
 }
 
 export function createViewState(): ViewState {
@@ -140,7 +157,24 @@ export function createViewState(): ViewState {
     detailScrollOffset: 0,
     filterQuery: null,
     checkedIds: new Set(),
+    previewIssueId: null,
   };
+}
+
+/**
+ * Move the list cursor.
+ *
+ * A function rather than an assignment because two things have to happen with
+ * it, and both were previously spread across nine call sites. The detail scroll
+ * resets — the pane is about to show a different document, and offset 40 into
+ * the last one means nothing in the next. And the preview pin clears, which is
+ * the whole contract that makes two cursors tolerable: the newer one yields the
+ * moment the user deliberately moves the older.
+ */
+export function moveSelection(state: ViewState, index: number): void {
+  state.selectedIndex = index;
+  state.detailScrollOffset = 0;
+  state.previewIssueId = null;
 }
 
 /**
@@ -447,6 +481,23 @@ export function setPanelClock(fn: () => number): void { nowMs = fn; }
 // that is their main consumer; the MR builder and action bar below import them
 // so both detail flavours stay visually identical.
 const DETAIL_KEY: CellAttrs = { fg: 2, fgMode: ColorMode.Palette };
+// Preview-strip tabs, in the toolbar's window-tab idiom (see the tab block in
+// `renderer.ts` and `tabUnderlineGlyphAndAttrs`): a filled background on the
+// active tab only, accent-bold on it and plain palette-8 on the rest, a
+// two-column gutter instead of a separator glyph, and a state rule along the
+// tab's own edge. Deliberately the toolbar's look rather than the info panel's
+// — these are tabs over a content pane, which is what the top bar's are.
+const PREVIEW_TAB_ACTIVE_ATTRS: CellAttrs = {
+  fg: tokens.accent.fg,
+  fgMode: tokens.accent.fgMode,
+  bold: true,
+  bg: theme.selected,
+  bgMode: ColorMode.RGB,
+};
+// No background and no dim: an inactive toolbar tab is plain palette-8 against
+// the terminal, which is what keeps the active tab's fill reading as the
+// selection rather than as one shade among several.
+const PREVIEW_TAB_ATTRS: CellAttrs = { fg: 8, fgMode: ColorMode.Palette };
 const SEPARATOR_ATTRS: CellAttrs = { fg: 8, fgMode: ColorMode.Palette, dim: true };
 // Accent for the split separator while it's hovered as a drag handle. Filled
 // in by rebuildPanelViewColors so it tracks the terminal theme.
@@ -455,10 +506,11 @@ const SEPARATOR_HOVER_ATTRS: CellAttrs = { fg: 8, fgMode: ColorMode.Palette };
 export function rebuildPanelViewColors(): void {
   // chrome-tokens is rebuilt first (see main.ts's onBackground handler), so the
   // token reads below are already adapted to the detected background.
-  for (const a of [CURSOR_ATTRS, GROUP_SELECTED_ATTRS]) {
+  for (const a of [CURSOR_ATTRS, GROUP_SELECTED_ATTRS, PREVIEW_TAB_ACTIVE_ATTRS]) {
     a.fg = tokens.accent.fg;
     a.fgMode = tokens.accent.fgMode;
   }
+  PREVIEW_TAB_ACTIVE_ATTRS.bg = theme.selected;
   PRIORITY_ATTRS[2]!.fg = tokens.textPrimary.fg;
   PRIORITY_ATTRS[2]!.fgMode = tokens.textPrimary.fgMode;
   SEPARATOR_HOVER_ATTRS.fg = tokens.accent.fg;
@@ -571,12 +623,258 @@ export function splitRatioForSepRow(rows: number, filterBarActive: boolean, sepR
   return Math.max(0, Math.min(1, (sepRow - filterBarRows) / splittable));
 }
 
+/**
+ * The preview strip: one tab per issue in the current set, drawn at the top of
+ * the detail pane.
+ *
+ * Resolved by main.ts rather than derived here, the same boundary as the
+ * sidebar's `setSessionStages`: which issues form the set depends on the ticks,
+ * the focused session's links and the tracker's own issue objects, none of
+ * which a renderer should know how to reach.
+ */
+export interface PreviewTabs {
+  /** In display order. Fewer than two and the strip is not drawn at all. */
+  items: RenderableItem[];
+  /** The item whose detail fills the pane, and the tab drawn as active. */
+  activeId: string | null;
+}
+
+/**
+ * The strip's three rows: labels, the rule beneath them, and a blank margin
+ * before the issue body.
+ *
+ * The rule is its *own* row rather than an overlay on the pane separator above.
+ * A tab sits on top of its content with the underline between the two — put the
+ * rule above the labels and the same glyphs read as an overline on a heading.
+ * The margin is what stops the body looking welded to the bar.
+ */
+const PREVIEW_STRIP_ROWS = 3;
+
+/**
+ * A floor, not a tuning knob: the strip must never take the pane's last usable
+ * rows. `MIN_DETAIL_ROWS` keeps `detailRows` at 5 or more whenever a detail pane
+ * exists at all, so at its very shortest the strip leaves two rows of issue
+ * body — thin, but the tabs are how you reach the rest.
+ */
+const MIN_ROWS_FOR_PREVIEW_TABS = PREVIEW_STRIP_ROWS + 2;
+
+const OVERFLOW_LEFT = "‹";
+const OVERFLOW_RIGHT = "›";
+/**
+ * Two blank columns between tabs, and no separator glyph — the toolbar's rule
+ * exactly (`space.groupGutter`). The gap plus the state rule below each tab
+ * already delimits them; a `│` on top of both is a third divider saying the
+ * same thing.
+ */
+const PREVIEW_TAB_GUTTER = space.groupGutter;
+
+/**
+ * Which tabs to draw, and where.
+ *
+ * Windowed rather than truncated: `packChips` drops what does not fit from the
+ * end, which would silently hide the active tab whenever it sat past the
+ * budget — a strip whose whole job is showing you where you are. So the window
+ * slides to keep the active tab in it, and overflow arrows say the rest are
+ * still there.
+ *
+ * Exported for the click hit-test, which must resolve a column against exactly
+ * the chips that were drawn.
+ */
+export function layoutPreviewTabs(
+  tabs: PreviewTabs,
+  cols: number,
+): { chips: PlacedChip[]; overflowLeft: boolean; overflowRight: boolean } {
+  const labels = tabs.items.map((i) => ({ id: i.id, width: textCols(previewTabLabel(i)) }));
+  const activeIdx = Math.max(0, tabs.items.findIndex((i) => i.id === tabs.activeId));
+
+  /**
+   * The column chips start at for a window beginning at `s`. A left arrow does
+   * not merely occupy column 0 — it also pushes the chips one column right, so
+   * a flat "reserve two columns" budget under-counts it by one and lets the
+   * last chip land on the column the right arrow needs.
+   */
+  const chipStart = (s: number) => (s > 0 ? 2 : 1);
+  /** Columns available to chips for the window `[s, e]`, arrows included. */
+  const room = (s: number, e: number) =>
+    cols - chipStart(s) - (e < labels.length - 1 ? 1 : 0);
+
+  // Widen from the active tab outwards. Every test is against the window that
+  // would *result* — extending changes which arrows are needed, so a fit
+  // measured against the current window is measuring the wrong thing.
+  let start = activeIdx;
+  let end = activeIdx;
+  let used = labels[activeIdx]?.width ?? 0;
+  for (;;) {
+    // `+ PREVIEW_TAB_GUTTER`, matching what packChips will actually insert. A
+    // window measured against a narrower gap than the pack uses overflows the
+    // budget, and packChips drops from the end — which can drop the active tab,
+    // the one thing the window exists to keep.
+    const nextW = end + 1 < labels.length ? labels[end + 1]!.width + PREVIEW_TAB_GUTTER : 0;
+    const prevW = start > 0 ? labels[start - 1]!.width + PREVIEW_TAB_GUTTER : 0;
+    const canRight = nextW > 0 && used + nextW <= room(start, end + 1);
+    const canLeft = prevW > 0 && used + prevW <= room(start - 1, end);
+    if (!canRight && !canLeft) break;
+    // Right first when both are open and the right tab is no wider, so the
+    // common case (near the start, or the whole set fits) reads left-to-right
+    // in the order it was written.
+    if (canRight && (!canLeft || nextW <= prevW)) { used += nextW; end++; }
+    else { used += prevW; start--; }
+  }
+
+  const overflowRight = end < labels.length - 1;
+  const chips = packChips(labels.slice(start, end + 1), {
+    start: chipStart(start),
+    // Exclusive end, so a chip can never be placed on the right arrow's column.
+    budget: cols - (overflowRight ? 1 : 0),
+    align: "left",
+    sepWidth: PREVIEW_TAB_GUTTER,
+  });
+  return { chips, overflowLeft: start > 0, overflowRight };
+}
+
+/**
+ * A tab's text, padded into a chip the way the panel's own tab bar pads its
+ * labels — the padding is what gives a chip a body once it has a background
+ * behind it.
+ *
+ * A finished issue is marked in the *label* rather than by colour. The strip
+ * has three tones and they are all spoken for (accent-bold active, receded
+ * inactive, and the separator), so a fourth "more receded than dim" does not
+ * exist; and a glyph survives any palette, including a terminal that renders
+ * dim as no change at all.
+ */
+function previewTabLabel(item: RenderableItem): string {
+  const done = item.stateType !== undefined
+    && (item.stateType === "completed" || item.stateType === "canceled" || item.stateType === "duplicate");
+  return done ? ` ✓ ${item.primary} ` : ` ${item.primary} `;
+}
+
+/**
+ * The index `delta` steps to, from whatever the strip is currently anchored on.
+ *
+ * `anchorId` is the pinned tab when there is one, else the list cursor's item —
+ * which is often *not* in the set, because the cursor is free to wander off it.
+ * An absent anchor enters from the end the step is coming from, so one press
+ * lands on the first tab going forward and the last going back, rather than
+ * silently doing nothing or jumping to an arbitrary index.
+ *
+ * Wraps, like every other tab strip here. Returns -1 for an empty set.
+ */
+export function stepPreviewIndex(
+  count: number,
+  anchorIndex: number,
+  delta: number,
+): number {
+  if (count <= 0) return -1;
+  const from = anchorIndex >= 0 ? anchorIndex : (delta > 0 ? -1 : 0);
+  return (((from + delta) % count) + count) % count;
+}
+
+/**
+ * Which tab is lit: the pin, else the list cursor, else nothing.
+ *
+ * The cursor clause is the one that is easy to leave out, and leaving it out is
+ * invisible in code review — the pin is null until `{`/`}` is actually pressed,
+ * so a strip resolving only the pin opens with nothing lit and stays that way
+ * until you move it, while the pane below is quite plainly showing one of the
+ * tabs. The two cursors agree far more often than they differ; when they agree,
+ * the strip has to say so.
+ *
+ * `null` is reserved for when they genuinely cannot agree: the list cursor has
+ * wandered off the set entirely. Either id is ignored once it leaves `items`,
+ * so a poll dropping a link cannot leave a tab lit that is no longer there.
+ */
+export function resolveActiveTab(
+  items: readonly RenderableItem[],
+  pinnedId: string | null,
+  cursorId: string | null,
+): string | null {
+  const inSet = (id: string | null) => id !== null && items.some((i) => i.id === id);
+  if (inSet(pinnedId)) return pinnedId;
+  if (inSet(cursorId)) return cursorId;
+  return null;
+}
+
+/** The tab a click at `col` on the strip row lands on, or null. */
+export function previewTabAtCol(
+  tabs: PreviewTabs,
+  cols: number,
+  col: number,
+): string | null {
+  return chipAtCol(layoutPreviewTabs(tabs, cols).chips, col);
+}
+
+/**
+ * The strip's row within the panel, or null when no strip is drawn.
+ *
+ * Exported because click routing in main.ts has to know the row *before* it can
+ * ask which tab was hit, and it must agree with the render exactly — this is
+ * the same reason `computeViewLayout` is the single source of truth for the
+ * pane bands rather than a formula re-derived at the call site.
+ */
+export function previewTabRow(
+  rows: number,
+  state: ViewState,
+  tabs: PreviewTabs | undefined,
+  splitRatio?: number,
+): number | null {
+  if (!tabs || tabs.items.length < 2) return null;
+  const layout = computeViewLayout(rows, state.filterQuery !== null, splitRatio);
+  if (!layout.showDetail || layout.detailRows < MIN_ROWS_FOR_PREVIEW_TABS) return null;
+  return layout.detailStart;
+}
+
+/**
+ * Draw the strip: labels on `row`, their rule on the row below.
+ *
+ * The rule is drawn per chip rather than across the panel, which is the one
+ * place this departs from the toolbar. The toolbar's tab rule is the terminal's
+ * own frame line, already spanning the width for its own reasons; the panel
+ * already has such a line — the pane separator two rows up — and a second
+ * full-width rule right under it would read as a doubled pane border rather
+ * than as tab chrome.
+ *
+ * Finished issues stay on the strip rather than disappearing — the set is what
+ * the session carries, and a tab vanishing when a ticket closed would renumber
+ * the strip under the user's cursor mid-read.
+ */
+function renderPreviewTabs(
+  grid: CellGrid,
+  row: number,
+  cols: number,
+  tabs: PreviewTabs,
+): void {
+  const ruleRow = row + 1;
+  const { chips, overflowLeft, overflowRight } = layoutPreviewTabs(tabs, cols);
+  if (overflowLeft) writeString(grid, row, 0, OVERFLOW_LEFT, PREVIEW_TAB_ATTRS);
+  if (overflowRight) writeString(grid, row, cols - 1, OVERFLOW_RIGHT, PREVIEW_TAB_ATTRS);
+
+  for (const chip of chips) {
+    const item = tabs.items.find((it) => it.id === chip.id);
+    if (!item) continue;
+    const isActive = item.id === tabs.activeId;
+    writeString(
+      grid, row, chip.x, previewTabLabel(item),
+      isActive ? PREVIEW_TAB_ACTIVE_ATTRS : PREVIEW_TAB_ATTRS,
+    );
+
+    // Heavy accent under the active tab, light frame rule under the rest —
+    // `tabUnderlineGlyphAndAttrs`' table, minus the bell and hover states the
+    // strip has no equivalent of. Weight signals active, hue reinforces it.
+    const glyph = isActive ? frame.ruleHeavy : frame.ruleLight;
+    const attrs = isActive ? { ...tokens.accent, dim: false } : tokens.ruleFrame;
+    for (let i = 0; i < chip.width; i++) {
+      writeString(grid, ruleRow, chip.x + i, glyph, attrs);
+    }
+  }
+}
+
 export function renderView(
   nodes: ViewNode[],
   cols: number,
   rows: number,
   state: ViewState,
-  opts: { splitRatio?: number; splitHovered?: boolean } = {},
+  opts: { splitRatio?: number; splitHovered?: boolean; previewTabs?: PreviewTabs } = {},
 ): CellGrid {
   const grid = createGrid(cols, rows);
 
@@ -637,12 +935,29 @@ export function renderView(
       opts.splitHovered ? SEPARATOR_HOVER_ATTRS : SEPARATOR_ATTRS,
     );
 
-    // Detail content (scrollable)
+    // The preview strip, when there is a set to show and room to show it. It
+    // takes a row off the top of the detail pane rather than out of the layout,
+    // so the separator stays where the user dragged it and the list keeps the
+    // height they chose.
+    const tabs = opts.previewTabs;
+    const showTabs = tabs !== undefined
+      && tabs.items.length >= 2
+      && detailRows >= MIN_ROWS_FOR_PREVIEW_TABS;
+    if (showTabs) renderPreviewTabs(grid, detailStart, cols, tabs);
+    const bodyStart = showTabs ? detailStart + PREVIEW_STRIP_ROWS : detailStart;
+    const bodyRows = showTabs ? detailRows - PREVIEW_STRIP_ROWS : detailRows;
+
+    // Detail content (scrollable). The pinned preview outranks the cursor: it
+    // is the newer of the two pointing gestures, and the one the strip above is
+    // reporting. main.ts clears the pin whenever the cursor moves, so this can
+    // only win while the user's last move was on the strip.
     const selectedNode = nodes[state.selectedIndex];
-    if (selectedNode?.kind === "item") {
-      renderDetail(grid, detailStart, cols, detailRows, selectedNode.item, state.detailScrollOffset);
+    const pinned = tabs?.items.find((i) => i.id === tabs.activeId) ?? null;
+    const detailItem = pinned ?? (selectedNode?.kind === "item" ? selectedNode.item : null);
+    if (detailItem) {
+      renderDetail(grid, bodyStart, cols, bodyRows, detailItem, state.detailScrollOffset);
     } else if (selectedNode?.kind === "group") {
-      writeString(grid, detailStart, 2, `${selectedNode.label} — ${selectedNode.count} items`, GROUP_ATTRS);
+      writeString(grid, bodyStart, 2, `${selectedNode.label} — ${selectedNode.count} items`, GROUP_ATTRS);
     }
 
     // Action bar — always at the bottom
@@ -650,8 +965,10 @@ export function renderView(
     if (actionSepRow > detailStart) {
       writeString(grid, actionSepRow, 0, "─".repeat(cols), SEPARATOR_ATTRS);
     }
-    const selectedItem = selectedNode?.kind === "item" ? selectedNode.item : null;
-    renderActionBar(grid, actionBarStart, cols, selectedItem);
+    // The bar sits under the detail pane and describes what the keys will do,
+    // and the keys act on what you are reading — so it follows the preview, not
+    // the cursor, whenever the two differ.
+    renderActionBar(grid, actionBarStart, cols, detailItem);
   }
 
   return grid;

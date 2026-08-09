@@ -1910,3 +1910,55 @@ describe("panel multi-select keys", () => {
     expect(calls.toggle).toBe(0);
   });
 });
+
+// `{` / `}` step the detail pane's preview strip — the queue-tab keys beside
+// them, shifted. Same gesture, one level in.
+describe("preview strip keys", () => {
+  function router(opts: Partial<ConstructorParameters<typeof InputRouter>[0]> = {}) {
+    const calls: string[] = [];
+    const r = new InputRouter(
+      {
+        onPtyData: (d) => calls.push(`pty:${d}`),
+        onSidebarClick: () => {},
+        onPanelPrevPreview: () => calls.push("prev"),
+        onPanelNextPreview: () => calls.push("next"),
+        ...opts,
+      },
+      baseLayout(24, "split", 40),
+    );
+    return { r, calls };
+  }
+
+  test("} steps forward when the panel has focus", () => {
+    const { r, calls } = router();
+    r.setPanelFocused(true);
+    r.setPanelTabsActive(true);
+    r.handleInput("}");
+    expect(calls).toEqual(["next"]);
+  });
+
+  test("{ steps back", () => {
+    const { r, calls } = router();
+    r.setPanelFocused(true);
+    r.setPanelTabsActive(true);
+    r.handleInput("{");
+    expect(calls).toEqual(["prev"]);
+  });
+
+  // The Diff tab has no preview strip, so the keys must reach hunk rather than
+  // being swallowed by a handler with nothing to act on.
+  test("they are not intercepted on the Diff tab", () => {
+    const { r, calls } = router();
+    r.setPanelFocused(true);
+    r.setPanelTabsActive(false);
+    r.handleInput("}");
+    expect(calls).not.toContain("next");
+  });
+
+  test("they reach the pty when the panel is not focused", () => {
+    const { r, calls } = router();
+    r.setPanelFocused(false);
+    r.handleInput("}");
+    expect(calls).toEqual(["pty:}"]);
+  });
+});

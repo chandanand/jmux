@@ -168,6 +168,78 @@ export function formatIssueLinkOption(ids: readonly string[]): string {
   return ids.join(" ");
 }
 
+/**
+ * Every issue a session is linked to, across both stores.
+ *
+ * The two stores hold different *kinds* of id — `state.json` the tracker's own
+ * (a UUID), {@link ISSUE_LINK_OPTION} whatever a human typed at `ctl issue link`
+ * (`TRA-123`) — and for a long time only `resolveIssueSession` looked at both.
+ * Every other consumer read one, which made an agent-linked issue a half
+ * citizen: it suppressed the ghost row and then had no sidebar badge, no stage
+ * band, no linked dot and no MR transition, because those all read a context
+ * built from `state.json` alone.
+ *
+ * Deduped through {@link linkKey}, `state.json` first so the tracker's own id
+ * wins when both stores name the same issue in different spellings. Callers feed
+ * the result to a lookup that accepts either shape.
+ */
+export function mergeIssueLinkIds(
+  stateIds: readonly string[],
+  optionIds: readonly string[],
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const id of [...stateIds, ...optionIds]) {
+    const key = linkKey(id);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(id);
+  }
+  return out;
+}
+
+/**
+ * Whether a stored link id refers to this issue.
+ *
+ * Both of the issue's names are tried because the stores key on different
+ * things: `state.json` on the tracker's id, {@link ISSUE_LINK_OPTION} on
+ * whatever identifier was typed at `ctl issue link`. Testing only the id leaves
+ * a `TRA-123` link untouched, and the issue reappears on the next poll — an
+ * unlink that reports success and does nothing.
+ */
+export function isIssueLinkFor(
+  storedId: string,
+  issue: Pick<Issue, "id" | "identifier">,
+): boolean {
+  const key = linkKey(storedId);
+  return key !== "" && (key === linkKey(issue.id) || key === linkKey(issue.identifier));
+}
+
+/** The ids in `stored` that do not refer to `issue`, order preserved. */
+export function withoutIssueLink(
+  stored: readonly string[],
+  issue: Pick<Issue, "id" | "identifier">,
+): string[] {
+  return stored.filter((id) => !isIssueLinkFor(id, issue));
+}
+
+/**
+ * A stable signature of a session's link set, for "have the links changed since
+ * we resolved this context?".
+ *
+ * Neither the active poll nor the background sweep re-reads the link *set* —
+ * both refresh the issues already in a context, by id. So a link added by
+ * `ctl issue link` (which has no IPC to the running TUI, and so cannot use the
+ * optimistic mutators the TUI's own key does) would otherwise never appear at
+ * all, however many times we polled.
+ *
+ * Sorted, so re-ordering a link is not a change; keyed, so re-spelling one is
+ * not either.
+ */
+export function issueLinkSignature(ids: readonly string[]): string {
+  return [...new Set(ids.map(linkKey))].filter(Boolean).sort().join(" ");
+}
+
 /** Longer than this and the branch name stops being readable in a tab strip. */
 const TITLE_SLUG_MAX = 40;
 

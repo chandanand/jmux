@@ -295,6 +295,8 @@ your branch has added since it forked.
 | `s` | Update issue status |
 | `a` | Approve MR |
 | `c` | Copy issue prompt |
+| `p` | Send issue prompt to this session's agent |
+| `{` / `}` | Previous / next issue in the preview strip |
 | `C` | Create an issue |
 | `r` | Refresh from the tracker |
 | `/` | Filter by text |
@@ -328,6 +330,7 @@ See [connecting.md](connecting.md) for setup, [issue-tracking.md](issue-tracking
 | `Ctrl-a a` | Capture a new issue (`Enter` files it, `Ctrl-S` files it and starts work) |
 | `Ctrl-a u` | Start the next issue from your stage rotation |
 | `Ctrl-a Z` | Undo the last status write to your tracker |
+| `Ctrl-a e` | Expand this session's issues in the sidebar |
 
 `Ctrl-a W` is where you define **your own workflow stages** — Urgent, To do,
 In Progress, Waiting — each sitting on top of one or many of your tracker's

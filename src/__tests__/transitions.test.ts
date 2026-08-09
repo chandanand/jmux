@@ -2,6 +2,7 @@ import { describe, test, expect } from "bun:test";
 import {
   detectMrTransitions,
   transitionTarget,
+  sharedStatuses,
   type MrSnapshot,
 } from "../transitions";
 import { REPO_SETTING_DEFAULTS } from "../repo-settings";
@@ -72,5 +73,52 @@ describe("transitionTarget", () => {
   test("an explicitly null event stays off even when siblings are set", () => {
     const s = { ...REPO_SETTING_DEFAULTS, onMrOpenState: "In Review", onMrMergedState: null };
     expect(transitionTarget("mr-merged", s)).toBeNull();
+  });
+});
+
+// Ticked issues can span teams, and teams can be on entirely different
+// workflows. The intersection is what keeps a bulk status write from offering
+// a status only some of the set accepts and then half-failing.
+describe("sharedStatuses", () => {
+  test("one issue's statuses are all of them", () => {
+    expect(sharedStatuses([["Todo", "In Progress", "Done"]]))
+      .toEqual(["Todo", "In Progress", "Done"]);
+  });
+
+  test("keeps only what every issue accepts", () => {
+    expect(sharedStatuses([
+      ["Todo", "In Progress", "Done"],
+      ["In Progress", "Done", "Blocked"],
+    ])).toEqual(["In Progress", "Done"]);
+  });
+
+  test("disjoint workflows share nothing", () => {
+    expect(sharedStatuses([["Todo"], ["Shipped"]])).toEqual([]);
+  });
+
+  test("no issues means no statuses", () => {
+    expect(sharedStatuses([])).toEqual([]);
+  });
+
+  // The first issue's spelling is what its own workflow calls it, so that is
+  // what gets shown and written.
+  test("matches case- and whitespace-insensitively, reports the first spelling", () => {
+    expect(sharedStatuses([["In Progress"], ["in progress"], ["  IN PROGRESS  "]]))
+      .toEqual(["In Progress"]);
+  });
+
+  test("a duplicate in the first list is offered once", () => {
+    expect(sharedStatuses([["Done", "done"], ["Done"]])).toEqual(["Done"]);
+  });
+
+  // An issue whose statuses could not be fetched arrives as []. Constraining
+  // the set to nothing is honest; ignoring it would offer statuses that issue
+  // may not accept and fail on the write.
+  test("an issue with no statuses constrains the set to nothing", () => {
+    expect(sharedStatuses([["Todo", "Done"], []])).toEqual([]);
+  });
+
+  test("blank entries are never offered", () => {
+    expect(sharedStatuses([["", "  ", "Done"], ["Done"]])).toEqual(["Done"]);
   });
 });

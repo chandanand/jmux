@@ -129,6 +129,8 @@ export interface InputRouterOptions {
   // Diff panel additions
   onDiffPanelData?: (data: string) => void;
   onDiffPanelFocusToggle?: () => void;
+  /** Expand or collapse the current session's issue list in the sidebar. */
+  onToggleSessionIssues?: () => void;
   onDiffToggle?: () => void;
   onDiffZoom?: () => void;  // Ctrl-a z when diff panel is focused — toggles split/full
   onDiffSendReview?: () => void;  // Ctrl-a r — hunk review notes → this session's agent
@@ -137,9 +139,14 @@ export interface InputRouterOptions {
   // Info panel tab / action callbacks
   onPanelPrevTab?: () => void;
   onPanelNextTab?: () => void;
+  /** Step the detail pane's preview strip — `{` / `}`. */
+  onPanelPrevPreview?: () => void;
+  onPanelNextPreview?: () => void;
   onPanelAction?: (key: string) => void;
   onPanelTabClick?: (col: number) => void; // col relative to panel start
-  onPanelItemClick?: (row: number) => void; // row relative to panel content start (after toolbar)
+  /** Row and column relative to the panel's content origin (after the toolbar,
+   * right of the panel's left edge). main.ts resolves both against the layout. */
+  onPanelItemClick?: (row: number, col: number) => void;
   onPanelTabHover?: (col: number) => void; // col relative to panel start, for hover detection
   onPanelScroll?: (delta: number, row: number) => void; // wheel scroll in panel area, row relative to content
   onPanelSelectPrev?: () => void;
@@ -537,6 +544,14 @@ export class InputRouter {
           this.opts.onDiffPanelFocusToggle?.();
           return;
         }
+        // Disclose the current session's issue list in the sidebar. The click
+        // affordance is the badge itself; this is the keyboard half, and jmux
+        // is keyboard-first enough that a click-only reveal would put the list
+        // out of reach of the people most likely to be living in it.
+        if (data === "e") {
+          this.opts.onToggleSessionIssues?.();
+          return;
+        }
         // --- keymap:prefix end ---
         // When diff panel is focused, swallow unrecognized post-prefix keys
         if (this.diffPanelFocused && this.layout.panel !== null) {
@@ -756,7 +771,9 @@ export class InputRouter {
           if (this.panelTabsActive && !mouse.release && !isMotion && !isWheel) {
             const panelRow = gridY - layout.contentTop;
             if (panelRow >= 0) {
-              this.opts.onPanelItemClick?.(panelRow); // main.ts bounds-checks against listRows
+              // main.ts routes this against the layout: list rows, or the
+              // detail pane's preview strip.
+              this.opts.onPanelItemClick?.(panelRow, gridX - layout.panel.x);
             }
             return;
           }
@@ -857,8 +874,13 @@ export class InputRouter {
         if (data === "\r" && this.opts.onPanelToggleCollapse) { this.opts.onPanelToggleCollapse(); return; }
         if (data === "n" && this.opts.onPanelCreateSession) { this.opts.onPanelCreateSession(); return; }
         if (data === "l" && this.opts.onPanelLinkToSession) { this.opts.onPanelLinkToSession(); return; }
+        // Preview tabs, shifted from the queue-tab keys beside them: `[`/`]`
+        // move between queues, `{`/`}` between the issues of the set you are
+        // looking at. Same gesture, one level in.
+        if (data === "{" && this.opts.onPanelPrevPreview) { this.opts.onPanelPrevPreview(); return; }
+        if (data === "}" && this.opts.onPanelNextPreview) { this.opts.onPanelNextPreview(); return; }
       }
-      if (this.panelTabsActive && this.opts.onPanelAction && (data === "o" || data === "a" || data === "s" || data === "c" || data === "C")) {
+      if (this.panelTabsActive && this.opts.onPanelAction && (data === "o" || data === "a" || data === "s" || data === "c" || data === "C" || data === "p")) {
         this.opts.onPanelAction(data);
         return;
       }

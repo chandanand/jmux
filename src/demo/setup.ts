@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, writeFileSync, rmSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from "fs";
 import { dirname, resolve } from "path";
 import { DEMO_SESSIONS, DEMO_MANUAL_LINKS } from "./seed-data";
 import { DemoCodeHostAdapter } from "./mock-code-host";
@@ -65,6 +65,56 @@ function seedRepo(dir: string, project: DemoProject, sessionName: string): void 
     resolve(dir, ".claude", "settings.json"),
     JSON.stringify(settings, null, 2) + "\n",
   );
+}
+
+/**
+ * Leave an uncommitted edit in a demo worktree.
+ *
+ * Every demo session portrays work in flight — a live agent, a branch, an open
+ * merge request, a CI glyph — and yet `git add -A && git commit` left every one
+ * of them pristine. That is internally inconsistent (an agent four minutes into
+ * a job has changed something), and it is why `jmux --demo` could not
+ * demonstrate the diff panel at all: `Ctrl-a g` → Diff spawns hunk against a
+ * clean tree and draws an empty changeset.
+ *
+ * Deliberately small, and deliberately more than one file: hunk's file list is
+ * worth seeing, and a hundred-line diff would bury the panel's own chrome.
+ * `session.project` is cast to `DemoProject` by the caller and can be a value
+ * this table has no row for, so an unknown project simply gets no edit rather
+ * than throwing during setup.
+ */
+function seedWorkInProgress(dir: string, project: DemoProject): void {
+  const edits: Partial<Record<DemoProject, Array<[string, (existing: string) => string]>>> = {
+    platform: [
+      [
+        "src/auth.ts",
+        (s) =>
+          s +
+          "\nexport function refreshWindow(issuedAt: number): number {\n" +
+          "  // Sliding window, so a token refreshed mid-session keeps its slot.\n" +
+          "  return issuedAt + REFRESH_SKEW_MS;\n" +
+          "}\n",
+      ],
+      ["README.md", (s) => s.replace(/^# (.*)$/m, "# $1 (wip)")],
+    ],
+    dashboard: [
+      [
+        "src/chart.ts",
+        (s) =>
+          s +
+          "\nexport function shouldRerender(prev: Series, next: Series): boolean {\n" +
+          "  return prev.revision !== next.revision;\n" +
+          "}\n",
+      ],
+      ["README.md", (s) => s.replace(/^# (.*)$/m, "# $1 (wip)")],
+    ],
+  };
+
+  for (const [rel, edit] of edits[project] ?? []) {
+    const path = resolve(dir, rel);
+    if (!existsSync(path)) continue;
+    writeFileSync(path, edit(readFileSync(path, "utf8")));
+  }
 }
 
 /**
@@ -212,6 +262,8 @@ export function setupDemo(opts: DemoOptions = {}): DemoContext {
       ],
       { cwd: dir, stdout: "pipe", stderr: "pipe" },
     );
+
+    seedWorkInProgress(dir, session.project as DemoProject);
   }
 
   // 1b. Base repos the issue→worktree flow cuts from.

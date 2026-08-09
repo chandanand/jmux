@@ -1,6 +1,6 @@
 import type { SessionInfo, SessionOtelState, AgentState, AgentStateRecord } from "./types";
 import type { SessionContext, MergeRequest, Issue } from "./adapters/types";
-import { drivingIssue } from "./issue-session";
+import { drivingIssue, isIssueFinished } from "./issue-session";
 
 const CACHE_TIMER_TTL = 300; // seconds
 const COMPACTION_FLASH_MS = 30_000;
@@ -78,6 +78,28 @@ function formatMrId(mr: MergeRequest): string {
 }
 
 /**
+ * A session's issues in the order the sidebar presents them: the driving issue
+ * first, then the rest in the order the context resolved them.
+ *
+ * One rule, two renders. The row-1 badge names the driving issue and the
+ * disclosure below lists all of them, and the badge naming one ticket while the
+ * first row underneath showed another would make the `+N` read as a different
+ * set from the one it expands to. Deriving both from this makes that
+ * disagreement unrepresentable rather than merely unlikely.
+ *
+ * Not sorted beyond that: array order is resolution order, which is stable, and
+ * re-sorting by status would move rows around under the cursor every time a
+ * ticket advanced.
+ */
+export function orderedSessionIssues<T extends Pick<Issue, "stateType">>(
+  issues: readonly T[],
+): T[] {
+  const driving = drivingIssue(issues);
+  if (!driving) return [];
+  return [driving, ...issues.filter((i) => i !== driving)];
+}
+
+/**
  * The row-1 issue badge: the driving issue, plus a count of the others.
  *
  * The count is of *other* issues rather than the total, so a one-issue session
@@ -87,10 +109,41 @@ function formatMrId(mr: MergeRequest): string {
 export function formatIssueBadge(
   issues: readonly Pick<Issue, "identifier" | "stateType">[],
 ): string | null {
-  const driving = drivingIssue(issues);
+  const [driving] = orderedSessionIssues(issues);
   if (!driving) return null;
   const others = issues.length - 1;
   return others > 0 ? `${driving.identifier} +${others}` : driving.identifier;
+}
+
+/** One disclosed issue row under a session. */
+export interface SessionIssueRow {
+  id: string;
+  identifier: string;
+  title: string;
+  status: string;
+  stateType?: Issue["stateType"];
+  /** Whether the tracker considers this one dealt with, in any of its ways. */
+  finished: boolean;
+}
+
+/**
+ * The rows the sidebar draws when a session's issue list is expanded.
+ *
+ * Built here rather than in sidebar.ts so the ordering rule stays beside the
+ * badge that has to agree with it, and so the sidebar keeps taking a plain
+ * view-model instead of learning what an `Issue` is.
+ */
+export function buildSessionIssueRows(
+  issues: readonly Issue[],
+): SessionIssueRow[] {
+  return orderedSessionIssues(issues).map((issue) => ({
+    id: issue.id,
+    identifier: issue.identifier,
+    title: issue.title,
+    status: issue.status,
+    stateType: issue.stateType,
+    finished: isIssueFinished(issue),
+  }));
 }
 
 export function buildSessionView(

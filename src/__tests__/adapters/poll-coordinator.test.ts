@@ -383,5 +383,93 @@ describe("PollCoordinator", () => {
       expect(calls).toEqual([]);
       coord.stop();
     });
+
+    // `ctl issue link` writes the `@jmux-linear-issue` tmux option, which the
+    // context was built without — so an agent-linked issue suppressed the ghost
+    // row (explicitIssueLinks reads both stores) and then had no sidebar badge,
+    // no stage band, no linked dot and no MR transition.
+    describe("both link stores", () => {
+      test("an option-store link resolves into the context", async () => {
+        const { coord, calls } = harness({ links: [] });
+        coord.start();
+        coord.addSession("tra-1", "/nonexistent/tra-1", ["TRA-9"]);
+        await settle();
+        expect(calls).toEqual(["TRA-9"]);
+        coord.stop();
+      });
+
+      test("both stores contribute, state.json first", async () => {
+        const { coord, calls } = harness({ links: ["i1"] });
+        coord.start();
+        coord.addSession("tra-1", "/nonexistent/tra-1", ["TRA-9"]);
+        await settle();
+        expect(calls).toEqual(["i1", "TRA-9"]);
+        coord.stop();
+      });
+
+      test("an issue in both stores is resolved once", async () => {
+        const { coord, calls } = harness({ links: ["TRA-9"] });
+        coord.start();
+        coord.addSession("tra-1", "/nonexistent/tra-1", ["tra-9"]);
+        await settle();
+        expect(calls).toEqual(["TRA-9"]);
+        coord.stop();
+      });
+
+      // The reason the signature exists. Neither the active poll nor the
+      // background sweep re-reads the link *set* — they refresh the issues a
+      // context already has, by id — and the CLI has no IPC to reach the
+      // optimistic mutators the TUI's own link key uses.
+      test("a link added after resolution re-resolves the context", async () => {
+        const { coord, calls } = harness({ links: [] });
+        coord.start();
+        coord.addSession("tra-1", "/nonexistent/tra-1", ["TRA-9"]);
+        await settle();
+        expect(calls).toEqual(["TRA-9"]);
+
+        coord.addSession("tra-1", "/nonexistent/tra-1", ["TRA-9", "TRA-10"]);
+        await settle();
+        expect(calls).toEqual(["TRA-9", "TRA-9", "TRA-10"]);
+        coord.stop();
+      });
+
+      test("an unchanged link set does not re-resolve", async () => {
+        const { coord, calls } = harness({ links: [] });
+        coord.start();
+        coord.addSession("tra-1", "/nonexistent/tra-1", ["TRA-9"]);
+        await settle();
+        coord.addSession("tra-1", "/nonexistent/tra-1", ["TRA-9"]);
+        await settle();
+        expect(calls).toEqual(["TRA-9"]);
+        coord.stop();
+      });
+
+      // Re-ordering and re-spelling are the two ways the same set arrives
+      // looking different. Either counting as a change would re-resolve every
+      // session on every list refresh.
+      test("re-ordering or re-spelling the same links does not re-resolve", async () => {
+        const { coord, calls } = harness({ links: [] });
+        coord.start();
+        coord.addSession("tra-1", "/nonexistent/tra-1", ["TRA-9", "TRA-10"]);
+        await settle();
+        coord.addSession("tra-1", "/nonexistent/tra-1", ["tra-10", "TRA-9"]);
+        await settle();
+        expect(calls).toEqual(["TRA-9", "TRA-10"]);
+        coord.stop();
+      });
+
+      test("removing the last link re-resolves to an empty context", async () => {
+        const { coord } = harness({ links: [] });
+        coord.start();
+        coord.addSession("tra-1", "/nonexistent/tra-1", ["TRA-9"]);
+        await settle();
+        expect(coord.getContext("tra-1")?.issues.length).toBe(1);
+
+        coord.addSession("tra-1", "/nonexistent/tra-1", []);
+        await settle();
+        expect(coord.getContext("tra-1")?.issues).toEqual([]);
+        coord.stop();
+      });
+    });
   });
 });

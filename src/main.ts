@@ -73,8 +73,8 @@ import {
 import { DEFAULT_VIEW, parseSupportedFlags, sameView, spawnArgs, viewLabel, viewRequiredFlag, type HunkView } from "./hunk/view";
 import { InfoPanel, rebuildInfoPanelColors } from "./info-panel";
 import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, parkedStages, toggleParkedState, effectiveFilter, stageForState, stageInSidebar, stageShowsUnstarted, type PanelView } from "./panel-view";
-import { transformIssues, transformMrs, buildViewNodes, itemsInGroup, checkedItems, renderView, createViewState, filterItems, rebuildPanelViewColors, computeViewLayout, splitRatioForSepRow, DEFAULT_PANEL_SPLIT_RATIO, type ViewState, type ViewNode, type IssueSessionInfo } from "./panel-view-renderer";
-import { formatIssueBadge } from "./session-view";
+import { transformIssues, transformMrs, buildViewNodes, itemsInGroup, checkedItems, renderView, createViewState, moveSelection, filterItems, rebuildPanelViewColors, computeViewLayout, splitRatioForSepRow, previewTabAtCol, previewTabRow, stepPreviewIndex, resolveActiveTab, DEFAULT_PANEL_SPLIT_RATIO, type ViewState, type ViewNode, type IssueSessionInfo } from "./panel-view-renderer";
+import { formatIssueBadge, orderedSessionIssues } from "./session-view";
 import {
   linkKey,
   drivingIssue,
@@ -82,6 +82,10 @@ import {
   slugifyName,
   sanitizeBranchName,
   parseIssueLinkOption,
+  formatIssueLinkOption,
+  mergeIssueLinkIds,
+  isIssueLinkFor,
+  withoutIssueLink,
   ISSUE_LINK_OPTION,
   issueWorktreePath,
   resolveIssueSession,
@@ -100,6 +104,7 @@ import {
   detectMrTransitions,
   transitionTarget,
   TRANSITION_LABELS,
+  sharedStatuses,
   type MrSnapshot,
   type TransitionEvent,
 } from "./transitions";
@@ -1826,6 +1831,123 @@ async function applyTransition(
   return { issueId: issue.id, identifier: issue.identifier, from, to: target };
 }
 
+/**
+ * Write a status the user picked by name.
+ *
+ * Deliberately not an `applyTransition` with a fourth `TransitionEvent`: that
+ * type means "an event happened and config says where it goes", and every part
+ * of it — the per-repo target lookup, the confirm policy, the event label — is
+ * about a write jmux decided to make. This one was named outright, so it needs
+ * none of that. What it does share is the `UndoMove`, so a manual pick lands in
+ * the same `Ctrl-a Z` batch as everything else.
+ */
+async function applyStatusPick(
+  issue: import("./adapters/types").Issue,
+  target: string,
+): Promise<UndoMove | null> {
+  const tracker = adapters.issueTracker;
+  if (!tracker || tracker.authState !== "ok") return null;
+  if (issue.status === target) return null;
+
+  const from = issue.status;
+  pollCoordinator.optimisticIssueStatus(issue.id, target);
+  try {
+    await tracker.updateStatus(issue.id, target);
+  } catch (e) {
+    // Put the optimistic change back: leaving it would show a status the
+    // tracker never accepted until the next global poll overwrote it.
+    pollCoordinator.optimisticIssueStatus(issue.id, from);
+    logError("jmux", `status pick failed for ${issue.identifier}: ${(e as Error).message}`);
+    scheduleRender();
+    return null;
+  }
+  pollCoordinator.refreshGlobalItem("issue", issue.id);
+  scheduleRender();
+  return { issueId: issue.id, identifier: issue.identifier, from, to: target };
+}
+
+/**
+ * Pick a status and write it to every issue in `issues`.
+ *
+ * Ticks are the reason this takes a list. `n` and `l` have read them since
+ * groups proved unable to name an arbitrary set, and `s` reading only the
+ * highlighted row made "these three are done" three separate trips through the
+ * same modal — in exactly the multi-issue sessions where it is the common move.
+ */
+async function pickStatusFor(
+  issues: import("./adapters/types").Issue[],
+  onApplied?: () => void,
+): Promise<void> {
+  const tracker = adapters.issueTracker;
+  if (!tracker || issues.length === 0) return;
+
+  const available = await Promise.all(
+    issues.map((i) => tracker.getAvailableStatuses(i.id).catch(() => [] as string[])),
+  );
+  const statuses = sharedStatuses(available);
+
+  if (statuses.length === 0) {
+    // Silence would read as a broken key. For one issue there is nothing useful
+    // to say; for several the reason is specific and actionable — issues from
+    // different teams can sit on entirely different workflows.
+    if (issues.length > 1) {
+      showNotice({
+        title: "No status they all share",
+        message: `${issues.length} issues, and no single status all of them can move to.`,
+        hint: "Issues on different teams can have different workflows. Move them separately.",
+      });
+    }
+    return;
+  }
+
+  const items = statuses.map((s) => ({ id: s, label: s }));
+  const listModal = new ListModal({
+    items,
+    header: issues.length > 1 ? `Update Status — ${issues.length} issues` : "Update Status",
+    ...(issues.length > 1 ? { subheader: issues.map((i) => i.identifier).join(", ") } : {}),
+  });
+  listModal.open();
+  openModal(listModal, (selected: unknown) => {
+    const sel = selected as { id: string };
+    // Cancelling keeps the ticks. They are the set the user built by hand, and
+    // backing out of the status list is very often a step toward picking a
+    // different status for that same set.
+    if (!sel?.id) return;
+    onApplied?.();
+    void (async () => {
+      const moves: Array<UndoMove | null> = [];
+      for (const issue of issues) moves.push(await applyStatusPick(issue, sel.id));
+      // One undo for the whole set: the user approved it as one decision, the
+      // same rule the transition checklist follows.
+      recordUndo(moves);
+      if (issues.length > 1) showToast(`${issues.length} → ${sel.id}`);
+    })();
+  });
+}
+
+/**
+ * The seed prompt for a set of issues, from the tracker that owns them.
+ *
+ * One issue takes `buildPrompt`, several take `buildGroupPrompt` — the same
+ * split `provisionIssueSession` makes, so what you copy or send is what a
+ * session start would have seeded. The single-issue path is not a group of one:
+ * the group prompt tells the agent these share a branch and a merge request,
+ * which is a claim, not a formatting choice.
+ */
+function promptForIssues(issues: import("./adapters/types").Issue[]): string {
+  const tracker = adapters.issueTracker;
+  if (!tracker || issues.length === 0) return "";
+  if (issues.length === 1) return tracker.buildPrompt(issues[0]!);
+  const projects = new Set(issues.map((i) => i.project ?? ""));
+  return tracker.buildGroupPrompt(issues, projects.size === 1 ? [...projects][0]! : "");
+}
+
+/** Put text on the user's clipboard through the terminal, via OSC 52. */
+function copyToClipboard(text: string): void {
+  if (!text) return;
+  process.stdout.write(`\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`);
+}
+
 /** Offer the batch just written as one undo, unless the policy says never. */
 function recordUndo(moves: Array<UndoMove | null>): void {
   const applied = moves.filter((m): m is UndoMove => m !== null);
@@ -2059,7 +2181,11 @@ function registerSessionsWithPoller(sessions: SessionInfo[]): void {
     // The absolute path, never the display string: this becomes the `cwd` of
     // the git commands that discover the session's branch.
     const dir = sessionDetailsCache.get(session.id)?.path;
-    if (dir) pollCoordinator.addSession(session.name, dir);
+    // `issueLinks` is the `@jmux-linear-issue` option, read in the same
+    // list-sessions call that produced this SessionInfo — pushed in rather than
+    // pulled back out of `currentSessions`, so it cannot be read at a moment
+    // when the two disagree.
+    if (dir) pollCoordinator.addSession(session.name, dir, session.issueLinks ?? []);
   }
 }
 
@@ -2890,6 +3016,87 @@ async function deliverReview(
 }
 
 /**
+ * Hand an agent the prompt for issues added to its session after it started.
+ *
+ * A session start seeds the agent with its issues. Everything linked *after* —
+ * the `l` key, `ctl issue link`, a ticket that arrives mid-feature — was
+ * invisible to the agent, which had no way to learn ticket two existed. The
+ * only route was `c`, switch pane, paste.
+ *
+ * Confirmed and never automatic, for the reason `sendReviewToAgent` states:
+ * this puts words into an agent's context and sets it working, so the user sees
+ * exactly what lands before it does. That is also why it is its own key rather
+ * than a step bolted onto `l` — claiming an issue and briefing an agent about
+ * it are separate decisions, and a session may not even have an agent.
+ */
+function briefAgentAbout(issues: import("./adapters/types").Issue[]): void {
+  const sessionId = currentSessionId;
+  if (!sessionId || issues.length === 0) return;
+
+  const pane = resolveAgentPane(sessionId);
+  if (!pane) {
+    showNotice({
+      title: "No agent to brief",
+      message: "This session has no agent pane.",
+      hint: "Run jmux --install-agent-hooks so agents report which pane they run in.",
+    });
+    return;
+  }
+
+  const prompt = promptForIssues(issues);
+  if (!prompt) return;
+
+  const sessionName = currentSessions.find((s) => s.id === sessionId)?.name ?? "";
+  const onSurface = { bg: theme.surface, bgMode: 2 as const };
+  const dim = { ...neutralFg(8), dim: true, ...onSurface };
+  const lines: StyledLine[] = [[]];
+
+  for (const issue of issues) {
+    lines.push([
+      { text: `  ${issue.identifier}`, attrs: { ...neutralFg(6), ...onSurface } },
+      { text: `  ${issue.title}`, attrs: { ...neutralFg(7), ...onSurface } },
+    ]);
+  }
+
+  lines.push([]);
+  // The prompt's own length is the thing worth stating: what lands is the
+  // tracker's full issue text, descriptions included, not the one-line
+  // summaries listed above.
+  lines.push([{ text: `  Sends the full issue prompt (${prompt.length} chars)`, attrs: dim }]);
+  lines.push([
+    { text: `  to ${pane}`, attrs: dim },
+    { text: sessionName ? ` in ${sessionName}` : "", attrs: dim },
+  ]);
+  lines.push([]);
+  lines.push([{ text: "  Enter to send · Esc to cancel", attrs: dim }]);
+
+  const modal = new ContentModal({
+    lines,
+    title: issues.length === 1
+      ? `Brief the agent on ${issues[0]!.identifier}`
+      : `Brief the agent on ${issues.length} issues`,
+    confirmOnEnter: true,
+  });
+  modal.setTermRows(process.stdout.rows || 24);
+  modal.open();
+  openModal(modal, (value) => {
+    if (value !== true) return;
+    if (!pasteIntoPane(pane, prompt)) {
+      showNotice({
+        title: "Couldn't reach the agent",
+        message: `tmux refused to send to ${pane}.`,
+        tone: "error",
+      });
+      return;
+    }
+    showToast(issues.length === 1
+      ? `Briefed on ${issues[0]!.identifier}`
+      : `Briefed on ${issues.length} issues`);
+  });
+  scheduleRender();
+}
+
+/**
  * Pick what the Diff tab shows.
  *
  * "Branch vs base" is the entry that only jmux can offer: it already resolves a
@@ -3308,8 +3515,17 @@ function renderFrame(): void {
         const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
 
         let rawItems: import("./panel-view-renderer").RenderableItem[];
+        // Built inside the branch that needs them and shared with
+        // previewTabsFor below. `getIssueSessionStates` walks every global issue
+        // and stats a worktree path for each — a cost its own doc comment calls
+        // out as fine once per poll and not per frame, which is what building it
+        // separately for the strip briefly made it.
+        let sessionStates: Map<string, IssueSessionInfo> | undefined;
+        let mrsIndex: ReturnType<typeof mrsByUrl> | undefined;
         if (view.source === "issues") {
-          rawItems = transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl());
+          sessionStates = getIssueSessionStates();
+          mrsIndex = mrsByUrl();
+          rawItems = transformIssues(issuesForView(view), linkedIssueIds, sessionStates, mrsIndex);
         } else if (view.filter.scope === "reviewing") {
           rawItems = transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds);
         } else {
@@ -3329,6 +3545,7 @@ function renderFrame(): void {
         contentGrid = renderView(nodes, dpCols, dpRows, viewState, {
           splitRatio: infoPanelSplitRatio,
           splitHovered: hoveredHandle === "panel-split",
+          previewTabs: previewTabsFor(view, viewState, nodes, sessionStates, mrsIndex),
         });
       } else {
         contentGrid = createGrid(dpCols, dpRows);
@@ -3728,6 +3945,14 @@ const inputRouter = new InputRouter(
         scheduleRender();
         return;
       }
+      // Before the row's own selection: the badge is a region inside a session
+      // row, so the narrower target has to be tested first or it never fires.
+      const disclosed = sidebar.disclosureHit(row, col);
+      if (disclosed) {
+        sidebar.toggleSessionIssues(disclosed);
+        scheduleRender();
+        return;
+      }
       const sel = sidebar.getSelectionByRow(row);
       if (sel?.type === "overview" || sel?.type === "pinnedPane") {
         void enterGlass();
@@ -3736,6 +3961,23 @@ const inputRouter = new InputRouter(
       if (sel?.type === "ghost") {
         const issue = pollCoordinator.getGlobalIssues().find((i) => i.id === sel.issueId);
         if (issue) openGhostPreview({ id: issue.id, identifier: issue.identifier });
+        return;
+      }
+      // A disclosed issue row: go to its session and put that issue — not the
+      // session's driving one — in the panel. Clicking a specific ticket and
+      // landing on a different ticket's detail would make the row pointless.
+      //
+      // Chained rather than fired alongside: switchSession ends by calling
+      // focusPanelOnSessionIssue, so a focus set beforehand would be overwritten
+      // with the driving issue the moment the switch resolved.
+      if (sel?.type === "sessionIssue") {
+        const arrived = sel.sessionId === currentSessionId
+          ? Promise.resolve()
+          : inGlass ? leaveGlass(sel.sessionId) : switchSession(sel.sessionId);
+        void arrived.then(() => {
+          focusPanelOnIssue(sel.issueId);
+          scheduleRender();
+        });
         return;
       }
       const session = sidebar.getSessionByRow(row);
@@ -3848,6 +4090,24 @@ const inputRouter = new InputRouter(
     onSortCycle: () => { applySidebarSort(sidebar.cycleSortMode()); scheduleRender(); },
     onFilterCycle: () => { sidebar.cycleFilterMode(); scheduleRender(); },
     onBrowserPane: () => { void openBrowserPane(); },
+    onToggleSessionIssues: () => {
+      const name = currentSessions.find((s) => s.id === currentSessionId)?.name;
+      if (!name) return;
+      const state = sidebar.toggleSessionIssues(name);
+      // null means the session has nothing to disclose. Said out loud rather
+      // than passed over in silence: a key that does nothing is indistinguishable
+      // from a key that is broken, and the reason here is worth knowing — one
+      // issue is already fully named by the badge.
+      if (state === null) {
+        const count = sidebar.getSessionIssues(name).length;
+        showToast(count === 1
+          ? "One issue — already shown on the row"
+          : "No issues linked to this session");
+        return;
+      }
+      sidebar.scrollToActive();
+      scheduleRender();
+    },
     onModalInput: (data) => {
       // Full-screen surfaces consume input while open, ahead of any modal.
       if (workflowScreen.isOpen) {
@@ -4009,8 +4269,7 @@ const inputRouter = new InputRouter(
     onPanelSelectPrev: () => {
       const viewState = viewStates.get(infoPanel.activeTab);
       if (viewState && viewState.selectedIndex > 0) {
-        viewState.selectedIndex--;
-        viewState.detailScrollOffset = 0; // reset detail scroll on item change
+        moveSelection(viewState, viewState.selectedIndex - 1);
         // Scroll list if selection is above visible area
         if (viewState.selectedIndex < viewState.scrollOffset) {
           viewState.scrollOffset = viewState.selectedIndex;
@@ -4039,8 +4298,7 @@ const inputRouter = new InputRouter(
       const effectiveView = viewState.filterQuery ? { ...view, groupBy: "none" as const } : view;
       const nodes = buildViewNodes(rawItems, effectiveView, viewState.collapsedGroups);
       if (viewState.selectedIndex < nodes.length - 1) {
-        viewState.selectedIndex++;
-        viewState.detailScrollOffset = 0; // reset detail scroll on item change
+        moveSelection(viewState, viewState.selectedIndex + 1);
         // Scroll list if selection goes below visible area
         const dpRows = layout.ptyRows;
         const { listRows } = panelViewLayout(dpRows, viewState);
@@ -4117,6 +4375,8 @@ const inputRouter = new InputRouter(
         scheduleRender();
       }
     },
+    onPanelPrevPreview: () => stepPreviewTab(-1),
+    onPanelNextPreview: () => stepPreviewTab(1),
     // Tick the highlighted item. Groups are not tickable: ticking is for
     // building a set the headers cannot express, and a header already has its
     // own whole-group action on `n`.
@@ -4268,9 +4528,8 @@ const inputRouter = new InputRouter(
       const viewState = viewStates.get(infoPanel.activeTab);
       if (viewState) {
         viewState.filterQuery = (viewState.filterQuery ?? "") + char;
-        viewState.selectedIndex = 0;
+        moveSelection(viewState, 0);
         viewState.scrollOffset = 0;
-        viewState.detailScrollOffset = 0;
         scheduleRender();
       }
     },
@@ -4278,9 +4537,8 @@ const inputRouter = new InputRouter(
       const viewState = viewStates.get(infoPanel.activeTab);
       if (viewState && viewState.filterQuery && viewState.filterQuery.length > 0) {
         viewState.filterQuery = viewState.filterQuery.slice(0, -1);
-        viewState.selectedIndex = 0;
+        moveSelection(viewState, 0);
         viewState.scrollOffset = 0;
-        viewState.detailScrollOffset = 0;
         scheduleRender();
       }
     },
@@ -4288,9 +4546,8 @@ const inputRouter = new InputRouter(
       const viewState = viewStates.get(infoPanel.activeTab);
       if (viewState) {
         viewState.filterQuery = null;
-        viewState.selectedIndex = 0;
+        moveSelection(viewState, 0);
         viewState.scrollOffset = 0;
-        viewState.detailScrollOffset = 0;
         scheduleRender();
       }
     },
@@ -4304,11 +4561,16 @@ const inputRouter = new InputRouter(
       const viewState = viewStates.get(view.id);
       if (!viewState) return;
 
-      // Determine if scroll is in list area or detail area
+      // The separator is the boundary: everything above it — the filter bar and
+      // the list — scrolls the list, the separator and everything below it
+      // scrolls the detail. Stated as one band rather than as `row < listRows`, which
+      // ignored the filter bar's row and sent the last list row's wheel to the
+      // detail pane for as long as a filter was open. With no detail pane
+      // `sepRow` is the panel height, so the whole panel scrolls the list.
       const dpRows = layout.ptyRows;
-      const { listRows } = panelViewLayout(dpRows, viewState);
+      const { sepRow } = panelViewLayout(dpRows, viewState);
 
-      if (row < listRows) {
+      if (row < sepRow) {
         // Scroll list
         const newOffset = viewState.scrollOffset + delta;
         viewState.scrollOffset = Math.max(0, newOffset);
@@ -4330,34 +4592,40 @@ const inputRouter = new InputRouter(
         scheduleRender();
       }
     },
-    onPanelItemClick: (row) => {
-      const view = panelViews.find((v) => v.id === infoPanel.activeTab);
-      if (!view) return;
-      const viewState = viewStates.get(view.id);
-      if (!viewState) return;
-      // Only handle clicks in the list area (top half)
+    onPanelItemClick: (row, col) => {
+      const pc = activePanelContext();
+      if (!pc) return;
+      const { viewState, nodes } = pc;
       const dpRows = layout.ptyRows;
-      const { listRows } = panelViewLayout(dpRows, viewState);
-      if (row >= listRows) return; // click was in detail area — ignore
-      // row is relative to panel content (after toolbar row)
-      const nodeIndex = row + viewState.scrollOffset;
-      if (nodeIndex >= 0) {
-        const sessionName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
-        const ctx = pollCoordinator.getContext(sessionName);
-        const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
-        const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
-        let rawItems = view.source === "issues"
-          ? transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl())
-          : view.filter.scope === "reviewing"
-            ? transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds)
-            : transformMrs(pollCoordinator.getGlobalMrs(), linkedMrIds);
-        if (viewState.filterQuery) rawItems = filterItems(rawItems, viewState.filterQuery);
-        const effectiveView = viewState.filterQuery ? { ...view, groupBy: "none" as const } : view;
-        const nodes = buildViewNodes(rawItems, effectiveView, viewState.collapsedGroups);
-        if (nodeIndex < nodes.length) {
-          viewState.selectedIndex = nodeIndex;
+
+      // The preview strip first: it lives inside the detail pane, which the
+      // list-area test below rejects wholesale, so asking after it would never
+      // reach here.
+      const tabs = previewTabsFor(pc.view, viewState, nodes);
+      const stripRow = previewTabRow(dpRows, viewState, tabs, infoPanelSplitRatio);
+      if (tabs && stripRow !== null && row === stripRow) {
+        const hit = previewTabAtCol(tabs, layout.panel?.w ?? 0, col);
+        if (hit) {
+          viewState.previewIssueId = hit;
+          viewState.detailScrollOffset = 0;
           scheduleRender();
         }
+        return;
+      }
+
+      // Then the list. `listStartRow` is subtracted rather than assumed zero:
+      // with the filter bar open the list starts a row down, and treating a
+      // click's row as a list index directly selected the row above the one
+      // under the pointer for the whole time a filter was active.
+      const { listStartRow, listRows } = computeViewLayout(
+        dpRows, viewState.filterQuery !== null, infoPanelSplitRatio,
+      );
+      const listRow = row - listStartRow;
+      if (listRow < 0 || listRow >= listRows) return;
+      const nodeIndex = listRow + viewState.scrollOffset;
+      if (nodeIndex >= 0 && nodeIndex < nodes.length) {
+        moveSelection(viewState, nodeIndex);
+        scheduleRender();
       }
     },
     onPanelTabClick: (col) => {
@@ -4381,52 +4649,69 @@ const inputRouter = new InputRouter(
         return;
       }
 
-      const viewState = viewStates.get(view.id);
-      if (!viewState) return;
-      const sessionName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
-      const ctx = pollCoordinator.getContext(sessionName);
-      const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
-      const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
-      let rawItems = view.source === "issues"
-        ? transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl())
-        : view.filter.scope === "reviewing"
-          ? transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds)
-          : transformMrs(pollCoordinator.getGlobalMrs(), linkedMrIds);
-      if (viewState.filterQuery) rawItems = filterItems(rawItems, viewState.filterQuery);
-      const effectiveView = viewState.filterQuery ? { ...view, groupBy: "none" as const } : view;
-      const nodes = buildViewNodes(rawItems, effectiveView, viewState.collapsedGroups);
-      const selected = nodes[viewState.selectedIndex];
-      if (selected?.kind !== "item") return;
+      // Rebuilt through activePanelContext rather than inline: this handler was
+      // the sixth copy of those twelve lines, and the copies agreed only by
+      // luck — this one had to remember the filterQuery flattening on its own.
+      const pc = activePanelContext();
+      if (!pc) return;
+      const { viewState, nodes } = pc;
 
+      // Ticked issues, for the keys that can act on a set. `n` and `l` already
+      // read ticks; `s` and the prompt keys reading only the highlighted row is
+      // what made "these three are done" three trips through one modal.
+      const tickedIssues = checkedItems(nodes, viewState)
+        .filter((i) => i.type === "issue")
+        .map((i) => i.raw as import("./adapters/types").Issue);
+
+      const selected = nodes[viewState.selectedIndex];
+      // The set a set-capable key acts on: ticks when there are any, else the
+      // single issue you are reading — which is the pinned preview when the
+      // strip is driving, and the row under the cursor otherwise.
+      const singleIssue = previewedOrSelectedIssue(pc);
+      const issueSet = tickedIssues.length > 0
+        ? tickedIssues
+        : singleIssue ? [singleIssue] : [];
+
+      if (adapters.issueTracker && singleIssue && key === "o") {
+        // Not a set action, deliberately: `o` on five ticked issues would open
+        // five browser tabs from one keystroke, with no confirmation and no way
+        // back. It opens what you are reading.
+        adapters.issueTracker.openInBrowser(singleIssue.id);
+        return;
+      }
+
+      if (adapters.issueTracker && issueSet.length > 0) {
+        if (key === "s") {
+          void pickStatusFor(issueSet, () => {
+            viewState.checkedIds.clear();
+            scheduleRender();
+          });
+          return;
+        }
+        if (key === "c") {
+          // The tracker's own prompt, not a string built here. This was the one
+          // path that composed its own, so the prompt you copied differed from
+          // the one a session start seeded — silently, and only for the key
+          // whose whole purpose is to hand that text to an agent.
+          copyToClipboard(promptForIssues(issueSet));
+          showToast(issueSet.length > 1
+            ? `Copied prompt for ${issueSet.length} issues`
+            : `Copied prompt for ${issueSet[0]!.identifier}`);
+          return;
+        }
+        if (key === "p") {
+          briefAgentAbout(issueSet);
+          return;
+        }
+      }
+
+      // `o` on an issue is handled above, in the set block — it is reached here
+      // only for a merge request, which the preview strip never contains.
+      if (selected?.kind !== "item") return;
       if (selected.item.type === "mr" && adapters.codeHost) {
         const mr = selected.item.raw as import("./adapters/types").MergeRequest;
         if (key === "o") adapters.codeHost.openInBrowser(mr.id);
         if (key === "a") adapters.codeHost.approve(mr.id).then(() => { pollCoordinator.refreshGlobalItem("mr", mr.id); scheduleRender(); });
-      }
-      if (selected.item.type === "issue" && adapters.issueTracker) {
-        const issue = selected.item.raw as import("./adapters/types").Issue;
-        if (key === "o") adapters.issueTracker.openInBrowser(issue.id);
-        if (key === "c") {
-          // Copy issue prompt to clipboard via OSC 52
-          const prompt = `You are working on ${issue.identifier}: ${issue.title}\n\n${issue.description ?? ""}\n\nStart by understanding the relevant code, then propose an approach.`;
-          const encoded = Buffer.from(prompt).toString("base64");
-          process.stdout.write(`\x1b]52;c;${encoded}\x07`);
-        }
-        if (key === "s") {
-          adapters.issueTracker.getAvailableStatuses(issue.id).then((statuses) => {
-            if (statuses.length === 0) return;
-            const items = statuses.map((s) => ({ id: s, label: s }));
-            const listModal = new ListModal({ items, header: "Update Status" });
-            listModal.open();
-            openModal(listModal, (selected: unknown) => {
-              const sel = selected as { id: string };
-              if (sel?.id) {
-                pollCoordinator.optimisticIssueStatus(issue.id, sel.id);
-                adapters.issueTracker!.updateStatus(issue.id, sel.id).then(() => { pollCoordinator.refreshGlobalItem("issue", issue.id); });
-              }
-            });
-          });
-        }
       }
     },
   },
@@ -5996,6 +6281,134 @@ interface PanelContext {
 }
 
 /**
+ * The preview strip's tab set for a view, or undefined for no strip.
+ *
+ * Two sources, and ticks win. A tick is an explicit act performed just now; the
+ * focused session's links are ambient and true all day. When the user has said
+ * "these ones", that is the set.
+ *
+ * The session source is deliberately *contextual*: it only produces a strip
+ * while the cursor is on one of that session's issues. Otherwise anyone holding
+ * a multi-issue session would carry a permanent strip through every unrelated
+ * queue, spending a row of detail on tabs whose active one is usually blank.
+ *
+ * Items for session issues are built here rather than looked up in `rawItems`,
+ * because the whole reason the preview has its own cursor is that they are
+ * routinely *not* there — a finished ticket on an "In Progress" tab, or one
+ * assigned to a teammate and so absent from `getMyIssues()` altogether.
+ */
+function previewTabsFor(
+  view: PanelView,
+  viewState: ViewState,
+  nodes: ViewNode[],
+  /**
+   * The caller's own `getIssueSessionStates()` / `mrsByUrl()`, when it has
+   * already built them. The render path has: it builds both a dozen lines
+   * earlier for `rawItems`, and recomputing here put a *second* walk of the
+   * whole backlog — with an `existsSync` per issue — on every frame, which is
+   * exactly what the note on `getIssueSessionStates` warns against. Optional
+   * because the key and click paths fire once per event and have neither.
+   */
+  sessionStates?: Map<string, IssueSessionInfo>,
+  mrs?: Map<string, import("./adapters/types").MergeRequest>,
+): import("./panel-view-renderer").PreviewTabs | undefined {
+  if (view.source !== "issues") return undefined;
+
+  const ticked = checkedItems(nodes, viewState).filter((i) => i.type === "issue");
+  let items = ticked;
+
+  if (items.length < 2) {
+    const sessionName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
+    const issues = pollCoordinator.getContext(sessionName)?.issues ?? [];
+    if (issues.length < 2) return undefined;
+
+    // Contextual: the cursor has to be on one of them. The pin counts too, or
+    // the strip would vanish the moment you used it to move off the row that
+    // summoned it.
+    const selected = nodes[viewState.selectedIndex];
+    const onOne = selected?.kind === "item" && selected.item.type === "issue"
+      && issues.some((i) => i.id === selected.item.id);
+    const pinnedHere = viewState.previewIssueId !== null
+      && issues.some((i) => i.id === viewState.previewIssueId);
+    if (!onOne && !pinnedHere) return undefined;
+
+    // orderedSessionIssues, so the strip reads in the same order as the
+    // sidebar's disclosure for the same session — two views of one set that
+    // disagreed on order would make the `+N` badge hard to trust.
+    items = transformIssues(
+      orderedSessionIssues(issues),
+      new Set(issues.map((i) => i.id)),
+      sessionStates ?? getIssueSessionStates(),
+      mrs ?? mrsByUrl(),
+    );
+  }
+
+  if (items.length < 2) return undefined;
+
+  const cursor = nodes[viewState.selectedIndex];
+  return {
+    items,
+    activeId: resolveActiveTab(
+      items,
+      viewState.previewIssueId,
+      cursor?.kind === "item" ? cursor.item.id : null,
+    ),
+  };
+}
+
+/**
+ * Step the preview strip by `delta`.
+ *
+ * Anchored on the pinned tab when there is one, else the cursor's own issue —
+ * so the first `}` moves to the *next* issue rather than jumping to the front
+ * of the strip. The index arithmetic lives in `stepPreviewIndex`, where its
+ * wrap and its absent-anchor case can be tested.
+ */
+function stepPreviewTab(delta: number): void {
+  const pc = activePanelContext();
+  if (!pc) return;
+  const tabs = previewTabsFor(pc.view, pc.viewState, pc.nodes);
+  if (!tabs || tabs.items.length < 2) return;
+
+  // `activeId` already resolves the cursor when nothing is pinned, so it is the
+  // whole anchor — a second fallback to the cursor here would only ever produce
+  // an id `resolveActiveTab` had just rejected for not being in the set, which
+  // `stepPreviewIndex` handles identically to none at all.
+  const next = stepPreviewIndex(
+    tabs.items.length,
+    tabs.items.findIndex((i) => i.id === tabs.activeId),
+    delta,
+  );
+  if (next < 0) return;
+
+  pc.viewState.previewIssueId = tabs.items[next]!.id;
+  // The pane is about to show a different document; the old offset means
+  // nothing in it. Same reason `moveSelection` resets it.
+  pc.viewState.detailScrollOffset = 0;
+  scheduleRender();
+}
+
+/**
+ * The issue a single-item panel action targets.
+ *
+ * The pinned preview outranks the cursor because the action bar sits under the
+ * detail pane and describes what is in it: reading TRA-743 and having `o` open
+ * the row you last arrowed past would be the surprise. Ticks are handled before
+ * this is ever consulted — when a set exists, actions act on the set.
+ */
+function previewedOrSelectedIssue(
+  pc: PanelContext,
+): import("./adapters/types").Issue | null {
+  const tabs = previewTabsFor(pc.view, pc.viewState, pc.nodes);
+  const pinned = tabs?.items.find((i) => i.id === tabs.activeId);
+  if (pinned) return pinned.raw as import("./adapters/types").Issue;
+  const selected = pc.nodes[pc.viewState.selectedIndex];
+  return selected?.kind === "item" && selected.item.type === "issue"
+    ? (selected.item.raw as import("./adapters/types").Issue)
+    : null;
+}
+
+/**
  * Everything a panel key needs about what is currently on screen.
  *
  * Every action handler used to rebuild this inline — the same twelve lines,
@@ -6244,7 +6657,10 @@ async function startIssueGroup(
  * instruction and reports what it did.
  *
  * Only *explicit* links are moved. A claim by name derivation is not a link and
- * needs no removal — an explicit link already outranks it.
+ * needs no removal — an explicit link already outranks it. But both explicit
+ * *stores* are cleared: stealing only the `state.json` claim left a session
+ * whose `@jmux-linear-issue` still named the issue, which is the two-claim state
+ * this exists to prevent — arrived at by the very key meant to resolve it.
  *
  * Provisioning does not go through here: it links a session that does not exist
  * yet, and reaches that path only when nothing else claims the issue.
@@ -6256,13 +6672,7 @@ function attachIssueTo(
   let movedFrom: string | null = null;
   for (const session of currentSessions) {
     if (session.name === sessionName) continue;
-    const claims = sessionState
-      .getLinkedIssueIds(session.name)
-      .some((id) => linkKey(id) === linkKey(issue.id));
-    if (!claims) continue;
-    sessionState.removeLink(session.name, { type: "issue", id: issue.id });
-    pollCoordinator.removeLinkedIssue(session.name, issue.id);
-    movedFrom = session.name;
+    if (removeIssueLinkFrom(session.name, issue)) movedFrom = session.name;
   }
   sessionState.addLink(sessionName, { type: "issue", id: issue.id });
   pollCoordinator.addLinkedIssue(sessionName, issue);
@@ -6355,6 +6765,104 @@ function explicitIssueLinks(): Map<string, string> {
 }
 
 /**
+ * The ids in a session's `@jmux-linear-issue` option, as of the last
+ * session-list refresh.
+ *
+ * Read off `SessionInfo` rather than by asking tmux, because `fetchSessions`
+ * already selects the option in its `list-sessions` format — a second query
+ * would be a slower way to get an answer that can only be staler.
+ */
+function optionIssueLinks(sessionName: string): string[] {
+  return currentSessions.find((s) => s.name === sessionName)?.issueLinks ?? [];
+}
+
+/**
+ * Rewrite a session's `@jmux-linear-issue` option, unsetting it when empty.
+ *
+ * Unset rather than set-to-"" so `parseIssueLinkOption` and tmux's own
+ * `#{@jmux-linear-issue}` agree about a session with no links, and so the
+ * option does not linger as an empty string that reads as "configured".
+ *
+ * `SessionInfo.issueLinks` is patched in the same breath: the next
+ * `fetchSessions` would fix it anyway, but every caller here goes on to consult
+ * the link set, and one of them (`attachIssueTo`) writes several sessions in a
+ * loop.
+ *
+ * Returns whether tmux accepted the write. Callers must not treat a refusal as
+ * a removal: the link survives in the option, the next `fetchSessions` reads it
+ * straight back, and reporting success would be the same silent no-op that
+ * matching on one id form used to produce.
+ */
+function writeOptionIssueLinks(sessionName: string, ids: readonly string[]): boolean {
+  const ok = ids.length > 0
+    ? runTmux(["set-option", "-t", sessionName, ISSUE_LINK_OPTION, formatIssueLinkOption(ids)]).ok
+    : runTmux(["set-option", "-t", sessionName, "-u", ISSUE_LINK_OPTION]).ok;
+  if (!ok) return false;
+  const session = currentSessions.find((s) => s.name === sessionName);
+  if (session) {
+    if (ids.length > 0) session.issueLinks = [...ids];
+    else delete session.issueLinks;
+  }
+  return true;
+}
+
+/**
+ * Every issue explicitly linked to a session, across both stores.
+ *
+ * "Explicit" is the load-bearing word: a session's context also carries issues
+ * discovered from its branch and from its merge requests, and those are not
+ * links — there is nothing to remove, so offering them to an unlink prompt
+ * would be offering an action that cannot work.
+ */
+function explicitIssueLinkIds(sessionName: string): string[] {
+  return mergeIssueLinkIds(
+    sessionState.getLinkedIssueIds(sessionName),
+    optionIssueLinks(sessionName),
+  );
+}
+
+/**
+ * Drop an issue's explicit link from a session, in whichever store holds it.
+ *
+ * Both are checked every time rather than the caller choosing: the TUI's `L`
+ * key writes `state.json` and `ctl issue link` writes the tmux option, and by
+ * the time something is being unlinked nobody remembers which made it.
+ *
+ * Both of the issue's names are checked too, and that is not belt-and-braces:
+ * the stores key on *different* things — `state.json` on the tracker's id, the
+ * option on whatever identifier was typed at `ctl issue link` — so matching a
+ * UUID alone silently leaves a `TRA-123` link in place, and the issue comes
+ * straight back on the next poll.
+ *
+ * Returns whether anything was actually removed.
+ */
+function removeIssueLinkFrom(
+  sessionName: string,
+  issue: Pick<import("./adapters/types").Issue, "id" | "identifier">,
+): boolean {
+  let removed = false;
+
+  for (const stored of sessionState.getLinkedIssueIds(sessionName)) {
+    if (!isIssueLinkFor(stored, issue)) continue;
+    // The stored spelling, not the caller's: removeLink matches ids exactly.
+    sessionState.removeLink(sessionName, { type: "issue", id: stored });
+    removed = true;
+  }
+
+  const option = optionIssueLinks(sessionName);
+  const remaining = withoutIssueLink(option, issue);
+  if (remaining.length !== option.length) {
+    // Only a write tmux accepted counts. A refused one leaves the link in the
+    // option for the next poll to read back, so claiming removal here would
+    // report a success the user can watch undo itself.
+    removed = writeOptionIssueLinks(sessionName, remaining) || removed;
+  }
+
+  if (removed) pollCoordinator.removeLinkedIssue(sessionName, issue.id);
+  return removed;
+}
+
+/**
  * Session state for a single issue.
  *
  * Split out of `getIssueSessionStates` because the ghost preview needs the
@@ -6415,8 +6923,7 @@ function selectIssueInOpenPanel(issueId: string): void {
   );
   if (index < 0) return;
 
-  viewState.selectedIndex = index;
-  viewState.detailScrollOffset = 0;
+  moveSelection(viewState, index);
   const { listRows } = panelViewLayout(layout.ptyRows, viewState);
   if (index >= viewState.scrollOffset + listRows) {
     viewState.scrollOffset = index - listRows + 1;
@@ -6425,54 +6932,108 @@ function selectIssueInOpenPanel(issueId: string): void {
   }
 }
 
+/**
+ * Highlight the issue that represents `sessionName`, in whichever tab holds it.
+ *
+ * "Represents" is `drivingIssue` — the same rule the sidebar badge, the stage
+ * band and parking all use. This used to take the first linked issue in *view
+ * order*, which for a session carrying several meant the sidebar named one
+ * ticket and the panel highlighted a different one, with the pairing changing
+ * as you re-sorted a tab.
+ *
+ * The driving issue can legitimately be absent from every tab — a queue's
+ * filter may exclude it — so any other linked issue is still better than
+ * nothing, and that fallback is the old behaviour, kept.
+ */
 function focusPanelOnSessionIssue(sessionName: string): void {
-  // sessionState is authoritative for links and is synchronous, so it reflects
-  // freshly-added links from onPanelCreateSession even before pollCoordinator
-  // has had a chance to resolve a context for the new session.
-  const linkedIssueIds = new Set(sessionState.getLinkedIssueIds(sessionName));
-  if (linkedIssueIds.size === 0) {
+  // Both link stores, and read synchronously: this has to reflect a link
+  // `onPanelCreateSession` just made, before pollCoordinator has resolved a
+  // context for the new session.
+  const linkIds = explicitIssueLinkIds(sessionName);
+  if (linkIds.length === 0) {
     // No linked issues — clear selection in any issues view so the previous
     // session's issue doesn't stay highlighted.
     for (const view of panelViews) {
       if (view.source !== "issues") continue;
       const viewState = viewStates.get(view.id);
-      if (viewState) {
-        viewState.selectedIndex = -1;
-        viewState.detailScrollOffset = 0;
-      }
+      if (viewState) moveSelection(viewState, -1);
     }
     return;
   }
 
-  // Find the issues view and locate the linked issue in it
+  const ctx = pollCoordinator.getContext(sessionName);
+  const driving = drivingIssue(ctx?.issues ?? []);
+  // The `sessionLinked` flag feeds sorting and the row dot, so it wants every
+  // spelling of every link: resolved ids from the context, raw ids from the
+  // stores for links too fresh to have resolved.
+  const linkedIssueIds = new Set([...linkIds, ...(ctx?.issues ?? []).map((i) => i.id)]);
+
+  const isLinked = (item: import("./panel-view-renderer").RenderableItem) =>
+    item.type === "issue"
+    && linkIds.some((id) => isIssueLinkFor(id, item.raw as import("./adapters/types").Issue));
+
+  // Two sweeps of the tabs, not one: the driving issue has to beat a
+  // merely-linked issue sitting in an *earlier* tab, so every tab must be asked
+  // the narrow question before any is asked the broad one.
+  if (driving && focusPanelWhere(byIssueId(driving.id), linkedIssueIds)) return;
+  focusPanelWhere(isLinked, linkedIssueIds);
+}
+
+const byIssueId = (issueId: string) =>
+  (item: import("./panel-view-renderer").RenderableItem) =>
+    item.type === "issue" && item.id === issueId;
+
+/**
+ * Select, reveal and switch to the first item any issues tab holds matching
+ * `wanted`. Returns whether anything matched.
+ *
+ * `linkedIds` only feeds `transformIssues`' session-linked flag, which decides
+ * the row dot and (under `sessionLinkedFirst`) the ordering — so it has to be
+ * the same set the panel would draw with, or the index found here addresses a
+ * different row than the one on screen.
+ */
+function focusPanelWhere(
+  wanted: (item: import("./panel-view-renderer").RenderableItem) => boolean,
+  linkedIds: Set<string>,
+): boolean {
   for (const view of panelViews) {
     if (view.source !== "issues") continue;
     const viewState = viewStates.get(view.id);
     if (!viewState) continue;
 
-    const rawItems = transformIssues(issuesForView(view), linkedIssueIds, getIssueSessionStates(), mrsByUrl());
+    const rawItems = transformIssues(issuesForView(view), linkedIds, getIssueSessionStates(), mrsByUrl());
     const nodes = buildViewNodes(rawItems, view, viewState.collapsedGroups);
 
-    for (let i = 0; i < nodes.length; i++) {
-      const node = nodes[i];
-      if (node.kind === "item" && node.item.type === "issue" && linkedIssueIds.has(node.item.id)) {
-        viewState.selectedIndex = i;
-        viewState.detailScrollOffset = 0;
-        // Ensure visible
-        const dpRows = layout.ptyRows;
-        const { listRows } = panelViewLayout(dpRows, viewState);
-        if (i >= viewState.scrollOffset + listRows) {
-          viewState.scrollOffset = i - listRows + 1;
-        } else if (i < viewState.scrollOffset) {
-          viewState.scrollOffset = i;
-        }
-        // Switch to this view tab
-        infoPanel.setActiveTab(view.id);
-        inputRouter.setPanelTabsActive(true);
-        return;
-      }
+    const index = nodes.findIndex((n) => n.kind === "item" && wanted(n.item));
+    if (index < 0) continue;
+
+    moveSelection(viewState, index);
+    const { listRows } = panelViewLayout(layout.ptyRows, viewState);
+    if (index >= viewState.scrollOffset + listRows) {
+      viewState.scrollOffset = index - listRows + 1;
+    } else if (index < viewState.scrollOffset) {
+      viewState.scrollOffset = index;
     }
+    infoPanel.setActiveTab(view.id);
+    inputRouter.setPanelTabsActive(true);
+    return true;
   }
+  return false;
+}
+
+/**
+ * Put one specific issue in the panel — what clicking a disclosed sidebar row
+ * means, as against `focusPanelOnSessionIssue`'s "whichever issue represents
+ * this session".
+ */
+function focusPanelOnIssue(issueId: string): void {
+  const sessionName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
+  const ctx = pollCoordinator.getContext(sessionName);
+  const linkedIds = new Set([
+    ...explicitIssueLinkIds(sessionName),
+    ...(ctx?.issues ?? []).map((i) => i.id),
+  ]);
+  focusPanelWhere(byIssueId(issueId), linkedIds);
 }
 
 function pickRepoForTeam(teamName: string): void {
@@ -7140,19 +7701,30 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
     }
     case "unlink-issue": {
       const sName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
-      const manualIssues = sessionState.getLinks(sName).filter((l) => l.type === "issue");
-      if (manualIssues.length === 0) return;
+      // Both stores. Listing only `state.json` meant an issue an agent linked
+      // with `ctl issue link` showed in the badge and could not be removed from
+      // the TUI at all — the human could see the link but not undo it.
+      const linkIds = explicitIssueLinkIds(sName);
+      if (linkIds.length === 0) return;
       const ctx = pollCoordinator.getContext(sName);
-      const items = manualIssues.map((l) => {
-        const issue = ctx?.issues.find((i) => i.id === l.id);
-        return { id: l.id, label: issue ? `${issue.identifier} ${issue.title}` : l.id };
+      // Each store keys on a different thing, so a stored id is matched against
+      // both of the resolved issue's names before falling back to showing the
+      // raw id — which is what an unresolvable link looks like, and still worth
+      // offering: an id nothing resolves is exactly the one worth unlinking.
+      const resolve = (stored: string) => ctx?.issues.find((i) => isIssueLinkFor(stored, i));
+      const items = linkIds.map((stored) => {
+        const issue = resolve(stored);
+        return { id: stored, label: issue ? `${issue.identifier} ${issue.title}` : stored };
       });
       const modal = new ListModal({ items, header: "Unlink Issue" });
       modal.open();
       openModal(modal, (selected) => {
         const sel = selected as { id: string };
-        sessionState.removeLink(sName, { type: "issue", id: sel.id });
-        pollCoordinator.removeLinkedIssue(sName, sel.id);
+        const issue = resolve(sel.id);
+        // An unresolved link has no issue to name both its forms, so the stored
+        // id stands in for both — which is the only spelling that store holds.
+        removeIssueLinkFrom(sName, issue ?? { id: sel.id, identifier: sel.id });
+        scheduleRender();
       });
       return;
     }

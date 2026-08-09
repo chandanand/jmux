@@ -11,6 +11,7 @@ import {
 } from "./types";
 import { getGitBranch } from "./context-resolver";
 import type { SessionState } from "../session-state";
+import { mergeIssueLinkIds, issueLinkSignature } from "../issue-session";
 
 const ACTIVE_INTERVAL_MS = 20_000;
 const BACKGROUND_INTERVAL_MS = 180_000;
@@ -42,6 +43,14 @@ export class PollCoordinator {
   private opts: PollCoordinatorOptions;
   private contexts = new Map<string, SessionContext>();
   private sessionDirs = new Map<string, string>();
+  /**
+   * Per session, the ids in `@jmux-linear-issue` as of the last session-list
+   * refresh. Pushed in with the dir rather than pulled through a callback, so
+   * there is no window where this disagrees with the list it came from.
+   */
+  private sessionOptionLinks = new Map<string, string[]>();
+  /** Per session, the link signature the cached context was resolved from. */
+  private resolvedLinkSignatures = new Map<string, string>();
   private activeSession: string | null = null;
   private activeTimer: ReturnType<typeof setInterval> | null = null;
   private backgroundTimer: ReturnType<typeof setInterval> | null = null;
@@ -226,8 +235,14 @@ export class PollCoordinator {
     this.opts.onUpdate("__global__");
   }
 
-  addSession(name: string, dir: string): void {
+  /**
+   * `optionIssueLinks` are the ids in the session's `@jmux-linear-issue` tmux
+   * option — the store `jmux ctl` writes, which has no route into `state.json`
+   * (a running TUI holds that in memory and would clobber the write).
+   */
+  addSession(name: string, dir: string, optionIssueLinks: readonly string[] = []): void {
     this.sessionDirs.set(name, dir);
+    this.sessionOptionLinks.set(name, [...optionIssueLinks]);
     // Called for every session on every session-list refresh, so this has to be
     // idempotent: already-resolved sessions are skipped, and the queue is a set.
     this.enqueueBackfill(name);
@@ -235,15 +250,36 @@ export class PollCoordinator {
 
   removeSession(name: string): void {
     this.sessionDirs.delete(name);
+    this.sessionOptionLinks.delete(name);
+    this.resolvedLinkSignatures.delete(name);
     this.contexts.delete(name);
     this.pending.delete(name);
     this.degradedSessions.delete(name);
   }
 
-  /** Queue a session for context resolution unless it already has a good one. */
+  /** The union of both link stores for a session, in the order they resolve. */
+  private linkIdsFor(name: string): string[] {
+    return mergeIssueLinkIds(
+      this.opts.sessionState?.getLinkedIssueIds(name) ?? [],
+      this.sessionOptionLinks.get(name) ?? [],
+    );
+  }
+
+  /**
+   * Queue a session for context resolution unless it already has a good one
+   * *built from the links it currently has*.
+   *
+   * That last clause is what lets `ctl issue link` show up at all. Neither the
+   * active poll nor the background sweep re-reads the link set — they refresh
+   * the issues already in a context, by id — so without a signature check a
+   * resolved session would never pick up a link an agent added, no matter how
+   * long it ran.
+   */
   private enqueueBackfill(name: string): void {
     if (this.inFlight.has(name)) return;
-    if (this.contexts.has(name) && !this.degradedSessions.has(name)) return;
+    const stale = this.resolvedLinkSignatures.get(name)
+      !== issueLinkSignature(this.linkIdsFor(name));
+    if (this.contexts.has(name) && !this.degradedSessions.has(name) && !stale) return;
     this.pending.add(name);
     void this.drainBackfill();
   }
@@ -264,7 +300,11 @@ export class PollCoordinator {
       const name: string = this.pending.values().next().value!;
       this.pending.delete(name);
       if (!this.sessionDirs.has(name)) continue;      // died while queued
-      if (this.contexts.has(name) && !this.degradedSessions.has(name)) continue;
+      // Same three-part test as enqueueBackfill, staleness included: a session
+      // queued for a link change must not be dropped here for having a context.
+      const fresh = this.resolvedLinkSignatures.get(name)
+        === issueLinkSignature(this.linkIdsFor(name));
+      if (this.contexts.has(name) && !this.degradedSessions.has(name) && fresh) continue;
       this.inFlight.add(name);
       void this.resolveContext(name).finally(() => {
         this.inFlight.delete(name);
@@ -307,8 +347,15 @@ export class PollCoordinator {
     const dir = this.sessionDirs.get(name);
     if (!dir) return;
     try {
-      const manualIssueIds = this.opts.sessionState?.getLinkedIssueIds(name) ?? [];
+      // Both link stores. Their id shapes differ — a tracker UUID from
+      // state.json, a human identifier from the tmux option — and the resolver's
+      // lookup accepts either, so they need no separate handling here.
+      const manualIssueIds = this.linkIdsFor(name);
       const manualMrIds = this.opts.sessionState?.getLinkedMrIds(name) ?? [];
+      // Stamped before the await, against the set actually being resolved: a
+      // link added *during* resolution must leave the signature stale so the
+      // next sweep picks it up, not be credited to this pass.
+      this.resolvedLinkSignatures.set(name, issueLinkSignature(manualIssueIds));
       const ctx = await resolveSessionContext({
         sessionName: name,
         dir,
@@ -335,6 +382,16 @@ export class PollCoordinator {
     const name = this.activeSession;
     const ctx = this.contexts.get(name);
     if (!ctx) {
+      await this.resolveContext(name);
+      return;
+    }
+
+    // Check for link drift, for the same reason as branch drift below: the
+    // batch refresh further down updates the issues a context already has, so
+    // only a re-resolve can pick up one that was linked since. This is the
+    // session the user is looking at and the one an agent's `ctl issue link` is
+    // most likely to be about, so it must not wait for the 3-minute sweep.
+    if (this.resolvedLinkSignatures.get(name) !== issueLinkSignature(this.linkIdsFor(name))) {
       await this.resolveContext(name);
       return;
     }
@@ -406,10 +463,11 @@ export class PollCoordinator {
     // added while rate-limited, and retries for tracker failures. The batches
     // below only refresh contexts that already exist, so without this a session
     // that missed its backfill would never get one.
+    // enqueueBackfill is authoritative about what needs resolving — unresolved,
+    // degraded, or resolved from a link set that has since changed — so this
+    // offers every session rather than pre-filtering on a subset of its test.
     for (const name of this.sessionDirs.keys()) {
-      if (!this.contexts.has(name) || this.degradedSessions.has(name)) {
-        this.enqueueBackfill(name);
-      }
+      this.enqueueBackfill(name);
     }
 
     const branchContexts: BranchContext[] = [];

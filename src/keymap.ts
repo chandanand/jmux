@@ -445,6 +445,22 @@ export const KEYMAP: readonly Binding[] = [
     context: IN_PANEL_LIST,
   },
   {
+    id: "panel-brief-agent",
+    keys: "p",
+    label: "Send issue prompt to this session's agent",
+    section: "Info panel",
+    source: "jmux",
+    context: IN_PANEL_LIST,
+  },
+  {
+    id: "panel-preview-tabs",
+    keys: "{ / }",
+    label: "Previous / next issue in the preview strip",
+    section: "Info panel",
+    source: "jmux",
+    context: IN_PANEL_LIST,
+  },
+  {
     id: "panel-create-issue",
     keys: "C",
     label: "Create an issue",
@@ -541,6 +557,14 @@ export const KEYMAP: readonly Binding[] = [
     section: "Work pipeline",
     source: "jmux",
     prefixKey: "Z",
+  },
+  {
+    id: "toggle-session-issues",
+    keys: "Ctrl-a e",
+    label: "Expand this session's issues in the sidebar",
+    section: "Work pipeline",
+    source: "jmux",
+    prefixKey: "e",
   },
 
   // --- Command Center ---

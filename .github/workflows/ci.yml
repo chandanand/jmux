@@ -64,3 +64,19 @@ jobs:
       # Docker, and verify:agents needs real agent installs — naming them here
       # would be claiming coverage this job does not have.
       - run: bun test
+
+      # Re-capture the website's scroll demo against this commit's jmux.
+      #
+      # The section on the site is not screenshots — it is cell data recorded
+      # from a running `jmux --demo`, and every beat asserts what its frames
+      # must contain ("Stage", "WAITING", "Starting will create"). Those
+      # assertions are the promise that the site cannot drift from the product,
+      # and until something runs them the promise is on the honour system.
+      #
+      # Linux only: this films real key handling in real time, and it is the
+      # same coverage on both runners. The frames are thrown away — a diff here
+      # would be timing noise, since the capture is a recording of a live UI.
+      # What matters is whether the beats still land.
+      - name: Site demo still captures
+        if: runner.os == 'Linux'
+        run: bun run scripts/capture-frames.ts --out "$RUNNER_TEMP/frames"

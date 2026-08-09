@@ -73,3 +73,31 @@ export const TRANSITION_LABELS: Record<TransitionEvent, string> = {
   "mr-open": "MR opened",
   "mr-merged": "MR merged",
 };
+
+/**
+ * The statuses every issue in a set can move to.
+ *
+ * An intersection, never a union. Statuses are per-team workflow states, so a
+ * set spanning two teams can legitimately share none — and offering one that
+ * only some of them accept would present it as applying to the set and then
+ * fail silently for the rest, leaving the batch half-moved with no report.
+ *
+ * Matched case-insensitively and on trimmed text, because these are names a
+ * human configured in the tracker; reported in the *first* issue's spelling,
+ * since that is what its own workflow calls it.
+ *
+ * `[]` in, `[]` out: an issue whose statuses could not be fetched constrains
+ * the set to nothing, which is the honest answer rather than quietly dropping
+ * it and offering statuses it may not accept.
+ */
+export function sharedStatuses(available: readonly (readonly string[])[]): string[] {
+  const [first, ...rest] = available;
+  if (!first) return [];
+  const seen = new Set<string>();
+  return first.filter((status) => {
+    const key = status.trim().toLowerCase();
+    if (key === "" || seen.has(key)) return false;
+    seen.add(key);
+    return rest.every((list) => list.some((s) => s.trim().toLowerCase() === key));
+  });
+}

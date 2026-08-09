@@ -7,14 +7,23 @@ import {
   checkedItems,
   renderView,
   createViewState,
+  moveSelection,
+  layoutPreviewTabs,
+  previewTabAtCol,
+  previewTabRow,
+  stepPreviewIndex,
+  resolveActiveTab,
   pickSessionIndicator,
   formatAge,
   type RenderableItem,
   computeViewLayout,
   splitRatioForSepRow,
   DEFAULT_PANEL_SPLIT_RATIO,
+  type PreviewTabs,
 } from "../panel-view-renderer";
 import type { PanelView } from "../panel-view";
+import { theme } from "../theme";
+import { tokens, frame } from "../chrome-tokens";
 import type { Issue, MergeRequest } from "../adapters/types";
 
 const ISSUE: Issue = {
@@ -567,5 +576,391 @@ describe("renderView checkbox column", () => {
     const text = extractText(renderView(buildViewNodes(items(), VIEW, new Set()), 60, 30, st) as any);
     expect(text).toContain("[x]");
     expect(text).toContain("[ ]");
+  });
+});
+
+// The preview strip: one tab per issue in the current set, at the top of the
+// detail pane. It exists because a session's `+N` badge says how many issues it
+// carries and nothing said which — and because the panel's detail pane could
+// only ever show a row that was in the list.
+describe("preview tabs", () => {
+  const NODES = buildViewNodes(
+    transformIssues([ISSUE, ISSUE2, ISSUE3], new Set()),
+    { ...VIEW, groupBy: "none", subGroupBy: "none" },
+    new Set(),
+  );
+  const ITEMS = transformIssues([ISSUE, ISSUE2, ISSUE3], new Set());
+
+  const render = (tabs: PreviewTabs | undefined, rows = 30, cols = 60) =>
+    extractText(renderView(NODES, cols, rows, createViewState(), { previewTabs: tabs }));
+
+  /**
+   * The strip row, identified by carrying more than one identifier — every
+   * other row in the panel names at most one issue. Looking for an identifier
+   * alone would match the list, which of course names all three.
+   */
+  const stripRowOf = (text: string): string | undefined =>
+    text.split("\n").find(
+      (r) => ["ENG-1234", "ENG-1235", "ENG-1236"].filter((id) => r.includes(id)).length > 1,
+    );
+
+  test("no strip without a set", () => {
+    expect(stripRowOf(render(undefined))).toBeUndefined();
+  });
+
+  test("a single-item set draws no strip — there is nothing to move between", () => {
+    expect(stripRowOf(render({ items: [ITEMS[0]!], activeId: ITEMS[0]!.id }))).toBeUndefined();
+  });
+
+  test("two or more draws a tab per issue", () => {
+    const strip = stripRowOf(render({ items: ITEMS, activeId: ITEMS[0]!.id }));
+    expect(strip).toBeDefined();
+    for (const id of ["ENG-1234", "ENG-1235", "ENG-1236"]) expect(strip).toContain(id);
+  });
+
+  test("the strip sits at the top of the detail pane, above its body", () => {
+    const rows = render({ items: ITEMS, activeId: "i1" }).split("\n");
+    const stripIdx = rows.findIndex((r) => r === stripRowOf(rows.join("\n")));
+    const bodyIdx = rows.findIndex((r) => r.includes("Status: In Progress"));
+    expect(stripIdx).toBeGreaterThan(0);
+    expect(bodyIdx).toBeGreaterThan(stripIdx);
+  });
+
+  test("the active tab's issue fills the pane, not the list cursor's", () => {
+    // The cursor is on index 0 (ENG-1234); the strip is pinned to ENG-1235.
+    const out = render({ items: ITEMS, activeId: "i2" });
+    expect(out).toContain("Add logging");
+    expect(out).not.toContain("Assignee: jarred");
+  });
+
+  test("with no active tab the pane follows the list cursor", () => {
+    const out = render({ items: ITEMS, activeId: null });
+    expect(out).toContain("Assignee: jarred");
+  });
+
+  // The bar sits under the detail and describes what the keys will do; the keys
+  // act on what you are reading.
+  test("the action bar follows the preview, not the cursor", () => {
+    const out = render({ items: ITEMS, activeId: "i2" });
+    expect(out).toContain("[o]");
+  });
+
+  // The strip lives inside the detail pane, so a panel with no detail pane has
+  // nowhere to put it. This is the reachable half of the floor; the row-count
+  // guard above it is a backstop that MIN_DETAIL_ROWS keeps unreachable.
+  test("no detail pane means no strip", () => {
+    const short = renderView(NODES, 60, 10, createViewState(), {
+      previewTabs: { items: ITEMS, activeId: "i1" },
+    });
+    expect(stripRowOf(extractText(short))).toBeUndefined();
+    expect(previewTabRow(10, createViewState(), { items: ITEMS, activeId: "i1" })).toBeNull();
+  });
+
+  // The strip is styled as the *toolbar's* window tabs are (see the tab block
+  // in renderer.ts and `tabUnderlineGlyphAndAttrs`), not as the panel's own
+  // queue-tab bar: a fill on the active tab only, a two-column gutter instead
+  // of a separator glyph, and a heavy accent rule along the active tab's edge.
+  describe("tab chrome", () => {
+    const DONE = { ...ISSUE, id: "d1", identifier: "ENG-9000", stateType: "completed" as const };
+    const withDone = transformIssues([ISSUE, ISSUE2, DONE], new Set());
+
+    const strip = (tabs: PreviewTabs, rows = 30, cols = 60) => {
+      const grid = renderView(NODES, cols, rows, createViewState(), { previewTabs: tabs });
+      const row = previewTabRow(rows, createViewState(), tabs);
+      expect(row).not.toBeNull();
+      return {
+        cells: grid.cells[row!]!,
+        // The rule is the strip's own row, directly under the labels.
+        rule: grid.cells[row! + 1]!,
+        margin: grid.cells[row! + 2]!,
+        separator: grid.cells[computeViewLayout(rows, false).sepRow]!,
+        body: grid.cells[row! + 3]!,
+        text: grid.cells[row!]!.map((c) => c.char).join(""),
+      };
+    };
+
+    test("labels are padded into chips", () => {
+      expect(strip({ items: ITEMS, activeId: "i1" }).text).toContain(" ENG-1234 ");
+    });
+
+    // The toolbar draws no divider: the gutter plus the rule below already
+    // delimit tabs, and a glyph on top of both is a third divider saying the
+    // same thing.
+    test("tabs are separated by a gutter, not a glyph", () => {
+      const { text } = strip({ items: ITEMS, activeId: "i1" });
+      expect(text).not.toContain("│");
+      expect(text).toContain("  ENG-1235");
+    });
+
+    test("only the active tab is filled; the rest sit on the terminal", () => {
+      const { cells, text } = strip({ items: ITEMS, activeId: "i2" });
+      const activeAt = text.indexOf("ENG-1235");
+      const otherAt = text.indexOf("ENG-1234");
+      expect(cells[activeAt]!.bg).toBe(theme.selected);
+      expect(cells[activeAt]!.bold).toBe(true);
+      expect(cells[activeAt]!.fg).toBe(tokens.accent.fg!);
+      expect(cells[otherAt]!.bg).toBeFalsy();
+      expect(cells[otherAt]!.bold).toBeFalsy();
+      expect(cells[otherAt]!.fg).toBe(8);
+    });
+
+    // Weight signals active, exactly as the toolbar's own tab rule does.
+    test("a heavy accent rule runs under the active tab, light under the rest", () => {
+      const { rule, text } = strip({ items: ITEMS, activeId: "i2" });
+      const activeAt = text.indexOf("ENG-1235");
+      const otherAt = text.indexOf("ENG-1234");
+      expect(rule[activeAt]!.char).toBe(frame.ruleHeavy);
+      expect(rule[activeAt]!.fg).toBe(tokens.accent.fg!);
+      expect(rule[otherAt]!.char).toBe(frame.ruleLight);
+    });
+
+    test("the rule follows the active tab as it moves", () => {
+      const a = strip({ items: ITEMS, activeId: "i1" });
+      const b = strip({ items: ITEMS, activeId: "i2" });
+      const heavy = (r: typeof a.rule) => r.map((c) => c.char).join("").indexOf(frame.ruleHeavy);
+      expect(heavy(a.rule)).toBeGreaterThanOrEqual(0);
+      expect(heavy(b.rule)).toBeGreaterThan(heavy(a.rule));
+    });
+
+    // A tab sits on top of its content with the rule between the two. Above the
+    // labels the same glyphs read as an overline on a heading, and the pane
+    // separator — which is also the split's drag handle — is not the strip's to
+    // repurpose.
+    test("the pane separator is left alone; the rule is the strip's own row", () => {
+      const { separator, rule } = strip({ items: ITEMS, activeId: "i1" });
+      expect(separator.map((c) => c.char).join("")).not.toContain(frame.ruleHeavy);
+      expect(rule.map((c) => c.char).join("")).toContain(frame.ruleHeavy);
+    });
+
+    test("a blank margin separates the bar from the issue body", () => {
+      const { margin, body } = strip({ items: ITEMS, activeId: "i1" });
+      expect(margin.map((c) => c.char).join("").trim()).toBe("");
+      expect(body.map((c) => c.char).join("")).toContain("ENG-1234");
+    });
+
+    // The strip's tones are all spoken for, so done-ness goes in the label,
+    // where it also survives a terminal that renders dim as no change at all.
+    test("a finished issue is marked in the label, not by colour alone", () => {
+      const { text } = strip({ items: withDone, activeId: "i1" });
+      expect(text).toContain("✓ ENG-9000");
+      expect(text).not.toContain("✓ ENG-1234");
+    });
+
+    test("overflow arrows sit at the strip's edges", () => {
+      const many = transformIssues(
+        Array.from({ length: 10 }, (_, i) => ({
+          ...ISSUE, id: `w${i}`, identifier: `ENG-80${i}`, title: `Issue ${i}`,
+        })),
+        new Set(),
+      );
+      const { cells } = strip({ items: many, activeId: "w5" }, 30, 44);
+      expect(cells[0]!.char).toBe("‹");
+      expect(cells[43]!.char).toBe("›");
+    });
+  });
+
+  describe("windowing", () => {
+    const many = transformIssues(
+      Array.from({ length: 12 }, (_, i) => ({
+        ...ISSUE, id: `m${i}`, identifier: `ENG-90${i}`, title: `Issue ${i}`,
+      })),
+      new Set(),
+    );
+
+    // packChips drops what does not fit from the end, which would hide the very
+    // tab the strip exists to show whenever it sat past the budget.
+    test("the active tab is always in the window, even at the far end", () => {
+      const { chips } = layoutPreviewTabs({ items: many, activeId: "m11" }, 40);
+      expect(chips.some((c) => c.id === "m11")).toBe(true);
+    });
+
+    test("and at the near end", () => {
+      const { chips } = layoutPreviewTabs({ items: many, activeId: "m0" }, 40);
+      expect(chips.some((c) => c.id === "m0")).toBe(true);
+    });
+
+    test("overflow is reported on the side that has more", () => {
+      const start = layoutPreviewTabs({ items: many, activeId: "m0" }, 40);
+      expect(start.overflowLeft).toBe(false);
+      expect(start.overflowRight).toBe(true);
+
+      const end = layoutPreviewTabs({ items: many, activeId: "m11" }, 40);
+      expect(end.overflowLeft).toBe(true);
+      expect(end.overflowRight).toBe(false);
+    });
+
+    test("a set that fits reports no overflow", () => {
+      const { chips, overflowLeft, overflowRight } =
+        layoutPreviewTabs({ items: ITEMS, activeId: "i1" }, 60);
+      expect(chips.length).toBe(3);
+      expect(overflowLeft).toBe(false);
+      expect(overflowRight).toBe(false);
+    });
+
+    // The bound that matters is not the grid width — it is the arrows' own
+    // columns. A flat "reserve two columns" budget under-counted the left
+    // arrow, which also pushes the chips one column right, so the last chip
+    // could land exactly on the right arrow and paint over it. Chips are drawn
+    // after arrows, so the strip then claimed there was nothing further right
+    // while hiding tabs. Swept rather than spot-checked: the collision needed a
+    // specific width/count/active-index combination to appear at all.
+    test("no chip ever lands on an arrow's column, at any size", () => {
+      for (let cols = 8; cols <= 90; cols++) {
+        for (let w = 2; w <= 14; w++) {
+          const items = transformIssues(
+            Array.from({ length: 8 }, (_, i) => ({
+              ...ISSUE, id: `s${i}`, identifier: "T".repeat(w), title: `Issue ${i}`,
+            })),
+            new Set(),
+          );
+          for (const active of items) {
+            const r = layoutPreviewTabs({ items, activeId: active.id }, cols);
+            const last = r.chips[r.chips.length - 1];
+            if (r.overflowRight && last) {
+              expect(last.x + last.width - 1).toBeLessThan(cols - 1);
+            }
+            if (r.overflowLeft) {
+              for (const c of r.chips) expect(c.x).toBeGreaterThan(0);
+            }
+          }
+        }
+      }
+    });
+
+    // Widening outward from the active tab is the whole point; a budget change
+    // that made packChips drop the tail could silently drop it.
+    test("the active tab survives whenever anything is drawn, at any size", () => {
+      for (let cols = 8; cols <= 90; cols++) {
+        for (let n = 2; n <= 12; n++) {
+          const items = transformIssues(
+            Array.from({ length: n }, (_, i) => ({
+              ...ISSUE, id: `a${i}`, identifier: `ENG-90${i}`, title: `Issue ${i}`,
+            })),
+            new Set(),
+          );
+          for (const active of items) {
+            const { chips } = layoutPreviewTabs({ items, activeId: active.id }, cols);
+            if (chips.length > 0) {
+              expect(chips.some((c) => c.id === active.id)).toBe(true);
+            }
+          }
+        }
+      }
+    });
+  });
+
+  describe("click routing", () => {
+    test("a column on a tab resolves to that tab", () => {
+      const tabs = { items: ITEMS, activeId: "i1" };
+      const { chips } = layoutPreviewTabs(tabs, 60);
+      const second = chips[1]!;
+      expect(previewTabAtCol(tabs, 60, second.x)).toBe(ITEMS[1]!.id);
+    });
+
+    test("a column in the gap between tabs resolves to nothing", () => {
+      const tabs = { items: ITEMS, activeId: "i1" };
+      const { chips } = layoutPreviewTabs(tabs, 60);
+      const gap = chips[0]!.x + chips[0]!.width;
+      expect(previewTabAtCol(tabs, 60, gap)).toBeNull();
+    });
+
+    // Routing has to agree with the render exactly, so it asks the same layout
+    // rather than re-deriving the row — the mistake that mis-routed list clicks
+    // for the whole time a filter bar was open.
+    test("the strip row is the detail pane's first row, filter bar or not", () => {
+      const tabs = { items: ITEMS, activeId: "i1" };
+      for (const filterQuery of [null, "x"]) {
+        const state = { ...createViewState(), filterQuery };
+        expect(previewTabRow(30, state, tabs))
+          .toBe(computeViewLayout(30, filterQuery !== null).detailStart);
+      }
+    });
+
+    test("no set means no row to route to", () => {
+      expect(previewTabRow(30, createViewState(), undefined)).toBeNull();
+      expect(previewTabRow(30, createViewState(), { items: [ITEMS[0]!], activeId: "i1" })).toBeNull();
+    });
+  });
+});
+
+// The pin is what makes two cursors tolerable: the newer yields the moment the
+// older is deliberately moved.
+describe("moveSelection", () => {
+  test("clears the preview pin", () => {
+    const state = createViewState();
+    state.previewIssueId = "i2";
+    moveSelection(state, 3);
+    expect(state.previewIssueId).toBeNull();
+    expect(state.selectedIndex).toBe(3);
+  });
+
+  test("resets the detail scroll — the pane is about to show a different document", () => {
+    const state = createViewState();
+    state.detailScrollOffset = 40;
+    moveSelection(state, 1);
+    expect(state.detailScrollOffset).toBe(0);
+  });
+});
+
+// Which tab is lit. The cursor clause is the one that was missing: the pin is
+// null until `{`/`}` is pressed, so the strip opened with nothing highlighted
+// while the pane below was plainly showing one of the tabs.
+describe("resolveActiveTab", () => {
+  const items = transformIssues([ISSUE, ISSUE2, ISSUE3], new Set());
+
+  test("nothing pinned lights the tab the cursor is on", () => {
+    expect(resolveActiveTab(items, null, "i2")).toBe("i2");
+  });
+
+  test("a pin outranks the cursor", () => {
+    expect(resolveActiveTab(items, "i3", "i1")).toBe("i3");
+  });
+
+  // A poll dropping a link, or a different group being ticked, must not leave a
+  // tab lit that the strip no longer offers.
+  test("an id outside the set is ignored, whichever it is", () => {
+    expect(resolveActiveTab(items, "gone", "i1")).toBe("i1");
+    expect(resolveActiveTab(items, null, "gone")).toBeNull();
+    expect(resolveActiveTab(items, "gone", "gone")).toBeNull();
+  });
+
+  // The honest "no tab applies" case: only a tick-sourced strip can reach it,
+  // since the session-sourced one is gated on the cursor being on a member.
+  test("a cursor off the set lights nothing", () => {
+    expect(resolveActiveTab(items, null, null)).toBeNull();
+  });
+
+  test("an empty set lights nothing", () => {
+    expect(resolveActiveTab([], "i1", "i1")).toBeNull();
+  });
+});
+
+// The strip's anchor is the pinned tab when there is one, else the list cursor
+// — which is free to wander off the set entirely.
+describe("stepPreviewIndex", () => {
+  test("steps forward and back from an anchor inside the set", () => {
+    expect(stepPreviewIndex(4, 1, 1)).toBe(2);
+    expect(stepPreviewIndex(4, 1, -1)).toBe(0);
+  });
+
+  test("wraps at both ends", () => {
+    expect(stepPreviewIndex(3, 2, 1)).toBe(0);
+    expect(stepPreviewIndex(3, 0, -1)).toBe(2);
+  });
+
+  // A cursor sitting outside the set gives no anchor. One press should still
+  // land somewhere sensible rather than doing nothing or picking arbitrarily.
+  test("an absent anchor enters from the end the step comes from", () => {
+    expect(stepPreviewIndex(4, -1, 1)).toBe(0);
+    expect(stepPreviewIndex(4, -1, -1)).toBe(3);
+  });
+
+  test("a one-item set always lands on it", () => {
+    expect(stepPreviewIndex(1, 0, 1)).toBe(0);
+    expect(stepPreviewIndex(1, -1, -1)).toBe(0);
+  });
+
+  test("an empty set has nowhere to go", () => {
+    expect(stepPreviewIndex(0, -1, 1)).toBe(-1);
   });
 });

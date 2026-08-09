@@ -2,7 +2,12 @@ import type { SessionOtelState, CellGrid, SessionInfo, AgentState, AgentStateRec
 import { ColorMode, makeSessionOtelState } from "./types";
 import { createGrid, writeString, textCols, truncateToCols, type CellAttrs } from "./cell-grid";
 import type { SessionContext } from "./adapters/types";
-import { buildSessionView, buildSessionRow3 } from "./session-view";
+import {
+  buildSessionView,
+  buildSessionRow3,
+  buildSessionIssueRows,
+  type SessionIssueRow,
+} from "./session-view";
 import { theme } from "./theme";
 import { tokens, frame } from "./chrome-tokens";
 import { stateAttrs, type StateColor } from "./state-colors";
@@ -42,7 +47,13 @@ export type SidebarSelection =
   /** An unstarted issue in the Up next band. Carries only the id: the caller
    * owns the issue data, and the sidebar deliberately knows nothing about
    * trackers (same boundary as `setSessionStages`). */
-  | { type: "ghost"; issueId: string };
+  | { type: "ghost"; issueId: string }
+  /**
+   * One issue of a session whose issue list is expanded. Carries the session as
+   * well as the issue because the row is a *sub-row* — activating it means "go
+   * to this session, and look at this issue of it", which needs both.
+   */
+  | { type: "sessionIssue"; sessionId: string; issueId: string };
 
 const HEADER_ROWS = 2; // "Sessions" header + separator
 
@@ -165,6 +176,44 @@ const GHOST_ID_ATTRS: CellAttrs = {
   fgMode: tokens.textSecondary.fgMode,
 };
 const GHOST_TITLE_ATTRS: CellAttrs = { dim: true };
+
+// Disclosed issue rows under an expanded session. Everything here is quieter
+// than the session row above it: these are its contents, not peers of it, and a
+// five-issue session must not out-shout a one-issue session beside it.
+const ISSUE_STEM = "·";
+const ISSUE_STEM_ATTRS: CellAttrs = {
+  fg: tokens.ruleHairline.fg,
+  fgMode: tokens.ruleHairline.fgMode,
+  dim: tokens.ruleHairline.dim,
+};
+const ISSUE_ID_ATTRS: CellAttrs = {
+  fg: tokens.textSecondary.fg,
+  fgMode: tokens.textSecondary.fgMode,
+};
+const ISSUE_TITLE_ATTRS: CellAttrs = { dim: true };
+const ISSUE_STATUS_ATTRS: CellAttrs = {
+  fg: tokens.textTertiary.fg,
+  fgMode: tokens.textTertiary.fgMode,
+  dim: tokens.textTertiary.dim,
+};
+// A finished issue stays on the list — it is still something the session
+// carries — but recedes, so the open work reads first.
+const ISSUE_DONE_ATTRS: CellAttrs = { dim: true };
+/** Below this a title is a stub rather than information, so it is dropped. */
+const ISSUE_TITLE_MIN_COLS = 6;
+// Status shorthand, from the tracker-agnostic stateType rather than the status
+// name: names are workspace-defined ("QA Failed", "Ready for review") and no
+// abbreviation of them is safe, while these six categories are fixed.
+const STATE_TYPE_GLYPH: Record<string, string> = {
+  triage: "?",
+  backlog: "·",
+  unstarted: "○",
+  started: "◐",
+  completed: "✓",
+  canceled: "✗",
+  duplicate: "⧉",
+  unknown: "·",
+};
 
 /**
  * Re-sync the sidebar's highlight backgrounds from the current theme. Called
@@ -314,6 +363,13 @@ type RenderItem =
   // renaming a stage doesn't silently expand a group the user had collapsed.
   | { type: "group-header"; key: string; label: string; collapsed: boolean; sessionCount: number }
   | { type: "session"; sessionIndex: number; grouped: boolean; groupLabel?: string; pinnedCount?: number }
+  // One issue of an expanded session, drawn directly below that session's own
+  // rows. A sub-row, not a peer: it is absent from `displayOrder` and from
+  // `navOrder`, because both mean "somewhere to go" and this row's session is
+  // already a stop on each. Landing on five of them in a row to reach the next
+  // session would make Ctrl-Shift-Down useless in exactly the sessions this
+  // feature exists for.
+  | { type: "session-issue"; sessionIndex: number; issueIndex: number }
   // An issue with no session yet. Drawn with a session row's exact geometry —
   // identifier where the name goes, title where the detail line goes — so the
   // row it becomes on activation is the row it was already standing in for.
@@ -371,6 +427,8 @@ function buildRenderPlan(
   parkedNames: Set<string> = new Set(),
   stageByName: Map<string, StageBucket> = new Map(),
   ghosts: readonly GhostEntry[] = [],
+  issueRowsByName: ReadonlyMap<string, readonly SessionIssueRow[]> = new Map(),
+  expandedNames: ReadonlySet<string> = new Set(),
 ): {
   items: RenderItem[];
   displayOrder: number[];
@@ -509,6 +567,29 @@ function buildRenderPlan(
   // band below for the history.
   const navOrder: NavTarget[] = [];
 
+  /**
+   * A session's row, plus its issue rows when it is expanded.
+   *
+   * The disclosure is offered only above one issue — with a single issue the
+   * badge already names it and there is nothing an expansion could add — so a
+   * session that drops to one ticket collapses back on its own rather than
+   * leaving a chevron that reveals what is already on screen.
+   */
+  const emitSession = (idx: number, item: RenderItem): void => {
+    items.push(item);
+    displayOrder.push(idx);
+    navOrder.push({ type: "session", sessionId: sessions[idx]!.id });
+    items.push({ type: "spacer" });
+
+    const name = sessions[idx]!.name;
+    const rows = issueRowsByName.get(name) ?? [];
+    if (rows.length < 2 || !expandedNames.has(name)) return;
+    for (let r = 0; r < rows.length; r++) {
+      items.push({ type: "session-issue", sessionIndex: idx, issueIndex: r });
+    }
+    items.push({ type: "spacer" });
+  };
+
   // Command Center block first — always present (header + counts only).
   items.push({ type: "overview", paneCount: pinnedPanes.length });
   items.push({ type: "spacer" });
@@ -539,16 +620,13 @@ function buildRenderPlan(
     items.push({ type: "spacer" });
     if (isCollapsed) return;
     for (const idx of indices) {
-      items.push({
+      emitSession(idx, {
         type: "session",
         sessionIndex: idx,
         grouped: true,
         groupLabel: label,
         pinnedCount: pinnedPaneCountBySession.get(sessions[idx].name),
       });
-      displayOrder.push(idx);
-      navOrder.push({ type: "session", sessionId: sessions[idx]!.id });
-      items.push({ type: "spacer" });
     }
     // Ghosts last within the band: work someone is on outranks work nobody is.
     for (const g of ghostIndices) {
@@ -570,15 +648,12 @@ function buildRenderPlan(
 
   // Flat list: group=none, or the project-less remainder in group=project.
   for (const idx of sortedUngrouped) {
-    items.push({
+    emitSession(idx, {
       type: "session",
       sessionIndex: idx,
       grouped: false,
       pinnedCount: pinnedPaneCountBySession.get(sessions[idx].name),
     });
-    displayOrder.push(idx);
-    navOrder.push({ type: "session", sessionId: sessions[idx]!.id });
-    items.push({ type: "spacer" });
   }
 
   // Up next: the fallback placement, for every grouping axis except stage.
@@ -633,6 +708,9 @@ function buildRenderPlan(
  */
 function itemHeight(item: RenderItem, hasStateRow: (sessionIndex: number) => boolean): number {
   if (item.type === "session") return hasStateRow(item.sessionIndex) ? 3 : 2;
+  // One row per issue, against a session's two or three. Five issues at a
+  // session's own height would bury the list this sits inside.
+  if (item.type === "session-issue") return 1;
   // Identifier row + title row. Fixed at 2: a ghost has no agent to promote,
   // so it never grows the third row a live session can.
   if (item.type === "ghost") return 2;
@@ -679,12 +757,33 @@ export class Sidebar {
   private ghosts: GhostEntry[] = [];
   private pinnedPanes: PinnedPaneEntry[] = [];
   private rowToSelection = new Map<number, SidebarSelection>();
+  /** Per row, the badge's clickable columns and the session it discloses. */
+  private rowToDisclosure = new Map<
+    number,
+    { sessionName: string; startCol: number; endCol: number }
+  >();
   private currentVersion: string = "";
   private latestVersion: string | null = null;
   private otelStates = new Map<string, SessionOtelState>();
   private agentStateRecords = new Map<string, AgentStateRecord>();
   cacheTimersEnabled: boolean = true;
   private sessionContexts = new Map<string, SessionContext>();
+  /**
+   * Sessions whose issue list is disclosed, by name.
+   *
+   * Default collapsed and never persisted, exactly like `collapsedGroups`: it
+   * is a view state, and a sidebar that came back from a restart already
+   * expanded would be a surprise about work you had since finished.
+   */
+  private expandedSessions = new Set<string>();
+  /**
+   * Per session, the issue rows to draw when expanded — rebuilt with the plan
+   * rather than read at paint time, so the row count the layout was computed
+   * from and the rows actually painted cannot disagree. The contexts map is
+   * mutated in place by the poll coordinator, which makes that a real risk
+   * rather than a theoretical one.
+   */
+  private sessionIssueRows = new Map<string, SessionIssueRow[]>();
   private stateAttrs: Record<AgentState, CellAttrs> = buildStateAttrs(DEFAULT_STATE_PALETTE);
 
   constructor(width: number, height: number) {
@@ -706,6 +805,12 @@ export class Sidebar {
     }
     for (const id of this.agentStateRecords.keys()) {
       if (!activeIds.has(id)) this.agentStateRecords.delete(id);
+    }
+    // Expansion is keyed by name, so a dead session's entry would silently
+    // apply to a later session that reused the name.
+    const activeNames = new Set(sessions.map((s) => s.name));
+    for (const name of this.expandedSessions) {
+      if (!activeNames.has(name)) this.expandedSessions.delete(name);
     }
     this.rebuildPlan();
   }
@@ -868,6 +973,13 @@ export class Sidebar {
   }
 
   private rebuildPlan(): void {
+    this.sessionIssueRows.clear();
+    for (const session of this.sessions) {
+      const issues = this.sessionContexts.get(session.name)?.issues;
+      if (issues && issues.length > 0) {
+        this.sessionIssueRows.set(session.name, buildSessionIssueRows(issues));
+      }
+    }
     const { items, displayOrder, navOrder } = buildRenderPlan(
       this.sessions,
       this.collapsedGroups,
@@ -880,6 +992,8 @@ export class Sidebar {
       this.parkedSessions,
       this.sessionStages,
       this.ghosts,
+      this.sessionIssueRows,
+      this.expandedSessions,
     );
     this.items = items;
     this.displayOrder = displayOrder;
@@ -932,7 +1046,46 @@ export class Sidebar {
 
   setSessionContexts(contexts: Map<string, SessionContext>): void {
     this.sessionContexts = contexts;
-    this.clampScroll();
+    // A full rebuild, not just a re-clamp: an expanded session's issue count is
+    // part of the layout now, so a poll that adds or removes a link changes how
+    // many rows the plan has to allocate.
+    this.rebuildPlan();
+  }
+
+  /**
+   * The issues a session carries, in the order they are disclosed. Empty when
+   * the context has not resolved yet, which reads the same as "none".
+   */
+  getSessionIssues(sessionName: string): readonly SessionIssueRow[] {
+    return this.sessionIssueRows.get(sessionName) ?? [];
+  }
+
+  /**
+   * Whether a session's issue list can be disclosed at all.
+   *
+   * One issue is not expandable: the badge already names it, so a chevron would
+   * promise a reveal and then show the same identifier a row lower.
+   */
+  canExpandSession(sessionName: string): boolean {
+    return this.getSessionIssues(sessionName).length > 1;
+  }
+
+  isSessionExpanded(sessionName: string): boolean {
+    return this.expandedSessions.has(sessionName);
+  }
+
+  /**
+   * Toggle a session's issue disclosure. Returns the new state, or null when
+   * the session has nothing to disclose — so a caller can report that rather
+   * than silently doing nothing.
+   */
+  toggleSessionIssues(sessionName: string): boolean | null {
+    if (!this.canExpandSession(sessionName)) return null;
+    const next = !this.expandedSessions.has(sessionName);
+    if (next) this.expandedSessions.add(sessionName);
+    else this.expandedSessions.delete(sessionName);
+    this.rebuildPlan();
+    return next;
   }
 
   hasActivity(sessionId: string): boolean {
@@ -992,6 +1145,19 @@ export class Sidebar {
 
   getSelectionByRow(row: number): SidebarSelection | null {
     return this.rowToSelection.get(row) ?? null;
+  }
+
+  /**
+   * The session whose issue disclosure a click at (row, col) toggles, or null.
+   *
+   * Checked before the row's own selection, exactly as the header's chip
+   * hit-tests are: this is a region *inside* a row that already means something
+   * else, so the narrower target has to be asked first.
+   */
+  disclosureHit(row: number, col: number): string | null {
+    const hit = this.rowToDisclosure.get(row);
+    if (!hit || col < hit.startCol || col > hit.endCol) return null;
+    return hit.sessionName;
   }
 
   getGroups(): { key: string; label: string; collapsed: boolean }[] {
@@ -1188,6 +1354,7 @@ export class Sidebar {
     this.rowToSessionIndex.clear();
     this.rowToGroupKey.clear();
     this.rowToSelection.clear();
+    this.rowToDisclosure.clear();
 
     // Header \u2014 a title on the left, a live agent-state rollup on the right so
     // "how many agents need me" is legible even when the list is scrolled. The
@@ -1309,6 +1476,8 @@ export class Sidebar {
         this.rowToGroupKey.set(screenRow, item.key);
       } else if (item.type === "spacer") {
         // nothing to render
+      } else if (item.type === "session-issue") {
+        this.renderSessionIssue(grid, screenRow, item);
       } else if (item.type === "ghost") {
         this.renderGhost(grid, screenRow, item);
       } else {
@@ -1415,6 +1584,91 @@ export class Sidebar {
       { ...GHOST_TITLE_ATTRS, ...bgAttrs });
   }
 
+  /**
+   * One issue of an expanded session: a tree stem, the identifier, the title,
+   * and the status right-aligned.
+   *
+   * Fields drop right-to-left as the sidebar narrows, the same way row 2's
+   * branch/timer/MR cluster does — status text first, then the title, leaving
+   * the identifier and a state glyph, which is the least that still says
+   * something. The glyph comes from `stateType` rather than the status name
+   * because status names are workspace-defined and cannot be abbreviated
+   * safely, while `stateType` is the tracker-agnostic axis jmux already orders
+   * work on.
+   *
+   * A finished issue is dimmed rather than hidden. The list is what the session
+   * carries, and dropping the done ones would make `+4` expand to three rows.
+   */
+  private renderSessionIssue(
+    grid: CellGrid,
+    row: number,
+    item: Extract<RenderItem, { type: "session-issue" }>,
+  ): void {
+    const session = this.sessions[item.sessionIndex];
+    if (!session) return;
+    const issue = this.sessionIssueRows.get(session.name)?.[item.issueIndex];
+    if (!issue) return;
+
+    const isHovered = this.hoveredRow === row;
+    const bgAttrs: CellAttrs = isHovered
+      ? { bg: HOVER_BG, bgMode: ColorMode.RGB }
+      : {};
+
+    this.rowToSelection.set(row, {
+      type: "sessionIssue",
+      sessionId: session.id,
+      issueId: issue.id,
+    });
+    // Also a session row for hit-testing, so the drag/hover paths that ask
+    // "which session is under the cursor" get the owning session rather than
+    // nothing at all.
+    this.rowToSessionIndex.set(row, item.sessionIndex);
+    this.paintRowChrome(grid, row, false, isHovered);
+
+    const stemCol = 3;
+    writeString(grid, row, stemCol, ISSUE_STEM, { ...ISSUE_STEM_ATTRS, ...bgAttrs });
+
+    const textStart = stemCol + 2;
+    const innerEdge = this.width - 1;
+    let rightEdge = innerEdge;
+
+    // Status, right-aligned: the full name when it fits, else a single glyph.
+    // Both are dropped before the identifier is, which is the one field that
+    // makes the row identifiable at all.
+    const glyph = STATE_TYPE_GLYPH[issue.stateType ?? "unknown"] ?? STATE_TYPE_GLYPH.unknown;
+    const statusAttrs: CellAttrs = {
+      ...(issue.finished ? ISSUE_DONE_ATTRS : ISSUE_STATUS_ATTRS),
+      ...bgAttrs,
+    };
+    const idCols = textCols(issue.identifier);
+    // The identifier, one space, and the field — below that the field is what
+    // gives way, since a row with no identifier names nothing.
+    const roomFor = (text: string) => textStart + idCols + 1 + textCols(text) - 1 <= innerEdge;
+    const statusText = roomFor(issue.status) ? issue.status : roomFor(glyph) ? glyph : "";
+    if (statusText) {
+      const col = innerEdge - textCols(statusText) + 1;
+      writeString(grid, row, col, statusText, statusAttrs);
+      rightEdge = col - 2; // one blank column before the status
+    }
+
+    const idAttrs: CellAttrs = {
+      ...(issue.finished ? ISSUE_DONE_ATTRS : ISSUE_ID_ATTRS),
+      ...bgAttrs,
+    };
+    const maxCols = rightEdge - textStart + 1;
+    if (maxCols <= 0) return;
+    writeString(grid, row, textStart, truncateToCols(issue.identifier, maxCols), idAttrs);
+
+    // Title in whatever is left, and only when there is enough left to be worth
+    // reading — a two-column stub of a title is noise, not information.
+    const titleStart = textStart + idCols + 1;
+    const titleCols = rightEdge - titleStart + 1;
+    if (titleCols >= ISSUE_TITLE_MIN_COLS) {
+      writeString(grid, row, titleStart, truncateToCols(issue.title, titleCols),
+        { ...(issue.finished ? ISSUE_DONE_ATTRS : ISSUE_TITLE_ATTRS), ...bgAttrs });
+    }
+  }
+
   private renderSession(
     grid: CellGrid,
     nameRow: number,
@@ -1481,9 +1735,19 @@ export class Sidebar {
         : {};
 
     // --- Row 1: session name (left) + mode badge + linear ID (right) ---
+    //
+    // The badge carries a disclosure chevron when the session holds more than
+    // one issue, and clicking it expands the list in place. Prepended into the
+    // badge string rather than placed in its own column so the right-alignment
+    // stays a single measurement — the same reason `linearId` is one
+    // preformatted string and not a pair of fields.
     const nameStart = 3;
-    const linearIdStr = view.linearId ?? "";
-    const linearIdCol = linearIdStr ? this.width - linearIdStr.length - 1 : this.width;
+    const expandable = this.canExpandSession(session.name);
+    const badgeText = view.linearId ?? "";
+    const linearIdStr = badgeText && expandable
+      ? `${this.expandedSessions.has(session.name) ? "▾" : "▸"} ${badgeText}`
+      : badgeText;
+    const linearIdCol = linearIdStr ? this.width - textCols(linearIdStr) - 1 : this.width;
     const hasBadge = view.modeBadge !== null;
     const badgeCol = hasBadge
       ? (linearIdStr ? linearIdCol - 2 : this.width - 2)
@@ -1522,6 +1786,17 @@ export class Sidebar {
     if (linearIdStr) {
       const linkAttrs: CellAttrs = { ...DIM_ATTRS, ...bgAttrs };
       writeString(grid, nameRow, linearIdCol, linearIdStr, linkAttrs);
+      // The whole badge is the disclosure target, not just the chevron: a
+      // one-column hit box on a 26-column sidebar is a dare, not an affordance.
+      // Recorded per row because a session's badge moves with it, the same way
+      // the header chips record their own columns each render.
+      if (expandable) {
+        this.rowToDisclosure.set(nameRow, {
+          sessionName: session.name,
+          startCol: linearIdCol,
+          endCol: linearIdCol + textCols(linearIdStr) - 1,
+        });
+      }
     }
 
     // --- Row 2: branch (left) + timer (center-right) + MR ID + pipeline glyph (right) ---

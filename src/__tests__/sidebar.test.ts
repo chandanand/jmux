@@ -2346,3 +2346,250 @@ describe("Sidebar parked band", () => {
     expect(text).not.toContain("Parked");
   });
 });
+
+// The disclosure: a session carrying several issues expands in place to list
+// them. The rows are sub-rows of their session, not peers of it, which is what
+// keeps navigation and the session cycle meaning what they meant before.
+describe("Sidebar session issue disclosure", () => {
+  const WIDE = 44;
+
+  function withIssues(
+    issues: Array<{ id: string; identifier: string; title?: string; status?: string; stateType?: string }>,
+  ): Map<string, SessionContext> {
+    return new Map([["api", {
+      sessionName: "api",
+      dir: "/tmp",
+      branch: "main",
+      remote: null,
+      mrs: [],
+      issues: issues.map((i) => ({
+        id: i.id,
+        identifier: i.identifier,
+        title: i.title ?? "Some work",
+        status: i.status ?? "In Progress",
+        stateType: i.stateType,
+        assignee: null,
+        linkedMrUrls: [],
+        webUrl: "",
+        source: "manual",
+      })),
+      resolvedAt: Date.now(),
+    } as unknown as SessionContext]]);
+  }
+
+  const TWO = [
+    { id: "a", identifier: "TRA-1", title: "Parse CSV", status: "In Progress", stateType: "started" },
+    { id: "b", identifier: "TRA-2", title: "Column map", status: "Todo", stateType: "unstarted" },
+  ];
+
+  function build(width = WIDE, issues = TWO) {
+    const sidebar = new Sidebar(width, 30);
+    sidebar.updateSessions(makeSessions([{ name: "api" }]));
+    sidebar.setSessionContexts(withIssues(issues));
+    return sidebar;
+  }
+
+  const text = (sidebar: Sidebar) =>
+    sidebar.getGrid().cells.map((row) => row.map((c) => c.char).join("")).join("\n");
+
+  test("collapsed by default, so an untouched sidebar looks as it always did", () => {
+    const sidebar = build();
+    expect(sidebar.isSessionExpanded("api")).toBe(false);
+    expect(text(sidebar)).not.toContain("Parse CSV");
+  });
+
+  test("expanding lists every issue the session carries", () => {
+    const sidebar = build();
+    sidebar.toggleSessionIssues("api");
+    const out = text(sidebar);
+    expect(out).toContain("TRA-1");
+    expect(out).toContain("TRA-2");
+    expect(out).toContain("Parse CSV");
+    expect(out).toContain("Column map");
+  });
+
+  test("toggling again collapses it", () => {
+    const sidebar = build();
+    expect(sidebar.toggleSessionIssues("api")).toBe(true);
+    expect(sidebar.toggleSessionIssues("api")).toBe(false);
+    expect(text(sidebar)).not.toContain("Parse CSV");
+  });
+
+  // The badge names the driving issue; the first disclosed row must be that
+  // same issue, or `+N` reads as expanding to a different set than it named.
+  test("the driving issue leads the list, matching the badge", () => {
+    const sidebar = build(WIDE, [
+      { id: "a", identifier: "TRA-9", title: "Done bit", status: "Done", stateType: "completed" },
+      { id: "b", identifier: "TRA-4", title: "Open bit", status: "Todo", stateType: "unstarted" },
+    ]);
+    sidebar.toggleSessionIssues("api");
+    const rows = text(sidebar).split("\n");
+    const badgeRow = rows.findIndex((r) => r.includes("TRA-4 +1"));
+    expect(badgeRow).toBeGreaterThanOrEqual(0);
+    // First issue row after the session's own rows names the driving issue.
+    const firstIssueRow = rows.findIndex((r, i) => i > badgeRow && r.includes("TRA-"));
+    expect(rows[firstIssueRow]).toContain("TRA-4");
+  });
+
+  test("a finished issue stays on the list rather than vanishing from the count", () => {
+    const sidebar = build(WIDE, [
+      { id: "a", identifier: "TRA-4", title: "Open bit", status: "Todo", stateType: "unstarted" },
+      { id: "b", identifier: "TRA-9", title: "Done bit", status: "Done", stateType: "completed" },
+    ]);
+    sidebar.toggleSessionIssues("api");
+    expect(text(sidebar)).toContain("TRA-9");
+  });
+
+  describe("the disclosure is offered only when it reveals something", () => {
+    test("one issue is not expandable — the badge already names it", () => {
+      const sidebar = build(WIDE, [TWO[0]!]);
+      expect(sidebar.canExpandSession("api")).toBe(false);
+      expect(sidebar.toggleSessionIssues("api")).toBeNull();
+      expect(text(sidebar)).not.toContain("▸");
+    });
+
+    test("no issues is not expandable either", () => {
+      const sidebar = new Sidebar(WIDE, 30);
+      sidebar.updateSessions(makeSessions([{ name: "api" }]));
+      expect(sidebar.canExpandSession("api")).toBe(false);
+      expect(sidebar.toggleSessionIssues("api")).toBeNull();
+    });
+
+    test("two issues draw a chevron beside the badge", () => {
+      expect(text(build())).toContain("▸");
+    });
+
+    test("the chevron turns down when expanded", () => {
+      const sidebar = build();
+      sidebar.toggleSessionIssues("api");
+      expect(text(sidebar)).toContain("▾");
+    });
+
+    // A session that drops to one issue has nothing left to disclose, so it
+    // must collapse on its own rather than leave a chevron revealing the row
+    // its own badge already shows.
+    test("falling back to one issue stops disclosing, even while expanded", () => {
+      const sidebar = build();
+      sidebar.toggleSessionIssues("api");
+      expect(text(sidebar)).toContain("Parse CSV");
+
+      sidebar.setSessionContexts(withIssues([TWO[0]!]));
+      const out = text(sidebar);
+      expect(out).not.toContain("▾");
+      expect(out).not.toContain("Parse CSV");
+    });
+  });
+
+  describe("rows are sub-rows, not peers", () => {
+    test("they add no stops to the session cycle", () => {
+      const sidebar = build();
+      const before = sidebar.getDisplayOrderIds();
+      sidebar.toggleSessionIssues("api");
+      expect(sidebar.getDisplayOrderIds()).toEqual(before);
+    });
+
+    // Ctrl-Shift-Down walking through five tickets to reach the next session
+    // would break navigation in exactly the sessions this feature is for.
+    test("they add no stops to keyboard navigation", () => {
+      const sidebar = build();
+      const before = sidebar.getNavOrder().length;
+      sidebar.toggleSessionIssues("api");
+      expect(sidebar.getNavOrder().length).toBe(before);
+    });
+
+    test("clicking one selects the issue and names its session", () => {
+      const sidebar = build();
+      sidebar.toggleSessionIssues("api");
+      const rows = text(sidebar).split("\n");
+      const row = rows.findIndex((r) => r.includes("Column map"));
+      expect(sidebar.getSelectionByRow(row)).toEqual({
+        type: "sessionIssue", sessionId: "$0", issueId: "b",
+      });
+    });
+  });
+
+  describe("the badge is the click target", () => {
+    test("a click on the badge discloses; one to its left does not", () => {
+      const sidebar = build();
+      const rows = text(sidebar).split("\n");
+      // TRA-2 drives: it is unstarted, which is less advanced than TRA-1.
+      const badgeRow = rows.findIndex((r) => r.includes("TRA-2 +1"));
+      expect(badgeRow).toBeGreaterThanOrEqual(0);
+      const col = rows[badgeRow]!.indexOf("▸");
+      expect(sidebar.disclosureHit(badgeRow, col)).toBe("api");
+      expect(sidebar.disclosureHit(badgeRow, col + 2)).toBe("api"); // the id itself
+      expect(sidebar.disclosureHit(badgeRow, col - 2)).toBeNull();  // the name
+    });
+
+    test("a one-issue session offers no target at all", () => {
+      const sidebar = build(WIDE, [TWO[0]!]);
+      for (let r = 0; r < 30; r++) expect(sidebar.disclosureHit(r, WIDE - 3)).toBeNull();
+    });
+  });
+
+  describe("narrow sidebars drop fields right-to-left", () => {
+    test("a wide sidebar shows identifier, title and status", () => {
+      const sidebar = build(WIDE);
+      sidebar.toggleSessionIssues("api");
+      const row = text(sidebar).split("\n").find((r) => r.includes("Parse CSV"))!;
+      expect(row).toContain("TRA-1");
+      expect(row).toContain("In Progress");
+    });
+
+    // The identifier is the one field that makes a row identifiable, so the
+    // status name gives way to a glyph and the title goes entirely before the
+    // identifier is touched. TRA-1's row is the one to read: TRA-2's identifier
+    // also appears in the badge above, since it is the driving issue.
+    test("a status too long to fit becomes a glyph, and the title is dropped", () => {
+      const sidebar = build(20);
+      sidebar.toggleSessionIssues("api");
+      const row = text(sidebar).split("\n").find((r) => r.includes("TRA-1"))!;
+      expect(row).toBeDefined();
+      expect(row).not.toContain("In Progress");
+      expect(row).toContain("◐"); // started
+    });
+
+    // A status that still fits keeps its name — the glyph is a fallback, not a
+    // narrow-sidebar style.
+    test("a status that fits is still spelled out", () => {
+      const sidebar = build(20);
+      sidebar.toggleSessionIssues("api");
+      const rows = text(sidebar).split("\n");
+      const badgeRow = rows.findIndex((r) => r.includes("+1"));
+      const row = rows.find((r, i) => i > badgeRow && r.includes("TRA-2"))!;
+      expect(row).toContain("Todo");
+    });
+
+    test("the identifier survives even when only it fits", () => {
+      const sidebar = build(14);
+      sidebar.toggleSessionIssues("api");
+      const row = text(sidebar).split("\n").find((r) => r.includes("TRA-1"))!;
+      expect(row).toBeDefined();
+      expect(row).not.toContain("Parse");
+    });
+  });
+
+  // A collapsed band hides its sessions, and an expanded session inside one
+  // must go with it — the rows are emitted through the same path as the
+  // session, so this holds by construction rather than by a second check.
+  test("a collapsed group hides the disclosed rows too", () => {
+    const sidebar = new Sidebar(WIDE, 30);
+    sidebar.updateSessions(makeSessions([{ name: "api", directory: "~/Code/proj/api" }]));
+    sidebar.setSessionContexts(withIssues(TWO));
+    sidebar.toggleSessionIssues("api");
+    expect(text(sidebar)).toContain("Parse CSV");
+
+    const group = sidebar.getGroups().find((g) => g.label.includes("Code"));
+    expect(group).toBeDefined();
+    sidebar.toggleGroup(group!.key);
+    expect(text(sidebar)).not.toContain("Parse CSV");
+  });
+
+  test("expansion is dropped when the session dies, so a reused name starts fresh", () => {
+    const sidebar = build();
+    sidebar.toggleSessionIssues("api");
+    expect(sidebar.isSessionExpanded("api")).toBe(true);
+    sidebar.updateSessions(makeSessions([{ name: "other" }]));
+    expect(sidebar.isSessionExpanded("api")).toBe(false);
+  });
+});
