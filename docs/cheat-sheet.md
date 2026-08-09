@@ -331,6 +331,7 @@ See [connecting.md](connecting.md) for setup, [issue-tracking.md](issue-tracking
 | `Ctrl-a u` | Start the next issue from your stage rotation |
 | `Ctrl-a Z` | Undo the last status write to your tracker |
 | `Ctrl-a e` | Expand this session's issues in the sidebar |
+| `Ctrl-a m` | Move this session's issues where the workflow says they should be |
 
 `Ctrl-a W` is where you define **your own workflow stages** — Urgent, To do,
 In Progress, Waiting — each sitting on top of one or many of your tracker's

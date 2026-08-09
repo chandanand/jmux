@@ -11,25 +11,10 @@ export type GroupMode = "none" | "project" | "status" | "stage";
 export type SortMode = "name" | "activity" | "status";
 export type FilterMode = "all" | "attention" | "active";
 
-/**
- * The stage bucket a session belongs to under group=stage — one of the user's
- * own workflow stages, resolved from its linked issue's status.
- *
- * Pre-resolved by the caller rather than derived here: stage membership needs
- * the tracker poll and the panel-view config, neither of which the sidebar
- * has. Carrying `rank` (the stage's position in the user's own priority order)
- * means header order is the order they arranged their workflow in, not
- * alphabetical — "To do" belongs above "In review" because they said so.
- *
- * Note this is NOT the four-rung `WorkStage` lifecycle (see work-stage.ts);
- * that drives parking, this is the user's own named ladder.
- */
-export interface StageBucket {
-  /** Stage (panel view) id — the collapse identity, stable across renames. */
-  id: string;
-  label: string;
-  rank: number;
-}
+// The stage a session bands under used to live here as `StageBucket`. It is now
+// one field of `SessionWorkflow` (workflow-drift.ts), which is built in the same
+// pass as the row-2 stage word and the drift marker — three answers about one
+// session's workflow position, from one resolution.
 
 // A session's status for ordering/filtering: the three promoted agent states,
 // plus "activity" (tmux saw output but no promoted state) and "idle" (nothing).

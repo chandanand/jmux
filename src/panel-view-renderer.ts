@@ -628,7 +628,7 @@ export function splitRatioForSepRow(rows: number, filterBarActive: boolean, sepR
  * the detail pane.
  *
  * Resolved by main.ts rather than derived here, the same boundary as the
- * sidebar's `setSessionStages`: which issues form the set depends on the ticks,
+ * sidebar's `setSessionWorkflow`: which issues form the set depends on the ticks,
  * the focused session's links and the tracker's own issue objects, none of
  * which a renderer should know how to reach.
  */

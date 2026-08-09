@@ -131,6 +131,7 @@ export interface InputRouterOptions {
   onDiffPanelFocusToggle?: () => void;
   /** Expand or collapse the current session's issue list in the sidebar. */
   onToggleSessionIssues?: () => void;
+  onFixWorkflowDrift?: () => void;
   onDiffToggle?: () => void;
   onDiffZoom?: () => void;  // Ctrl-a z when diff panel is focused — toggles split/full
   onDiffSendReview?: () => void;  // Ctrl-a r — hunk review notes → this session's agent
@@ -550,6 +551,14 @@ export class InputRouter {
         // out of reach of the people most likely to be living in it.
         if (data === "e") {
           this.opts.onToggleSessionIssues?.();
+          return;
+        }
+        // Move the current session's issues where the workflow says they
+        // should be. `m` is tmux's mark-pane, which this shadows — the same
+        // trade `n` and `p` already make against next-window and
+        // previous-window, and mark-pane is a far quieter loss than either.
+        if (data === "m") {
+          this.opts.onFixWorkflowDrift?.();
           return;
         }
         // --- keymap:prefix end ---

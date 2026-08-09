@@ -559,6 +559,14 @@ export const KEYMAP: readonly Binding[] = [
     prefixKey: "Z",
   },
   {
+    id: "fix-workflow-drift",
+    keys: "Ctrl-a m",
+    label: "Move the issue where the workflow says it should be",
+    section: "Work pipeline",
+    source: "jmux",
+    prefixKey: "m",
+  },
+  {
     id: "toggle-session-issues",
     keys: "Ctrl-a e",
     label: "Expand this session's issues in the sidebar",

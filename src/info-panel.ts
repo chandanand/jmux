@@ -119,7 +119,7 @@ export class InfoPanel {
    * The Diff tab's live badge — "+142 −38 ●2" — or null for none.
    *
    * Arrives pre-formatted from main.ts rather than being derived here, for the
-   * same reason `setSessionStages` exists on the sidebar: composing it needs
+   * same reason `setSessionWorkflow` exists on the sidebar: composing it needs
    * hunk's daemon and the panel's current width, and neither belongs in a
    * module whose job is a tab strip. See `formatDiffBadge` in hunk/protocol.ts.
    */

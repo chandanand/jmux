@@ -4,6 +4,7 @@ import type { PinnedPaneEntry } from "../sidebar";
 import type { SessionInfo } from "../types";
 import { makeSessionOtelState } from "../types";
 import type { SessionContext, PipelineStatus } from "../adapters/types";
+import type { SessionWorkflow } from "../workflow-drift";
 import { tokens, frame } from "../chrome-tokens";
 import { resolveStateColors } from "../state-colors";
 
@@ -1854,14 +1855,19 @@ describe("Sidebar — sort & filter", () => {
   // Stage membership is resolved by the caller (main.ts, from the linked issue
   // + panelViews) and handed over pre-resolved, so these tests set it directly.
 
-  const stage = (id: string, label: string, rank: number) => ({ id, label, rank });
+  const stage = (id: string, label: string, rank: number): SessionWorkflow => ({
+    band: { id, label, rank },
+    label,
+    drift: null,
+    driftByIssue: new Map(),
+  });
 
   test("group=stage emits headers in the user's stage order, not alphabetical", () => {
     const sb = seeded();
     sb.setGroupMode("stage");
     // "To do" is rank 0 and "In review" rank 1 — alphabetically the reverse, so
     // this only passes if header order follows the workflow, not the label.
-    sb.setSessionStages(new Map([
+    sb.setSessionWorkflow(new Map([
       ["alpha", stage("todo", "To do", 0)],
       ["bravo", stage("review", "In review", 1)],
       ["charlie", stage("review", "In review", 1)],
@@ -1882,7 +1888,7 @@ describe("Sidebar — sort & filter", () => {
     const sb = seeded();
     sb.setGroupMode("stage");
     // charlie/delta have no linked issue, or a status no stage claims.
-    sb.setSessionStages(new Map([
+    sb.setSessionWorkflow(new Map([
       ["alpha", stage("todo", "To do", 0)],
       ["bravo", stage("todo", "To do", 0)],
     ]));
@@ -1899,7 +1905,7 @@ describe("Sidebar — sort & filter", () => {
   test("with no stages resolved at all, group=stage degrades to a flat list", () => {
     const sb = seeded();
     sb.setGroupMode("stage");
-    sb.setSessionStages(new Map());
+    sb.setSessionWorkflow(new Map());
     const g = sb.getGrid();
     const all = Array.from({ length: g.rows }, (_, r) =>
       Array.from({ length: WIDTH }, (_, i) => g.cells[r][i].char).join("")).join("\n");
@@ -1910,11 +1916,11 @@ describe("Sidebar — sort & filter", () => {
   test("collapse is keyed on stage id, so a rename keeps the group folded", () => {
     const sb = seeded();
     sb.setGroupMode("stage");
-    sb.setSessionStages(new Map([["alpha", stage("todo", "To do", 0)]]));
+    sb.setSessionWorkflow(new Map([["alpha", stage("todo", "To do", 0)]]));
     sb.toggleGroup("stage:todo");
     expect(linesWith(sb, "alpha")).toBe(-1); // folded away
     // Rename the stage; the id is unchanged, so it must still be folded.
-    sb.setSessionStages(new Map([["alpha", stage("todo", "Next up", 0)]]));
+    sb.setSessionWorkflow(new Map([["alpha", stage("todo", "Next up", 0)]]));
     expect(linesWith(sb, "Next up")).toBeGreaterThan(-1);
     expect(linesWith(sb, "alpha")).toBe(-1);
   });
@@ -1922,7 +1928,7 @@ describe("Sidebar — sort & filter", () => {
   test("pins outrank a stage — an explicit signal beats a derived one", () => {
     const sb = seeded();
     sb.setGroupMode("stage");
-    sb.setSessionStages(new Map([
+    sb.setSessionWorkflow(new Map([
       ["alpha", stage("todo", "To do", 0)],
       ["charlie", stage("todo", "To do", 0)],
     ]));
@@ -1942,7 +1948,7 @@ describe("Sidebar — sort & filter", () => {
   //
   // Membership, ordering and the cap are all resolved by the caller (main.ts,
   // from the tracker + Up next config + live sessions), so these hand the
-  // sidebar a finished list — the same boundary as setSessionStages.
+  // sidebar a finished list — the same boundary as setSessionWorkflow.
 
   const ghost = (issueId: string, identifier: string, title: string) => ({ issueId, identifier, title });
 
@@ -2025,7 +2031,7 @@ describe("Sidebar — sort & filter", () => {
   test("ghosts join nav order on the stage axis too, inside their band", () => {
     const sb = seeded();
     sb.setGroupMode("stage");
-    sb.setSessionStages(new Map([["alpha", stage("todo", "To do", 0)]]));
+    sb.setSessionWorkflow(new Map([["alpha", stage("todo", "To do", 0)]]));
     sb.setGhostSessions([stageGhost("i1", "ENG-142", "fix flaky auth", "todo", "To do", 0)]);
     const nav = sb.getNavOrder();
     const ghostAt = nav.findIndex((t) => t.type === "ghost" && t.issueId === "i1");
@@ -2138,7 +2144,7 @@ describe("Sidebar — sort & filter", () => {
   test("a ghost sits inside its own stage band, below that stage's sessions", () => {
     const sb = seeded();
     sb.setGroupMode("stage");
-    sb.setSessionStages(new Map([["alpha", stage("todo", "To do", 0)]]));
+    sb.setSessionWorkflow(new Map([["alpha", stage("todo", "To do", 0)]]));
     sb.setGhostSessions([stageGhost("i1", "ENG-142", "fix flaky auth", "todo", "To do", 0)]);
     const header = linesWith(sb, "To do");
     expect(header).toBeGreaterThan(-1);
@@ -2154,7 +2160,7 @@ describe("Sidebar — sort & filter", () => {
     // is no session in that stage to carry it.
     const sb = seeded();
     sb.setGroupMode("stage");
-    sb.setSessionStages(new Map([["alpha", stage("todo", "To do", 0)]]));
+    sb.setSessionWorkflow(new Map([["alpha", stage("todo", "To do", 0)]]));
     sb.setGhostSessions([stageGhost("i1", "ENG-9", "ship it", "review", "In review", 1)]);
     expect(linesWith(sb, "In review")).toBeGreaterThan(-1);
     expect(linesWith(sb, "ENG-9")).toBeGreaterThan(-1);
@@ -2163,7 +2169,7 @@ describe("Sidebar — sort & filter", () => {
   test("ghost-only stage bands obey workflow order like any other", () => {
     const sb = seeded();
     sb.setGroupMode("stage");
-    sb.setSessionStages(new Map());
+    sb.setSessionWorkflow(new Map());
     sb.setGhostSessions([
       stageGhost("i2", "ENG-2", "second", "review", "In review", 1),
       stageGhost("i1", "ENG-1", "first", "todo", "To do", 0),
@@ -2176,7 +2182,7 @@ describe("Sidebar — sort & filter", () => {
     // A stage of only ghosts must not collapse to a header reading "(0)".
     const sb = seeded();
     sb.setGroupMode("stage");
-    sb.setSessionStages(new Map());
+    sb.setSessionWorkflow(new Map());
     sb.setGhostSessions([
       stageGhost("i1", "ENG-1", "one", "todo", "To do", 0),
       stageGhost("i2", "ENG-2", "two", "todo", "To do", 0),
@@ -2192,7 +2198,7 @@ describe("Sidebar — sort & filter", () => {
   test("per-stage ghosts stay out of the session cycle order too", () => {
     const sb = seeded();
     sb.setGroupMode("stage");
-    sb.setSessionStages(new Map([["alpha", stage("todo", "To do", 0)]]));
+    sb.setSessionWorkflow(new Map([["alpha", stage("todo", "To do", 0)]]));
     const before = sb.getDisplayOrderIds();
     sb.setGhostSessions([stageGhost("i1", "ENG-142", "fix it", "todo", "To do", 0)]);
     expect(sb.getDisplayOrderIds()).toEqual(before);
@@ -2201,7 +2207,7 @@ describe("Sidebar — sort & filter", () => {
   test("a filter suppresses per-stage ghosts, and empties a ghost-only band", () => {
     const sb = seeded();
     sb.setGroupMode("stage");
-    sb.setSessionStages(new Map());
+    sb.setSessionWorkflow(new Map());
     sb.setGhostSessions([stageGhost("i1", "ENG-1", "one", "todo", "To do", 0)]);
     expect(linesWith(sb, "ENG-1")).toBeGreaterThan(-1);
     sb.setFilterMode("attention");
@@ -2591,5 +2597,264 @@ describe("Sidebar session issue disclosure", () => {
     expect(sidebar.isSessionExpanded("api")).toBe(true);
     sidebar.updateSessions(makeSessions([{ name: "other" }]));
     expect(sidebar.isSessionExpanded("api")).toBe(false);
+  });
+});
+
+// The workflow field at the head of a session's detail row, and the drift form
+// it takes when the tracker disagrees with what the MR and the session prove.
+//
+// Everything here arrives pre-resolved through setSessionWorkflow — the same
+// boundary as setParkedSessions — so these set it directly.
+describe("Sidebar workflow field", () => {
+  const WIDE = 40;
+
+  function wf(over: Partial<SessionWorkflow> = {}): SessionWorkflow {
+    return {
+      band: { id: "review", label: "Review", rank: 2 },
+      label: "Review",
+      stateType: "started",
+      drift: null,
+      driftByIssue: new Map(),
+      ...over,
+    };
+  }
+
+  function build(width = WIDE, workflow: SessionWorkflow | null = wf()) {
+    const sidebar = new Sidebar(width, 30);
+    sidebar.updateSessions(makeSessions([{ name: "api", gitBranch: "feat/importer" }]));
+    if (workflow) sidebar.setSessionWorkflow(new Map([["api", workflow]]));
+    return sidebar;
+  }
+
+  const rows = (sidebar: Sidebar) =>
+    sidebar.getGrid().cells.map((row) => row.map((c) => c.char).join(""));
+  /** The session's detail row: the one carrying its branch or its workflow word. */
+  const detailRow = (sidebar: Sidebar, needle: string) =>
+    rows(sidebar).find((r) => r.includes(needle));
+
+  test("a wide sidebar leads the detail row with the stage word, then the branch", () => {
+    const row = detailRow(build(), "Review")!;
+    expect(row).toBeDefined();
+    expect(row).toContain("Review");
+    expect(row).toContain("feat/importer");
+    expect(row.indexOf("Review")).toBeLessThan(row.indexOf("feat/importer"));
+  });
+
+  // The field was added to an existing row; it has to take that row's state
+  // styling like everything already on it. Resting it is a touch quieter than
+  // the branch, which is deliberate — on the active row it must not stay dim
+  // in the one place the user is looking.
+  test("the field lights up with its row when that row is active", () => {
+    const sidebar = build();
+    sidebar.setActiveSession("$0");
+    const grid = sidebar.getGrid();
+    const rowIdx = rows(sidebar).findIndex((r) => r.includes("Review"));
+    expect(rowIdx).toBeGreaterThan(-1);
+
+    const cellAt = (needle: string) => {
+      const text = rows(sidebar)[rowIdx]!;
+      return grid.cells[rowIdx]![text.indexOf(needle)]!;
+    };
+    expect(cellAt("Review").fg).toBe(cellAt("feat/importer").fg);
+    expect(cellAt("Review").dim).toBe(cellAt("feat/importer").dim);
+  });
+
+  test("no workflow resolved leaves the row exactly as it was", () => {
+    const row = detailRow(build(WIDE, null), "feat/importer")!;
+    expect(row).toContain("feat/importer");
+    expect(row).not.toContain("Review");
+  });
+
+  // The branch is derived from the session name one row above, so it is the one
+  // field here repeating something already on screen.
+  test("the branch truncates, then drops, before the stage word gives way", () => {
+    expect(detailRow(build(22), "Review")).toContain("Review");
+    const narrow = detailRow(build(15), "Review");
+    expect(narrow).toContain("Review");
+    expect(narrow).not.toContain("feat/importer");
+  });
+
+  test("below the stage word's own width it degrades to a stateType glyph", () => {
+    const row = detailRow(build(8), "◐");
+    expect(row).toBeDefined();
+    expect(row).not.toContain("Review");
+  });
+
+  // A separator divides two words. The last-resort forms are markers, not
+  // words — and `·` is both the backlog/unknown glyph and the character inside
+  // the separator, so `· · feat/x` would put three visual tokens on a row
+  // saying two things. `unknown` is the default when an adapter populates no
+  // stateType, which makes this the common case, not an exotic one.
+  // Reachable whenever the stage label is wider than the separator plus the
+  // branch minimum — "In Progress" and "In Review" both are.
+  test("a marker form is not followed by the word separator", () => {
+    const row = detailRow(build(13, wf({ label: "In Progress", stateType: undefined })), "feat")!;
+    expect(row).toBeDefined();
+    expect(row).not.toContain("· ·");
+    expect(row).toContain("· feat");
+  });
+
+  test("the drift marker gets the same treatment", () => {
+    const narrow = wf({
+      label: "In Progress",
+      drift: "Ready for Release",
+      driftByIssue: new Map([["a", "Ready for Release"]]),
+    });
+    const row = detailRow(build(20, narrow), "feat")!;
+    expect(row).toBeDefined();
+    expect(row).toContain("! feat");
+    expect(row).not.toContain("! ·");
+  });
+
+  // A row reading "Review" under a "REVIEW" header says nothing and costs the
+  // branch six columns to say it.
+  describe("grouped by stage, the header already says it", () => {
+    function grouped(width = WIDE, workflow = wf()) {
+      const sidebar = new Sidebar(width, 30);
+      sidebar.updateSessions(makeSessions([{ name: "api", gitBranch: "feat/importer" }]));
+      sidebar.setSessionWorkflow(new Map([["api", workflow]]));
+      sidebar.setGroupMode("stage");
+      return sidebar;
+    }
+
+    test("the stage word drops from the row and the branch takes the width back", () => {
+      const sidebar = grouped();
+      const all = rows(sidebar);
+      const header = all.findIndex((r) => r.includes("Review"));
+      const branchRow = all.findIndex((r) => r.includes("feat/importer"));
+      expect(header).toBeGreaterThan(-1);
+      expect(branchRow).toBeGreaterThan(header);
+      // The only "Review" on screen is the header itself.
+      expect(all.filter((r) => r.includes("Review")).length).toBe(1);
+      expect(all[branchRow]).not.toContain("·");
+    });
+
+    // The header supplies where the ticket is; the disagreement is about where
+    // it should be, which no header carries.
+    test("drift survives, without repeating the stage the header names", () => {
+      const sidebar = grouped(WIDE, wf({ drift: "Done", driftByIssue: new Map([["a", "Done"]]) }));
+      const row = rows(sidebar).find((r) => r.includes("→Done"))!;
+      expect(row).toBeDefined();
+      expect(row).not.toContain("Review→Done");
+    });
+
+    // A session under group=stage can still land in Pinned or Parked, whose
+    // headers name neither — so the word has to come back.
+    test("a pinned session keeps its stage word, since no header names it", () => {
+      const sidebar = grouped();
+      sidebar.setPinnedSessions(new Set(["api"]));
+      const all = rows(sidebar);
+      expect(all.some((r) => r.includes("Pinned"))).toBe(true);
+      expect(all.some((r) => r.includes("Review · feat/importer"))).toBe(true);
+    });
+
+    // Its sessions fall to the flat remainder, where nothing names the stage.
+    test("a session whose stage draws no band keeps its word", () => {
+      const sidebar = grouped(WIDE, wf({ band: null }));
+      expect(rows(sidebar).some((r) => r.includes("Review · feat/importer"))).toBe(true);
+    });
+
+    test("on every other axis the word stays", () => {
+      const sidebar = grouped();
+      sidebar.setGroupMode("project");
+      expect(rows(sidebar).some((r) => r.includes("Review · feat/importer"))).toBe(true);
+    });
+  });
+
+  test("a status claimed by no stage still names itself on the row", () => {
+    const row = detailRow(build(WIDE, wf({ band: null, label: "Blocked" })), "Blocked")!;
+    expect(row).toContain("Blocked");
+  });
+
+  describe("drift", () => {
+    const drifting = (over: Partial<SessionWorkflow> = {}) =>
+      wf({ drift: "Done", driftByIssue: new Map([["a", "Done"]]), ...over });
+
+    test("names where the workflow says it should be", () => {
+      const row = detailRow(build(WIDE, drifting()), "Review→Done")!;
+      expect(row).toContain("Review→Done");
+    });
+
+    // The target is what the fix key will write, so the current stage — which
+    // the drift already contradicts — is what gives way first.
+    test("the current stage drops before the target does", () => {
+      const row = detailRow(build(11, drifting()), "→Done")!;
+      expect(row).toBeDefined();
+      expect(row).not.toContain("Review→Done");
+      expect(row).toContain("→Done");
+    });
+
+    // Not "⚠": this sidebar tracks columns explicitly and that glyph's width
+    // varies between terminals.
+    test("the minimal form is a single unambiguous column", () => {
+      const wide = rows(build(WIDE, drifting())).join("\n");
+      const narrow = rows(build(7, drifting())).join("\n");
+      expect(wide).not.toContain("⚠");
+      expect(narrow).not.toContain("⚠");
+      expect(narrow).not.toContain("→Done");
+      expect(narrow.split("\n").some((r) => r.includes("!"))).toBe(true);
+    });
+  });
+
+  describe("the disclosure marks every drifting issue, not just the driving one", () => {
+    function withIssues(): Map<string, SessionContext> {
+      return new Map([["api", {
+        sessionName: "api",
+        dir: "/tmp",
+        branch: "feat/importer",
+        remote: null,
+        mrs: [],
+        issues: [
+          { id: "a", identifier: "TRA-1", title: "Parse CSV", status: "Todo", stateType: "unstarted" },
+          { id: "b", identifier: "TRA-2", title: "Column map", status: "In Review", stateType: "started" },
+        ],
+        resolvedAt: Date.now(),
+      } as unknown as SessionContext]]);
+    }
+
+    function expanded(width: number, driftByIssue: Map<string, string>) {
+      const sidebar = new Sidebar(width, 30);
+      sidebar.updateSessions(makeSessions([{ name: "api", gitBranch: "feat/importer" }]));
+      sidebar.setSessionContexts(withIssues());
+      sidebar.setSessionWorkflow(new Map([["api", wf({
+        label: "Todo",
+        drift: driftByIssue.get("a") ?? null,
+        driftByIssue,
+      })]]));
+      sidebar.toggleSessionIssues("api");
+      return sidebar;
+    }
+
+    test("a sub-row names both its status and its target when both fit", () => {
+      const sidebar = expanded(48, new Map([["a", "Done"], ["b", "Done"]]));
+      const row = rows(sidebar).find((r) => r.includes("Parse CSV"))!;
+      expect(row).toContain("Todo→Done");
+    });
+
+    test("the target drops before the raw status, which is why you expanded", () => {
+      const sidebar = expanded(24, new Map([["a", "Done"], ["b", "Done"]]));
+      const row = rows(sidebar).find((r) => r.includes("TRA-2"))!;
+      expect(row).not.toContain("In Review→Done");
+      expect(row).toContain("→Done");
+    });
+
+    // The collapsed row can only speak for the issue its badge names; expanding
+    // is how the rest become visible.
+    test("a drifting non-driving issue is marked even when the row above is not", () => {
+      const sidebar = expanded(48, new Map([["b", "Done"]]));
+      const all = rows(sidebar).join("\n");
+      const driving = rows(sidebar).find((r) => r.includes("Parse CSV"))!;
+      const other = rows(sidebar).find((r) => r.includes("Column map"))!;
+      expect(driving).not.toContain("→Done");
+      expect(other).toContain("→Done");
+      expect(all).toContain("TRA-1");
+    });
+
+    test("with nothing drifting the sub-rows read exactly as they always did", () => {
+      const sidebar = expanded(48, new Map());
+      const row = rows(sidebar).find((r) => r.includes("Parse CSV"))!;
+      expect(row).toContain("Todo");
+      expect(row).not.toContain("→");
+    });
   });
 });

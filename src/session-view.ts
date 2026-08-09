@@ -124,6 +124,13 @@ export interface SessionIssueRow {
   stateType?: Issue["stateType"];
   /** Whether the tracker considers this one dealt with, in any of its ways. */
   finished: boolean;
+  /**
+   * Where the workflow says this one should be, when that disagrees with where
+   * it is. Present on every drifting issue of the session, not just the driving
+   * one — the collapsed row can only speak for the issue its badge names, so
+   * expanding is how the rest become visible.
+   */
+  driftTarget?: string;
 }
 
 /**
@@ -135,6 +142,7 @@ export interface SessionIssueRow {
  */
 export function buildSessionIssueRows(
   issues: readonly Issue[],
+  driftByIssue: ReadonlyMap<string, string> = new Map(),
 ): SessionIssueRow[] {
   return orderedSessionIssues(issues).map((issue) => ({
     id: issue.id,
@@ -143,6 +151,7 @@ export function buildSessionIssueRows(
     status: issue.status,
     stateType: issue.stateType,
     finished: isIssueFinished(issue),
+    driftTarget: driftByIssue.get(issue.id),
   }));
 }
 

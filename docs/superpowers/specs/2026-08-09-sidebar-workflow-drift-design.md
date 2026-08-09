@@ -317,6 +317,49 @@ Everything fails closed.
 No integration test. `main.ts` only wires; every rule lives in the pure module,
 which is the reason for putting it there.
 
+## Changed during implementation
+
+Five departures from the design above, each recorded here rather than silently
+absorbed:
+
+- **The field is suppressed where a header already carries it.** The design had
+  row 2 naming the stage on every axis. Under `group=stage` that puts `Review`
+  under a `REVIEW` header — redundancy paid for with six columns of branch. The
+  word is dropped there and drift shortens to `→Done`, since the header supplies
+  where the ticket is and nothing supplies where it should be. The predicate is
+  stamped on the `RenderItem` at placement, not re-derived at paint: a session
+  under `group=stage` still lands in Pinned or Parked for its own reasons, and
+  those headers name neither.
+
+- **`SessionWorkflow` lives in `workflow-drift.ts`, not `sidebar-sort.ts`.**
+  It is defined where it is built. `sidebar.ts` imports it `import type`, so the
+  runtime coupling is nil and the sidebar still learns nothing about trackers.
+  `sidebar-sort.ts` keeps a pointer where `StageBucket` used to be.
+
+- **The strongest event falls through when it produces no move.** The design
+  said the first event whose precondition holds is the only one worth saying. In
+  practice a merged MR with no `onMrMerged` configured would then mask a
+  correctly-configured `onSessionStart` report sitting underneath it. Still one
+  statement per session — the strongest one that *exists*.
+
+- **`applyMoves` was not extracted from `requestTransitions`.** `applyStatusPick`
+  and `pickStatusFor` already are the user-initiated write path, with the same
+  one-undo-per-decision rule. Reusing them is less churn and brings the
+  optimistic status update for free, which is what clears the marker on the next
+  frame rather than the next poll. `requestTransitions` is untouched.
+
+- **The inert-case line is in the settings screen's Diagnostics, not the
+  workflow screen.** That is where `parkingSetupWarning` actually renders, so
+  the two sit together. `driftSetupWarning` reports two conditions: no
+  transition target configured anywhere, and — outranking it — no linked issues
+  to check at all. The second exists because the predicate for the first is
+  derived by scanning live sessions' issues, so an empty set made "configured
+  and no target found" indistinguishable from "nothing to look at". On a fresh
+  install that named a cause the user could act on, and acting on it changed
+  nothing. The third part of the setup ("N statuses unmapped") stays on the
+  workflow row above it; saying it twice would suggest two settings where there
+  is one.
+
 ## Out of scope
 
 - `ctl workflow drift`. The module would serve it unchanged, but the CLI is its

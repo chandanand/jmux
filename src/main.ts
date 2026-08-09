@@ -15,8 +15,16 @@ import {
   GROUP_MODES, SORT_MODES, FILTER_MODES,
   groupModeLabel, sortModeLabel, filterModeLabel, migrateLegacySort,
   type GroupMode, type SortMode, type FilterMode, type LegacySortMode,
-  type StageBucket,
 } from "./sidebar-sort";
+import {
+  buildSessionWorkflow,
+  detectDrift,
+  driftSetupWarning,
+  DRIFT_EVENTS,
+  type SessionWorkflow,
+  type StageRef,
+  type WorkflowInputs,
+} from "./workflow-drift";
 import { buildFooter, layoutFooter, type FooterModel } from "./footer";
 import { CommandPalette } from "./command-palette";
 import { HelpModal } from "./help-modal";
@@ -1551,6 +1559,38 @@ function stageOfSession(name: string): WorkStage | null {
 }
 
 /**
+ * The two lookups `workflow-drift.ts` needs, resolved from live config.
+ *
+ * Rebuilt per pass rather than memoised: `panelViews` and repo settings both
+ * change under the config watcher, and a stale closure here would keep the
+ * sidebar reporting a workflow the user has already edited.
+ */
+function workflowInputs(): WorkflowInputs {
+  return {
+    stageOf: (status: string): StageRef | null => {
+      const view = stageForState(panelViews, status);
+      if (!view) return null;
+      return {
+        id: view.id,
+        label: view.label,
+        rank: panelViews.indexOf(view),
+        inSidebar: stageInSidebar(view),
+      };
+    },
+    targetFor: (issue, event) => transitionTarget(
+      event,
+      repoSettingsFor(resolveIssueRepoDir(issue, configStore.config, homedir())),
+    ),
+  };
+}
+
+/**
+ * Every session's workflow position, kept for the fix key — which must act on
+ * the same answer the sidebar drew, not re-derive one that could differ.
+ */
+const sessionWorkflow = new Map<string, SessionWorkflow>();
+
+/**
  * Recompute where each session sits in the sidebar: the Parked band, and the
  * workflow stage it groups under. Cheap and idempotent, so it can run on any
  * signal that might change the answer (session list changes, poll updates,
@@ -1564,7 +1604,8 @@ function recomputeSessionBands(): void {
   const config = parkingConfig();
   const now = Date.now();
   const parked = new Set<string>();
-  const stages = new Map<string, StageBucket>();
+  const inputs = workflowInputs();
+  sessionWorkflow.clear();
   const live = new Set(currentSessions.map((s) => s.name));
 
   for (const session of currentSessions) {
@@ -1579,22 +1620,13 @@ function recomputeSessionBands(): void {
 
     const ctx = pollCoordinator.getContext(name);
 
-    // The stage band: the session's driving issue, projected through the user's
-    // own stage definitions. Rank is the stage's position in `panelViews`,
-    // which is the priority order the workflow screen reorders — so the sidebar
-    // headers read top-to-bottom in the order they arranged their workflow.
-    const issue = drivingIssue(ctx?.issues ?? []);
-    const stageView = issue ? stageForState(panelViews, issue.status) : null;
-    // A stage hidden from the sidebar claims nothing for grouping: its sessions
-    // fall to the flat remainder, exactly like a session whose status no stage
-    // claims. Hiding the band must never hide the session.
-    if (stageView && stageInSidebar(stageView)) {
-      stages.set(name, {
-        id: stageView.id,
-        label: stageView.label,
-        rank: panelViews.indexOf(stageView),
-      });
-    }
+    // The stage band, the word row 2 leads with and the drift marker, from one
+    // resolution. Rank is the stage's position in `panelViews`, which is the
+    // priority order the workflow screen reorders — so the sidebar headers read
+    // top-to-bottom in the order they arranged their workflow, and "behind" in
+    // drift means behind in that same order.
+    const workflow = buildSessionWorkflow(ctx?.issues ?? [], ctx?.mrs ?? [], inputs);
+    if (workflow) sessionWorkflow.set(name, workflow);
 
     const baseline = parkBaselines.get(name);
     const parkCtx: ParkContext = {
@@ -1633,7 +1665,7 @@ function recomputeSessionBands(): void {
   }
 
   sidebar.setParkedSessions(parked);
-  sidebar.setSessionStages(stages);
+  sidebar.setSessionWorkflow(sessionWorkflow);
   recomputeGhosts();
 }
 
@@ -1923,6 +1955,54 @@ async function pickStatusFor(
       if (issues.length > 1) showToast(`${issues.length} → ${sel.id}`);
     })();
   });
+}
+
+/**
+ * Move the focused session's issues where the workflow says they should be.
+ *
+ * Reads `detectDrift` — the same function the sidebar's marker is built from —
+ * rather than re-deriving the set, so the key cannot move something the row
+ * never claimed.
+ *
+ * Writes through `applyStatusPick`, not `applyTransition`: the target is named
+ * outright on screen before the key is pressed, so this is a status the user
+ * picked, not a write jmux decided to make. That is also why `transitionConfirm`
+ * does not apply — the same reasoning as `ctl issue move`. The optimistic update
+ * it carries is what clears the marker on the next frame instead of the next
+ * poll.
+ */
+async function fixWorkflowDrift(): Promise<void> {
+  const name = currentSessions.find((s) => s.id === currentSessionId)?.name;
+  const ctx = name ? pollCoordinator.getContext(name) : undefined;
+  if (!ctx || ctx.issues.length === 0) {
+    showToast("No issues linked to this session");
+    return;
+  }
+
+  const drift = detectDrift(ctx.issues, ctx.mrs, workflowInputs());
+  // Silence would read as a broken key. Said out loud, the same way `Ctrl-a e`
+  // reports having nothing to disclose.
+  if (!drift) {
+    showToast("Nothing to move — the tracker already agrees");
+    return;
+  }
+
+  const moves: Array<UndoMove | null> = [];
+  for (const move of drift.moves) moves.push(await applyStatusPick(move.issue, move.target));
+  recordUndo(moves);
+
+  const applied = moves.filter((m) => m !== null);
+  if (applied.length === 0) {
+    showNotice({
+      title: "Nothing moved",
+      message: `The tracker refused ${drift.moves.length === 1 ? "the write" : "every write"}.`,
+      hint: "Check the tracker's auth in settings; the marker stays up until a write lands.",
+    });
+    return;
+  }
+  showToast(applied.length === 1
+    ? `${applied[0]!.identifier} → ${applied[0]!.to}`
+    : `${applied.length} issues moved`);
 }
 
 /**
@@ -4108,6 +4188,7 @@ const inputRouter = new InputRouter(
       sidebar.scrollToActive();
       scheduleRender();
     },
+    onFixWorkflowDrift: () => { void fixWorkflowDrift(); },
     onModalInput: (data) => {
       // Full-screen surfaces consume input while open, ahead of any modal.
       if (workflowScreen.isOpen) {
@@ -5597,6 +5678,24 @@ function buildSettingsCategories(): SettingsCategory[] {
           getValue: () =>
             parkingSetupWarning(derivedStages().parked.length)
             ?? `active — ${currentSessions.filter((x) => sidebar.isParked(x.name)).length} parked`,
+        },
+        {
+          id: "drift-status", label: "Drift detection", type: "text" as const,
+          getValue: () => {
+            const inputs = workflowInputs();
+            // The issues actually examined, not just whether one had a target:
+            // an empty set makes "no target configured" indistinguishable from
+            // "nothing to look at", and the row would name a cause the user
+            // could act on without it ever changing.
+            const checked = currentSessions.flatMap((s) =>
+              pollCoordinator.getContext(s.name)?.issues ?? []);
+            const configured = checked.some((i) =>
+              DRIFT_EVENTS.some((e) => inputs.targetFor(i, e)));
+            const drifting = [...sessionWorkflow.values()]
+              .filter((w) => w.driftByIssue.size > 0).length;
+            return driftSetupWarning(configured, checked.length)
+              ?? `active — ${drifting} drifting`;
+          },
         },
         {
           id: "stage-source", label: "Tracker states available", type: "text" as const,

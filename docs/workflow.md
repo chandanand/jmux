@@ -176,6 +176,79 @@ to a stage and the mode is simply a flat list.
 
 ---
 
+## Where a session sits, on every grouping axis
+
+Stage bands only exist under `Stage` grouping. So that a session says where it
+sits no matter how the sidebar is grouped, its second row leads with the stage
+its issue is in:
+
+```
+  ▶ auth-refactor    TRA-123
+    Review · feat/auth  !88 ✓
+```
+
+That is your **stage** label, not the raw tracker status — the word you chose in
+`Ctrl-a W`. Two statuses in the same stage read the same here; press `Ctrl-a e`
+and each disclosed row spells its own status out. A status that no stage claims
+has nothing to abbreviate to, so it prints as-is.
+
+The field outranks the branch beside it: on a `wtm` worktree the branch name is
+derived from the session name one row above, so it is the only thing on that row
+repeating something already on screen. Narrow the sidebar and the branch
+truncates, then drops, then the stage word becomes a one-character glyph.
+
+**Grouped by `Stage`, the word goes away** — the band header above the row
+already says it, and a row reading `Review` under a `REVIEW` header is six
+columns the branch could have had. It comes back for any session the header
+does *not* speak for: pinned ones, parked ones, and any whose stage draws no
+band.
+
+---
+
+## When the status stops being true
+
+jmux moves your issues on *events* — a session starts, an MR opens, an MR merges
+(see [Transitions](#transitions-writes-to-your-tracker)). Firing on events and
+never on conditions is what keeps it from rewriting history: attaching to a
+six-month-old session must not replay six months of moves into your tracker.
+
+The cost is that a missed event stays missed. jmux restarted while the MR was
+merging, the write failed, you linked the issue afterwards — the ticket now says
+one thing and your branch says another, forever.
+
+So the same field reports it:
+
+```
+  ▶ auth-refactor    TRA-123
+    Review→Done  !88 ✓
+```
+
+That reads: the MR is merged, your `MR merged` transition says such issues
+belong in `Done`, and this one never got there. Grouped by `Stage` it shortens
+to just `→Done`, since the header already told you where the ticket is — the
+disagreement is about where it should be, which no header carries.
+**`Ctrl-a m` moves it**, with `Ctrl-a Z` to take it back. Several issues on one session all move together —
+each to whatever *its* repo's transition configures, since hand-linked issues
+can come from teams that map elsewhere.
+
+Three things it will not do:
+
+- **Flag a ticket you moved past the target.** "Behind" means behind in the
+  stage order you arranged in `Ctrl-a W`, so a ticket in `Released` is not
+  behind `Done`.
+- **Guess without an ordering.** No configured transition, or a status that no
+  stage claims, and jmux says nothing rather than inventing a comparison.
+  Settings → Diagnostics → *Drift detection* tells you when that is why the
+  feature is quiet.
+- **Write anything by itself.** The marker is a report. Only `Ctrl-a m` writes,
+  and because you asked for it, your transition-confirmation setting does not
+  gate it.
+
+Expanding a session (`Ctrl-a e`) marks *every* drifting issue it carries, not
+just the one the badge names.
+
+---
+
 ## Unstarted work in the sidebar
 
 The sidebar otherwise shows only what exists. Turn this on and it also shows the

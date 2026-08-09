@@ -27,8 +27,8 @@ import {
   type FilterMode,
   type SessionStatus,
   type SessionSortInfo,
-  type StageBucket,
 } from "./sidebar-sort";
+import type { SessionWorkflow } from "./workflow-drift";
 import type { GhostEntry } from "./ghosts";
 import type { NavTarget } from "./nav-order";
 
@@ -46,7 +46,7 @@ export type SidebarSelection =
   | { type: "pinnedPane"; paneId: string }
   /** An unstarted issue in the Up next band. Carries only the id: the caller
    * owns the issue data, and the sidebar deliberately knows nothing about
-   * trackers (same boundary as `setSessionStages`). */
+   * trackers (same boundary as `setSessionWorkflow`). */
   | { type: "ghost"; issueId: string }
   /**
    * One issue of a session whose issue list is expanded. Carries the session as
@@ -201,6 +201,8 @@ const ISSUE_STATUS_ATTRS: CellAttrs = {
 const ISSUE_DONE_ATTRS: CellAttrs = { dim: true };
 /** Below this a title is a stub rather than information, so it is dropped. */
 const ISSUE_TITLE_MIN_COLS = 6;
+/** The same judgement for a branch name on a session's detail row. */
+const BRANCH_MIN_COLS = 4;
 // Status shorthand, from the tracker-agnostic stateType rather than the status
 // name: names are workspace-defined ("QA Failed", "Ready for review") and no
 // abbreviation of them is safe, while these six categories are fixed.
@@ -214,6 +216,70 @@ const STATE_TYPE_GLYPH: Record<string, string> = {
   duplicate: "⧉",
   unknown: "·",
 };
+
+// The workflow field at the head of a session's detail row: the stage the
+// driving issue sits in, or — when that disagrees with what the MR and the
+// session already prove — where the workflow says it should be.
+const WORKFLOW_ARROW = "→";
+// The minimal drift form. Deliberately not "⚠": this sidebar tracks columns
+// explicitly and that glyph's width varies between terminals, which is the
+// class of drift between the width table and the real terminal that leaves
+// ghost gaps. "!" is unambiguously one column and already reads as attention
+// here, in column 1.
+const WORKFLOW_DRIFT_MARK = "!";
+/**
+ * Separates the workflow field from the branch — two words on one row. Absent
+ * when either is dropped, and narrowed to a plain space when the field has
+ * degraded to a marker rather than a word (see `terse` below).
+ */
+const WORKFLOW_SEP = " · ";
+const WORKFLOW_ATTRS: CellAttrs = {
+  fg: tokens.textTertiary.fg,
+  fgMode: tokens.textTertiary.fgMode,
+  dim: tokens.textTertiary.dim,
+};
+
+/**
+ * What the workflow field says at a given width, longest affordable form first.
+ *
+ * Under drift the target is the actionable half — it is also exactly what the
+ * fix key will write — so the current stage gives way before it does.
+ *
+ * `stageInHeader` drops the current stage from every form, because the band
+ * above the row already names it. Grouped by stage, a row reading "Review"
+ * under a "REVIEW" header says nothing and costs the branch six columns to say
+ * it. Drift survives that: the header supplies where the ticket *is*, and the
+ * disagreement is about where it should be.
+ *
+ * `terse` marks the last-resort single-character forms. They are markers rather
+ * than words, and the caller separates them from the branch with a plain space:
+ * `·` is both the `backlog`/`unknown` glyph *and* the character inside the
+ * word separator, so `· · feat/x` would put three visual tokens where there are
+ * two things being said.
+ */
+function workflowFieldText(
+  wf: Pick<SessionWorkflow, "label" | "stateType" | "drift">,
+  maxCols: number,
+  stageInHeader = false,
+): { text: string; terse: boolean } {
+  const candidates: Array<{ text: string; terse: boolean }> = [];
+  if (wf.drift) {
+    const arrow = `${WORKFLOW_ARROW}${wf.drift}`;
+    if (!stageInHeader) candidates.push({ text: `${wf.label}${arrow}`, terse: false });
+    candidates.push({ text: arrow, terse: false });
+    candidates.push({ text: WORKFLOW_DRIFT_MARK, terse: true });
+  } else if (!stageInHeader) {
+    candidates.push({ text: wf.label, terse: false });
+    candidates.push({
+      text: STATE_TYPE_GLYPH[wf.stateType ?? "unknown"] ?? STATE_TYPE_GLYPH.unknown!,
+      terse: true,
+    });
+  }
+  for (const candidate of candidates) {
+    if (candidate.text && textCols(candidate.text) <= maxCols) return candidate;
+  }
+  return { text: "", terse: false };
+}
 
 /**
  * Re-sync the sidebar's highlight backgrounds from the current theme. Called
@@ -362,7 +428,12 @@ type RenderItem =
   // switches. The stage axis keys on the stage *id* rather than its label, so
   // renaming a stage doesn't silently expand a group the user had collapsed.
   | { type: "group-header"; key: string; label: string; collapsed: boolean; sessionCount: number }
-  | { type: "session"; sessionIndex: number; grouped: boolean; groupLabel?: string; pinnedCount?: number }
+  // `stageInHeader` says the band this row was emitted under already names its
+  // workflow stage, so row 2 must not repeat it. Stamped where the row is
+  // *placed* rather than re-derived at paint time: a session under group=stage
+  // can still land in Pinned or Parked, whose headers name neither, and a rule
+  // evaluated twice is a rule that can disagree with itself.
+  | { type: "session"; sessionIndex: number; grouped: boolean; groupLabel?: string; pinnedCount?: number; stageInHeader?: boolean }
   // One issue of an expanded session, drawn directly below that session's own
   // rows. A sub-row, not a peer: it is absent from `displayOrder` and from
   // `navOrder`, because both mean "somewhere to go" and this row's session is
@@ -425,7 +496,7 @@ function buildRenderPlan(
   sortMode: SortMode,
   filterMode: FilterMode,
   parkedNames: Set<string> = new Set(),
-  stageByName: Map<string, StageBucket> = new Map(),
+  workflowByName: Map<string, SessionWorkflow> = new Map(),
   ghosts: readonly GhostEntry[] = [],
   issueRowsByName: ReadonlyMap<string, readonly SessionIssueRow[]> = new Map(),
   expandedNames: ReadonlySet<string> = new Set(),
@@ -501,8 +572,10 @@ function buildRenderPlan(
       // mapped to no stage — falls to the flat remainder, exactly as a
       // project-less session does under group=project. Making those a "No
       // stage" group would give the sessions you have *not* classified a
-      // header of their own, above ones you have.
-      const stage = stageByName.get(sessions[i].name);
+      // header of their own, above ones you have. A stage hidden from the
+      // sidebar arrives with a null band for the same reason — hiding a stage
+      // hides its header, never its sessions.
+      const stage = workflowByName.get(sessions[i].name)?.band;
       if (!stage) {
         ungrouped.push(i);
         continue;
@@ -600,6 +673,7 @@ function buildRenderPlan(
     indices: number[],
     collapsedByDefault = false,
     ghostIndices: readonly number[] = [],
+    stageInHeader = false,
   ): void => {
     // Parked inverts the collapse default: the band exists to hide rows, so an
     // absent entry in `collapsedGroups` means collapsed, and toggling records
@@ -626,6 +700,7 @@ function buildRenderPlan(
         grouped: true,
         groupLabel: label,
         pinnedCount: pinnedPaneCountBySession.get(sessions[idx].name),
+        stageInHeader,
       });
     }
     // Ghosts last within the band: work someone is on outranks work nobody is.
@@ -641,9 +716,11 @@ function buildRenderPlan(
     emitGroup(PINNED_GROUP_KEY, PINNED_GROUP_LABEL, sortedPinned);
   }
 
-  // Grouped buckets (none in group=none).
+  // Grouped buckets (none in group=none). On the stage axis — and only there —
+  // every bucket is a stage, so its header already carries what row 2 would
+  // otherwise say.
   for (const b of buckets) {
-    emitGroup(b.key, b.label, b.indices, false, b.ghostIndices);
+    emitGroup(b.key, b.label, b.indices, false, b.ghostIndices, groupMode === "stage");
   }
 
   // Flat list: group=none, or the project-less remainder in group=project.
@@ -753,7 +830,7 @@ export class Sidebar {
   private collapsedGroups = new Set<string>();
   private pinnedSessions = new Set<string>();
   private parkedSessions = new Set<string>();
-  private sessionStages = new Map<string, StageBucket>();
+  private sessionWorkflow = new Map<string, SessionWorkflow>();
   private ghosts: GhostEntry[] = [];
   private pinnedPanes: PinnedPaneEntry[] = [];
   private rowToSelection = new Map<number, SidebarSelection>();
@@ -862,18 +939,20 @@ export class Sidebar {
   }
 
   /**
-   * Which workflow stage each session sits in, for group=stage. Resolved by the
-   * caller from the linked issue + the user's stage definitions; sessions absent
-   * from the map have no stage and stay in the flat remainder.
+   * Each session's workflow position: the band it groups under, the word row 2
+   * leads with, and where the workflow says its issues should be. Resolved by
+   * the caller from the linked issues + the user's stage definitions; sessions
+   * absent from the map have no issue to describe, so they say nothing and stay
+   * in the flat remainder.
    */
-  setSessionStages(stages: Map<string, StageBucket>): void {
-    this.sessionStages = new Map(stages);
+  setSessionWorkflow(workflow: Map<string, SessionWorkflow>): void {
+    this.sessionWorkflow = new Map(workflow);
     this.rebuildPlan();
   }
 
   /**
    * Unstarted issues for the Up next band, already selected, ordered and capped
-   * by the caller. Same boundary as `setSessionStages`: which issues qualify
+   * by the caller. Same boundary as `setSessionWorkflow`: which issues qualify
    * depends on the tracker, the stage config and the live session list, none of
    * which the sidebar knows about.
    */
@@ -977,7 +1056,10 @@ export class Sidebar {
     for (const session of this.sessions) {
       const issues = this.sessionContexts.get(session.name)?.issues;
       if (issues && issues.length > 0) {
-        this.sessionIssueRows.set(session.name, buildSessionIssueRows(issues));
+        this.sessionIssueRows.set(
+          session.name,
+          buildSessionIssueRows(issues, this.sessionWorkflow.get(session.name)?.driftByIssue),
+        );
       }
     }
     const { items, displayOrder, navOrder } = buildRenderPlan(
@@ -990,7 +1072,7 @@ export class Sidebar {
       this.sortMode,
       this.filterMode,
       this.parkedSessions,
-      this.sessionStages,
+      this.sessionWorkflow,
       this.ghosts,
       this.sessionIssueRows,
       this.expandedSessions,
@@ -1635,16 +1717,31 @@ export class Sidebar {
     // Status, right-aligned: the full name when it fits, else a single glyph.
     // Both are dropped before the identifier is, which is the one field that
     // makes the row identifiable at all.
+    //
+    // A drifting issue puts its target in front of that chain. Naming both is
+    // affordable here — a sub-row has no branch, timer or MR competing for the
+    // width — and the raw status is the reason to expand in the first place, so
+    // the target is what drops next, leaving the plain chain the row already
+    // had.
     const glyph = STATE_TYPE_GLYPH[issue.stateType ?? "unknown"] ?? STATE_TYPE_GLYPH.unknown;
+    const drifting = issue.driftTarget !== undefined;
     const statusAttrs: CellAttrs = {
-      ...(issue.finished ? ISSUE_DONE_ATTRS : ISSUE_STATUS_ATTRS),
+      ...(drifting
+        ? this.stateAttrs.waiting
+        : issue.finished ? ISSUE_DONE_ATTRS : ISSUE_STATUS_ATTRS),
       ...bgAttrs,
     };
     const idCols = textCols(issue.identifier);
     // The identifier, one space, and the field — below that the field is what
     // gives way, since a row with no identifier names nothing.
     const roomFor = (text: string) => textStart + idCols + 1 + textCols(text) - 1 <= innerEdge;
-    const statusText = roomFor(issue.status) ? issue.status : roomFor(glyph) ? glyph : "";
+    const candidates: string[] = [];
+    if (issue.driftTarget !== undefined) {
+      const arrow = `${WORKFLOW_ARROW}${issue.driftTarget}`;
+      candidates.push(`${issue.status}${arrow}`, arrow);
+    }
+    candidates.push(issue.status, glyph);
+    const statusText = candidates.find((t) => t && roomFor(t)) ?? "";
     if (statusText) {
       const col = innerEdge - textCols(statusText) + 1;
       writeString(grid, row, col, statusText, statusAttrs);
@@ -1868,13 +1965,43 @@ export class Sidebar {
       }
     }
 
-    // Branch (left, truncates to fit)
+    // Workflow field (left, before the branch) + branch.
+    //
+    // The field outranks the branch because on the wtm flow the branch name is
+    // derived from the session name one row above: it is the only field here
+    // repeating something already on screen, while the workflow position is
+    // derivable from nothing else.
+    const detailStart = 3;
+    let leftCol = detailStart;
+    let fieldTerse = false;
+    const wf = this.sessionWorkflow.get(session.name);
+    if (wf) {
+      const field = workflowFieldText(wf, rightEdge - detailStart + 1, item.stageInHeader);
+      if (field.text) {
+        // Drift keeps the attention colour in every state — that is what it is
+        // for. Otherwise the field follows the row it sits on: resting, it is a
+        // touch quieter than the branch beside it, but on the active or hovered
+        // row it lights up with everything else rather than staying dim in the
+        // one place the user is looking.
+        writeString(grid, detailRow, leftCol, field.text, wf.drift
+          ? { ...this.stateAttrs.waiting, ...bgAttrs }
+          : isActive || isHovered
+            ? detailAttrs
+            : { ...WORKFLOW_ATTRS, ...bgAttrs });
+        leftCol += textCols(field.text);
+        fieldTerse = field.terse;
+      }
+    }
+
     if (view.branch) {
-      const detailStart = 3;
-      const maxLen = rightEdge - detailStart + 1;
-      if (maxLen > 0) {
-        const branch = truncateToCols(view.branch, maxLen);
-        writeString(grid, detailRow, detailStart, branch, detailAttrs);
+      const sep = leftCol === detailStart ? "" : fieldTerse ? " " : WORKFLOW_SEP;
+      const branchCol = leftCol + textCols(sep);
+      const maxLen = rightEdge - branchCol + 1;
+      // Below this a branch is a stub rather than information, so it drops
+      // entirely — the same judgement ISSUE_TITLE_MIN_COLS makes for a title.
+      if (maxLen >= BRANCH_MIN_COLS) {
+        if (sep) writeString(grid, detailRow, leftCol, sep, detailAttrs);
+        writeString(grid, detailRow, branchCol, truncateToCols(view.branch, maxLen), detailAttrs);
       }
     }
 
