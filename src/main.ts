@@ -3610,6 +3610,14 @@ async function retitleCurrentSession(): Promise<void> {
   const session = currentSessions.find((s) => s.id === currentSessionId);
   if (!session) return;
 
+  // Before resolving, not after: `resolveGitTitleInput` returns the memo's
+  // already-resolved entry for an unchanged branch rather than re-running
+  // `readGitTitleInput`, so a delete that came after `resolveTitleInput` would
+  // only benefit the *next* invocation. Refreshing a git-tier title frozen on
+  // the branch's first commit is the whole reason this command exists, and it
+  // has to work on the first press.
+  gitTitleInputs.delete(session.id);
+
   const input = await resolveTitleInput(session);
   if (!input) {
     showNotice({
@@ -3621,8 +3629,15 @@ async function retitleCurrentSession(): Promise<void> {
     return;
   }
 
-  gitTitleInputs.delete(session.id);
   titleGenerator.forget(session.name);
+  // A silent model failure leaves this call's signature un-cached by
+  // `onTitle` — but `TitleGenerator.request` below still marks it attempted
+  // regardless of outcome, so re-asking the identical question needs another
+  // `forget()`, not a cleared option. What this unset actually guards is the
+  // stored value staying `manual`: `requestSessionTitles` skips a `manual`
+  // session unconditionally, so a failed attempt here must not leave the
+  // automatic pipeline believing this session opted out forever — the whole
+  // point of asking was to supersede that sentinel.
   await control
     .sendCommand(`set-option -t ${tq(session.id)} -u ${TITLE_SIGNATURE_OPTION}`)
     .catch(() => {});
