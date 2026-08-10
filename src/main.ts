@@ -3578,6 +3578,58 @@ async function requestSessionTitles(sessions: readonly SessionInfo[]): Promise<v
 }
 
 /**
+ * Re-name the current session on demand.
+ *
+ * Three things suppress an automatic run, and an explicit request has to clear
+ * all three or the command silently does nothing — the exact failure
+ * `showNotice` exists to prevent:
+ *
+ *  - the `manual` sentinel, which is the human's own name. Asking for a
+ *    generated one supersedes it; that is what the request *means*.
+ *  - `TitleGenerator.attempted`, which is what stops the poll re-asking the
+ *    same question forever. Here the same question is the point.
+ *  - the git memo, keyed on branch rather than HEAD. Dropping the entry is what
+ *    makes this command pick up commits made since the branch's first, which is
+ *    the one case where the memo's narrowing is visible to a human.
+ *
+ * The stored title is left on screen rather than unset. It is replaced when the
+ * new one lands, so the row changes once instead of flickering back to the raw
+ * session name in between.
+ */
+async function retitleCurrentSession(): Promise<void> {
+  if (!titleGenerator) {
+    showNotice({
+      title: "Session naming is off",
+      message: "No model is configured to name sessions.",
+      hint: 'Set sessionTitle.command in ~/.config/jmux/config.json, e.g. ["claude", "-p"].',
+      tone: "warn",
+    });
+    return;
+  }
+
+  const session = currentSessions.find((s) => s.id === currentSessionId);
+  if (!session) return;
+
+  const input = await resolveTitleInput(session);
+  if (!input) {
+    showNotice({
+      title: "Nothing to name this session from",
+      message: "This session has no linked issue, no recorded first prompt, and no commits of its own.",
+      hint: "Link an issue, prompt the agent, or commit something, then try again.",
+      tone: "warn",
+    });
+    return;
+  }
+
+  gitTitleInputs.delete(session.id);
+  titleGenerator.forget(session.name);
+  await control
+    .sendCommand(`set-option -t ${tq(session.id)} -u ${TITLE_SIGNATURE_OPTION}`)
+    .catch(() => {});
+  titleGenerator.request(session.name, titleSignature(input), buildTitlePrompt(input));
+}
+
+/**
  * Put the sidebar rail on the attached session — unless another surface owns
  * the main area.
  *
@@ -5376,6 +5428,7 @@ function buildPaletteCommands(): PaletteCommand[] {
     { id: "new-session", label: "New session", category: "session" },
     { id: "kill-session", label: "Kill session", category: "session" },
     { id: "rename-session", label: "Rename session", category: "session" },
+    { id: "retitle-session", label: "Re-name session with the model", category: "session" },
     { id: "new-window", label: "New window", category: "window" },
     { id: "rename-window", label: "Rename window", category: "window" },
     { id: "close-window", label: "Close window", category: "window" },
@@ -7744,6 +7797,10 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
             `set-option -t ${tq(currentSessionId!)} ${TITLE_SIGNATURE_OPTION} ${tq(MANUAL_SIGNATURE)}`,
         );
       });
+      return;
+    }
+    case "retitle-session": {
+      void retitleCurrentSession();
       return;
     }
     case "new-window":
