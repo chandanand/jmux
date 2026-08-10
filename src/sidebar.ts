@@ -1853,8 +1853,8 @@ export class Sidebar {
     // The mode badge takes the right-hand slot the issue badge used to hold;
     // that badge is now row 2's identity field.
     const nameStart = 3;
-    const hasBadge = view.modeBadge !== null;
-    const reserveRight = this.width - 1 - (hasBadge ? 2 : 0);
+    const hasModeBadge = view.modeBadge !== null;
+    const reserveRight = this.width - 1 - (hasModeBadge ? 2 : 0);
     const nameMaxCols = reserveRight - nameStart;
     const displayName = truncateToCols(
       displaySessionName({ name: view.sessionName, title: view.title ?? undefined }),
@@ -1868,7 +1868,7 @@ export class Sidebar {
         : { ...INACTIVE_NAME_ATTRS };
     writeString(grid, nameRow, nameStart, displayName, nameAttrs);
 
-    if (hasBadge) {
+    if (hasModeBadge) {
       const badgeCol = this.width - 2;
       let glyph: string;
       let badgeAttrs: CellAttrs;
@@ -2039,11 +2039,15 @@ export class Sidebar {
     // was measured against the budget its own separator choice implies.
     const wf = this.sessionWorkflow.get(session.name);
     if (wf) {
-      const hasBadge = leftCol !== detailStart;
-      const narrowSep = hasBadge ? " " : "";
+      // `hasIssueBadge`, not `hasBadge`: row 1 has a *mode* badge of its own
+      // and the two are different things one function apart. This one asks
+      // whether the issue badge already claimed columns at the start of row 2,
+      // which is the only reason a separator is needed at all.
+      const hasIssueBadge = leftCol !== detailStart;
+      const narrowSep = hasIssueBadge ? " " : "";
       const wideBudget = Math.max(0, rightEdge - (leftCol + textCols(narrowSep)) + 1);
       const fieldWide = workflowFieldText(wf, wideBudget, item.stageInHeader);
-      let sep = hasBadge ? (fieldWide.terse ? " " : WORKFLOW_SEP) : "";
+      let sep = hasIssueBadge ? (fieldWide.terse ? " " : WORKFLOW_SEP) : "";
       let field = fieldWide;
       if (sep !== narrowSep) {
         const tightBudget = Math.max(0, rightEdge - (leftCol + textCols(sep)) + 1);

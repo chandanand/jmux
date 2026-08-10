@@ -2739,6 +2739,10 @@ describe("Sidebar workflow field", () => {
     expect(row).toContain("·");
   });
 
+  // The collision form is `· !` — the separator's own dot, then the terse
+  // drift marker. It was written `! ·` here while the field still preceded a
+  // branch; after the badge moved to the head of the row nothing can ever
+  // produce that order, so the assertion passed against broken code.
   test("the drift marker gets the same treatment", () => {
     const narrow = wf({
       label: "In Progress",
@@ -2749,7 +2753,11 @@ describe("Sidebar workflow field", () => {
     const nameRowIdx = findNameRow(sidebar);
     const row = rows(sidebar)[nameRowIdx + 1]!;
     expect(row).toContain("!");
-    expect(row).not.toContain("! ·");
+    expect(row).not.toContain("· !");
+    // With no badge there is nothing for a separator to separate, so the
+    // marker leads the row outright — the `not.toContain` above is structurally
+    // unreachable here and this is what actually pins the no-badge case.
+    expect(row.trim().startsWith("!")).toBe(true);
   });
 
   test("the drift marker gets the same treatment, with a badge leading the row", () => {
@@ -2769,7 +2777,7 @@ describe("Sidebar workflow field", () => {
     const row = detailRow(sidebar, "TRA-123")!;
     expect(row).toBeDefined();
     expect(row).toContain("!");
-    expect(row).not.toContain("! ·");
+    expect(row).not.toContain("· !");
   });
 
   // A label can sit in the two-column band where it fits the budget the
