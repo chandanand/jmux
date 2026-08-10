@@ -35,12 +35,79 @@ export type TitleRunner = (
   timeoutMs: number,
 ) => Promise<string>;
 
+/** Defaults and the bounds a hand-edited value is pulled back into. */
+const TIMEOUT_DEFAULT_MS = 20_000;
+const TIMEOUT_MIN_MS = 1_000;
+const TIMEOUT_MAX_MS = 120_000;
+const MAX_CHARS_DEFAULT = 48;
+/** Below this a title is not a phrase; `maxChars: 0` stores a bare `…`. */
+const MAX_CHARS_MIN = 8;
+const MAX_CHARS_MAX = 200;
+
+function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+/**
+ * Turn the raw `sessionTitle` block out of config.json into something the
+ * generator can run, or null.
+ *
+ * Validated rather than cast, because **every way this can be wrong fails
+ * silently and identically**. `config.ts` is a bare `JSON.parse`, so
+ * `"command": "claude -p"` — a string, the natural thing to write — survives
+ * every structural check jmux had, and `Bun.spawn` on a string spreads it into
+ * argv `["c","l","a","u","d","e"," ","-","p"]`: ENOENT, caught by the
+ * generator's own "a naming failure is silent" rule, and then nothing happens
+ * for the life of the process with no way to find out why. A binary genuinely
+ * missing from PATH lands in exactly the same place, which is why `lookup`
+ * runs here too — the feature has no other diagnostic surface, and silence is
+ * indistinguishable from "off", which is also the default.
+ *
+ * `warn` and `lookup` are injected so the whole decision table tests without
+ * capturing stderr or needing the command to exist.
+ */
+export function resolveTitleConfig(
+  raw: unknown,
+  warn: (message: string) => void,
+  lookup: (command: string) => string | null = (c) => Bun.which(c),
+): TitleGeneratorConfig | null {
+  if (raw === null || typeof raw !== "object") return null;
+  const cfg = raw as { command?: unknown; timeoutMs?: unknown; maxChars?: unknown };
+  if (cfg.command === undefined || cfg.command === null) return null; // unset is off
+
+  if (!Array.isArray(cfg.command)) {
+    warn(
+      'jmux: sessionTitle.command must be an argv array, not a string — use ["claude", "-p"], not "claude -p"',
+    );
+    return null;
+  }
+  if (cfg.command.length === 0 || !cfg.command.every((a) => typeof a === "string" && a.length > 0)) {
+    warn("jmux: sessionTitle.command must be a non-empty array of non-empty strings — session naming is off");
+    return null;
+  }
+
+  const command = cfg.command as string[];
+  if (lookup(command[0]!) === null) {
+    warn(`jmux: sessionTitle.command "${command[0]}" was not found on PATH — session naming will never produce a title`);
+  }
+
+  return {
+    command,
+    timeoutMs: clampNumber(cfg.timeoutMs, TIMEOUT_DEFAULT_MS, TIMEOUT_MIN_MS, TIMEOUT_MAX_MS),
+    maxChars: clampNumber(cfg.maxChars, MAX_CHARS_DEFAULT, MAX_CHARS_MIN, MAX_CHARS_MAX),
+    maxConcurrent: 2,
+  };
+}
+
 interface QueuedRequest {
   sessionName: string;
   signature: string;
   prompt: string;
   /** The session's generation at request time — see `generation` below. */
   generation: number;
+  /** The human asked for this one by name — see `onFailure`. */
+  explicit: boolean;
 }
 
 export class TitleGenerator {
@@ -69,6 +136,17 @@ export class TitleGenerator {
     private readonly cfg: TitleGeneratorConfig,
     private readonly run: TitleRunner,
     private readonly onTitle: (sessionName: string, title: string, signature: string) => void,
+    /**
+     * Reported only for a request the human made by name.
+     *
+     * "A naming failure is silent" governs the runs jmux starts on its own
+     * initiative — the same distinction `transitionConfirm` draws for
+     * `ctl issue move`. A run somebody asked for was a question, and a question
+     * that gets no answer and no error is indistinguishable from a key that did
+     * nothing. Automatic runs stay silent because they are continuous: one
+     * unreachable command would otherwise report itself on every poll forever.
+     */
+    private readonly onFailure?: (sessionName: string, reason: string) => void,
   ) {}
 
   private static key(sessionName: string, signature: string): string {
@@ -80,11 +158,17 @@ export class TitleGenerator {
   }
 
   /** Ask for a title, unless this exact input has already been tried. */
-  request(sessionName: string, signature: string, prompt: string): void {
+  request(sessionName: string, signature: string, prompt: string, explicit = false): void {
     const key = TitleGenerator.key(sessionName, signature);
     if (this.attempted.has(key)) return;
     this.attempted.add(key);
-    this.queue.push({ sessionName, signature, prompt, generation: this.currentGeneration(sessionName) });
+    this.queue.push({
+      sessionName,
+      signature,
+      prompt,
+      generation: this.currentGeneration(sessionName),
+      explicit,
+    });
     this.pump();
   }
 
@@ -124,6 +208,10 @@ export class TitleGenerator {
   private start(req: QueuedRequest): void {
     this.active += 1;
     this.inFlight.add(req.sessionName);
+    // Why the failure is *recorded* rather than only swallowed: an explicit
+    // request needs to say what went wrong, and "ENOENT" and "the model
+    // returned a blank line" are different problems with different fixes.
+    let reason: string | null = null;
     // `run` is invoked inside `.then()`, not called directly, so a `TitleRunner`
     // that throws synchronously (the type promises nothing about that; only
     // `spawnTitleRunner`'s `async` keyword happens to convert it) still becomes
@@ -132,18 +220,25 @@ export class TitleGenerator {
     Promise.resolve()
       .then(() => this.run(this.cfg.command, req.prompt, this.cfg.timeoutMs))
       .then((raw) => parseTitle(raw, this.cfg.maxChars))
-      // A naming failure is silent. It never raises the session's attention
-      // flag — that flag means the human's work needs them, and a model that
-      // did not answer is not the human's work. Scoped to just the run+parse
-      // step: a bug in the caller's own `onTitle` below must not be mistaken
-      // for one of these and vanish with it.
-      .catch(() => null)
+      // A naming failure raises nothing on its own. It never sets the session's
+      // attention flag — that flag means the human's work needs them, and a
+      // model that did not answer is not the human's work. Scoped to just the
+      // run+parse step: a bug in the caller's own `onTitle` below must not be
+      // mistaken for one of these and vanish with it.
+      .catch((e: unknown) => {
+        reason = e instanceof Error ? e.message : String(e);
+        return null;
+      })
       .then((title) => {
         // A `forget()` between dispatch and this resolving means the session
         // is gone; the subprocess had already been started and there is no
         // way to cancel it, so the only thing left to do is not report it.
-        if (title && this.currentGeneration(req.sessionName) === req.generation) {
-          this.onTitle(req.sessionName, title, req.signature);
+        // That guard covers the failure report too — nobody is waiting on an
+        // answer about a session that has gone away.
+        if (this.currentGeneration(req.sessionName) !== req.generation) return;
+        if (title) this.onTitle(req.sessionName, title, req.signature);
+        else if (req.explicit) {
+          this.onFailure?.(req.sessionName, reason ?? "the command printed nothing usable");
         }
       })
       .finally(() => {
