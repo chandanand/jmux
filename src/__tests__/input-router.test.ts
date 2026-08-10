@@ -512,6 +512,25 @@ describe("diff panel routing", () => {
     expect(diffToggled).toBe(false); // uppercase G must not fall through to lowercase g
   });
 
+  test("Ctrl-a \\ toggles the sidebar, and the backslash never reaches the pty", () => {
+    let toggled = 0;
+    let ptyData = "";
+    const router = new InputRouter(
+      {
+        onPtyData: (d) => { ptyData += d; },
+        onSidebarClick: () => {},
+        onSidebarToggle: () => { toggled += 1; },
+      },
+      baseLayout(4),
+    );
+    router.handleInput("\x01");
+    router.handleInput("\\");
+    expect(toggled).toBe(1);
+    // The prefix itself is forwarded (tmux's other binds must keep working);
+    // the chord byte is not.
+    expect(ptyData).toBe("\x01");
+  });
+
   test("prefix+d detaches jmux when the Command Center is active", () => {
     let detachCalled = false;
     let ptyData = "";
@@ -723,6 +742,181 @@ describe("toolbar column routing", () => {
     const mouseX = layout.main.x + 1; // gridX === layout.main.x
     router.handleInput(`\x1b[<0;${mouseX};1M`);
     expect(clickedCol).toBe(0);
+  });
+});
+
+describe("chrome chords on a full-screen surface", () => {
+  // Settings / workflow / ghost preview consume input, so they arrive with
+  // modalOpen set and every chord dies. The sidebar is painted beside all
+  // three — and the preview is the surface you reach *from* a sidebar row —
+  // so the chord that hides it has to survive there.
+  const surfaceRouter = (opts: Partial<InputRouterOptions> = {}) => {
+    const router = new InputRouter(
+      {
+        onPtyData: () => {},
+        onSidebarClick: () => {},
+        fullScreenSurfaceActive: () => true,
+        ...opts,
+      },
+      baseLayout(24),
+    );
+    router.setModalOpen(true);
+    return router;
+  };
+
+  test("Ctrl-a \\ toggles the sidebar instead of reaching the surface", () => {
+    let toggled = 0;
+    let surfaceSaw = "";
+    const router = surfaceRouter({
+      onSidebarToggle: () => { toggled += 1; },
+      onModalInput: (d) => { surfaceSaw += d; },
+    });
+    router.handleInput("\x01");
+    router.handleInput("\\");
+    expect(toggled).toBe(1);
+    expect(surfaceSaw).toBe("");
+  });
+
+  test("Ctrl-a g asks for the panel instead of reaching the surface", () => {
+    // The swap itself (leave the surface, then show the panel) is main.ts's
+    // requestDiffPanel; the router's whole job here is not to swallow the key.
+    let diffToggles = 0;
+    let surfaceSaw = "";
+    const router = surfaceRouter({
+      onDiffToggle: () => { diffToggles += 1; },
+      onModalInput: (d) => { surfaceSaw += d; },
+    });
+    router.handleInput("\x01");
+    router.handleInput("g");
+    expect(diffToggles).toBe(1);
+    expect(surfaceSaw).toBe("");
+  });
+
+  test("any other chord flushes the prefix and the key to the surface, in order", () => {
+    let toggled = 0;
+    let surfaceSaw = "";
+    const router = surfaceRouter({
+      onSidebarToggle: () => { toggled += 1; },
+      onModalInput: (d) => { surfaceSaw += d; },
+      // Wired, and must not fire: a surface owns everything but the chrome.
+      onNewSession: () => { throw new Error("new-session must not fire on a surface"); },
+    });
+    router.handleInput("\x01");
+    router.handleInput("n");
+    expect(toggled).toBe(0);
+    expect(surfaceSaw).toBe("\x01n");
+  });
+
+  test("a bare key still reaches the surface untouched", () => {
+    let surfaceSaw = "";
+    const router = surfaceRouter({ onModalInput: (d) => { surfaceSaw += d; } });
+    router.handleInput("\\");
+    expect(surfaceSaw).toBe("\\");
+  });
+
+  test("an ordinary modal is not a surface — the chord stays dead there", () => {
+    let toggled = 0;
+    let modalSaw = "";
+    const router = new InputRouter(
+      {
+        onPtyData: () => {},
+        onSidebarClick: () => {},
+        onSidebarToggle: () => { toggled += 1; },
+        onModalInput: (d) => { modalSaw += d; },
+        fullScreenSurfaceActive: () => false,
+      },
+      baseLayout(24),
+    );
+    router.setModalOpen(true);
+    router.handleInput("\x01");
+    router.handleInput("\\");
+    expect(toggled).toBe(0);
+    expect(modalSaw).toBe("\x01\\");
+  });
+
+  test("nothing leaks to the pty while a surface owns input", () => {
+    let ptyData = "";
+    const router = surfaceRouter({
+      onPtyData: (d) => { ptyData += d; },
+      onSidebarToggle: () => {},
+      onModalInput: () => {},
+    });
+    router.handleInput("\x01");
+    router.handleInput("\\");
+    router.handleInput("\x01");
+    router.handleInput("n");
+    expect(ptyData).toBe("");
+  });
+});
+
+describe("mouse routing with no sidebar", () => {
+  // The whole mouse block used to be gated on `layout.sidebar`, on the reading
+  // that null meant "terminal too narrow for chrome". `Ctrl-a \` hides the
+  // sidebar with the toolbar and panel still on screen, and that gate sent
+  // every click straight to the pty — the buttons, the panel tabs and the
+  // divider drag all dead while it was hidden.
+  const hiddenLayout = (diffState: "off" | "split" = "off", panelCols = 0): FrameLayout =>
+    computeFrameLayout({
+      termCols: 120,
+      termRows: 40,
+      sidebarWidth: 26,
+      sidebarHidden: true,
+      borderWidth: 1,
+      toolbarRows: 1,
+      diffState,
+      requestedPanelCols: panelCols,
+      frameRulesEnabled: false,
+      footerEnabled: false,
+    });
+
+  test("a toolbar click still dispatches, with main starting at column 0", () => {
+    let clickedCol = -1;
+    const layout = hiddenLayout();
+    expect(layout.sidebar).toBeNull();
+    expect(layout.main.x).toBe(0);
+    const router = new InputRouter(
+      {
+        onPtyData: () => {},
+        onSidebarClick: () => {},
+        onToolbarClick: (col) => { clickedCol = col; },
+      },
+      layout,
+    );
+    router.handleInput("\x1b[<0;6;1M"); // gridX 5, toolbar row
+    expect(clickedCol).toBe(5);
+  });
+
+  test("a click in the leftmost column is content, not a sidebar row", () => {
+    let sidebarClicks = 0;
+    let ptyData = "";
+    const layout = hiddenLayout();
+    const router = new InputRouter(
+      {
+        onPtyData: (d) => { ptyData += d; },
+        onSidebarClick: () => { sidebarClicks += 1; },
+      },
+      layout,
+    );
+    router.handleInput("\x1b[<0;1;5M"); // gridX 0, a content row
+    expect(sidebarClicks).toBe(0);
+    // Translated by main.x (0) and contentTop (1), so tmux sees its own row 4.
+    expect(ptyData).toBe("\x1b[<0;1;4M");
+  });
+
+  test("a click in the panel still reaches the panel", () => {
+    let panelFocusToggles = 0;
+    const layout = hiddenLayout("split", 40);
+    expect(layout.panel).not.toBeNull();
+    const router = new InputRouter(
+      {
+        onPtyData: () => {},
+        onSidebarClick: () => {},
+        onDiffPanelFocusToggle: () => { panelFocusToggles += 1; },
+      },
+      layout,
+    );
+    router.handleInput(`\x1b[<0;${layout.panel!.x + 2};5M`);
+    expect(panelFocusToggles).toBe(1);
   });
 });
 

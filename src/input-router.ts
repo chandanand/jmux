@@ -114,6 +114,17 @@ export interface InputRouterOptions {
   onSortCycle?: () => void;       // Ctrl-a s — cycle sidebar sort mode
   onFilterCycle?: () => void;     // Ctrl-a f — cycle sidebar filter mode
   onBrowserPane?: () => void;     // Ctrl-a b — open a terminal-browser pane
+  onSidebarToggle?: () => void;   // Ctrl-a \ — hide/show the sidebar
+  /**
+   * True while a full-screen surface (settings, workflow, ghost preview) owns
+   * input. Those set `modalOpen`, which otherwise kills every chord — right
+   * for chords aimed at the surface, wrong for the ones aimed at the chrome
+   * drawn around it. See the surface arm in handleInput.
+   *
+   * Deliberately not true for ordinary modals: a modal is a transient question
+   * over the frame, and the sidebar is not what you are looking at.
+   */
+  fullScreenSurfaceActive?: () => boolean;
   onSessionPrev?: () => void;
   onSessionNext?: () => void;
   // Pane-of-glass (Overview) additions
@@ -184,6 +195,7 @@ export class InputRouter {
   private prefixSeen = false;
   private prefixTimer: ReturnType<typeof setTimeout> | null = null;
   private glassPrefixDeferred = false;
+  private surfacePrefixDeferred = false;
   private diffPanelFocused = false;
   private panelTabsActive = false;
   private panelFilterActive = false;
@@ -407,10 +419,41 @@ export class InputRouter {
     // Ctrl-a p interception: detect prefix + p to toggle palette
     // Ctrl-a is forwarded to tmux (so other prefix bindings work),
     // but if next byte is "p" we intercept it before tmux sees it.
-    if (!this.modalOpen) {
+    //
+    // A full-screen surface (settings, workflow, ghost preview) consumes
+    // input, so it reaches this with `modalOpen` set — and every chord dies
+    // there. That is right for chords acting on the surface's own area, and
+    // wrong for the ones acting on the chrome *around* it: the sidebar is
+    // painted beside all three, and the preview is the surface you reach from
+    // a sidebar row, so `Ctrl-a \` going dead exactly there is the least
+    // defensible place for it to. Those surfaces therefore get their own
+    // narrow arm below (the Command Center has had one all along).
+    const surfaceActive = this.modalOpen && this.opts.fullScreenSurfaceActive?.() === true;
+    if (!this.modalOpen || surfaceActive) {
       if (this.prefixSeen) {
         this.prefixSeen = false;
         if (this.prefixTimer) { clearTimeout(this.prefixTimer); this.prefixTimer = null; }
+
+        // Full-screen surface: only the chrome chords intercept. Anything
+        // else flushes the deferred prefix and the key to the surface, so it
+        // sees exactly the bytes it would have seen — same shape as the glass
+        // arm below, and delimited for keymap.test.ts the same way.
+        if (surfaceActive) {
+          const deferred = this.surfacePrefixDeferred;
+          this.surfacePrefixDeferred = false;
+          // --- keymap:surface-prefix start ---
+          if (data === "\\") { this.opts.onSidebarToggle?.(); return; }
+          // The panel and a full-screen surface cannot share the frame — the
+          // surface takes the whole main area and the panel is docked chrome
+          // beside it. So this is a swap, resolved by main.ts: asking for the
+          // panel leaves the surface. Doing nothing (today's behaviour) is the
+          // one option that answers neither.
+          if (data === "g") { this.opts.onDiffToggle?.(); return; }
+          // --- keymap:surface-prefix end ---
+          if (deferred) this.opts.onModalInput?.("\x01");
+          this.opts.onModalInput?.(data);
+          return;
+        }
 
         // Glass owns the post-prefix byte: digits switch tabs, jmux chords
         // intercept, everything else flushes the deferred prefix to the tile.
@@ -445,6 +488,7 @@ export class InputRouter {
           if (data === "s") { this.opts.onSortCycle?.(); return; }
           if (data === "f") { this.opts.onFilterCycle?.(); return; }
           if (data === "b") { this.opts.onBrowserPane?.(); return; }
+          if (data === "\\") { this.opts.onSidebarToggle?.(); return; }
           // --- keymap:glass-prefix end ---
           // Not a jmux chord — flush the buffered prefix, then the key, to the tile.
           if (deferred) this.opts.onPtyData("\x01");
@@ -520,6 +564,13 @@ export class InputRouter {
           this.opts.onBrowserPane?.();
           return;
         }
+        // Hide the sidebar to give the panes the whole terminal. `\` because
+        // every letter that reads as "sidebar" is spoken for and tmux binds
+        // nothing to it — this shadows no binding at all, jmux's or tmux's.
+        if (data === "\\") {
+          this.opts.onSidebarToggle?.();
+          return;
+        }
         if (data === "g") {
           this.opts.onDiffToggle?.();
           return;
@@ -569,8 +620,17 @@ export class InputRouter {
         // Not intercepted — forward to PTY normally (tmux handles its prefix binding)
       } else if (data === "\x01") {
         this.prefixSeen = true;
-        this.prefixTimer = setTimeout(() => { this.prefixSeen = false; this.prefixTimer = null; this.glassPrefixDeferred = false; }, 2000);
-        if (this.opts.glassActive?.()) {
+        this.prefixTimer = setTimeout(() => {
+          this.prefixSeen = false;
+          this.prefixTimer = null;
+          this.glassPrefixDeferred = false;
+          this.surfacePrefixDeferred = false;
+        }, 2000);
+        if (surfaceActive) {
+          // Same deferral as glass: the next byte decides whether this was a
+          // chrome chord or a key the surface itself wanted.
+          this.surfacePrefixDeferred = true;
+        } else if (this.opts.glassActive?.()) {
           // In glass, defer the prefix: the next byte decides whether it's a
           // jmux action, a tab digit, or a real in-tile prefix chord.
           this.glassPrefixDeferred = true;
@@ -584,13 +644,20 @@ export class InputRouter {
     // Check for SGR mouse events. Grid-space conversion happens exactly once,
     // here — `gridX`/`gridY` are 0-indexed and every hit-test below reads
     // spans off `this.layout` rather than recomputing offsets from scattered
-    // fields (see src/frame-layout.ts). `layout.sidebar` doubles as the gate
-    // that used to be `sidebarVisible`: it's null exactly when the terminal
-    // is too narrow for jmux's chrome, in which case mouse sequences fall
-    // through to the default PTY passthrough below, same as before.
+    // fields (see src/frame-layout.ts).
+    //
+    // A missing sidebar is a sidebar of zero columns, not a reason to stop
+    // classifying. This block used to be gated on `layout.sidebar` outright,
+    // on the reading that null meant "the terminal is too narrow for jmux's
+    // chrome" — but `Ctrl-a \` hides the sidebar with every other piece of
+    // chrome still on screen, and the gate took the toolbar's buttons, the
+    // panel's tabs, link clicks, hover and the divider drag down with it.
+    // Every test below reads `sidebarCols`, which is 0 in that case, so the
+    // sidebar's own branches fall through on arithmetic rather than needing a
+    // second path.
     const layout = this.layout;
-    if (mouse && layout.sidebar) {
-      const sidebar = layout.sidebar;
+    if (mouse) {
+      const sidebarCols = layout.sidebar?.w ?? 0;
       const gridX = mouse.x - 1;
       const gridY = mouse.y - 1;
       const isMotion = (mouse.button & 32) !== 0;
@@ -625,7 +692,7 @@ export class InputRouter {
           : hitHandle(layout, gridX) ?? this.hitPanelSplit(gridX, gridY);
         if (hoverHandle) {
           this.opts.onHover({ area: "handle", handle: hoverHandle });
-        } else if (gridX < sidebar.w) {
+        } else if (gridX < sidebarCols) {
           this.opts.onHover({ area: "sidebar", row: gridY });
         } else if (!this.modalOpen) {
           if (gridY < layout.toolbarRows) {
@@ -648,7 +715,7 @@ export class InputRouter {
       // sees a stray event.
       if (
         !this.modalOpen &&
-        gridX >= sidebar.w &&
+        gridX >= sidebarCols &&
         !isMotion &&
         !isWheel &&
         (mouse.button & 0x03) === 0
@@ -680,7 +747,7 @@ export class InputRouter {
         }
       }
 
-      if (gridX < sidebar.w) {
+      if (gridX < sidebarCols) {
         // Wheel events: button 64 = up, 65 = down
         if (isWheel) {
           const delta = (mouse.button & 1) ? 3 : -3;

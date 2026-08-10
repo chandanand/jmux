@@ -11,6 +11,7 @@ Quick reference for all keybindings and features. The default prefix is `Ctrl-a`
 | Switch session | Click a session in the sidebar |
 | Next/prev session | `Ctrl-Shift-Down` / `Ctrl-Shift-Up` |
 | Scroll sidebar | Mouse wheel over the sidebar |
+| Hide / show the sidebar | `Ctrl-a \` — the panes take the whole terminal |
 | Mouse select & copy | Click-drag in the main area to select, copies to clipboard |
 
 The sidebar shows all sessions with:
@@ -72,6 +73,8 @@ Four bands sit outside the grouping, in fixed positions:
   | `s` | Change the issue's status (park it, or move it along) |
   | `o` | Open the issue in your browser |
   | `↑` `↓` `PgUp` `PgDn` | Scroll the issue body |
+  | `Ctrl-a \` | Hide / show the sidebar, as anywhere else |
+  | `Ctrl-a g` | Leave the preview and open the panel — the two can't share the frame |
   | `Esc` / `q` | Back to what you were doing |
 
   The preview shows the issue *and* what starting it would do — the session and

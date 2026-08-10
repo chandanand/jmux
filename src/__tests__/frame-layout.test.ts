@@ -206,6 +206,56 @@ describe("computeFrameLayout — sidebar auto-hidden on narrow terminal", () => 
   });
 });
 
+describe("computeFrameLayout — sidebar hidden by the user (Ctrl-a \\)", () => {
+  const wide = {
+    termCols: 120,
+    termRows: 40,
+    sidebarWidth: 26,
+    borderWidth: 1,
+    toolbarRows: 1,
+    diffState: "off" as const,
+    requestedPanelCols: 0,
+    frameRulesEnabled: false,
+    footerEnabled: false,
+  };
+
+  test("a wide terminal collapses to the same shape the narrow one produces", () => {
+    // The whole point of expressing "hidden" as `sidebar: null`: every
+    // consumer downstream already handles this state, so hiding needs no
+    // second code path anywhere.
+    const layout = computeFrameLayout({ ...wide, sidebarHidden: true });
+
+    expect(layout.sidebar).toBeNull();
+    expect(layout.borderCol).toBeNull();
+    expect(layout.main).toEqual({ x: 0, w: 120 });
+  });
+
+  test("split mode gives the reclaimed columns to main, not to the panel", () => {
+    const layout = computeFrameLayout({
+      ...wide,
+      sidebarHidden: true,
+      diffState: "split",
+      requestedPanelCols: 40,
+    });
+
+    expect(layout.main).toEqual({ x: 0, w: 79 });
+    expect(layout.divider).toBe(79);
+    expect(layout.panel).toEqual({ x: 80, w: 40 });
+  });
+
+  test("absent means not hidden — the width rule still decides", () => {
+    expect(computeFrameLayout(wide).sidebar).toEqual({ x: 0, w: 26 });
+    expect(computeFrameLayout({ ...wide, sidebarHidden: false }).sidebar).toEqual({ x: 0, w: 26 });
+  });
+
+  test("showing it back on a narrow terminal is still a hidden sidebar", () => {
+    // Which is why main.ts's toggle says so out loud rather than leaving the
+    // key looking broken.
+    const layout = computeFrameLayout({ ...wide, termCols: 79, sidebarHidden: false });
+    expect(layout.sidebar).toBeNull();
+  });
+});
+
 describe("computeFrameLayout — borderWidth is threaded through, not hardcoded", () => {
   // FrameLayoutInput.borderWidth generalizes the single hardcoded "1" that
   // both the sidebar/main border and the main/panel divider use throughout

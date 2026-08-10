@@ -178,7 +178,7 @@ import { stripVisibleFor, renderStrip, layoutStrip, STRIP_ROWS } from "./glass/s
 import { chipAtCol, type PlacedChip } from "./band-layout";
 import { clampTabSelection } from "./glass/reload";
 import { OtelReceiver } from "./otel-receiver";
-import { computeFrameLayout, sidebarBottomRow, type FrameLayout } from "./frame-layout";
+import { computeFrameLayout, sidebarBottomRow, SIDEBAR_MIN_TERM_COLS, type FrameLayout } from "./frame-layout";
 import { AgentStateTracker, coerceStaleAgentState } from "./agent-state";
 import { logError } from "./log";
 import { AGENT_INTEGRATIONS, installAllAgents, screenTierMayWrite } from "./agent-hooks/registry";
@@ -451,6 +451,12 @@ if (demoMode) {
 
 const configStore = new ConfigStore(demoCtx?.configPath);
 let sidebarWidth = configStore.config.sidebarWidth || 26;
+// `Ctrl-a \` — the sidebar hidden by the user, as opposed to by the terminal
+// being too narrow for it. Deliberately not persisted: this is "give the panes
+// the whole terminal for a minute", not a preference, and a hidden sidebar
+// that survived a restart would take away the surface that explains how to get
+// it back.
+let sidebarHidden = false;
 const BORDER_WIDTH = 1;
 // Drag-handle chrome + live-resize state. `hoveredHandle` drives the accent
 // that makes the one-column handles findable at all, and stays lit for the
@@ -725,6 +731,7 @@ let layout: FrameLayout = computeFrameLayout({
   termCols: cols,
   termRows: rows,
   sidebarWidth,
+  sidebarHidden,
   borderWidth: BORDER_WIDTH,
   toolbarRows: toolbarHeight,
   diffState: "off",
@@ -751,6 +758,7 @@ let fullScreenLayout: FrameLayout = computeFrameLayout({
   termCols: cols,
   termRows: rows,
   sidebarWidth,
+  sidebarHidden,
   borderWidth: BORDER_WIDTH,
   toolbarRows: 0,
   diffState: "off",
@@ -2904,6 +2912,7 @@ function relayout(): void {
     termCols,
     termRows,
     sidebarWidth,
+    sidebarHidden,
     borderWidth: BORDER_WIDTH,
     toolbarRows: toolbarHeight,
     // The top rule (+ junctions + tab underline) is on — compositeGrids
@@ -2937,6 +2946,7 @@ function relayout(): void {
     termCols,
     termRows,
     sidebarWidth,
+    sidebarHidden,
     borderWidth: BORDER_WIDTH,
     toolbarRows: 0,
     diffState: "off",
@@ -2997,6 +3007,52 @@ function applyChromeLayout(): void {
   // reaching them requires a keystroke, which already aborts.
   inputRouter.setLayout(active);
   sidebar.resize(sidebarWidth, sidebarBottomRow(active));
+}
+
+/**
+ * Hide or show the sidebar (`Ctrl-a \`). The state is an input to
+ * computeFrameLayout rather than anything the sidebar itself knows, so the
+ * pty, the input router's hit-testing and the composite all follow from the
+ * one relayout.
+ *
+ * The width rule outranks the user in one direction only: a terminal under
+ * SIDEBAR_MIN_TERM_COLS has no sidebar to show, so asking for it back says so
+ * instead of doing nothing — a key with no visible effect is indistinguishable
+ * from a key that is broken.
+ */
+function toggleSidebar(): void {
+  sidebarHidden = !sidebarHidden;
+  relayout();
+  if (!sidebarHidden && layout.sidebar === null) {
+    showToast(`Sidebar needs ${SIDEBAR_MIN_TERM_COLS} columns — this terminal has ${layout.termCols}`);
+  }
+}
+
+/**
+ * `Ctrl-a g` — show me the panel, from wherever I am.
+ *
+ * On the normal frame that is the plain toggle. On a full-screen surface
+ * (settings, workflow, ghost preview) it is a swap: the surface owns the whole
+ * main area and the panel is docked chrome beside it, so the two cannot share
+ * the frame and the surface steps aside.
+ *
+ * The second branch is what stops the swap from being a no-op. A panel opened
+ * before the surface was is still `isActive()` while the surface paints over
+ * it — invisible, because the surface render paths pass no panel — so toggling
+ * blindly would close it, and `g` would read as "left the preview and nothing
+ * else". Leaving the surface is what makes it visible again.
+ */
+function requestDiffPanel(): void {
+  if (ghostPreview.isOpen || settingsScreen.isOpen || workflowScreen.isOpen) {
+    if (ghostPreview.isOpen) closeGhostPreview();
+    if (settingsScreen.isOpen) toggleSettingsScreen();
+    if (workflowScreen.isOpen) toggleWorkflowScreen();
+    if (diffPanel.isActive()) {
+      scheduleRender();
+      return;
+    }
+  }
+  void toggleDiffPanel();
 }
 
 async function toggleDiffPanel(): Promise<void> {
@@ -4581,6 +4637,12 @@ const inputRouter = new InputRouter(
     onSortCycle: () => { applySidebarSort(sidebar.cycleSortMode()); scheduleRender(); },
     onFilterCycle: () => { sidebar.cycleFilterMode(); scheduleRender(); },
     onBrowserPane: () => { void openBrowserPane(); },
+    onSidebarToggle: () => toggleSidebar(),
+    // The three surfaces that take the whole main area but keep the sidebar
+    // beside them. Glass is absent because it has its own prefix arm already,
+    // and modals are absent by design — see the option's doc comment.
+    fullScreenSurfaceActive: () =>
+      settingsScreen.isOpen || workflowScreen.isOpen || ghostPreview.isOpen,
     onToggleSessionIssues: () => {
       const name = currentSessions.find((s) => s.id === currentSessionId)?.name;
       if (!name) return;
@@ -4710,7 +4772,7 @@ const inputRouter = new InputRouter(
     onGlassTabSwitch: (n) => { const tab = commandCenterTabs[n - 1]; if (tab) switchCommandCenterTab(tab.id); },
     onGlassTabRelative: (delta) => switchCommandCenterTabRelative(delta),
     onGlassDetach: () => detachClient(),
-    onDiffToggle: () => toggleDiffPanel(),
+    onDiffToggle: () => requestDiffPanel(),
     onDiffZoom: () => zoomDiffPanel(),
     onDiffSendReview: () => void sendReviewToAgent(),
     onDiffViewPicker: () => void openDiffViewPicker(),

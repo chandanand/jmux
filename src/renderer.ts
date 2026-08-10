@@ -329,7 +329,7 @@ export function getModalPosition(
 function renderWindowBranchRow(
   grid: CellGrid,
   tabs: PlacedToolbarTab[],
-  borderCol: number,
+  mainX: number,
 ): void {
   const branchIcon = "⎇ ";
   const iconWidth = textCols(branchIcon);
@@ -344,7 +344,7 @@ function renderWindowBranchRow(
     if (maxLen <= 0) continue;
     const branchText = truncateToCols(branch, maxLen);
     const label = " " + branchIcon + branchText + " ";
-    writeStyledLine(grid, 1, borderCol + 1 + x, [{ text: label, attrs }], rowWidth);
+    writeStyledLine(grid, 1, mainX + x, [{ text: label, attrs }], rowWidth);
   }
 }
 
@@ -373,7 +373,7 @@ function paintRuleRow(
   grid: CellGrid,
   row: number,
   layout: FrameLayout,
-  borderCol: number,
+  borderCol: number | null,
   junction: string,
 ): void {
   const totalCols = grid.cols;
@@ -383,7 +383,12 @@ function paintRuleRow(
     writeCell(grid, row, x, frame.ruleLight, tokens.ruleFrame);
   }
 
-  writeCell(grid, row, borderCol, junction, tokens.ruleFrame);
+  // No sidebar, no border column to cross — the rule simply starts at column
+  // 0. A junction painted anyway would be a ┼ hanging off the end of a line
+  // that meets nothing.
+  if (borderCol !== null) {
+    writeCell(grid, row, borderCol, junction, tokens.ruleFrame);
+  }
 
   if (layout.divider !== null) {
     writeCell(grid, row, layout.divider, junction, tokens.ruleFrame);
@@ -400,7 +405,7 @@ function paintTopRuleRow(
   grid: CellGrid,
   row: number,
   layout: FrameLayout,
-  borderCol: number,
+  borderCol: number | null,
   toolbar: ToolbarConfig | null,
   toolbarLayout: ToolbarLayout | null,
   diffPanel?: { mode: "split" | "full"; focused: boolean },
@@ -434,7 +439,7 @@ function paintTopRuleRow(
     for (const { x, width, tab } of toolbarLayout.tabs) {
       const isHovered = !tab.active && toolbar.hoveredTabId === tab.windowId;
       const { glyph, attrs } = tabUnderlineGlyphAndAttrs(tab, isHovered);
-      const startCol = borderCol + 1 + x;
+      const startCol = layout.main.x + x;
       for (let i = 0; i < width; i++) {
         writeCell(grid, row, startCol + i, glyph, attrs);
       }
@@ -450,7 +455,7 @@ function paintFooterRuleRow(
   grid: CellGrid,
   row: number,
   layout: FrameLayout,
-  borderCol: number,
+  borderCol: number | null,
 ): void {
   paintRuleRow(grid, row, layout, borderCol, frame.crossUp);
 }
@@ -482,18 +487,29 @@ export function compositeGrids(
   footer?: StyledSegment[] | null,
   drag?: DragState | null,
 ): CellGrid {
-  if (!sidebar) return main;
-
-  // Invariant maintained by callers (see src/frame-layout.ts): a sidebar
-  // grid is only ever passed when `layout.sidebar`/`layout.borderCol` are
-  // also non-null — main.ts sizes both from the same relayout() call.
-  // Likewise `layout.panel` is non-null whenever `diffPanel.isActive()` is
-  // true, and `layout.divider` is non-null whenever `diffPanel.mode` is
-  // "split" — full mode has no divider. Both hold because main.ts's relayout()
-  // runs synchronously after every diffPanel state mutation. The reads below
-  // are guarded to match: the divider read sits inside the `mode === "split"`
+  // A missing sidebar subtracts the sidebar, and nothing else. This used to
+  // `return main` — every other piece of chrome (toolbar, rules, diff panel,
+  // modal overlay, footer) skipped along with it — which was survivable only
+  // while the single way to lose the sidebar was a terminal too narrow to
+  // carry chrome anyway. `Ctrl-a \` made it reachable on a 200-column screen,
+  // where it read as the diff panel, the palette and the toolbar all being
+  // broken at once.
+  //
+  // Everything below is positioned from `layout.main.x`, which is `borderCol +
+  // borderWidth` with a sidebar and 0 without, so the two cases are the same
+  // arithmetic rather than two paths.
+  //
+  // Invariant maintained by callers (see src/frame-layout.ts): a sidebar grid
+  // is only ever passed when `layout.sidebar`/`layout.borderCol` are also
+  // non-null — main.ts sizes both from the same relayout() call. Likewise
+  // `layout.panel` is non-null whenever `diffPanel.isActive()` is true, and
+  // `layout.divider` is non-null whenever `diffPanel.mode` is "split" — full
+  // mode has no divider. Both hold because main.ts's relayout() runs
+  // synchronously after every diffPanel state mutation. The reads below are
+  // guarded to match: the divider read sits inside the `mode === "split"`
   // branch, and moving it out would break this invariant.
-  const borderCol = layout.borderCol!;
+  const borderCol = sidebar ? layout.borderCol! : null;
+  const mainX = layout.main.x;
   const mainCols = toolbar ? toolbar.mainCols : main.cols;
   const totalCols = layout.termCols;
   const toolbarRows = toolbar ? layout.toolbarRows : 0;
@@ -508,17 +524,19 @@ export function compositeGrids(
 
   for (let y = 0; y < totalRows; y++) {
     // Copy sidebar cells
-    blit(grid, sidebar, { destX: 0, destY: y, srcX: 0, srcY: y, w: sidebar.cols, h: 1 });
-    // Border column — accented while it's hovered as a drag handle, so the
-    // resize affordance is visible before the user commits to a press.
-    grid.cells[y][borderCol] = drag?.hoveredHandle === "sidebar-edge"
-      ? { ...DEFAULT_CELL, char: BORDER_CHAR, ...tokens.accent }
-      : { ...DEFAULT_CELL, char: BORDER_CHAR, fg: 8, fgMode: ColorMode.Palette };
+    if (sidebar && borderCol !== null) {
+      blit(grid, sidebar, { destX: 0, destY: y, srcX: 0, srcY: y, w: sidebar.cols, h: 1 });
+      // Border column — accented while it's hovered as a drag handle, so the
+      // resize affordance is visible before the user commits to a press.
+      grid.cells[y][borderCol] = drag?.hoveredHandle === "sidebar-edge"
+        ? { ...DEFAULT_CELL, char: BORDER_CHAR, ...tokens.accent }
+        : { ...DEFAULT_CELL, char: BORDER_CHAR, fg: 8, fgMode: ColorMode.Palette };
+    }
 
     if (toolbar && y < toolbarRows) {
       if (y === 1 && toolbarRows >= 2) {
         // Second toolbar row: per-window git branch, aligned under each tab.
-        renderWindowBranchRow(grid, toolbarLayout!.tabs, borderCol);
+        renderWindowBranchRow(grid, toolbarLayout!.tabs, mainX);
       } else if (y === 0) {
       // Toolbar row — always render (palette no longer replaces it)
       const hoverBg = theme.hover;
@@ -540,7 +558,7 @@ export function compositeGrids(
           bg: hasBg ? bg : 0,
           bgMode: hasBg ? ColorMode.RGB : ColorMode.Default,
         };
-        writeStyledLine(grid, 0, borderCol + 1 + x, [{ text: label, attrs }], width);
+        writeStyledLine(grid, 0, mainX + x, [{ text: label, attrs }], width);
         // No separator glyph between tabs — the gap between placements
         // (space.groupGutter, two blank columns) already reads as a
         // separator, and the tab underline (Task 5) delimits tabs from below.
@@ -564,7 +582,7 @@ export function compositeGrids(
           { text: btn.label, attrs: iconAttrs },
           { text: " ", attrs: spaceAttrs },
         ];
-        writeStyledLine(grid, 0, borderCol + 1 + x, segments, width);
+        writeStyledLine(grid, 0, mainX + x, segments, width);
       }
 
       // Render status chip (dim text, right-aligned just before action buttons)
@@ -572,7 +590,7 @@ export function compositeGrids(
       if (chip && toolbar.statusChip) {
         const label = ` ${toolbar.statusChip} `;
         const attrs: CellAttrs = { fg: 8, fgMode: ColorMode.Palette, dim: true };
-        writeStyledLine(grid, 0, borderCol + 1 + chip.x, [{ text: label, attrs }], chip.width);
+        writeStyledLine(grid, 0, mainX + chip.x, [{ text: label, attrs }], chip.width);
       }
 
       // Hover hint — same slot, and layoutToolbar only ever places one of the
@@ -581,7 +599,7 @@ export function compositeGrids(
       const hint = toolbarLayout!.hoverHint;
       if (hint) {
         const attrs: CellAttrs = { fg: 8, fgMode: ColorMode.Palette };
-        writeStyledLine(grid, 0, borderCol + 1 + hint.x, [{ text: ` ${hint.text} `, attrs }], hint.width);
+        writeStyledLine(grid, 0, mainX + hint.x, [{ text: ` ${hint.text} `, attrs }], hint.width);
       }
       }
     } else if (layout.topRuleRow !== null && y === layout.topRuleRow) {
