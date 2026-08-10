@@ -195,6 +195,11 @@ describe("UserPromptSubmit prompt capture", () => {
     expect(captureAt).toBeGreaterThan(stateAt);
   });
 
+  test("the state write precedes the stdin read specifically", () => {
+    expect(cmd.indexOf("@jmux-agent-state running"))
+      .toBeLessThan(cmd.indexOf("head -c 4000"));
+  });
+
   test("is gated on the capture switch, so an unconfigured user stores nothing", () => {
     expect(cmd).toContain("@jmux-title-capture");
   });
@@ -204,8 +209,8 @@ describe("UserPromptSubmit prompt capture", () => {
     expect(cmd).toContain("@jmux-prompt");
   });
 
-  test("truncates what it stores", () => {
-    expect(cmd).toContain("head -c");
+  test("truncates what it stores, at the size we chose", () => {
+    expect(cmd).toContain("head -c 4000");
   });
 
   test("can never fail the hook", () => {

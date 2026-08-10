@@ -1,5 +1,6 @@
 import type { AgentKind, AgentState } from "../types";
 import type { HookEvent, HookEntry } from "./types";
+import { PROMPT_OPTION, TITLE_CAPTURE_OPTION } from "../session-title/display";
 
 /**
  * The shell snippets every agent integration emits. One module so all agents
@@ -113,11 +114,12 @@ function writeRunningIdempotent(kind: AgentKind): string {
  * where parsing is easy.
  */
 function capturePrompt(): string {
-  const capture = 'tmux show-option -gqv @jmux-title-capture 2>/dev/null';
-  const existing = 'tmux show-option -p -t "$TMUX_PANE" -qv @jmux-prompt 2>/dev/null';
+  const capture = `tmux show-option -gqv ${TITLE_CAPTURE_OPTION} 2>/dev/null`;
+  const existing =
+    `tmux show-option -p -t "$TMUX_PANE" -qv ${PROMPT_OPTION} 2>/dev/null`;
   const store =
     'p=$(head -c 4000); ' +
-    'tmux set-option -t "$TMUX_PANE" -p @jmux-prompt "$p"';
+    `tmux set-option -t "$TMUX_PANE" -p ${PROMPT_OPTION} "$p"`;
   return `{ [ -n "$(${capture})" ] && [ -z "$(${existing})" ] && { ${store}; }; } 2>/dev/null || true`;
 }
 
