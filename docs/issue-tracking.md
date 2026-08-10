@@ -188,15 +188,16 @@ jmux automatically links sessions to their issues and MRs using multiple signals
 4. **Transitive links** — if an issue has MR URLs in its attachments, jmux resolves those too
 5. **Manual links** — press `l` in the panel or use the command palette to explicitly link items
 
-Linked items show in the sidebar on a third row beneath the branch name:
+Linked items lead the sidebar's second row, as a badge:
 
 ```
-  ● api-server        ✓  3w
-    feature-auth
-    ENG-1234           1M
+  ● api-server
+    ENG-1234 · Review   !88 ✓
 ```
 
-The `✓` is the pipeline status glyph, `ENG-1234` is the linked issue, and `1M` means one linked merge request.
+`ENG-1234` is the linked issue, `Review` is the workflow stage it's in (once
+you've defined one under `Ctrl-a W`), `!88` is the linked merge request, and
+`✓` is the pipeline status glyph.
 
 A session can carry **several** issues, and then the badge reads `ENG-1234 +4`.
 The identifier shown is the *driving* issue — the least advanced one that isn't

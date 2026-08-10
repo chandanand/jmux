@@ -33,7 +33,7 @@ brew install jarredkenny/tap/jmux    # also installs tmux for you
 bun install -g @jx0/jmux             # needs Bun 1.3.8+; the only option on Alpine/musl
 ```
 
-Optionally install [git](https://git-scm.com/) for branch display in the sidebar.
+Optionally install [git](https://git-scm.com/) — jmux uses it for worktrees, the diff panel, and (once you set `sessionTitle`) naming sessions from your branch's commits.
 
 ---
 
@@ -197,7 +197,7 @@ This creates a bare repo with [wtm](https://github.com/jarredkenny/worktree-mana
 6. Start your agent: `claude`
 7. Repeat for more features — each gets its own branch
 
-The sidebar groups worktrees by project and shows each branch name. When an agent finishes (orange `!`), switch to it, review the diff, and merge if it's good.
+The sidebar groups worktrees by project; a new worktree's session is named after its branch, so row 1 shows that until you name it something else — see [Session titles](configuration.md#session-titles-sessiontitle). When an agent finishes (orange `!`), switch to it, review the diff, and merge if it's good.
 
 **Example:** 5 agents, 5 branches, all working off `main` simultaneously:
 

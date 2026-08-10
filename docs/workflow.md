@@ -179,12 +179,12 @@ to a stage and the mode is simply a flat list.
 ## Where a session sits, on every grouping axis
 
 Stage bands only exist under `Stage` grouping. So that a session says where it
-sits no matter how the sidebar is grouped, its second row leads with the stage
-its issue is in:
+sits no matter how the sidebar is grouped, its second row — right after the
+issue badge that leads it — carries the stage its issue is in:
 
 ```
-  ▶ auth-refactor    TRA-123
-    Review · feat/auth  !88 ✓
+  ▶ auth-refactor
+    TRA-123 · Review    !88 ✓
 ```
 
 That is your **stage** label, not the raw tracker status — the word you chose in
@@ -192,16 +192,15 @@ That is your **stage** label, not the raw tracker status — the word you chose 
 and each disclosed row spells its own status out. A status that no stage claims
 has nothing to abbreviate to, so it prints as-is.
 
-The field outranks the branch beside it: on a `wtm` worktree the branch name is
-derived from the session name one row above, so it is the only thing on that row
-repeating something already on screen. Narrow the sidebar and the branch
-truncates, then drops, then the stage word becomes a one-character glyph.
+The field's neighbours are the issue badge to its left, which leads the row and
+never drops, and a timer/MR cluster to its right. Narrow the sidebar and the
+timer drops first, then the stage word becomes a one-character glyph.
 
 **Grouped by `Stage`, the word goes away** — the band header above the row
 already says it, and a row reading `Review` under a `REVIEW` header is six
-columns the branch could have had. It comes back for any session the header
-does *not* speak for: pinned ones, parked ones, and any whose stage draws no
-band.
+columns the row's other fields could use instead. It comes back for any
+session the header does *not* speak for: pinned ones, parked ones, and any
+whose stage draws no band.
 
 ---
 
@@ -273,7 +272,7 @@ work sitting in each stage that **nobody has picked up** — issues with no sess
 
 A hollow `○` where a live session carries its filled activity dot. The row uses a
 session row's exact two-row shape — identifier where the name goes, title where
-the branch goes — because that is the row it turns into.
+the issue badge goes — because that is the row it turns into.
 
 **Clicking one previews it** — it does not start anything. The main area is
 replaced by the issue and, above the description, exactly what starting it would

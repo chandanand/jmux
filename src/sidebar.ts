@@ -227,9 +227,10 @@ const WORKFLOW_ARROW = "→";
 // here, in column 1.
 const WORKFLOW_DRIFT_MARK = "!";
 /**
- * Separates the workflow field from the branch — two words on one row. Absent
- * when either is dropped, and narrowed to a plain space when the field has
- * degraded to a marker rather than a word (see `terse` below).
+ * Separates the workflow field from the issue badge to its left — two words
+ * on one row. Absent when there is no badge to separate from, and narrowed to
+ * a plain space when the field has degraded to a marker rather than a word
+ * (see `terse` below).
  */
 const WORKFLOW_SEP = " · ";
 const WORKFLOW_ATTRS: CellAttrs = {
@@ -246,12 +247,13 @@ const WORKFLOW_ATTRS: CellAttrs = {
  *
  * `stageInHeader` drops the current stage from every form, because the band
  * above the row already names it. Grouped by stage, a row reading "Review"
- * under a "REVIEW" header says nothing and costs the branch six columns to say
- * it. Drift survives that: the header supplies where the ticket *is*, and the
- * disagreement is about where it should be.
+ * under a "REVIEW" header says nothing and spends six columns the row's
+ * badge/timer/MR cluster could use instead. Drift survives that: the header
+ * supplies where the ticket *is*, and the disagreement is about where it
+ * should be.
  *
  * `terse` marks the last-resort single-character forms. They are markers rather
- * than words, and the caller separates them from the branch with a plain space:
+ * than words, and the caller separates them from the badge with a plain space:
  * `·` is both the `backlog`/`unknown` glyph *and* the character inside the
  * word separator, so `· · feat/x` would put three visual tokens where there are
  * two things being said.
