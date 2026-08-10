@@ -860,8 +860,17 @@ describe("UserPromptSubmit prompt capture", () => {
     expect(cmd).toContain("@jmux-prompt");
   });
 
-  test("truncates what it stores", () => {
-    expect(cmd).toContain("head -c");
+  test("truncates what it stores, at the size we chose", () => {
+    // The byte count is the assertion: `toContain("head -c")` alone passes
+    // against `head -c 1`, which would store a title's worth of nothing.
+    expect(cmd).toContain("head -c 4000");
+  });
+
+  test("the state write precedes the stdin read specifically", () => {
+    // Not `indexOf("@jmux-prompt")` — that matches the guard's read, which sits
+    // before the store either way, so it would hold even if the order were wrong.
+    expect(cmd.indexOf("@jmux-agent-state running"))
+      .toBeLessThan(cmd.indexOf("head -c 4000"));
   });
 
   test("can never fail the hook", () => {
@@ -913,16 +922,21 @@ In `src/agent-hooks/commands.ts`, add after `writeRunningIdempotent`:
  * where parsing is easy.
  */
 function capturePrompt(): string {
-  const capture = 'tmux show-option -gqv @jmux-title-capture 2>/dev/null';
-  const existing = 'tmux show-option -p -t "$TMUX_PANE" -qv @jmux-prompt 2>/dev/null';
+  const capture = `tmux show-option -gqv ${TITLE_CAPTURE_OPTION} 2>/dev/null`;
+  const existing =
+    `tmux show-option -p -t "$TMUX_PANE" -qv ${PROMPT_OPTION} 2>/dev/null`;
   const store =
     'p=$(head -c 4000); ' +
-    'tmux set-option -t "$TMUX_PANE" -p @jmux-prompt "$p"';
+    `tmux set-option -t "$TMUX_PANE" -p ${PROMPT_OPTION} "$p"`;
   return `{ [ -n "$(${capture})" ] && [ -z "$(${existing})" ] && { ${store}; }; } 2>/dev/null || true`;
 }
 ```
 
-and change the `UserPromptSubmit` entry in `hookCommands`:
+with `import { PROMPT_OPTION, TITLE_CAPTURE_OPTION } from "../session-title/display";`
+at the top of the file — the option names have one definition, and a second
+spelling of them is a drift the compiler cannot catch.
+
+Then change the `UserPromptSubmit` entry in `hookCommands`:
 
 ```ts
     UserPromptSubmit: `${writeState(kind, "running")}\n${capturePrompt()}`,
