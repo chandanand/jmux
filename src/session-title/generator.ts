@@ -1,3 +1,5 @@
+import { tmpdir } from "os";
+
 import { parseTitle } from "./prompt";
 
 /**
@@ -316,12 +318,30 @@ export function titleRunnerEnv(parent: Record<string, string | undefined>): Reco
   return env;
 }
 
+/**
+ * The directory the naming command runs in.
+ *
+ * Deliberately not jmux's own, for the same class of reason `titleRunnerEnv`
+ * strips `TMUX_PANE`: an agent CLI auto-discovers project context from its
+ * working directory, and jmux's is whatever repo it was started in. Spawned
+ * there, `claude -p` read that repo's `CLAUDE.md` and answered with what *that
+ * checkout* was working on — "naming subprocess isolation" for an issue about
+ * tenant subdomains. Everything the model legitimately needs is in the prompt;
+ * anything it picks up from the cwd is another session's context leaking into
+ * this one's name. It costs latency too (9.4s in-repo against 7.6s neutral),
+ * but the wrong answer is the reason.
+ */
+export function titleRunnerCwd(): string {
+  return tmpdir();
+}
+
 export const spawnTitleRunner: TitleRunner = async (argv, stdin, timeoutMs) => {
   const proc = Bun.spawn([...argv], {
     stdin: new TextEncoder().encode(stdin),
     stdout: "pipe",
     stderr: "ignore",
     env: titleRunnerEnv(process.env),
+    cwd: titleRunnerCwd(),
   });
   const timer = setTimeout(() => proc.kill(), timeoutMs);
   try {

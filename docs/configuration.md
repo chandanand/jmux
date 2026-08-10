@@ -345,7 +345,8 @@ the work:
 ```json
 {
   "sessionTitle": {
-    "command": ["claude", "-p", "--model", "haiku"],
+    "command": ["claude", "-p", "--model", "haiku", "--effort", "low",
+                "--settings", "{\"alwaysThinkingEnabled\":false}"],
     "timeoutMs": 60000,
     "maxChars": 32
   }
@@ -412,6 +413,21 @@ useful title in four characters and `maxChars: 0` would store a bare `…`.
 
 Note this is a budget, not a guarantee: the model is asked for it and told why,
 but a model that overshoots is still truncated at the cap.
+
+**Ask for the cheapest thing that can answer.** Naming is a five-word
+classification, not a reasoning task, so the flags in the example above matter
+more than the model alias does: `--effort low` and
+`--settings '{"alwaysThinkingEnabled":false}'` turn off extended thinking, which
+is otherwise on for the session and is pure latency here. Measured on one
+machine, warm: 9.4s with none of this, 7.6s with a neutral working directory,
+6.0s with both. There is no configuration that gets an agent CLI under about
+five seconds — that is its startup, not the model.
+
+**The command also runs in a temporary directory, not jmux's.** An agent CLI
+auto-discovers project context from its working directory, so a naming call
+spawned in jmux's own checkout reads that repo's `CLAUDE.md` and names your
+sessions after whatever *it* is working on. Everything the model legitimately
+needs is in the prompt.
 
 **The naming command runs without `TMUX` or `TMUX_PANE`.** It is normally an
 agent CLI, and `jmux --install-agent-hooks` installs jmux's state emitters into

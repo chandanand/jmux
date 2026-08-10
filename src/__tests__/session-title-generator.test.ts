@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
-import { TitleGenerator, resolveTitleConfig, titleRunnerEnv } from "../session-title/generator";
+import { TitleGenerator, resolveTitleConfig, titleRunnerEnv, titleRunnerCwd } from "../session-title/generator";
+import { existsSync } from "fs";
 import type { TitleRunner } from "../session-title/generator";
 
 const CFG = { command: ["fake"], timeoutMs: 100, maxChars: 48, maxConcurrent: 2 };
@@ -324,5 +325,23 @@ describe("titleRunnerEnv", () => {
     const parent = { TMUX_PANE: "%1", PATH: "/usr/bin" };
     titleRunnerEnv(parent);
     expect(parent.TMUX_PANE).toBe("%1");
+  });
+});
+
+// The naming command inherits jmux's working directory unless told otherwise,
+// and an agent CLI auto-discovers project context from its cwd. Spawned in the
+// jmux repo, `claude -p` read that repo's CLAUDE.md and answered "naming
+// subprocess isolation" — this branch's work — for an issue about tenant
+// subdomains. Measured 9.4s in-repo against 7.6s in a neutral directory, so it
+// is a correctness bug first and a latency one second.
+describe("titleRunnerCwd", () => {
+  test("is not the directory jmux happens to be running in", () => {
+    expect(titleRunnerCwd()).not.toBe(process.cwd());
+  });
+
+  test("is a real, absolute directory the command can start in", () => {
+    const dir = titleRunnerCwd();
+    expect(dir.startsWith("/")).toBe(true);
+    expect(existsSync(dir)).toBe(true);
   });
 });
