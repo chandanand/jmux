@@ -3009,11 +3009,12 @@ describe("session titles", () => {
     expect(rowText(sidebar.getGrid(), 5, 16)).toContain("TRA-123");
   });
 
-  // The issue badge is the only protected field on row 2 — it claims its
-  // columns first and never drops. The MR id is part of the right-hand
-  // cluster that claims next, ahead of the workflow field, but still behind
-  // the badge — so at a width where both cannot fit, the badge is what
-  // survives and the MR id is what goes, not the reverse.
+  // The issue badge is protected against the right-hand cluster — it claims
+  // its columns first, and nothing in that cluster may encroach on what it
+  // needs. The MR id is part of that cluster, claiming next, ahead of the
+  // workflow field but still behind the badge — so at a width where both
+  // cannot fit, the badge is what survives and the MR id is what goes, not
+  // the reverse.
   test("the badge outranks the MR id when both cannot fit", () => {
     const sidebar = new Sidebar(18, 30);
     sidebar.updateSessions(titled);

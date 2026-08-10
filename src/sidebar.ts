@@ -1910,8 +1910,11 @@ export class Sidebar {
     }
 
     // Issue badge (left). Computed here — before MR id, timer, the context
-    // figure and the pinned count — so it claims its space first: the badge
-    // never drops, so nothing to its right may encroach on what it needs.
+    // figure and the pinned count — so it claims its space first: nothing in
+    // that right-hand cluster may encroach on what the badge needs. (The
+    // pipeline glyph above is drawn with no floor check at all, so it is
+    // more absolutely protected than the badge is — the badge's write is
+    // still gated on there being room left, and drops at an extreme width.)
     // Everything else on the row claims next, each taking what it needs from
     // `rightEdge` if it fits — MR id, timer, context figure, pinned count, in
     // that order. The workflow field is computed last of all, from whatever
