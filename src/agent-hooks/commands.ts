@@ -85,12 +85,49 @@ function writeRunningIdempotent(kind: AgentKind): string {
 }
 
 /**
+ * Store the human's first prompt for the session titler, guarded twice.
+ *
+ * Three things here are load-bearing:
+ *
+ *  - **It runs after the state write, not as part of it.** Reading the prompt
+ *    means reading the hook's stdin, and a `cat` with nothing on the other end
+ *    blocks until the hook's timeout. Ordering it second means the worst case is
+ *    a missing title rather than a RUNNING indicator that appears five seconds
+ *    late. This is the one event where the "one tmux process per fire" property
+ *    above is deliberately relaxed: `UserPromptSubmit` fires once per human
+ *    prompt, unlike `PreToolUse`.
+ *  - **`@jmux-title-capture` gates it.** jmux writes that global option at
+ *    startup from `sessionTitle.command`. Hooks are installed once and cannot
+ *    read jmux's config, so an option is how they ask — and without it,
+ *    installing agent hooks would store the human's prompts whether or not they
+ *    use titling at all.
+ *  - **It skips a pane that already has a value**, using the same
+ *    non-inheriting `show-option -p` read as writeRunningIdempotent. That makes
+ *    the stored value the *first* prompt rather than the latest, so a title is
+ *    stable for the life of the session, and the capture runs once instead of on
+ *    every prompt.
+ *
+ * The raw stdin JSON is stored and jmux parses it. Extracting a field in a shell
+ * one-liner needs `jq`, which is not guaranteed to exist, and a hand-rolled
+ * `sed` would be wrong on the first prompt containing a quote. Parsing belongs
+ * where parsing is easy.
+ */
+function capturePrompt(): string {
+  const capture = 'tmux show-option -gqv @jmux-title-capture 2>/dev/null';
+  const existing = 'tmux show-option -p -t "$TMUX_PANE" -qv @jmux-prompt 2>/dev/null';
+  const store =
+    'p=$(head -c 4000); ' +
+    'tmux set-option -t "$TMUX_PANE" -p @jmux-prompt "$p"';
+  return `{ [ -n "$(${capture})" ] && [ -z "$(${existing})" ] && { ${store}; }; } 2>/dev/null || true`;
+}
+
+/**
  * The canonical event → command mapping. Both Claude Code and Codex accept
  * every one of these events under these exact names.
  */
 export function hookCommands(kind: AgentKind): Record<HookEvent, string> {
   return {
-    UserPromptSubmit: writeState(kind, "running"),
+    UserPromptSubmit: `${writeState(kind, "running")}\n${capturePrompt()}`,
     PermissionRequest: writeState(kind, "waiting"),
     // Idempotent — see writeRunningIdempotent.
     PreToolUse: writeRunningIdempotent(kind),

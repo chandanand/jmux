@@ -185,6 +185,38 @@ describe("installHooks", () => {
   });
 });
 
+describe("UserPromptSubmit prompt capture", () => {
+  const cmd = hookCommands("claude").UserPromptSubmit;
+
+  test("writes the agent state before it reads stdin", () => {
+    const stateAt = cmd.indexOf("@jmux-agent-state running");
+    const captureAt = cmd.indexOf("@jmux-prompt");
+    expect(stateAt).toBeGreaterThanOrEqual(0);
+    expect(captureAt).toBeGreaterThan(stateAt);
+  });
+
+  test("is gated on the capture switch, so an unconfigured user stores nothing", () => {
+    expect(cmd).toContain("@jmux-title-capture");
+  });
+
+  test("is gated on the prompt being unset, so it stores the first prompt not the latest", () => {
+    expect(cmd).toContain("show-option -p");
+    expect(cmd).toContain("@jmux-prompt");
+  });
+
+  test("truncates what it stores", () => {
+    expect(cmd).toContain("head -c");
+  });
+
+  test("can never fail the hook", () => {
+    expect(cmd.trimEnd().endsWith("|| true")).toBe(true);
+  });
+
+  test("still carries the marker the installer detects jmux hooks by", () => {
+    expect(cmd).toContain("@jmux-agent-state");
+  });
+});
+
 describe("detectInstalledKind / hook timeout", () => {
   test("a stale timeout is partial, not current", () => {
     // Regression: detection compared command text only, so the SessionEnd
