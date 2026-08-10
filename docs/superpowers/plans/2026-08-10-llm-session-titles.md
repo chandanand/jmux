@@ -1728,6 +1728,13 @@ async function retitleCurrentSession(): Promise<void> {
   const session = currentSessions.find((s) => s.id === currentSessionId);
   if (!session) return;
 
+  // Before resolving, not after: `resolveTitleInput` returns the memo's already
+  // resolved entry for an unchanged branch, so a delete that came afterwards
+  // would only benefit the *next* invocation. Refreshing a git-tier title
+  // frozen on the branch's first commit is the whole reason this command
+  // exists, and it has to work on the first press.
+  gitTitleInputs.delete(session.id);
+
   const input = await resolveTitleInput(session);
   if (!input) {
     showNotice({
@@ -1739,7 +1746,6 @@ async function retitleCurrentSession(): Promise<void> {
     return;
   }
 
-  gitTitleInputs.delete(session.id);
   titleGenerator.forget(session.name);
   await control
     .sendCommand(`set-option -t ${tq(session.id)} -u ${TITLE_SIGNATURE_OPTION}`)
@@ -1748,9 +1754,12 @@ async function retitleCurrentSession(): Promise<void> {
 }
 ```
 
-Note the ordering: `gitTitleInputs.delete` comes **before** the request but
-**after** `resolveTitleInput`, so the notice-if-nothing check runs against what
-is currently known while the request that follows resolves afresh.
+The ordering is the substance of this step. `resolveTitleInput` hands back the
+memo's already-resolved entry when the branch has not changed, and there is no
+second resolve between it and `request()` — so the delete has to happen *first*
+or the command needs pressing twice to pick up new commits. Resolving fresh also
+makes the notice-if-nothing check honest: it answers "is there anything to name
+this from *now*", not "was there when we last looked".
 
 There is deliberately no success notice. A modal to dismiss after a routine
 action is worse than the row simply changing, and the two failure cases are the
