@@ -314,11 +314,11 @@ describe("titleRunnerEnv", () => {
 
   test("keeps everything else, because the command needs the user's environment", () => {
     const env = titleRunnerEnv({
-      PATH: "/usr/bin", HOME: "/home/x", ANTHROPIC_API_KEY: "sk-x", TMUX_PANE: "%1",
+      PATH: "/usr/bin", HOME: "/home/x", ANTHROPIC_API_KEY: "not-a-real-key", TMUX_PANE: "%1",
     });
     expect(env.PATH).toBe("/usr/bin");
     expect(env.HOME).toBe("/home/x");
-    expect(env.ANTHROPIC_API_KEY).toBe("sk-x");
+    expect(env.ANTHROPIC_API_KEY).toBe("not-a-real-key");
   });
 
   test("does not mutate the environment it was handed", () => {

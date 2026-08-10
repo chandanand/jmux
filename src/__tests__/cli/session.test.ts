@@ -9,13 +9,13 @@ function row(parts: string[]): string {
 describe("parseSessionListOutput", () => {
   test("parses list-sessions format string output", () => {
     const lines = [
-      row(["$1", "my-project", "1712678400", "1", "3", "/Users/jarred/Code/project", ""]),
-      row(["$2", "other", "1712678300", "0", "1", "/Users/jarred/Code/other", ""]),
+      row(["$1", "my-project", "1712678400", "1", "3", "/home/dev/code/project", ""]),
+      row(["$2", "other", "1712678300", "0", "1", "/home/dev/code/other", ""]),
     ];
     const sessions = parseSessionListOutput(lines);
     expect(sessions).toEqual([
-      { id: "$1", name: "my-project", activity: 1712678400, attached: true, windows: 3, path: "/Users/jarred/Code/project" },
-      { id: "$2", name: "other", activity: 1712678300, attached: false, windows: 1, path: "/Users/jarred/Code/other" },
+      { id: "$1", name: "my-project", activity: 1712678400, attached: true, windows: 3, path: "/home/dev/code/project" },
+      { id: "$2", name: "other", activity: 1712678300, attached: false, windows: 1, path: "/home/dev/code/other" },
     ]);
   });
 

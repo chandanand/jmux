@@ -4,13 +4,13 @@ import { parsePaneListOutput } from "../../cli/pane";
 describe("parsePaneListOutput", () => {
   test("parses list-panes format string output", () => {
     const lines = [
-      "%5:@1:1:120:40:claude:/Users/jarred/Code/project",
-      "%6:@1:0:120:40:zsh:/Users/jarred/Code/project",
+      "%5:@1:1:120:40:claude:/home/dev/code/project",
+      "%6:@1:0:120:40:zsh:/home/dev/code/project",
     ];
     const panes = parsePaneListOutput(lines);
     expect(panes).toEqual([
-      { id: "%5", window: "@1", active: true, width: 120, height: 40, command: "claude", path: "/Users/jarred/Code/project" },
-      { id: "%6", window: "@1", active: false, width: 120, height: 40, command: "zsh", path: "/Users/jarred/Code/project" },
+      { id: "%5", window: "@1", active: true, width: 120, height: 40, command: "claude", path: "/home/dev/code/project" },
+      { id: "%6", window: "@1", active: false, width: 120, height: 40, command: "zsh", path: "/home/dev/code/project" },
     ]);
   });
 
