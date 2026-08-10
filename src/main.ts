@@ -1337,13 +1337,14 @@ function applySidebarSort(mode: SortMode): void {
 const agentStateTracker = new AgentStateTracker();
 
 /**
- * The first prompt seen for each session, from `@jmux-prompt`, keyed by session id.
+ * The first prompt each session's human gave an agent, keyed by session id.
+ * Already extracted from the `@jmux-prompt` hook document — see `fetchAgentState`.
  *
- * First non-empty wins rather than an `outranks()` rollup: that helper ranks by
+ * First one wins rather than an `outranks()` rollup: that helper ranks by
  * *urgency*, which a prompt does not have, and the hook writes each pane's value
- * exactly once, so the first non-empty value is deterministic. Filled from the
- * same `list-panes` sweep that feeds the tracker, since it is the only place
- * jmux already reads every pane's options.
+ * exactly once, so the first value is deterministic. Filled from the same
+ * `list-panes` sweep that feeds the tracker, since it is the only place jmux
+ * already reads every pane's options.
  */
 const firstPromptBySession = new Map<string, string>();
 
@@ -1548,6 +1549,10 @@ const pollCoordinator = new PollCoordinator({
     checkMrTransitions();
     refreshPanelViews();
     if (sessionName === "__global__") refreshTeams();
+    // Issues are the strongest naming input and this is where they arrive —
+    // typically seconds after boot, long after the `fetchSessions` that found
+    // no context at all. Without this the primary tier would almost never fire.
+    void requestSessionTitles(currentSessions);
     scheduleRender();
   },
   getSessionDir: (name) => {
@@ -3297,6 +3302,24 @@ async function openDiffViewPicker(): Promise<void> {
 }
 
 /**
+ * Run a git command and hand back its stdout, or null if it failed.
+ *
+ * Async `Bun.spawn`, never `spawnSync` — the same shape as `gitBranchForPath`
+ * and for the same reason: these run on the session-refresh path, and a
+ * synchronous subprocess there freezes the render loop for as long as git takes.
+ */
+async function gitOutput(cwd: string, args: string[]): Promise<string | null> {
+  try {
+    const proc = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "ignore" });
+    const out = await new Response(proc.stdout).text();
+    await proc.exited;
+    return proc.exitCode === 0 ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The branch this worktree forked from, preferring what the repo is configured
  * to use over a guess. Falls back to whichever of the usual names exists, and
  * to null when neither does — the picker then simply omits the entry rather
@@ -3306,11 +3329,9 @@ async function resolveBaseBranch(cwd: string): Promise<string | null> {
   const configured = repoSettingsFor(cwd).defaultBaseBranch;
   const candidates = [configured, "main", "master"].filter((b): b is string => !!b);
   for (const branch of candidates) {
-    const check = Bun.spawnSync(["git", "-C", cwd, "rev-parse", "--verify", "--quiet", branch], {
-      stdout: "pipe",
-      stderr: "ignore",
-    });
-    if ((check.exitCode ?? 1) === 0) return branch;
+    if ((await gitOutput(cwd, ["rev-parse", "--verify", "--quiet", branch])) !== null) {
+      return branch;
+    }
   }
   return null;
 }
@@ -3413,7 +3434,9 @@ async function fetchSessions(): Promise<void> {
     // poll coordinator's contexts, which the loop above has already pruned and
     // which never hold a session whose directory is not yet known.
     for (const prev of previousSessions) {
-      if (!liveSessionNames.has(prev.name)) titleGenerator?.forget(prev.name);
+      if (liveSessionNames.has(prev.name)) continue;
+      titleGenerator?.forget(prev.name);
+      gitTitleInputs.delete(prev.id);
     }
 
     renderFrame();
@@ -3424,6 +3447,75 @@ async function fetchSessions(): Promise<void> {
   } catch {
     // tmux server may be shutting down
   }
+}
+
+/**
+ * A git-tier answer, and whether the branch settles it for good.
+ *
+ * `durable` is false for exactly one outcome — "this branch has no commits of
+ * its own *yet*" — which is the state a fresh worktree leaves the moment its
+ * agent commits, and the whole reason the tier exists. Everything else is
+ * decided by the branch and cannot change while the branch doesn't.
+ */
+type GitTierResult = { input: TitleInput | null; durable: boolean };
+
+/**
+ * The git tier's answer per session, so the only tier that costs subprocesses
+ * pays for them once.
+ *
+ * `requestSessionTitles` runs on every session refresh, every tracker poll and
+ * every agent-state change; without this, a session with no issue and no prompt
+ * would re-shell `git rev-parse` and `git log` on all of them, forever, long
+ * after it was named. A resolved input is kept for the life of the branch
+ * rather than re-read per commit on purpose: the field names the work, and a
+ * name that moves every time the agent commits is churn nobody asked for.
+ *
+ * The value is the in-flight promise, not the settled answer, so a burst of
+ * refreshes during the first (slow) read shares one pair of subprocesses
+ * instead of starting a pair each — the same single-flight discipline
+ * `TitleGenerator` applies to the model call.
+ */
+const gitTitleInputs = new Map<string, { branch: string; pending: Promise<GitTierResult> }>();
+
+async function readGitTitleInput(
+  dir: string,
+  branch: string,
+  project: string | undefined,
+): Promise<GitTierResult> {
+  const base = await resolveBaseBranch(dir);
+  if (!base || base === branch) return { input: null, durable: true };
+  const log = await gitOutput(dir, [
+    "log", "--oneline", "--no-merges", "-n", "5", `${base}..HEAD`,
+  ]);
+  const commits = (log ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+  if (commits.length === 0) return { input: null, durable: false };
+  return {
+    input: { kind: "git", repo: project ?? basename(dir), branch, commits },
+    durable: true,
+  };
+}
+
+async function resolveGitTitleInput(session: SessionInfo): Promise<TitleInput | null> {
+  // The absolute path, never `session.directory` — that one is the display
+  // string with `~` substituted in, and no git process expands a tilde.
+  const dir = sessionDetailsCache.get(session.id)?.path;
+  const branch = session.gitBranch;
+  if (!dir || !branch) return null;
+
+  const cached = gitTitleInputs.get(session.id);
+  const entry =
+    cached && cached.branch === branch
+      ? cached
+      : { branch, pending: readGitTitleInput(dir, branch, session.project) };
+  gitTitleInputs.set(session.id, entry);
+
+  const result = await entry.pending;
+  // Guarded on identity: a branch change during the read has already replaced
+  // this entry, and dropping the new one would lose its answer.
+  if (!result.durable && gitTitleInputs.get(session.id) === entry) {
+    gitTitleInputs.delete(session.id);
+  }
+  return result.input;
 }
 
 /**
@@ -3449,27 +3541,10 @@ async function resolveTitleInput(session: SessionInfo): Promise<TitleInput | nul
     };
   }
 
-  const prompt = promptTextFromHook(firstPromptBySession.get(session.id) ?? "");
+  const prompt = firstPromptBySession.get(session.id);
   if (prompt) return { kind: "prompt", text: prompt };
 
-  // The absolute path, never `session.directory` — that one is the display
-  // string with `~` substituted in, and no git process expands a tilde.
-  const dir = sessionDetailsCache.get(session.id)?.path;
-  const branch = session.gitBranch;
-  if (!dir || !branch) return null;
-  const base = await resolveBaseBranch(dir);
-  if (!base || base === branch) return null;
-  const log = Bun.spawnSync(
-    ["git", "-C", dir, "log", "--oneline", "--no-merges", "-n", "5", `${base}..HEAD`],
-    { stdout: "pipe", stderr: "ignore" },
-  );
-  const commits = new TextDecoder()
-    .decode(log.stdout)
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
-  if (commits.length === 0) return null;
-  return { kind: "git", repo: session.project ?? basename(dir), branch, commits };
+  return resolveGitTitleInput(session);
 }
 
 /**
@@ -8794,6 +8869,9 @@ async function lookupSessionDetails(sessions: SessionInfo[]): Promise<void> {
   // Paths are known only now, so this is where sessions that existed at
   // startup first become resolvable.
   registerSessionsWithPoller(currentSessions);
+  // Third and last of the naming inputs: the git tier needs a path and a
+  // branch, and neither exists during the `fetchSessions` that started this.
+  void requestSessionTitles(currentSessions);
   renderFrame();
 }
 
@@ -8900,18 +8978,28 @@ async function fetchAgentState(): Promise<void> {
     if (!paneId || !sessionId) continue;
     activePaneIds.push(paneId);
     liveSessionIds.add(sessionId);
+    // Parsed here rather than at use: the map then holds a phrase instead of up
+    // to 4KB of hook document, and the parse runs once per pane rather than
+    // once per session on every refresh. A pane whose document is unparseable
+    // stores nothing and so does not block a sibling's — first *usable* prompt
+    // wins, which is the same rule with the unusable case spelled out.
     if (rawPrompt && !firstPromptBySession.has(sessionId)) {
-      firstPromptBySession.set(sessionId, rawPrompt);
+      const text = promptTextFromHook(rawPrompt);
+      if (text) firstPromptBySession.set(sessionId, text);
     }
     agentStateTracker.apply(paneId, sessionId, rawState || null, rawSince || null);
   }
   agentStateTracker.pruneExcept(activePaneIds);
-  // Kept in step with the pane sweep for the same reason the tracker is: each
-  // entry holds up to 4KB of a hook document, and a session that has gone away
-  // will never be asked about again.
+  // Kept in step with the pane sweep for the same reason the tracker is: a
+  // session that has gone away will never be asked about again.
   for (const sessionId of firstPromptBySession.keys()) {
     if (!liveSessionIds.has(sessionId)) firstPromptBySession.delete(sessionId);
   }
+  // The first prompt is one of the three things a session can be named from,
+  // and this is where it arrives. `fetchSessions` fires only on session
+  // add/remove/rename, so nothing else would re-run the tiers and a session
+  // named from its prompt would wait for one of those to happen by chance.
+  void requestSessionTitles(currentSessions);
 }
 
 /**
