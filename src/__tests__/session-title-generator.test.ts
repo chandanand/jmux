@@ -131,4 +131,40 @@ describe("TitleGenerator", () => {
     await settle();
     expect(h.calls).toEqual(["first", "second"]);
   });
+
+  test("forget while a call is in flight drops the result, not just the queue", async () => {
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((r) => { release = r; });
+    const h = harness(async () => { await gate; return "A title"; });
+    h.gen.request("a", "sig-a", "a");
+    await settle();
+    h.gen.forget("a");
+    release!();
+    await settle();
+    expect(h.titles).toEqual([]);
+  });
+
+  test("a runner that throws synchronously does not throw out of request() or deadlock the session", async () => {
+    const calls: string[] = [];
+    const titles: Array<{ session: string; title: string; signature: string }> = [];
+    const syncThrowRunner: TitleRunner = (_argv, stdin) => {
+      calls.push(stdin);
+      throw new Error("sync boom");
+    };
+    const gen = new TitleGenerator(CFG, syncThrowRunner, (session, title, signature) =>
+      titles.push({ session, title, signature }),
+    );
+
+    expect(() => gen.request("tra-123", "i-tra-123", "name this")).not.toThrow();
+    await settle();
+    expect(calls.length).toBe(1);
+    expect(titles).toEqual([]);
+
+    // The session's in-flight slot was released, so a later request for the
+    // same session (a different signature, since the first is now cached as
+    // a failure) still runs rather than deadlocking forever.
+    gen.request("tra-123", "i-tra-123.tra-9", "name this again");
+    await settle();
+    expect(calls.length).toBe(2);
+  });
 });

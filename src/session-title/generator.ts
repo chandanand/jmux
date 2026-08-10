@@ -39,6 +39,8 @@ interface QueuedRequest {
   sessionName: string;
   signature: string;
   prompt: string;
+  /** The session's generation at request time — see `generation` below. */
+  generation: number;
 }
 
 export class TitleGenerator {
@@ -52,6 +54,16 @@ export class TitleGenerator {
   private readonly inFlight = new Set<string>();
   private queue: QueuedRequest[] = [];
   private active = 0;
+  /**
+   * Bumped by `forget()`. A request captures its session's generation when it
+   * is queued; `start()` checks it again when the call resolves, so a call
+   * already dispatched when `forget()` fires still finishes (there is no way
+   * to cancel a running subprocess-await) but its result is discarded rather
+   * than reported for a session that has gone away. Never deleted on forget —
+   * only bumped — because a stale entry has to keep outranking generation 0,
+   * the value any in-flight request from before the first forget still carries.
+   */
+  private readonly generation = new Map<string, number>();
 
   constructor(
     private readonly cfg: TitleGeneratorConfig,
@@ -63,27 +75,36 @@ export class TitleGenerator {
     return `${sessionName}\0${signature}`;
   }
 
+  private currentGeneration(sessionName: string): number {
+    return this.generation.get(sessionName) ?? 0;
+  }
+
   /** Ask for a title, unless this exact input has already been tried. */
   request(sessionName: string, signature: string, prompt: string): void {
     const key = TitleGenerator.key(sessionName, signature);
     if (this.attempted.has(key)) return;
     this.attempted.add(key);
-    this.queue.push({ sessionName, signature, prompt });
+    this.queue.push({ sessionName, signature, prompt, generation: this.currentGeneration(sessionName) });
     this.pump();
   }
 
   /**
    * Drop everything about a session that has gone away.
    *
-   * Also clears its signature cache: a session name that comes back is a new
+   * Clears its signature cache: a session name that comes back is a new
    * session, and refusing to name it because a dead one of the same name was
    * once named would be a cache outliving the thing it described.
+   *
+   * Also bumps its generation, which is what stops a call already in flight
+   * for this session from reporting a title after this returns — the queue
+   * filter below only reaches work that hasn't been dispatched yet.
    */
   forget(sessionName: string): void {
     this.queue = this.queue.filter((q) => q.sessionName !== sessionName);
     for (const key of this.attempted) {
       if (key.startsWith(`${sessionName}\0`)) this.attempted.delete(key);
     }
+    this.generation.set(sessionName, this.currentGeneration(sessionName) + 1);
   }
 
   /** Queued plus running, for tests and diagnostics. */
@@ -103,15 +124,28 @@ export class TitleGenerator {
   private start(req: QueuedRequest): void {
     this.active += 1;
     this.inFlight.add(req.sessionName);
-    this.run(this.cfg.command, req.prompt, this.cfg.timeoutMs)
-      .then((raw) => {
-        const title = parseTitle(raw, this.cfg.maxChars);
-        if (title) this.onTitle(req.sessionName, title, req.signature);
-      })
+    // `run` is invoked inside `.then()`, not called directly, so a `TitleRunner`
+    // that throws synchronously (the type promises nothing about that; only
+    // `spawnTitleRunner`'s `async` keyword happens to convert it) still becomes
+    // a rejection instead of unwinding out through `pump()` and `request()`,
+    // which would otherwise leak this session's `inFlight` slot forever.
+    Promise.resolve()
+      .then(() => this.run(this.cfg.command, req.prompt, this.cfg.timeoutMs))
+      .then((raw) => parseTitle(raw, this.cfg.maxChars))
       // A naming failure is silent. It never raises the session's attention
       // flag — that flag means the human's work needs them, and a model that
-      // did not answer is not the human's work.
-      .catch(() => {})
+      // did not answer is not the human's work. Scoped to just the run+parse
+      // step: a bug in the caller's own `onTitle` below must not be mistaken
+      // for one of these and vanish with it.
+      .catch(() => null)
+      .then((title) => {
+        // A `forget()` between dispatch and this resolving means the session
+        // is gone; the subprocess had already been started and there is no
+        // way to cancel it, so the only thing left to do is not report it.
+        if (title && this.currentGeneration(req.sessionName) === req.generation) {
+          this.onTitle(req.sessionName, title, req.signature);
+        }
+      })
       .finally(() => {
         this.active -= 1;
         this.inFlight.delete(req.sessionName);
