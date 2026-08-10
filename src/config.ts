@@ -70,6 +70,33 @@ export interface StateColorConfig {
   complete?: string;
 }
 
+/**
+ * Session titling. Global rather than per-repo: which model the user can reach
+ * is a property of their machine, not of a repo.
+ */
+export interface SessionTitleConfig {
+  /**
+   * The argv jmux runs to name a session. It receives the prompt on stdin and
+   * must print the name on stdout. Unset is off, and **the value is the
+   * switch** — there is no separate boolean that could disagree with it.
+   *
+   * An array rather than a shell string so there is no quoting question and no
+   * parser: `["claude", "-p", "--model", "haiku"]`, `["codex", "exec"]`,
+   * `["ollama", "run", "qwen2.5"]`. Model choice is a flag the user already
+   * controls, which is why jmux has no provider registry.
+   */
+  command?: string[];
+  /** Hard bound on one naming call. */
+  timeoutMs?: number;
+  /**
+   * Cap on a stored title. A *storage* cap, not a display one: a 26-column
+   * sidebar shows around twenty characters and truncates, while the palette and
+   * `ctl` have room for the whole thing. Capping at the sidebar's width would
+   * throw away the words the wider surfaces exist to show.
+   */
+  maxChars?: number;
+}
+
 export interface JmuxConfig {
   sidebarWidth?: number;
   infoPanelWidth?: number;
@@ -93,6 +120,7 @@ export interface JmuxConfig {
    * wins for the same command. Patterns are case-insensitive regex sources.
    */
   agentScreenSignatures?: ScreenSignature[];
+  sessionTitle?: SessionTitleConfig;
   projectDirs?: string[];
   diffPanel?: {
     splitRatio?: number;

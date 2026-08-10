@@ -87,6 +87,19 @@ export interface SessionInfo {
    * `ISSUE_LINK_OPTION` in issue-session.ts for the encoding.
    */
   issueLinks?: string[];
+  /**
+   * The `@jmux-session-title` session option — a short human phrase generated
+   * from the session's issues, first prompt or commits. Absent until one has
+   * been generated, and absent forever when titling is off; every consumer goes
+   * through `displaySessionName`, so absence is the shipped behaviour.
+   */
+  title?: string;
+  /**
+   * The `@jmux-title-signature` session option. The hash of the input `title`
+   * was generated from, or `manual` when the human renamed the session — which
+   * is what stops jmux generating another over the top of their name.
+   */
+  titleSignature?: string;
 }
 
 export type ErrorState = {
