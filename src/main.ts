@@ -4200,6 +4200,11 @@ const inputRouter = new InputRouter(
     onFilterCycle: () => { sidebar.cycleFilterMode(); scheduleRender(); },
     onBrowserPane: () => { void openBrowserPane(); },
     onSidebarToggle: () => toggleSidebar(),
+    // The three surfaces that take the whole main area but keep the sidebar
+    // beside them. Glass is absent because it has its own prefix arm already,
+    // and modals are absent by design — see the option's doc comment.
+    fullScreenSurfaceActive: () =>
+      settingsScreen.isOpen || workflowScreen.isOpen || ghostPreview.isOpen,
     onToggleSessionIssues: () => {
       const name = currentSessions.find((s) => s.id === currentSessionId)?.name;
       if (!name) return;

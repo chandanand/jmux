@@ -69,7 +69,7 @@ function confBinds(): string[] {
  * sequences) and range comparisons are not single keys and are excluded by the
  * regex requiring exactly one character or one escape.
  */
-function routerPrefixKeys(arm: "prefix" | "glass-prefix"): string[] {
+function routerPrefixKeys(arm: "prefix" | "glass-prefix" | "surface-prefix"): string[] {
   const text = readFileSync(INPUT_ROUTER, "utf-8");
   const start = text.indexOf(`--- keymap:${arm} start ---`);
   const end = text.indexOf(`--- keymap:${arm} end ---`);
@@ -146,6 +146,24 @@ describe("keymap ↔ input-router", () => {
       .filter((b) => !intercepted.has(b.prefixKey!))
       .map((b) => b.keys);
     expect(missing).toEqual([]);
+  });
+
+  test("every key the full-screen-surface arm intercepts is in the table", () => {
+    // Subset, like the glass arm: this arm is a deliberate handful of chords
+    // that stay live while settings/workflow/ghost-preview own input, not a
+    // second copy of the keymap. What it must never be is a chord nothing
+    // documents — the drift keymap.ts exists to prevent.
+    const tabled = new Set(prefixBindings.map((b) => b.prefixKey));
+    const missing = routerPrefixKeys("surface-prefix").filter((k) => !tabled.has(k));
+    expect(missing).toEqual([]);
+  });
+
+  test("the surface arm stays a strict subset of the ordinary prefix chain", () => {
+    // A chord live on a surface but not on the normal frame would be
+    // unreachable from the place users actually learn it.
+    const plain = new Set(routerPrefixKeys("prefix"));
+    const stray = routerPrefixKeys("surface-prefix").filter((k) => !plain.has(k));
+    expect(stray).toEqual([]);
   });
 
   test("Ctrl-a ? reaches the help overlay from both arms", () => {

@@ -745,6 +745,95 @@ describe("toolbar column routing", () => {
   });
 });
 
+describe("chrome chords on a full-screen surface", () => {
+  // Settings / workflow / ghost preview consume input, so they arrive with
+  // modalOpen set and every chord dies. The sidebar is painted beside all
+  // three — and the preview is the surface you reach *from* a sidebar row —
+  // so the chord that hides it has to survive there.
+  const surfaceRouter = (opts: Partial<InputRouterOptions> = {}) => {
+    const router = new InputRouter(
+      {
+        onPtyData: () => {},
+        onSidebarClick: () => {},
+        fullScreenSurfaceActive: () => true,
+        ...opts,
+      },
+      baseLayout(24),
+    );
+    router.setModalOpen(true);
+    return router;
+  };
+
+  test("Ctrl-a \\ toggles the sidebar instead of reaching the surface", () => {
+    let toggled = 0;
+    let surfaceSaw = "";
+    const router = surfaceRouter({
+      onSidebarToggle: () => { toggled += 1; },
+      onModalInput: (d) => { surfaceSaw += d; },
+    });
+    router.handleInput("\x01");
+    router.handleInput("\\");
+    expect(toggled).toBe(1);
+    expect(surfaceSaw).toBe("");
+  });
+
+  test("any other chord flushes the prefix and the key to the surface, in order", () => {
+    let toggled = 0;
+    let surfaceSaw = "";
+    const router = surfaceRouter({
+      onSidebarToggle: () => { toggled += 1; },
+      onModalInput: (d) => { surfaceSaw += d; },
+      // Wired, and must not fire: a surface owns everything but the chrome.
+      onNewSession: () => { throw new Error("new-session must not fire on a surface"); },
+    });
+    router.handleInput("\x01");
+    router.handleInput("n");
+    expect(toggled).toBe(0);
+    expect(surfaceSaw).toBe("\x01n");
+  });
+
+  test("a bare key still reaches the surface untouched", () => {
+    let surfaceSaw = "";
+    const router = surfaceRouter({ onModalInput: (d) => { surfaceSaw += d; } });
+    router.handleInput("\\");
+    expect(surfaceSaw).toBe("\\");
+  });
+
+  test("an ordinary modal is not a surface — the chord stays dead there", () => {
+    let toggled = 0;
+    let modalSaw = "";
+    const router = new InputRouter(
+      {
+        onPtyData: () => {},
+        onSidebarClick: () => {},
+        onSidebarToggle: () => { toggled += 1; },
+        onModalInput: (d) => { modalSaw += d; },
+        fullScreenSurfaceActive: () => false,
+      },
+      baseLayout(24),
+    );
+    router.setModalOpen(true);
+    router.handleInput("\x01");
+    router.handleInput("\\");
+    expect(toggled).toBe(0);
+    expect(modalSaw).toBe("\x01\\");
+  });
+
+  test("nothing leaks to the pty while a surface owns input", () => {
+    let ptyData = "";
+    const router = surfaceRouter({
+      onPtyData: (d) => { ptyData += d; },
+      onSidebarToggle: () => {},
+      onModalInput: () => {},
+    });
+    router.handleInput("\x01");
+    router.handleInput("\\");
+    router.handleInput("\x01");
+    router.handleInput("n");
+    expect(ptyData).toBe("");
+  });
+});
+
 describe("mouse routing with no sidebar", () => {
   // The whole mouse block used to be gated on `layout.sidebar`, on the reading
   // that null meant "terminal too narrow for chrome". `Ctrl-a \` hides the

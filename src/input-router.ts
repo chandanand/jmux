@@ -115,6 +115,16 @@ export interface InputRouterOptions {
   onFilterCycle?: () => void;     // Ctrl-a f — cycle sidebar filter mode
   onBrowserPane?: () => void;     // Ctrl-a b — open a terminal-browser pane
   onSidebarToggle?: () => void;   // Ctrl-a \ — hide/show the sidebar
+  /**
+   * True while a full-screen surface (settings, workflow, ghost preview) owns
+   * input. Those set `modalOpen`, which otherwise kills every chord — right
+   * for chords aimed at the surface, wrong for the ones aimed at the chrome
+   * drawn around it. See the surface arm in handleInput.
+   *
+   * Deliberately not true for ordinary modals: a modal is a transient question
+   * over the frame, and the sidebar is not what you are looking at.
+   */
+  fullScreenSurfaceActive?: () => boolean;
   onSessionPrev?: () => void;
   onSessionNext?: () => void;
   // Pane-of-glass (Overview) additions
@@ -185,6 +195,7 @@ export class InputRouter {
   private prefixSeen = false;
   private prefixTimer: ReturnType<typeof setTimeout> | null = null;
   private glassPrefixDeferred = false;
+  private surfacePrefixDeferred = false;
   private diffPanelFocused = false;
   private panelTabsActive = false;
   private panelFilterActive = false;
@@ -408,10 +419,35 @@ export class InputRouter {
     // Ctrl-a p interception: detect prefix + p to toggle palette
     // Ctrl-a is forwarded to tmux (so other prefix bindings work),
     // but if next byte is "p" we intercept it before tmux sees it.
-    if (!this.modalOpen) {
+    //
+    // A full-screen surface (settings, workflow, ghost preview) consumes
+    // input, so it reaches this with `modalOpen` set — and every chord dies
+    // there. That is right for chords acting on the surface's own area, and
+    // wrong for the ones acting on the chrome *around* it: the sidebar is
+    // painted beside all three, and the preview is the surface you reach from
+    // a sidebar row, so `Ctrl-a \` going dead exactly there is the least
+    // defensible place for it to. Those surfaces therefore get their own
+    // narrow arm below (the Command Center has had one all along).
+    const surfaceActive = this.modalOpen && this.opts.fullScreenSurfaceActive?.() === true;
+    if (!this.modalOpen || surfaceActive) {
       if (this.prefixSeen) {
         this.prefixSeen = false;
         if (this.prefixTimer) { clearTimeout(this.prefixTimer); this.prefixTimer = null; }
+
+        // Full-screen surface: only the chrome chords intercept. Anything
+        // else flushes the deferred prefix and the key to the surface, so it
+        // sees exactly the bytes it would have seen — same shape as the glass
+        // arm below, and delimited for keymap.test.ts the same way.
+        if (surfaceActive) {
+          const deferred = this.surfacePrefixDeferred;
+          this.surfacePrefixDeferred = false;
+          // --- keymap:surface-prefix start ---
+          if (data === "\\") { this.opts.onSidebarToggle?.(); return; }
+          // --- keymap:surface-prefix end ---
+          if (deferred) this.opts.onModalInput?.("\x01");
+          this.opts.onModalInput?.(data);
+          return;
+        }
 
         // Glass owns the post-prefix byte: digits switch tabs, jmux chords
         // intercept, everything else flushes the deferred prefix to the tile.
@@ -578,8 +614,17 @@ export class InputRouter {
         // Not intercepted — forward to PTY normally (tmux handles its prefix binding)
       } else if (data === "\x01") {
         this.prefixSeen = true;
-        this.prefixTimer = setTimeout(() => { this.prefixSeen = false; this.prefixTimer = null; this.glassPrefixDeferred = false; }, 2000);
-        if (this.opts.glassActive?.()) {
+        this.prefixTimer = setTimeout(() => {
+          this.prefixSeen = false;
+          this.prefixTimer = null;
+          this.glassPrefixDeferred = false;
+          this.surfacePrefixDeferred = false;
+        }, 2000);
+        if (surfaceActive) {
+          // Same deferral as glass: the next byte decides whether this was a
+          // chrome chord or a key the surface itself wanted.
+          this.surfacePrefixDeferred = true;
+        } else if (this.opts.glassActive?.()) {
           // In glass, defer the prefix: the next byte decides whether it's a
           // jmux action, a tab digit, or a real in-tile prefix chord.
           this.glassPrefixDeferred = true;
