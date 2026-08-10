@@ -19,6 +19,12 @@ The sidebar shows all sessions with:
 - Orange `!` flag for attention (e.g. Claude Code finished a response)
 - `▲` / `▼` indicators when sessions overflow the sidebar
 
+Each session's row 1 is its **title** when one has generated — see
+[Session titles](configuration.md#session-titles-sessiontitle) — or its plain
+tmux session name otherwise; row 2 leads with its linked issue badge (`TRA-123
++4`), not a branch name. The branch still shows on the ghost preview and the
+info panel.
+
 ### Grouping, sorting and filtering
 
 Grouping and sorting are two independent axes: grouping decides how sessions
@@ -242,7 +248,15 @@ Press `Ctrl-a p` to open the command palette — a floating overlay for fuzzy-se
 | `Escape` | Back out of sub-list, or close palette |
 | `Ctrl-a p` | Close palette |
 
-**Available commands:** switch sessions, switch windows, new session/window, kill session, close window/pane, split a pane either way, open a browser pane, zoom pane, rename session, move window, open Claude, keyboard shortcuts, setup, Command Center (pin/unpin, move tile to tab, switch tab, new/rename/delete/reorder tab), sidebar width, Claude command, project directories.
+**Available commands:** switch sessions, switch windows, new session/window, kill session, close window/pane, split a pane either way, open a browser pane, zoom pane, rename session, **re-name session with the model**, move window, open Claude, keyboard shortcuts, setup, Command Center (pin/unpin, move tile to tab, switch tab, new/rename/delete/reorder tab), sidebar width, Claude command, project directories.
+
+**Re-name session with the model** asks for a fresh title on demand — the
+escape hatch for a [git-tier title frozen](configuration.md#session-titles-sessiontitle)
+on the branch's first commit, or for retrying after a naming call failed. It
+overrides a hand-typed rename too. Always in the list; it tells you instead of
+renaming anything when `sessionTitle.command` isn't configured, or when the
+session has nothing to name it from yet (no linked issue, no captured prompt,
+no commits of its own).
 
 Commands that also have a keybinding show it beside the row, so you can stop
 reaching for the palette once you have learned the chord.

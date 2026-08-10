@@ -335,4 +335,67 @@ switch tabs with `Ctrl-a <number>` (jump to tab N), or `Ctrl-a [` / `Ctrl-a ]`
 so they don't affect tmux copy-mode/paste in normal panes. The config file is
 hot-reloaded — edits applied externally take effect immediately without restarting jmux.
 
+### Session titles (`sessionTitle`)
+
+Row 1 of a session normally shows its tmux session name — a slug like
+`tra-123`, or whatever you typed at `Ctrl-a n`. Set `sessionTitle.command` and
+jmux asks a model to name the session instead, from whatever it knows about
+the work:
+
+```json
+{
+  "sessionTitle": {
+    "command": ["claude", "-p", "--model", "haiku"],
+    "timeoutMs": 20000,
+    "maxChars": 48
+  }
+}
+```
+
+`command` is absent from the example config above for the same reason
+`diffPanel.theme` is: **unset is off, and the value is the switch** — there is
+no separate boolean that could disagree with it. It is an argv array, not a
+shell string: jmux spawns it directly and writes the prompt to its stdin, so
+there is no quoting question and no command-line parser to get wrong.
+`["codex", "exec"]`, `["ollama", "run", "qwen2.5"]`, or a shell script you
+wrote all work — the model choice is a flag you already control, and jmux
+keeps no provider registry and no second credentials story.
+
+jmux names a session from the strongest of three inputs it has, in order:
+
+1. **Linked issues** — identifier, title and description, once the session
+   has any.
+2. **The first prompt you gave the agent** — captured by the `UserPromptSubmit`
+   hook, so it only exists once **you have re-run
+   `jmux --install-agent-hooks`** after turning titling on. An install from
+   before this feature does not capture prompts; `--install-agent-hooks`
+   detects the stale hook body and rewrites it.
+3. **Git** — the repo name, the branch, and the commits your branch has that
+   its base branch doesn't. A fresh worktree with no commits of its own has
+   nothing here, so a session can still fall through with no title at all.
+
+A generated title is requested again only when the input it would come from
+changes — a session growing from one linked issue to five re-titles, retyping
+the same prompt does not. A failed or timed-out call is cached exactly like a
+successful one, under the same input, so a model that didn't answer once isn't
+asked again on every poll.
+
+**Git-tier titles freeze on the branch's first commit.** The title is resolved
+once per branch and kept for the life of that branch, not re-read on every
+commit — the input is keyed on `(session, branch)`, not on `HEAD`, because a
+`HEAD` key would cost a subprocess per session on every sidebar refresh. A
+session titled from three early commits keeps that title as you add forty
+more; this is expected, not a bug. Re-run naming on demand from the command
+palette — **"Re-name session with the model"** — which re-resolves the
+current input regardless of what's cached.
+
+`maxChars` caps what gets **stored**, not what the sidebar shows. The sidebar
+truncates row 1 to whatever the (26-column default) sidebar width has room
+for; the command palette and `ctl session list`/`info` show the whole stored
+title. The default is 48, generous enough for those wider surfaces.
+
+Renaming a session by hand (`Ctrl-a p` → **Rename session**) always wins: it
+clears any generated title and marks the session so titling never overwrites
+your name again, even across a restart.
+
 See [connecting.md](connecting.md) for adapter setup, [issue-tracking.md](issue-tracking.md) for the info panel, and [workflow.md](workflow.md) for the pipeline.
