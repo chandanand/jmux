@@ -384,11 +384,17 @@ jmux names a session from the strongest of three inputs it has, in order:
    its base branch doesn't. A fresh worktree with no commits of its own has
    nothing here, so a session can still fall through with no title at all.
 
-A generated title is requested again only when the input it would come from
-changes — a session growing from one linked issue to five re-titles, retyping
-the same prompt does not. A failed or timed-out call is cached exactly like a
-successful one, under the same input, so a model that didn't answer once isn't
-asked again on every poll.
+**A session is named once.** The three tiers resolve at different moments —
+commits at boot, the tracker poll a second later, your first prompt whenever you
+type it — so jmux takes the first one that answers and then leaves the name
+alone. Without that a session visibly renames itself two or three times in its
+first minute, and a name that changes while you are reading it is worse than one
+that is merely not the best available. What that gives up is the automatic
+re-title when a session grows from one linked issue to five; ask for it with
+**"Re-name session with the model"** in the palette.
+
+A failed or timed-out call is cached exactly like a successful one, under the
+same input, so a model that didn't answer once isn't asked again on every poll.
 
 **Git-tier titles freeze on the branch's first commit.** The title is resolved
 once per branch and kept for the life of that branch, not re-read on every
