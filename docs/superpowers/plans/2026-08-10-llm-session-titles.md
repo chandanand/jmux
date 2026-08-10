@@ -1438,7 +1438,9 @@ Then in the row-2 left-hand section, replace the `if (view.branch) { ... }` bloc
       }
     }
 
-    let fieldTerse = false;
+    // No `fieldTerse` any more: it existed only to pick the separator before the
+    // branch, and the branch is gone. `workflowFieldText` still returns `terse`
+    // for callers that have something after the field; this one does not.
     const wf = this.sessionWorkflow.get(session.name);
     if (wf) {
       const sep = leftCol === detailStart ? "" : WORKFLOW_SEP;
@@ -1454,12 +1456,14 @@ Then in the row-2 left-hand section, replace the `if (view.branch) { ... }` bloc
           : isActive || isHovered
             ? detailAttrs
             : { ...WORKFLOW_ATTRS, ...bgAttrs });
-        leftCol = fieldCol + textCols(field.text);
-        fieldTerse = field.terse;
       }
     }
-    void fieldTerse;
 ```
+
+The workflow field is the last thing on the row's left side, so it does not
+advance `leftCol` — there is nothing after it to read the value. `leftCol` is
+still written by the badge above, because the field's separator and budget both
+depend on whether a badge was drawn.
 
 Delete the now-unused `linearIdCol` / `badgeCol` / `nameMaxLen` locals from the old row-1 block and the `BRANCH_MIN_COLS` import if nothing else uses it (check with `grep -n BRANCH_MIN_COLS src/`).
 
