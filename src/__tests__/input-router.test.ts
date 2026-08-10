@@ -512,6 +512,25 @@ describe("diff panel routing", () => {
     expect(diffToggled).toBe(false); // uppercase G must not fall through to lowercase g
   });
 
+  test("Ctrl-a \\ toggles the sidebar, and the backslash never reaches the pty", () => {
+    let toggled = 0;
+    let ptyData = "";
+    const router = new InputRouter(
+      {
+        onPtyData: (d) => { ptyData += d; },
+        onSidebarClick: () => {},
+        onSidebarToggle: () => { toggled += 1; },
+      },
+      baseLayout(4),
+    );
+    router.handleInput("\x01");
+    router.handleInput("\\");
+    expect(toggled).toBe(1);
+    // The prefix itself is forwarded (tmux's other binds must keep working);
+    // the chord byte is not.
+    expect(ptyData).toBe("\x01");
+  });
+
   test("prefix+d detaches jmux when the Command Center is active", () => {
     let detachCalled = false;
     let ptyData = "";

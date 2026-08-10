@@ -11,6 +11,7 @@ Quick reference for all keybindings and features. The default prefix is `Ctrl-a`
 | Switch session | Click a session in the sidebar |
 | Next/prev session | `Ctrl-Shift-Down` / `Ctrl-Shift-Up` |
 | Scroll sidebar | Mouse wheel over the sidebar |
+| Hide / show the sidebar | `Ctrl-a \` — the panes take the whole terminal |
 | Mouse select & copy | Click-drag in the main area to select, copies to clipboard |
 
 The sidebar shows all sessions with:

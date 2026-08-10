@@ -173,6 +173,14 @@ export const KEYMAP: readonly Binding[] = [
     source: "jmux",
     prefixKey: "f",
   },
+  {
+    id: "sidebar-toggle",
+    keys: "Ctrl-a \\",
+    label: "Hide / show the sidebar",
+    section: "Sessions",
+    source: "jmux",
+    prefixKey: "\\",
+  },
 
   // --- Windows ---
   {

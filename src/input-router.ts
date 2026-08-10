@@ -114,6 +114,7 @@ export interface InputRouterOptions {
   onSortCycle?: () => void;       // Ctrl-a s — cycle sidebar sort mode
   onFilterCycle?: () => void;     // Ctrl-a f — cycle sidebar filter mode
   onBrowserPane?: () => void;     // Ctrl-a b — open a terminal-browser pane
+  onSidebarToggle?: () => void;   // Ctrl-a \ — hide/show the sidebar
   onSessionPrev?: () => void;
   onSessionNext?: () => void;
   // Pane-of-glass (Overview) additions
@@ -445,6 +446,7 @@ export class InputRouter {
           if (data === "s") { this.opts.onSortCycle?.(); return; }
           if (data === "f") { this.opts.onFilterCycle?.(); return; }
           if (data === "b") { this.opts.onBrowserPane?.(); return; }
+          if (data === "\\") { this.opts.onSidebarToggle?.(); return; }
           // --- keymap:glass-prefix end ---
           // Not a jmux chord — flush the buffered prefix, then the key, to the tile.
           if (deferred) this.opts.onPtyData("\x01");
@@ -518,6 +520,13 @@ export class InputRouter {
         // wouldn't exist.
         if (data === "b") {
           this.opts.onBrowserPane?.();
+          return;
+        }
+        // Hide the sidebar to give the panes the whole terminal. `\` because
+        // every letter that reads as "sidebar" is spoken for and tmux binds
+        // nothing to it — this shadows no binding at all, jmux's or tmux's.
+        if (data === "\\") {
+          this.opts.onSidebarToggle?.();
           return;
         }
         if (data === "g") {

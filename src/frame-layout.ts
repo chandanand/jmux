@@ -25,6 +25,19 @@ export interface FrameLayoutInput {
    * assumes a border width.
    */
   borderWidth: number;
+  /**
+   * User override: hide the sidebar outright (`Ctrl-a \`), whatever the
+   * terminal is wide enough for. Optional because it *overrides* the width
+   * rule below rather than being a second input to it — absent means the
+   * width decides, which is the answer for every caller that has no user to
+   * ask.
+   *
+   * Hiding is expressed as `sidebar: null` — the same state a sub-80-column
+   * terminal already produces — so every consumer downstream (the renderer's
+   * composite, InputRouter's column classification, main.x) handles it on a
+   * path that has always shipped.
+   */
+  sidebarHidden?: boolean;
   toolbarRows: number;
   diffState: "off" | "split" | "full";
   requestedPanelCols: number;
@@ -119,7 +132,9 @@ export function computeFrameLayout(input: FrameLayoutInput): FrameLayout {
   } = input;
 
   const sidebar: Span | null =
-    termCols >= SIDEBAR_MIN_TERM_COLS ? { x: 0, w: sidebarWidth } : null;
+    !input.sidebarHidden && termCols >= SIDEBAR_MIN_TERM_COLS
+      ? { x: 0, w: sidebarWidth }
+      : null;
   const borderCol = sidebar ? sidebar.x + sidebar.w : null;
 
   const chrome = resolveChrome(input);
