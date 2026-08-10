@@ -1647,3 +1647,152 @@ git commit -m "docs(titles): configuration, the new row shape, and the rules beh
 **One gap the spec claimed and this plan does not close:** the spec named "glass tabs" as a surface. `src/glass/tabs.ts` is the Diff/Overview tab strip and holds no session names; the glass surface that does is `buildPaneLabel`, which Task 7 covers instead.
 
 **Type consistency.** `displaySessionName` takes `{name, title?}` everywhere. `TitleGenerator.request(sessionName, signature, prompt)` and the `onTitle(sessionName, title, signature)` callback match between Task 3's definition and Task 5's construction. `titleSignature`/`buildTitlePrompt`/`parseTitle` signatures match between Task 2 and their callers in Tasks 3 and 5. `SESSION_TITLE_OPTION`, `TITLE_SIGNATURE_OPTION`, `PROMPT_OPTION`, `TITLE_CAPTURE_OPTION`, `MANUAL_SIGNATURE` are defined once in Task 1 and imported by Tasks 4, 5 and 7.
+
+---
+
+### Task 9: Re-name this session, on demand
+
+Added after Tasks 1-8 were planned, at the user's request. Runs after Task 7 and
+before Task 8, which documents it.
+
+**Why it belongs.** Every trigger so far is automatic and keyed on the input
+changing. Three things that follow from that leave the human with no way to ask:
+a title they simply dislike, a `manual` sentinel they now want to undo, and — the
+sharp one — a git-tier title frozen on the branch's first commit, because the
+memo added in Task 5 is keyed on branch rather than HEAD. This command is the
+escape hatch for all three, which is what turns that last one from a limitation
+into "it refreshes when you ask".
+
+**Files:**
+- Modify: `src/main.ts` — the palette command list (~5035, beside the dynamic
+  `switch-session` entries), the command dispatch switch (~7640), and
+  `requestSessionTitles` / the `gitTitleInputs` memo from Task 5.
+- Test: none directly — this is `main.ts`, which no unit test can import. See
+  Verification below.
+
+**Interfaces:**
+- Consumes: `titleGenerator`, `requestSessionTitles`, `gitTitleInputs`,
+  `resolveTitleInput`, `showNotice`, `SESSION_TITLE_OPTION`,
+  `TITLE_SIGNATURE_OPTION` — all from Task 5.
+- Produces: palette command id `retitle-session`; a `retitleCurrentSession()`
+  handler. Nothing later depends on either.
+
+- [ ] **Step 1: Add the palette entry**
+
+In the static command list beside `rename-session` (`src/main.ts:5134`):
+
+```ts
+    { id: "retitle-session", label: "Re-name session with the model", category: "session" },
+```
+
+The command is always listed, never hidden or disabled when titling is off. A
+command that vanishes when unconfigured teaches nothing; one that appears and
+then explains itself teaches the setting exists. That is the same judgement
+`sectionedViewNotice` makes, and the reason `showNotice` exists at all.
+
+- [ ] **Step 2: Force a re-name past all three suppressors**
+
+Add beside `requestSessionTitles`:
+
+```ts
+/**
+ * Re-name the current session on demand.
+ *
+ * Three things suppress an automatic run, and an explicit request has to clear
+ * all three or the command silently does nothing — the exact failure
+ * `showNotice` exists to prevent:
+ *
+ *  - the `manual` sentinel, which is the human's own name. Asking for a
+ *    generated one supersedes it; that is what the request *means*.
+ *  - `TitleGenerator.attempted`, which is what stops the poll re-asking the
+ *    same question forever. Here the same question is the point.
+ *  - the git memo, keyed on branch rather than HEAD. Dropping the entry is what
+ *    makes this command pick up commits made since the branch's first, which is
+ *    the one case where the memo's narrowing is visible to a human.
+ *
+ * The stored title is left on screen rather than unset. It is replaced when the
+ * new one lands, so the row changes once instead of flickering back to the raw
+ * session name in between.
+ */
+async function retitleCurrentSession(): Promise<void> {
+  if (!titleGenerator) {
+    showNotice({
+      title: "Session naming is off",
+      message: "No model is configured to name sessions.",
+      hint: 'Set sessionTitle.command in ~/.config/jmux/config.json, e.g. ["claude", "-p"].',
+      tone: "warn",
+    });
+    return;
+  }
+
+  const session = currentSessions.find((s) => s.id === currentSessionId);
+  if (!session) return;
+
+  const input = await resolveTitleInput(session);
+  if (!input) {
+    showNotice({
+      title: "Nothing to name this session from",
+      message: "This session has no linked issue, no recorded first prompt, and no commits of its own.",
+      hint: "Link an issue, prompt the agent, or commit something, then try again.",
+      tone: "warn",
+    });
+    return;
+  }
+
+  gitTitleInputs.delete(session.id);
+  titleGenerator.forget(session.name);
+  await control
+    .sendCommand(`set-option -t ${tq(session.id)} -u ${TITLE_SIGNATURE_OPTION}`)
+    .catch(() => {});
+  titleGenerator.request(session.name, titleSignature(input), buildTitlePrompt(input));
+}
+```
+
+Note the ordering: `gitTitleInputs.delete` comes **before** the request but
+**after** `resolveTitleInput`, so the notice-if-nothing check runs against what
+is currently known while the request that follows resolves afresh.
+
+There is deliberately no success notice. A modal to dismiss after a routine
+action is worse than the row simply changing, and the two failure cases are the
+only ones where nothing visible would otherwise happen.
+
+- [ ] **Step 3: Dispatch it**
+
+In the command switch (`src/main.ts:7473`, beside `rename-session`):
+
+```ts
+    case "retitle-session": {
+      void retitleCurrentSession();
+      return;
+    }
+```
+
+`void` for the same reason `requestSessionTitles` is voided at its call site:
+the dispatcher must not wait on a model.
+
+- [ ] **Step 4: Typecheck and boot**
+
+Run: `bun run typecheck && bun test && bun test src/__tests__/boot-smoke.test.ts`
+Expected: all clean. The boot smoke matters because this adds a module-scope
+command-list entry and a function referencing `let` bindings from Task 5.
+
+- [ ] **Step 5: Verify by hand**
+
+`main.ts` cannot be unit-tested, so this is the evidence. Use a throwaway
+`HOME`/`XDG_CONFIG_HOME` — never the real config.
+
+1. With no `sessionTitle.command`: `Ctrl-a p`, run the command. Expected: the
+   "Session naming is off" notice naming the config key.
+2. With it configured, on a session with a title: run it, confirm the row
+   changes and the old title stays visible until it does.
+3. On a session renamed by hand (so `@jmux-title-signature` is `manual`): run
+   it, confirm a generated title replaces the manual name.
+4. On a bare shell session in a non-repo directory: expected: the "Nothing to
+   name this session from" notice.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/main.ts
+git commit -m "feat(titles): ask for a new name when the automatic one is wrong"
+```
