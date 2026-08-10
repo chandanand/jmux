@@ -22,10 +22,19 @@ The sidebar shows all sessions with:
 
 Each session's row 1 is its **title** when one has generated — see
 [Session titles](configuration.md#session-titles-sessiontitle) — or its plain
-tmux session name otherwise; row 2 leads with its linked issue badge (`TRA-123
-+4`), not a branch name. For a worktree session the branch *is* the session
-name, so it is on row 1 until a title replaces it; the branch a **ghost** row
-would get is spelled out on its pre-flight preview.
+tmux session name otherwise. A titled session then carries its **branch** on
+row 2 (for a worktree session that is the same string row 1 used to show, since
+the branch, the worktree directory and the session name are one name), and its
+linked issue badge (`TRA-123 +4`), stage word, timer and MR on the row below
+that. With naming unconfigured there is no branch row: row 1 is already the
+name. The branch a **ghost** row would get is spelled out on its pre-flight
+preview.
+
+**A session is named once.** The three inputs a title can come from arrive at
+different moments, so jmux takes the first one that resolves and then leaves the
+name alone — a name that changes while you are reading it is worse than one that
+is merely not the best available. Ask for a new one with **Re-name session with
+the model** in the palette.
 
 ### Grouping, sorting and filtering
 

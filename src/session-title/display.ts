@@ -55,3 +55,24 @@ export function displaySessionName(session: { name: string; title?: string }): s
   const trimmed = session.title?.trim();
   return trimmed ? trimmed : session.name;
 }
+
+/**
+ * Whether jmux should generate a title for this session on its own initiative.
+ *
+ * **The first title wins.** The three input tiers become available at different
+ * moments — git commits exist at boot, the tracker poll resolves an issue a
+ * second or two later, the human's first prompt arrives whenever they type —
+ * and each is a different signature, so without this rule a session visibly
+ * renames itself two or three times in its first minute as stronger inputs turn
+ * up. A name that changes while you are reading the sidebar is worse than a
+ * name that is merely not the best one available, which is the same judgement
+ * behind never re-titling from the accumulating diff.
+ *
+ * What this gives up is the automatic re-title when a session's issue set grows
+ * from one ticket to five. That is a real loss, and the deliberate remedy is the
+ * palette's "Re-name session with the model" — which does not come through here.
+ */
+export function shouldGenerateTitle(session: { title?: string; titleSignature?: string }): boolean {
+  if (session.titleSignature === MANUAL_SIGNATURE) return false;
+  return (session.title?.trim().length ?? 0) === 0;
+}

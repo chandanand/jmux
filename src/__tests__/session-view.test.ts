@@ -58,14 +58,19 @@ describe("buildSessionView", () => {
 
   // `branch` left the view when it left the sidebar — gitBranch feeds nothing
   // here now, which is what "the view carries no branch field" pins down.
-  test("gitBranch no longer surfaces on the view", () => {
+  test("gitBranch surfaces for the branch row", () => {
     const view = buildSessionView(
       makeSession({ gitBranch: "feat/cool" }),
       undefined,
       undefined,
       new Set(),
     );
-    expect("branch" in view).toBe(false);
+    expect(view.branch).toBe("feat/cool");
+  });
+
+  test("branch is null when the session has no git branch", () => {
+    const view = buildSessionView(makeSession({}), undefined, undefined, new Set());
+    expect(view.branch).toBeNull();
   });
 
   test("the view carries the title and no longer carries the branch", () => {
@@ -75,7 +80,7 @@ describe("buildSessionView", () => {
       undefined, undefined, new Set(), null,
     );
     expect(view.title).toBe("Fix stale cache headers");
-    expect("branch" in view).toBe(false);
+    expect(view.branch).toBe("feat/cache");
   });
 
   test("the title is null when the session has none", () => {

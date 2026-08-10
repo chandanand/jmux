@@ -785,8 +785,16 @@ function buildRenderPlan(
  * supplied by the caller because promotion lives on the Sidebar instance, not
  * on the plan item.
  */
-function itemHeight(item: RenderItem, hasStateRow: (sessionIndex: number) => boolean): number {
-  if (item.type === "session") return hasStateRow(item.sessionIndex) ? 3 : 2;
+function itemHeight(
+  item: RenderItem,
+  hasStateRow: (sessionIndex: number) => boolean,
+  hasBranchRow: (sessionIndex: number) => boolean,
+): number {
+  if (item.type === "session") {
+    // Name/title, then the detail row, plus a branch row when a title has
+    // displaced the name from row 1 and a state row when an agent is live.
+    return 2 + (hasBranchRow(item.sessionIndex) ? 1 : 0) + (hasStateRow(item.sessionIndex) ? 1 : 0);
+  }
   // One row per issue, against a session's two or three. Five issues at a
   // session's own height would bury the list this sits inside.
   if (item.type === "session-issue") return 1;
@@ -1421,13 +1429,28 @@ export class Sidebar {
    * True when a session renders its third row (context + agent-state label).
    * Promotion is what creates that row; before it the row would be blank.
    */
+  /**
+   * Whether this session draws a branch row.
+   *
+   * Only when it has a title. Row 1 shows `displaySessionName`, so without a
+   * title it is already showing the session name — which on the wtm flow *is*
+   * the branch and the worktree directory — and a row repeating it underneath
+   * would be the same string twice. With naming unconfigured, which is the
+   * default, the sidebar therefore keeps exactly the two-row session it had
+   * before this feature existed.
+   */
+  private sessionHasBranchRow = (sessionIndex: number): boolean => {
+    const session = this.sessions[sessionIndex];
+    return !!session && (session.title?.trim().length ?? 0) > 0;
+  };
+
   private sessionHasStateRow = (sessionIndex: number): boolean => {
     const session = this.sessions[sessionIndex];
     return session !== undefined && this.agentStateRecords.has(session.id);
   };
 
   private heightOf(item: RenderItem): number {
-    return itemHeight(item, this.sessionHasStateRow);
+    return itemHeight(item, this.sessionHasStateRow, this.sessionHasBranchRow);
   }
 
   private clampScroll(): void {
@@ -1789,11 +1812,17 @@ export class Sidebar {
     const session = this.sessions[sessionIdx];
     if (!session) return;
 
-    const detailRow = nameRow + 1;
-    const row3 = nameRow + 2;
+    // The branch row sits between the title and the detail row, so every row
+    // below it shifts. Derived from one predicate shared with `itemHeight`,
+    // never recomputed here — a layout that disagreed with the height it was
+    // allocated would paint one session's rows over the next one's.
+    const branchRow = this.sessionHasBranchRow(sessionIdx) ? nameRow + 1 : null;
+    const detailRow = (branchRow ?? nameRow) + 1;
+    const row3 = detailRow + 1;
     const isActive = session.id === this.activeSessionId;
     const isHovered = !isActive && this.hoveredRow !== null &&
-      (this.hoveredRow === nameRow || this.hoveredRow === detailRow || this.hoveredRow === row3);
+      (this.hoveredRow === nameRow || this.hoveredRow === branchRow ||
+        this.hoveredRow === detailRow || this.hoveredRow === row3);
 
     // Build the view
     const ctx = this.sessionContexts.get(session.name);
@@ -1813,8 +1842,14 @@ export class Sidebar {
       this.rowToSelection.set(detailRow, { type: "session", id: session.id });
     }
 
+    if (branchRow !== null && branchRow < this.height) {
+      this.rowToSessionIndex.set(branchRow, sessionIdx);
+      this.rowToSelection.set(branchRow, { type: "session", id: session.id });
+    }
+
     // Paint background + active marker bar across name + detail rows
     this.paintRowChrome(grid, nameRow, isActive, isHovered);
+    if (branchRow !== null) this.paintRowChrome(grid, branchRow, isActive, isHovered);
     this.paintRowChrome(grid, detailRow, isActive, isHovered);
 
     // Indicator (col 1)
@@ -1883,6 +1918,29 @@ export class Sidebar {
         badgeAttrs = MODE_COMPACTION_ATTRS;
       }
       writeString(grid, nameRow, badgeCol, glyph, { ...badgeAttrs, ...bgAttrs });
+    }
+
+    // --- Branch row: where the work actually lives ---
+    //
+    // The git branch, falling back to the session name when there is none. On
+    // the wtm flow those are the same string by construction (the one-name
+    // rule), and it is the string row 1 stopped showing when the title took
+    // that row — so this is not a new field, it is the old one given somewhere
+    // to be. It gets a whole row because branch names routinely run past forty
+    // characters, and row 2's badge and right-hand cluster leave nothing like
+    // that much.
+    if (branchRow !== null && branchRow < this.height) {
+      const branchText = view.branch ?? view.sessionName;
+      const branchAttrs: CellAttrs = isActive || isHovered
+        ? { ...ACTIVE_DETAIL_ATTRS, ...bgAttrs }
+        : { ...DIM_ATTRS, ...bgAttrs };
+      writeString(
+        grid,
+        branchRow,
+        nameStart,
+        truncateToCols(branchText, Math.max(0, this.width - 1 - nameStart)),
+        branchAttrs,
+      );
     }
 
     // --- Row 2: issue badge (left) · workflow field · timer · MR · glyph ---

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { displaySessionName, MANUAL_SIGNATURE } from "../session-title/display";
+import { displaySessionName, shouldGenerateTitle, MANUAL_SIGNATURE } from "../session-title/display";
 import { titleSignature, buildTitlePrompt, parseTitle, promptTextFromHook } from "../session-title/prompt";
 import type { TitleInput } from "../session-title/prompt";
 
@@ -251,5 +251,26 @@ describe("parseTitle", () => {
     expect(parseTitle("\u201cFix cache\u201d", 48)).toBe("Fix cache");
     // U+2018 LEFT SINGLE QUOTATION MARK, U+2019 RIGHT SINGLE QUOTATION MARK
     expect(parseTitle("\u2018Fix cache\u2019", 48)).toBe("Fix cache");
+  });
+});
+
+describe("shouldGenerateTitle", () => {
+  test("names a session that has no title yet", () => {
+    expect(shouldGenerateTitle({})).toBe(true);
+    expect(shouldGenerateTitle({ title: "   " })).toBe(true);
+  });
+
+  test("leaves a session that already has one alone", () => {
+    expect(shouldGenerateTitle({ title: "Fix cache headers" })).toBe(false);
+  });
+
+  test("never overwrites a hand-typed name", () => {
+    expect(shouldGenerateTitle({ titleSignature: MANUAL_SIGNATURE })).toBe(false);
+  });
+
+  // The churn this exists to stop: a session titled from its commits at boot,
+  // then re-titled seconds later when the tracker poll resolves its issue.
+  test("does not re-title when a stronger input arrives later", () => {
+    expect(shouldGenerateTitle({ title: "Sidebar toggle work", titleSignature: "g-abc" })).toBe(false);
   });
 });

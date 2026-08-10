@@ -89,7 +89,7 @@ import {
   PROMPT_OPTION,
   TITLE_CAPTURE_OPTION,
   MANUAL_SIGNATURE,
-  displaySessionName,
+  displaySessionName, shouldGenerateTitle,
 } from "./session-title/display";
 import {
   titleSignature,
@@ -3699,7 +3699,7 @@ async function requestSessionTitles(sessions: readonly SessionInfo[]): Promise<v
   const gen = titleGenerator;
   if (!gen) return;
   for (const session of sessions) {
-    if (session.titleSignature === MANUAL_SIGNATURE) continue;
+    if (!shouldGenerateTitle(session)) continue;
     try {
       const input = await resolveTitleInput(session);
       if (!input) continue;

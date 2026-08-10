@@ -2988,10 +2988,15 @@ describe("session titles", () => {
     expect(rowText(sidebar.getGrid(), 4, 40)).toContain("tra-123");
   });
 
-  test("the branch no longer appears on row 2", () => {
+  // The branch has its own row under the title now (see "the branch row"), so
+  // what this pins is that it stays off the detail row, where it used to
+  // compete with the stage word, timer and MR for a 26-column budget.
+  test("the branch does not share the detail row", () => {
     const sidebar = new Sidebar(40, 30);
     sidebar.updateSessions(titled);
-    expect(rowText(sidebar.getGrid(), 5, 40)).not.toContain("feat/cache");
+    const grid = sidebar.getGrid();
+    expect(rowText(grid, 5, 40)).toContain("feat/cache");
+    expect(rowText(grid, 6, 40)).not.toContain("feat/cache");
   });
 
   test("row 2 leads with the issue badge", () => {
@@ -3004,7 +3009,7 @@ describe("session titles", () => {
       ],
       mrs: [],
     } as unknown as SessionContext]]));
-    const row2 = rowText(sidebar.getGrid(), 5, 40);
+    const row2 = rowText(sidebar.getGrid(), 6, 40);
     expect(row2.trimStart().startsWith("▸ TRA-123 +1")).toBe(true);
     expect(rowText(sidebar.getGrid(), 4, 40)).not.toContain("TRA-123");
   });
@@ -3016,7 +3021,7 @@ describe("session titles", () => {
       issues: [{ id: "1", identifier: "TRA-123", title: "Cache", status: "In Review", stateType: "started" }],
       mrs: [],
     } as unknown as SessionContext]]));
-    expect(rowText(sidebar.getGrid(), 5, 16)).toContain("TRA-123");
+    expect(rowText(sidebar.getGrid(), 6, 16)).toContain("TRA-123");
   });
 
   // The issue badge is protected against the right-hand cluster — it claims
@@ -3035,7 +3040,7 @@ describe("session titles", () => {
       ],
       mrs: [{ id: "acme/repo#4321", createdAt: Date.now() }],
     } as unknown as SessionContext]]));
-    const row2 = rowText(sidebar.getGrid(), 5, 18);
+    const row2 = rowText(sidebar.getGrid(), 6, 18);
     expect(row2).toContain("TRA-123");
     expect(row2).not.toContain("#4321");
   });
@@ -3095,5 +3100,66 @@ describe("session titles", () => {
     ]);
     sidebar.setSortMode("name");
     expect(sidebar.getDisplayOrderIds()).toEqual(["$2", "$1"]);
+  });
+});
+
+// The title displaced the session name from row 1, and on the wtm flow that
+// name *is* the branch and the worktree directory — so the one string that
+// tells you where the work lives went invisible. It comes back on its own row
+// rather than sharing row 2: branches here run past 40 characters, and row 2's
+// badge, stage word, timer and MR already claim most of a 50-column sidebar.
+//
+// The row exists only when a title does. With naming off, row 1 is still the
+// name, and a branch row under it would repeat the same string — so an
+// unconfigured sidebar keeps exactly the two-row session it has today.
+describe("the branch row", () => {
+  const withTitle: SessionInfo = {
+    id: "$0", name: "tra-1787-notify", attached: true, activity: 0, windowCount: 1,
+    gitBranch: "tra-1787-notification-email-links", title: "Notification email tenant links",
+  };
+
+  test("sits directly under the title, above the issue badge", () => {
+    const sidebar = new Sidebar(50, 30);
+    sidebar.updateSessions([withTitle]);
+    const grid = sidebar.getGrid();
+    expect(rowText(grid, 4, 50)).toContain("Notification email tenant links");
+    expect(rowText(grid, 5, 50)).toContain("tra-1787-notification-email-links");
+  });
+
+  test("falls back to the session name when there is no git branch", () => {
+    const sidebar = new Sidebar(50, 30);
+    sidebar.updateSessions([{ ...withTitle, gitBranch: undefined }]);
+    expect(rowText(sidebar.getGrid(), 5, 50)).toContain("tra-1787-notify");
+  });
+
+  test("is absent when there is no title, so an unconfigured sidebar is unchanged", () => {
+    const sidebar = new Sidebar(50, 30);
+    sidebar.updateSessions([{ ...withTitle, title: undefined }]);
+    const grid = sidebar.getGrid();
+    // Row 1 is the real name again, and row 2 is the detail row, not a branch.
+    expect(rowText(grid, 4, 50)).toContain("tra-1787-notify");
+    expect(rowText(grid, 5, 50)).not.toContain("tra-1787-notification-email-links");
+  });
+
+  test("a session with a title pushes the next session down a row", () => {
+    const second: SessionInfo = {
+      id: "$1", name: "zzz-other", attached: false, activity: 0, windowCount: 1,
+    };
+    const untitled = new Sidebar(50, 30);
+    untitled.updateSessions([{ ...withTitle, title: undefined }, second]);
+    const titled = new Sidebar(50, 30);
+    titled.updateSessions([withTitle, second]);
+
+    // Two rows for the first session without a branch row, three with one
+    // (plus the spacer the sidebar already puts between sessions).
+    expect(rowText(untitled.getGrid(), 7, 50)).toContain("zzz-other");
+    expect(rowText(titled.getGrid(), 8, 50)).toContain("zzz-other");
+  });
+
+  test("clicking the branch row selects its session", () => {
+    const sidebar = new Sidebar(50, 30);
+    sidebar.updateSessions([withTitle]);
+    sidebar.getGrid();
+    expect(sidebar.getSessionByRow(5)?.name).toBe("tra-1787-notify");
   });
 });

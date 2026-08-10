@@ -37,6 +37,16 @@ export interface SessionView {
   title: string | null;
 
   /**
+   * The branch row: the session's git branch, or null when it has none.
+   *
+   * Reinstated after the title took row 1, and removed in the same change that
+   * put it there — the branch left the sidebar because row 1's session name
+   * already *was* the branch on the wtm flow, and it comes back because row 1
+   * stopped saying that. Not a new field; the old one given somewhere to be.
+   */
+  branch: string | null;
+
+  /**
    * Row 2, left-aligned: the driving issue, suffixed with `+N` when the
    * session carries more. One preformatted string rather than a pair of
    * fields, so the sidebar's right-alignment math stays a single measurement.
@@ -247,6 +257,7 @@ export function buildSessionView(
     hasActivity: activitySet.has(session.id),
     indicatorKind,
     modeBadge,
+    branch: session.gitBranch ?? null,
     title: session.title ?? null,
     linearId,
     timerText,
