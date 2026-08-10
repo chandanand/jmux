@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { displaySessionName, MANUAL_SIGNATURE } from "../session-title/display";
-import { titleSignature, buildTitlePrompt, parseTitle } from "../session-title/prompt";
+import { titleSignature, buildTitlePrompt, parseTitle, promptTextFromHook } from "../session-title/prompt";
 import type { TitleInput } from "../session-title/prompt";
 
 describe("displaySessionName", () => {
@@ -89,6 +89,43 @@ describe("buildTitlePrompt", () => {
     });
     expect(p).toContain("feat/x");
     expect(p).toContain("fix the parser");
+  });
+});
+
+describe("promptTextFromHook", () => {
+  const doc = (fields: Record<string, unknown>) => JSON.stringify(fields);
+
+  test("takes the prompt field out of the hook document", () => {
+    expect(
+      promptTextFromHook(
+        doc({
+          session_id: "abc",
+          transcript_path: "/home/someone/.claude/projects/x/abc.jsonl",
+          cwd: "/home/someone/code/jmux",
+          hook_event_name: "UserPromptSubmit",
+          prompt: "add a cache header",
+        }),
+      ),
+    ).toBe("add a cache header");
+  });
+
+  test("survives a prompt containing quotes and newlines", () => {
+    expect(promptTextFromHook(doc({ prompt: 'make it say "done"\nthen stop' })))
+      .toBe('make it say "done"\nthen stop');
+  });
+
+  test("returns null for a document truncated mid-write", () => {
+    const full = doc({ prompt: "x".repeat(500) });
+    expect(promptTextFromHook(full.slice(0, 200))).toBeNull();
+  });
+
+  test("returns null when there is no prompt to take", () => {
+    expect(promptTextFromHook(doc({ hook_event_name: "UserPromptSubmit" }))).toBeNull();
+    expect(promptTextFromHook(doc({ prompt: "   " }))).toBeNull();
+    expect(promptTextFromHook(doc({ prompt: 42 }))).toBeNull();
+    expect(promptTextFromHook("not json at all")).toBeNull();
+    expect(promptTextFromHook("")).toBeNull();
+    expect(promptTextFromHook("null")).toBeNull();
   });
 });
 

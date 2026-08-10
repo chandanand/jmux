@@ -53,6 +53,33 @@ export function titleSignature(input: TitleInput): string {
   }
 }
 
+/**
+ * The human's words, out of the raw `UserPromptSubmit` document the hook stored.
+ *
+ * The hook writes its stdin verbatim — extracting a field in a shell one-liner
+ * needs `jq`, which is not guaranteed to exist, and a hand-rolled `sed` is wrong
+ * on the first prompt containing a quote — so the parse lands here.
+ *
+ * Null rather than the document when there is no prompt in it. The document also
+ * carries a transcript path and a working directory, and a session named from
+ * those would be named after a file. The capture is truncated at the write, so a
+ * very long first prompt arrives as unparseable JSON and takes the same null: an
+ * honest fall through to the next tier beats guessing where the string was cut.
+ */
+export function promptTextFromHook(raw: string): string | null {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof doc !== "object" || doc === null) return null;
+  const prompt = (doc as { prompt?: unknown }).prompt;
+  if (typeof prompt !== "string") return null;
+  const trimmed = prompt.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 /** The prompt sent on the naming command's stdin. */
 export function buildTitlePrompt(input: TitleInput): string {
   const body = (() => {

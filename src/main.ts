@@ -84,6 +84,20 @@ import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFil
 import { transformIssues, transformMrs, buildViewNodes, itemsInGroup, checkedItems, renderView, createViewState, moveSelection, filterItems, rebuildPanelViewColors, computeViewLayout, splitRatioForSepRow, previewTabAtCol, previewTabRow, stepPreviewIndex, resolveActiveTab, DEFAULT_PANEL_SPLIT_RATIO, type ViewState, type ViewNode, type IssueSessionInfo } from "./panel-view-renderer";
 import { formatIssueBadge, orderedSessionIssues } from "./session-view";
 import {
+  SESSION_TITLE_OPTION,
+  TITLE_SIGNATURE_OPTION,
+  PROMPT_OPTION,
+  TITLE_CAPTURE_OPTION,
+  MANUAL_SIGNATURE,
+} from "./session-title/display";
+import {
+  titleSignature,
+  buildTitlePrompt,
+  promptTextFromHook,
+  type TitleInput,
+} from "./session-title/prompt";
+import { TitleGenerator, spawnTitleRunner } from "./session-title/generator";
+import {
   linkKey,
   drivingIssue,
   isIssueFinished,
@@ -168,7 +182,7 @@ import { AgentStateTracker, coerceStaleAgentState } from "./agent-state";
 import { logError } from "./log";
 import { AGENT_INTEGRATIONS, installAllAgents, screenTierMayWrite } from "./agent-hooks/registry";
 import { BUILTIN_SIGNATURES, classifyPaneScreen, compileSignatures, hasSignatureFor } from "./agent-screen";
-import { resolve, dirname } from "path";
+import { resolve, dirname, basename } from "path";
 import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync, rmSync } from "fs";
 import { homedir } from "os";
 import pkg from "../package.json" with { type: "json" };
@@ -499,6 +513,51 @@ let pinnedSessions = new Set<string>(configStore.config.pinnedSessions ?? []);
 let infoPanelWidth: number | null = configStore.config.infoPanelWidth ?? null;
 let diffPanelSplitRatio = configStore.config.diffPanel?.splitRatio ?? 0.4;
 let hunkCommand = configStore.config.diffPanel?.hunkCommand ?? "hunk";
+
+/**
+ * The session-title generator, or null when titling is off.
+ *
+ * `sessionTitle.command` unset is the entire off switch — no second boolean —
+ * so a null generator is what every caller checks, and the whole feature
+ * disappears behind one `?.`.
+ *
+ * Everything this touches *at call time* is declared above it (`configStore`).
+ * `currentSessions` and `control` are only reached from inside the callback,
+ * which cannot run before the first title comes back — see boot-smoke.test.ts
+ * for why that distinction is load-bearing at module scope in this file.
+ */
+function makeTitleGenerator(): TitleGenerator | null {
+  const cfg = configStore.config.sessionTitle;
+  if (!cfg?.command || cfg.command.length === 0) return null;
+  return new TitleGenerator(
+    {
+      command: cfg.command,
+      timeoutMs: cfg.timeoutMs ?? 20_000,
+      maxChars: cfg.maxChars ?? 48,
+      maxConcurrent: 2,
+    },
+    spawnTitleRunner,
+    (sessionName, title, signature) => {
+      const session = currentSessions.find((s) => s.name === sessionName);
+      if (!session) return;
+      control
+        .sendCommand(
+          `set-option -t ${tq(session.id)} ${SESSION_TITLE_OPTION} ${tq(title)} ; ` +
+            `set-option -t ${tq(session.id)} ${TITLE_SIGNATURE_OPTION} ${tq(signature)}`,
+        )
+        .catch(() => {});
+    },
+  );
+}
+
+let titleGenerator: TitleGenerator | null = makeTitleGenerator();
+
+/** The capture gate the prompt hook reads, as this config wants it set. */
+function titleCaptureCommand(): string {
+  return titleGenerator
+    ? `set-option -g ${TITLE_CAPTURE_OPTION} 1`
+    : `set-option -gu ${TITLE_CAPTURE_OPTION}`;
+}
 
 // jmuxDir / configFile are resolved far above, before the subcommand branches.
 
@@ -1276,6 +1335,18 @@ function applySidebarSort(mode: SortMode): void {
   configStore.set("sidebarSortBy", mode);
 }
 const agentStateTracker = new AgentStateTracker();
+
+/**
+ * The first prompt seen for each session, from `@jmux-prompt`, keyed by session id.
+ *
+ * First non-empty wins rather than an `outranks()` rollup: that helper ranks by
+ * *urgency*, which a prompt does not have, and the hook writes each pane's value
+ * exactly once, so the first non-empty value is deterministic. Filled from the
+ * same `list-panes` sweep that feeds the tracker, since it is the only place
+ * jmux already reads every pane's options.
+ */
+const firstPromptBySession = new Map<string, string>();
+
 agentStateTracker.onChange((sessionId) => {
   const record = agentStateTracker.getRecord(sessionId);
   sidebar.setAgentStateRecord(sessionId, record);
@@ -3260,10 +3331,11 @@ async function zoomDiffPanel(): Promise<void> {
 // --- Session data helpers ---
 
 /**
- * US-separated rather than colon-separated because the last field is a user
- * option: `jmux ctl issue link <session> <issue>` puts caller-supplied
- * identifiers in `@jmux-linear-issue`, and a colon in one would shift every
- * field after it.
+ * US-separated rather than colon-separated because the trailing fields are user
+ * options and none of their values are ours: `jmux ctl issue link <session>
+ * <issue>` puts caller-supplied identifiers in `@jmux-linear-issue`, and
+ * `@jmux-session-title` is a sentence a model wrote. A colon in either would
+ * shift every field after it.
  */
 const SESSION_LIST_FORMAT = [
   "#{session_id}",
@@ -3272,6 +3344,8 @@ const SESSION_LIST_FORMAT = [
   "#{session_attached}",
   "#{session_windows}",
   `#{${ISSUE_LINK_OPTION}}`,
+  `#{${SESSION_TITLE_OPTION}}`,
+  `#{${TITLE_SIGNATURE_OPTION}}`,
 ].join(US);
 
 async function fetchSessions(): Promise<void> {
@@ -3282,7 +3356,8 @@ async function fetchSessions(): Promise<void> {
     const sessions: SessionInfo[] = lines
       .filter((l) => l.length > 0)
       .map((line) => {
-        const [id, name, activity, attached, windows, issueLink] = splitFields(line);
+        const [id, name, activity, attached, windows, issueLink, title, titleSig] =
+          splitFields(line);
         const cached = sessionDetailsCache.get(id);
         const issueLinks = parseIssueLinkOption(issueLink);
         return {
@@ -3295,8 +3370,11 @@ async function fetchSessions(): Promise<void> {
           gitBranch: cached?.gitBranch,
           project: cached?.project,
           ...(issueLinks.length > 0 ? { issueLinks } : {}),
+          ...(title ? { title } : {}),
+          ...(titleSig ? { titleSignature: titleSig } : {}),
         };
       });
+    const previousSessions = currentSessions;
     currentSessions = sessions;
 
     // Mark sessions with activity since last viewed
@@ -3329,13 +3407,97 @@ async function fetchSessions(): Promise<void> {
     if (otelReceiver.getActiveSessionIds().length === 0) {
       stopCacheTimerTick();
     }
+    // A name that comes back is a *new* session, so the generator has to be told
+    // the old one died or it would refuse to name the new one — see
+    // TitleGenerator.forget. Diffed against the previous list rather than the
+    // poll coordinator's contexts, which the loop above has already pruned and
+    // which never hold a session whose directory is not yet known.
+    for (const prev of previousSessions) {
+      if (!liveSessionNames.has(prev.name)) titleGenerator?.forget(prev.name);
+    }
 
     renderFrame();
 
     // Fire-and-forget git branch lookup (async, updates sidebar when done)
     lookupSessionDetails(sessions);
+    void requestSessionTitles(sessions);
   } catch {
     // tmux server may be shutting down
+  }
+}
+
+/**
+ * What this session should be named from, strongest first: its linked issues,
+ * then the first thing the human asked an agent, then its own commits.
+ *
+ * Returns null when there is nothing worth naming from. The git tier
+ * deliberately requires commits the branch does not share with its base — a
+ * fresh worktree has none of its own, and naming a session after the base
+ * branch's history would describe somebody else's work.
+ */
+async function resolveTitleInput(session: SessionInfo): Promise<TitleInput | null> {
+  const ctx = pollCoordinator.getAllContexts().get(session.name);
+  const issues = ctx?.issues ?? [];
+  if (issues.length > 0) {
+    return {
+      kind: "issues",
+      issues: issues.map((i) => ({
+        identifier: i.identifier,
+        title: i.title,
+        description: i.description,
+      })),
+    };
+  }
+
+  const prompt = promptTextFromHook(firstPromptBySession.get(session.id) ?? "");
+  if (prompt) return { kind: "prompt", text: prompt };
+
+  // The absolute path, never `session.directory` — that one is the display
+  // string with `~` substituted in, and no git process expands a tilde.
+  const dir = sessionDetailsCache.get(session.id)?.path;
+  const branch = session.gitBranch;
+  if (!dir || !branch) return null;
+  const base = await resolveBaseBranch(dir);
+  if (!base || base === branch) return null;
+  const log = Bun.spawnSync(
+    ["git", "-C", dir, "log", "--oneline", "--no-merges", "-n", "5", `${base}..HEAD`],
+    { stdout: "pipe", stderr: "ignore" },
+  );
+  const commits = new TextDecoder()
+    .decode(log.stdout)
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (commits.length === 0) return null;
+  return { kind: "git", repo: session.project ?? basename(dir), branch, commits };
+}
+
+/**
+ * Ask for a title for every session whose input has changed since the one it
+ * already carries.
+ *
+ * `manual` is the human's own name and is never overwritten — the sentinel lives
+ * in a tmux option rather than an in-memory set precisely so a restart cannot
+ * forget it and re-title a session the human just named.
+ *
+ * Nothing here may throw: this runs `void`-ed off `fetchSessions`, whose job is
+ * the session list and which must not lose a refresh because one session's git
+ * tier hit a repo that has gone away underneath it.
+ */
+async function requestSessionTitles(sessions: readonly SessionInfo[]): Promise<void> {
+  const gen = titleGenerator;
+  if (!gen) return;
+  for (const session of sessions) {
+    if (session.titleSignature === MANUAL_SIGNATURE) continue;
+    try {
+      const input = await resolveTitleInput(session);
+      if (!input) continue;
+      const signature = titleSignature(input);
+      if (signature === session.titleSignature) continue;
+      gen.request(session.name, signature, buildTitlePrompt(input));
+    } catch {
+      // One unresolvable session must not stop the rest being named.
+    }
   }
 }
 
@@ -7479,7 +7641,18 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       });
       modal.open();
       openModal(modal, async (name) => {
-        await control.sendCommand(`rename-session -t ${tq(currentSessionId!)} ${tq(name as string)}`);
+        // The title is unset rather than replaced, so the row falls back to the
+        // name the human just typed — the same fallback as every other absence.
+        // The `manual` sentinel lives in a tmux option so a restart cannot
+        // forget it and generate a title over the top of their name.
+        await control.sendCommand(
+          `rename-session -t ${tq(currentSessionId!)} ${tq(name as string)} ; ` +
+            // `-u` is spelled separately, never packed onto `-t`: `-t` takes an
+            // argument, so tmux reads `-tu` as `-t u` and fails with
+            // "ambiguous option".
+            `set-option -t ${tq(currentSessionId!)} -u ${SESSION_TITLE_OPTION} ; ` +
+            `set-option -t ${tq(currentSessionId!)} ${TITLE_SIGNATURE_OPTION} ${tq(MANUAL_SIGNATURE)}`,
+        );
       });
       return;
     }
@@ -8347,6 +8520,16 @@ try {
     diffPanelSplitRatio = updated.diffPanel?.splitRatio ?? 0.4;
     hunkCommand = updated.diffPanel?.hunkCommand ?? "hunk";
 
+    // Hot-apply the titling switch. `sessionTitle.command` unset is the whole
+    // off state, so the generator is simply rebuilt. Dropping the running one's
+    // in-memory signature cache costs nothing: the durable cache is
+    // `@jmux-title-signature` on each session, which this cannot touch, so a
+    // rebuild re-asks only for sessions whose input actually changed. The
+    // capture gate follows, so turning titling off stops the hook storing
+    // prompts without reinstalling anything.
+    titleGenerator = makeTitleGenerator();
+    control.sendCommand(titleCaptureCommand()).catch(() => {});
+
     // A theme edit takes effect on the running panel, since hunk reads its
     // theme only at startup. Same no-op guard as the background handler.
     if (diffPty && resolveHunkTheme() !== spawnedHunkTheme) {
@@ -8545,6 +8728,8 @@ control.onEvent((event: ControlEvent) => {
         void fetchAgentState();
       } else if (event.name === "windows") {
         fetchWindows();
+      } else if (event.name === "session-titles") {
+        fetchSessions();
       } else if (event.name === "pinned-panes") {
         refreshPinnedPanes();
       }
@@ -8699,6 +8884,7 @@ const AGENT_STATE_FORMAT = [
   "#{session_id}",
   "#{@jmux-agent-state}",
   "#{@jmux-agent-state-since}",
+  `#{${PROMPT_OPTION}}`,
 ].join(US);
 
 async function fetchAgentState(): Promise<void> {
@@ -8706,15 +8892,26 @@ async function fetchAgentState(): Promise<void> {
     `list-panes -a -f "${INTERNAL_SESSION_FILTER}" -F '${AGENT_STATE_FORMAT}'`,
   );
   const activePaneIds: string[] = [];
+  const liveSessionIds = new Set<string>();
   for (const line of result) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const [paneId, sessionId, rawState, rawSince] = splitFields(trimmed);
+    const [paneId, sessionId, rawState, rawSince, rawPrompt] = splitFields(trimmed);
     if (!paneId || !sessionId) continue;
     activePaneIds.push(paneId);
+    liveSessionIds.add(sessionId);
+    if (rawPrompt && !firstPromptBySession.has(sessionId)) {
+      firstPromptBySession.set(sessionId, rawPrompt);
+    }
     agentStateTracker.apply(paneId, sessionId, rawState || null, rawSince || null);
   }
   agentStateTracker.pruneExcept(activePaneIds);
+  // Kept in step with the pane sweep for the same reason the tracker is: each
+  // entry holds up to 4KB of a hook document, and a session that has gone away
+  // will never be asked about again.
+  for (const sessionId of firstPromptBySession.keys()) {
+    if (!liveSessionIds.has(sessionId)) firstPromptBySession.delete(sessionId);
+  }
 }
 
 /**
@@ -9462,6 +9659,12 @@ async function start(): Promise<void> {
     openSetup();
   }
 
+  // The prompt-capture hook reads this before storing anything. Written from
+  // config so a user who has not configured titling never has their prompts
+  // stored, and so turning titling off stops the capture without reinstalling
+  // hooks.
+  await control.sendCommand(titleCaptureCommand()).catch(() => {});
+
   // Subscribe to per-pane agent-state user options. These only ever act as a
   // *trigger* — the payload is discarded and fetchAgentState() re-queries — so
   // the format just has to change whenever any pane's value does.
@@ -9478,6 +9681,18 @@ async function start(): Promise<void> {
     "agent-state-since",
     1,
     "#{S:#{W:#{P:#{pane_id}=#{@jmux-agent-state-since} }}}",
+  );
+
+  // Subscribe to the session-title option, for the same reason as agent-state:
+  // the payload is a trigger and nothing more. `fetchSessions` otherwise runs
+  // only when a session is added, killed or renamed, and writing a title is
+  // none of those — so without this a generated title would sit in tmux unread
+  // until the user happened to create or destroy a session. Reading it back off
+  // the option keeps one path from a title to the screen.
+  await control.registerSubscription(
+    "session-titles",
+    1,
+    "#{S:#{session_id}=#{@jmux-session-title} }",
   );
 
   // Subscribe to window count + active window + name — fires on add/remove/switch/rename
