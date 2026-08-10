@@ -705,7 +705,7 @@ interface QueuedRequest {
 }
 
 export class TitleGenerator {
-  /** `${sessionName} ${signature}` for every input already tried. */
+  /** `${sessionName}\0${signature}` for every input already tried. */
   private readonly attempted = new Set<string>();
   private readonly inFlight = new Set<string>();
   private queue: QueuedRequest[] = [];
@@ -718,7 +718,7 @@ export class TitleGenerator {
   ) {}
 
   private static key(sessionName: string, signature: string): string {
-    return `${sessionName} ${signature}`;
+    return `${sessionName}\0${signature}`;
   }
 
   /** Ask for a title, unless this exact input has already been tried. */
@@ -740,7 +740,7 @@ export class TitleGenerator {
   forget(sessionName: string): void {
     this.queue = this.queue.filter((q) => q.sessionName !== sessionName);
     for (const key of this.attempted) {
-      if (key.startsWith(`${sessionName} `)) this.attempted.delete(key);
+      if (key.startsWith(`${sessionName}\0`)) this.attempted.delete(key);
     }
   }
 
