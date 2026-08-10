@@ -63,8 +63,10 @@ describe("titleSignature", () => {
 });
 
 describe("buildTitlePrompt", () => {
+  const BUDGET = 32;
+
   test("names every issue in the set", () => {
-    const p = buildTitlePrompt(issues("TRA-1", "TRA-2"));
+    const p = buildTitlePrompt(issues("TRA-1", "TRA-2"), BUDGET);
     expect(p).toContain("TRA-1");
     expect(p).toContain("TRA-2");
   });
@@ -73,12 +75,12 @@ describe("buildTitlePrompt", () => {
     const p = buildTitlePrompt({
       kind: "issues",
       issues: [{ identifier: "TRA-1", title: "t", description: "x".repeat(5000) }],
-    });
+    }, BUDGET);
     expect(p.length).toBeLessThan(2000);
   });
 
   test("asks for one short line and nothing else", () => {
-    const p = buildTitlePrompt({ kind: "prompt", text: "add a cache header" });
+    const p = buildTitlePrompt({ kind: "prompt", text: "add a cache header" }, BUDGET);
     expect(p).toContain("add a cache header");
     expect(p.toLowerCase()).toContain("one line");
   });
@@ -86,9 +88,23 @@ describe("buildTitlePrompt", () => {
   test("git input carries the branch and the commit subjects", () => {
     const p = buildTitlePrompt({
       kind: "git", repo: "jmux", branch: "feat/x", commits: ["fix the parser", "add a test"],
-    });
+    }, BUDGET);
     expect(p).toContain("feat/x");
     expect(p).toContain("fix the parser");
+  });
+
+  // The budget we ask for and the budget we enforce are the same number, so a
+  // model that obeys never produces a title `parseTitle` then has to cut. Two
+  // numbers here would drift, and the visible symptom would be every title
+  // ending in an ellipsis.
+  test("states the character budget it was given", () => {
+    expect(buildTitlePrompt(issues("TRA-1"), 32)).toContain("32 characters");
+    expect(buildTitlePrompt(issues("TRA-1"), 48)).toContain("48 characters");
+  });
+
+  test("says why short matters, so the model has the reason and not just the rule", () => {
+    const p = buildTitlePrompt(issues("TRA-1"), BUDGET).toLowerCase();
+    expect(p).toContain("sidebar");
   });
 });
 

@@ -39,7 +39,15 @@ export type TitleRunner = (
 const TIMEOUT_DEFAULT_MS = 20_000;
 const TIMEOUT_MIN_MS = 1_000;
 const TIMEOUT_MAX_MS = 120_000;
-const MAX_CHARS_DEFAULT = 48;
+/**
+ * The default budget, chosen against the sidebar rather than against what a
+ * model can write. A 26-column sidebar shows about twenty characters of row 1
+ * before it truncates, and a wider one still reads better with a short phrase
+ * than a long one cut off — so this is deliberately near the surface that
+ * constrains it. The palette and `ctl` have more room, and a title that fits
+ * everywhere beats one that fits only where there is space.
+ */
+const MAX_CHARS_DEFAULT = 32;
 /** Below this a title is not a phrase; `maxChars: 0` stores a bare `…`. */
 const MAX_CHARS_MIN = 8;
 const MAX_CHARS_MAX = 200;
@@ -194,6 +202,18 @@ export class TitleGenerator {
   /** Queued plus running, for tests and diagnostics. */
   pending(): number {
     return this.queue.length + this.active;
+  }
+
+  /**
+   * The resolved, clamped character budget, for callers building the prompt.
+   *
+   * Exposed rather than re-read from config at the call site, because the raw
+   * config value is neither defaulted nor clamped: a caller reading it directly
+   * would ask the model for a budget this class then enforces a different one
+   * for, and every title would come back one character too long and truncated.
+   */
+  maxChars(): number {
+    return this.cfg.maxChars;
   }
 
   private pump(): void {

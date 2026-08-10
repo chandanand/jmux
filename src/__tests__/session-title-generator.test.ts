@@ -268,7 +268,7 @@ describe("resolveTitleConfig", () => {
     expect(cfg).toEqual({
       command: ["claude", "-p"],
       timeoutMs: 20_000,
-      maxChars: 48,
+      maxChars: 32,
       maxConcurrent: 2,
     });
     expect(warnings).toEqual([]);
@@ -288,7 +288,7 @@ describe("resolveTitleConfig", () => {
   test("a non-number falls back to the default rather than becoming NaN", () => {
     const { cfg } = collect({ command: ["x"], timeoutMs: "20s", maxChars: null });
     expect(cfg?.timeoutMs).toBe(20_000);
-    expect(cfg?.maxChars).toBe(48);
+    expect(cfg?.maxChars).toBe(32);
   });
 
   test("a fractional value is rounded, so it can never reach parseTitle as one", () => {

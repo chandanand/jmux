@@ -347,7 +347,7 @@ the work:
   "sessionTitle": {
     "command": ["claude", "-p", "--model", "haiku"],
     "timeoutMs": 20000,
-    "maxChars": 48
+    "maxChars": 32
   }
 }
 ```
@@ -397,12 +397,21 @@ more; this is expected, not a bug. Re-run naming on demand from the command
 palette — **"Re-name session with the model"** — which re-resolves the
 current input regardless of what's cached.
 
-`maxChars` caps what gets **stored**, not what the sidebar shows. The sidebar
-truncates row 1 to whatever the (26-column default) sidebar width has room
-for; the command palette and `ctl session list`/`info` show the whole stored
-title. The default is 48, generous enough for those wider surfaces. It is
-clamped to 8–200 and `timeoutMs` to 1000–120000, because there is no useful
-title in four characters and `maxChars: 0` would store a bare `…`.
+`maxChars` is **both** the budget jmux asks the model for and the cap it
+enforces on the answer — one number, stated in the prompt and applied to the
+reply. Two numbers would drift, and the symptom would be every title coming
+back one character too long and truncated.
+
+The default is 32, chosen against the sidebar rather than against what a model
+can write. A 26-column sidebar shows about twenty characters of row 1 before it
+truncates, and even a wide sidebar reads better with a short phrase than a long
+one cut off. Raise it if your sidebar is wide and you want more words — the
+command palette and `ctl session list`/`info` have room for whatever you store.
+It is clamped to 8–200, and `timeoutMs` to 1000–120000, because there is no
+useful title in four characters and `maxChars: 0` would store a bare `…`.
+
+Note this is a budget, not a guarantee: the model is asked for it and told why,
+but a model that overshoots is still truncated at the cap.
 
 `command` is checked at startup and on every config reload: a shell string
 instead of an argv array, an empty array, or a binary that isn't on `PATH`

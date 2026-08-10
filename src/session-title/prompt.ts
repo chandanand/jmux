@@ -24,10 +24,28 @@ export type TitleInput =
 const DESCRIPTION_MAX = 400;
 const PROMPT_TEXT_MAX = 1200;
 
-const INSTRUCTION =
-  "Name this coding session. Reply with one line of at most eight words, " +
-  "in plain sentence case, describing the work — no quotes, no punctuation " +
-  "at the end, no preamble, no explanation.";
+/**
+ * What we ask for, in the units the answer is judged in.
+ *
+ * A character budget rather than a word count, because the thing that decides
+ * whether a title survives is the sidebar's column budget, and "eight words"
+ * can be anything from 30 to 70 columns. The budget passed in is the same
+ * `maxChars` {@link parseTitle} enforces — one number, so a model that obeys
+ * never produces a title we then have to cut. Two numbers would drift, and the
+ * symptom would be every title ending in an ellipsis.
+ *
+ * The reason is stated, not just the rule. A model told only "at most 32
+ * characters" pads to the limit; one told the name sits in a narrow sidebar
+ * writes the short form first.
+ */
+function instruction(maxChars: number): string {
+  return (
+    `Name this coding session. Reply with one line of at most ${maxChars} characters. ` +
+    "Shorter is better — the name is shown in a narrow terminal sidebar, and " +
+    "anything longer is cut off. Plain sentence case, describing the work. " +
+    "No quotes, no punctuation at the end, no preamble, no explanation."
+  );
+}
 
 /**
  * The cache key for "have we already asked about this?".
@@ -80,8 +98,13 @@ export function promptTextFromHook(raw: string): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-/** The prompt sent on the naming command's stdin. */
-export function buildTitlePrompt(input: TitleInput): string {
+/**
+ * The prompt sent on the naming command's stdin.
+ *
+ * `maxChars` is the caller's resolved-and-clamped budget, not a raw config
+ * read, so what we ask for is exactly what {@link parseTitle} will enforce.
+ */
+export function buildTitlePrompt(input: TitleInput, maxChars: number): string {
   const body = (() => {
     switch (input.kind) {
       case "issues":
@@ -104,7 +127,7 @@ export function buildTitlePrompt(input: TitleInput): string {
         ].join("\n");
     }
   })();
-  return `${INSTRUCTION}\n\n${body}\n`;
+  return `${instruction(maxChars)}\n\n${body}\n`;
 }
 
 /**

@@ -68,7 +68,7 @@ rather than in `repoDefaults`:
 "sessionTitle": {
   "command": ["claude", "-p", "--model", "haiku"],
   "timeoutMs": 20000,
-  "maxChars": 48
+  "maxChars": 32
 }
 ```
 
@@ -157,11 +157,21 @@ least urgent thing in that sequence.
 First line only. Strip surrounding quotes, backticks and a trailing period. Cap
 at `maxChars`.
 
-`maxChars` is a **storage** cap, not a display one. A 26-column sidebar shows
-around twenty characters of row 1 and truncates the rest with `…`; the palette
-and `ctl` have room for the whole thing. Capping at the sidebar's width would
-throw away the words the wider surfaces exist to show, so the default is 48 and
-each surface truncates to what it has.
+**`maxChars` is one number doing two jobs**: the budget stated in the prompt and
+the cap applied to the reply. This replaced a design where the prompt asked for
+"at most eight words" while the cap counted characters — two limits in different
+units, which is a drift waiting to happen, and eight words is anywhere from 30
+to 70 columns.
+
+The default is 32, set against the sidebar rather than against what a model can
+write. The earlier reasoning here was that the palette and `ctl` have room for
+more, so the cap should be generous and each surface should truncate to what it
+has. That was wrong about which cost matters: a title cut off at the surface
+you actually read it on says less than a shorter one that fits, and the wider
+surfaces lose nothing by showing a short phrase. Asking for the budget also
+means the model chooses what to drop, which it does better than `slice()`.
+
+A budget is not a guarantee — a model that overshoots is still cut at the cap.
 
 Anything empty after that is rejected and the session keeps its real name — the same fallback as never having called at all, which is what keeps
 this to one code path.

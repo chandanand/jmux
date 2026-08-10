@@ -3705,7 +3705,7 @@ async function requestSessionTitles(sessions: readonly SessionInfo[]): Promise<v
       if (!input) continue;
       const signature = titleSignature(input);
       if (signature === session.titleSignature) continue;
-      gen.request(session.name, signature, buildTitlePrompt(input));
+      gen.request(session.name, signature, buildTitlePrompt(input, gen.maxChars()));
     } catch {
       // One unresolvable session must not stop the rest being named.
     }
@@ -3802,7 +3802,12 @@ async function retitleCurrentSession(): Promise<void> {
   // `explicit` is what routes a failure back to `onFailure` above; automatic
   // runs stay silent, or one unreachable command would report itself on every
   // poll for the life of the process.
-  titleGenerator.request(session.name, titleSignature(input), buildTitlePrompt(input), true);
+  titleGenerator.request(
+    session.name,
+    titleSignature(input),
+    buildTitlePrompt(input, titleGenerator.maxChars()),
+    true,
+  );
   showToast(`Asking the model to name ${displaySessionName(session)}…`);
 }
 
