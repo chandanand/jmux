@@ -7208,6 +7208,20 @@ function attachIssueTo(
  * going to do it, and a picker that teleported you would make "which session is
  * this?" an expensive question to ask.
  */
+/**
+ * How a session is named in a `ListModal` picker.
+ *
+ * Both strings, for the same reason the command palette carries both: a
+ * `ListModal` fuzzy-matches the label and nothing else, so a human who has
+ * typed `tra-123` for two days must not have to learn a new string to reach
+ * the same session. Listing only the raw name is the slug-mapping this feature
+ * exists to remove; listing only the title takes the old address away.
+ */
+function sessionPickerLabel(session: SessionInfo): string {
+  const shown = displaySessionName(session);
+  return shown === session.name ? session.name : `${shown} (${session.name})`;
+}
+
 function attachIssueToSession(issueId: string): void {
   const issue = pollCoordinator.getGlobalIssues().find((i) => i.id === issueId);
   if (!issue) return;
@@ -7221,7 +7235,7 @@ function attachIssueToSession(issueId: string): void {
   );
   const items = ordered.map((s) => ({
     id: s.name,
-    label: s.name,
+    label: sessionPickerLabel(s),
     annotation: formatIssueBadge(pollCoordinator.getContext(s.name)?.issues ?? []) ?? "",
   }));
   if (items.length === 0) return;
@@ -7947,9 +7961,13 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       return;
     case "move-window": {
       const currentWindowName = currentWindows.find(w => w.active)?.name ?? "";
+      // The *target* now comes from the session id, not the label: taking a
+      // tmux target off a label was only ever safe while the label happened to
+      // be the raw session name, which it no longer is.
+      const byId = new Map(currentSessions.map((s) => [s.id, s]));
       const sessions = currentSessions
         .filter(s => s.id !== currentSessionId)
-        .map(s => ({ id: s.id, label: s.name }));
+        .map(s => ({ id: s.id, label: sessionPickerLabel(s) }));
       if (sessions.length === 0) return;
       const modal = new ListModal({
         header: "Move Window",
@@ -7959,7 +7977,9 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       modal.open();
       openModal(modal, async (value) => {
         const selected = value as ListItem;
-        await control.sendCommand(`move-window -t ${tq(selected.label + ":")}`);
+        const target = byId.get(selected.id);
+        if (!target) return;
+        await control.sendCommand(`move-window -t ${tq(target.name + ":")}`);
         fetchWindows();
       });
       return;
