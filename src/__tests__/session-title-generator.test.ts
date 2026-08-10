@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { TitleGenerator, resolveTitleConfig } from "../session-title/generator";
+import { TitleGenerator, resolveTitleConfig, titleRunnerEnv } from "../session-title/generator";
 import type { TitleRunner } from "../session-title/generator";
 
 const CFG = { command: ["fake"], timeoutMs: 100, maxChars: 48, maxConcurrent: 2 };
@@ -267,7 +267,7 @@ describe("resolveTitleConfig", () => {
     const { cfg, warnings } = collect({ command: ["claude", "-p"] });
     expect(cfg).toEqual({
       command: ["claude", "-p"],
-      timeoutMs: 20_000,
+      timeoutMs: 60_000,
       maxChars: 32,
       maxConcurrent: 2,
     });
@@ -287,11 +287,42 @@ describe("resolveTitleConfig", () => {
 
   test("a non-number falls back to the default rather than becoming NaN", () => {
     const { cfg } = collect({ command: ["x"], timeoutMs: "20s", maxChars: null });
-    expect(cfg?.timeoutMs).toBe(20_000);
+    expect(cfg?.timeoutMs).toBe(60_000);
     expect(cfg?.maxChars).toBe(32);
   });
 
   test("a fractional value is rounded, so it can never reach parseTitle as one", () => {
     expect(collect({ command: ["x"], maxChars: 32.7 }).cfg?.maxChars).toBe(33);
+  });
+});
+
+// The naming command is an agent CLI, and jmux installs state-emitting hooks
+// into every agent CLI on the machine. A spawned `claude -p` that inherits
+// TMUX_PANE fires UserPromptSubmit -> running, PreToolUse -> running,
+// Stop -> complete, SessionEnd -> clear against the human's own pane: the
+// sidebar flaps through the whole cycle for every title generated, the
+// agent-state subscription fires on each write, and `fetchAgentState` calls
+// `requestSessionTitles` again. It also lets the naming prompt land in
+// `@jmux-prompt` as that pane's "first prompt".
+describe("titleRunnerEnv", () => {
+  test("removes the two variables the hooks address a pane with", () => {
+    const env = titleRunnerEnv({ PATH: "/usr/bin", TMUX: "/tmp/sock,123,0", TMUX_PANE: "%42" });
+    expect(env.TMUX).toBeUndefined();
+    expect(env.TMUX_PANE).toBeUndefined();
+  });
+
+  test("keeps everything else, because the command needs the user's environment", () => {
+    const env = titleRunnerEnv({
+      PATH: "/usr/bin", HOME: "/home/x", ANTHROPIC_API_KEY: "sk-x", TMUX_PANE: "%1",
+    });
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.HOME).toBe("/home/x");
+    expect(env.ANTHROPIC_API_KEY).toBe("sk-x");
+  });
+
+  test("does not mutate the environment it was handed", () => {
+    const parent = { TMUX_PANE: "%1", PATH: "/usr/bin" };
+    titleRunnerEnv(parent);
+    expect(parent.TMUX_PANE).toBe("%1");
   });
 });

@@ -67,7 +67,7 @@ rather than in `repoDefaults`:
 ```jsonc
 "sessionTitle": {
   "command": ["claude", "-p", "--model", "haiku"],
-  "timeoutMs": 20000,
+  "timeoutMs": 60000,
   "maxChars": 32
 }
 ```

@@ -36,7 +36,16 @@ export type TitleRunner = (
 ) => Promise<string>;
 
 /** Defaults and the bounds a hand-edited value is pulled back into. */
-const TIMEOUT_DEFAULT_MS = 20_000;
+/**
+ * Generous, because a timeout here is not a retry — it caches as a failure
+ * under the input's signature and that input is never asked about again. An
+ * agent CLI is a whole harness booting before it answers: `claude -p` measured
+ * 7-22s on a warm machine for a five-word reply, so the previous 20s tripped on
+ * ordinary variance and permanently gave up on a session that would have been
+ * named fine a second later. The cost of waiting is nothing — the call is
+ * async, off the render path, and capped at two concurrent.
+ */
+const TIMEOUT_DEFAULT_MS = 60_000;
 const TIMEOUT_MIN_MS = 1_000;
 const TIMEOUT_MAX_MS = 120_000;
 /**
@@ -277,11 +286,42 @@ export class TitleGenerator {
  * A non-zero exit is a failure even with output on stdout: a command that
  * printed a usage message and exited 1 has not named anything.
  */
+/**
+ * The environment the naming command runs in.
+ *
+ * `TMUX` and `TMUX_PANE` are removed, and that is not tidiness — it is the
+ * whole reason this function exists. The naming command is an agent CLI, and
+ * `jmux --install-agent-hooks` installs jmux's own state emitters into every
+ * agent CLI on the machine. A `claude -p` that inherits `TMUX_PANE` therefore
+ * fires them against the pane jmux itself was launched from: `UserPromptSubmit`
+ * writes `running`, `PreToolUse` writes `running`, `Stop` writes `complete`,
+ * `SessionEnd` clears — so the sidebar flaps through the entire agent lifecycle
+ * once per title generated, on a session that is doing nothing of the kind.
+ *
+ * It compounds twice over. Each of those writes fires the agent-state
+ * subscription, which runs `fetchAgentState`, which calls
+ * `requestSessionTitles` — so naming feeds itself work. And because the capture
+ * gate is on whenever titling is configured, the naming prompt itself lands in
+ * `@jmux-prompt` as that pane's "first prompt", which is then what the pane
+ * gets named after.
+ *
+ * Stripping the two variables is enough: they are the only way the hook
+ * addresses a pane, and with them gone `tmux set-option -p -t ""` cannot
+ * resolve a target and the `|| true` on every hook swallows it.
+ */
+export function titleRunnerEnv(parent: Record<string, string | undefined>): Record<string, string | undefined> {
+  const env = { ...parent };
+  delete env.TMUX;
+  delete env.TMUX_PANE;
+  return env;
+}
+
 export const spawnTitleRunner: TitleRunner = async (argv, stdin, timeoutMs) => {
   const proc = Bun.spawn([...argv], {
     stdin: new TextEncoder().encode(stdin),
     stdout: "pipe",
     stderr: "ignore",
+    env: titleRunnerEnv(process.env),
   });
   const timer = setTimeout(() => proc.kill(), timeoutMs);
   try {

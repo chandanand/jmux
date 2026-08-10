@@ -346,7 +346,7 @@ the work:
 {
   "sessionTitle": {
     "command": ["claude", "-p", "--model", "haiku"],
-    "timeoutMs": 20000,
+    "timeoutMs": 60000,
     "maxChars": 32
   }
 }
@@ -412,6 +412,25 @@ useful title in four characters and `maxChars: 0` would store a bare `…`.
 
 Note this is a budget, not a guarantee: the model is asked for it and told why,
 but a model that overshoots is still truncated at the cap.
+
+**The naming command runs without `TMUX` or `TMUX_PANE`.** It is normally an
+agent CLI, and `jmux --install-agent-hooks` installs jmux's state emitters into
+every agent CLI on the machine — so a `claude -p` that inherited `TMUX_PANE`
+would fire them against the pane jmux was launched from and flap that session
+through RUNNING → COMPLETE once per title. Each write also wakes the
+agent-state subscription, which asks for more titles, and the naming prompt
+itself would land in `@jmux-prompt` as that pane's first prompt. Stripping the
+two variables is enough: they are the only way the hook addresses a pane.
+
+**Expect the call to take five to twenty seconds.** That is the agent CLI
+booting, not jmux — `claude -p` measured 7–22s on a warm machine for a
+five-word reply, and `--strict-mcp-config` and `--max-turns 1` made no
+difference. It is off the render path and capped at two concurrent, so it costs
+you nothing but the wait for the row to change. `timeoutMs` defaults to 60000
+for that reason: a timeout caches as a failure under that input's signature and
+the input is never asked about again, so a tight bound permanently gives up on
+sessions that would have been named fine. If you want titles in under a second,
+point `command` at something that is not a full agent harness.
 
 `command` is checked at startup and on every config reload: a shell string
 instead of an argv array, an empty array, or a binary that isn't on `PATH`
