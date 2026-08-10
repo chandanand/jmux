@@ -106,6 +106,32 @@ describe("buildTitlePrompt", () => {
     const p = buildTitlePrompt(issues("TRA-1"), BUDGET).toLowerCase();
     expect(p).toContain("sidebar");
   });
+
+  // Measured, not guessed. A character budget alone overshot on 4 of 6 samples
+  // (37/39/33/35 against 32) because a model counts words far better than it
+  // counts characters, so the budget is also stated in words — scaled from the
+  // same number, or the two rules fight and the model satisfies the wrong one.
+  test("states a word count scaled to the character budget", () => {
+    expect(buildTitlePrompt(issues("TRA-1"), 32)).toContain("3 or 4 words");
+    expect(buildTitlePrompt(issues("TRA-1"), 60)).toContain("6 or 7 words");
+  });
+
+  // Asking the model to reason first improves the answer and, left unqualified,
+  // makes it print the reasoning: one sample in six came back as a 274-char
+  // think-aloud. `parseTitle` takes the *first* non-empty line, so that lands a
+  // paragraph of working in the sidebar rather than a name.
+  test("asks for the reasoning to stay unprinted", () => {
+    const p = buildTitlePrompt(issues("TRA-1"), BUDGET).toLowerCase();
+    expect(p).toContain("silently");
+    expect(p).toContain("do not show");
+  });
+
+  // The row already carries the identifier one line below the title, so a title
+  // that repeats it spends a third of the budget saying nothing new.
+  test("forbids repeating what the row already shows", () => {
+    const p = buildTitlePrompt(issues("TRA-1"), BUDGET).toLowerCase();
+    expect(p).toContain("identifier");
+  });
 });
 
 describe("promptTextFromHook", () => {

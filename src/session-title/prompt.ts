@@ -25,26 +25,50 @@ const DESCRIPTION_MAX = 400;
 const PROMPT_TEXT_MAX = 1200;
 
 /**
- * What we ask for, in the units the answer is judged in.
+ * What we ask for.
  *
- * A character budget rather than a word count, because the thing that decides
- * whether a title survives is the sidebar's column budget, and "eight words"
- * can be anything from 30 to 70 columns. The budget passed in is the same
- * `maxChars` {@link parseTitle} enforces — one number, so a model that obeys
- * never produces a title we then have to cut. Two numbers would drift, and the
- * symptom would be every title ending in an ellipsis.
+ * The budget passed in is the same `maxChars` {@link parseTitle} enforces, so
+ * a model that obeys never produces a title we then have to cut. Beyond that,
+ * three rules here were measured rather than reasoned about — each replaced a
+ * simpler version that failed on real output:
  *
- * The reason is stated, not just the rule. A model told only "at most 32
- * characters" pads to the limit; one told the name sits in a narrow sidebar
- * writes the short form first.
+ *  - **The budget is stated in words as well as characters.** Characters alone
+ *    overshot on four of six samples (37, 39, 33, 35 against 32): a model counts
+ *    words far better than it counts characters. The word figure is *derived*
+ *    from `maxChars` rather than written down beside it, because two
+ *    independent numbers fight and the model satisfies whichever it read last.
+ *  - **The reasoning is asked for and then suppressed.** Naming the subject and
+ *    the outcome separately produces better titles; leaving it there produced
+ *    one think-aloud in six, and `parseTitle` takes the *first* non-empty line,
+ *    so that puts a paragraph of working in the sidebar. "Silently" and "do not
+ *    show that reasoning" took multi-line replies to zero across nine samples.
+ *  - **Repeating the identifier is banned outright.** The row already shows
+ *    `TRA-1787` a line below the title, and without the rule the model spent a
+ *    third of the budget on it — "TRA-1180: Map unknown GTINs to catalog".
+ *
+ * Each rule states its reason to the model, not just the rule. One told "at
+ * most 32 characters" pads to the limit; one told the name sits in a narrow
+ * sidebar writes the short form first.
  */
 function instruction(maxChars: number): string {
-  return (
-    `Name this coding session. Reply with one line of at most ${maxChars} characters. ` +
-    "Shorter is better — the name is shown in a narrow terminal sidebar, and " +
-    "anything longer is cut off. Plain sentence case, describing the work. " +
-    "No quotes, no punctuation at the end, no preamble, no explanation."
-  );
+  // Roughly ten characters a word, which is what the samples came out at. A
+  // range rather than an exact figure, because an exact count makes it pad.
+  const words = Math.max(2, Math.round(maxChars / 10));
+  return [
+    "Name this coding session so it is recognisable in a sidebar a week from now.",
+    `Reply with one line and nothing else: ${words} or ${words + 1} words, never more than ${maxChars} characters.`,
+    "",
+    "Silently work out what system or problem this is about and what should be",
+    "different when it is done, then name those two things. Do not show that",
+    "reasoning. Ignore anything that only describes how the work should be",
+    "carried out.",
+    "",
+    "- Plain sentence case, a noun phrase or a short action phrase.",
+    "- Never repeat the issue identifier or the project name; the row already shows them.",
+    "- Name the change itself, not the branch, plan, review or tooling used to make it.",
+    "- Do not say the work is finished. Do not restate the input and cut it short.",
+    "- No quotes, no labels, no trailing punctuation, no preamble, no explanation.",
+  ].join("\n");
 }
 
 /**

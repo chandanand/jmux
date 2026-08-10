@@ -346,7 +346,8 @@ the work:
 {
   "sessionTitle": {
     "command": ["claude", "-p", "--model", "haiku", "--effort", "low",
-                "--settings", "{\"alwaysThinkingEnabled\":false}"],
+                "--settings", "{\"alwaysThinkingEnabled\":false}",
+                "--setting-sources", ""],
     "timeoutMs": 60000,
     "maxChars": 32
   }
@@ -422,6 +423,13 @@ is otherwise on for the session and is pure latency here. Measured on one
 machine, warm: 9.4s with none of this, 7.6s with a neutral working directory,
 6.0s with both. There is no configuration that gets an agent CLI under about
 five seconds — that is its startup, not the model.
+
+**`--setting-sources ""` is worth having for the same reason.** Without it the
+naming call loads your user settings — which means your global `CLAUDE.md`, your
+skills, and any `SessionStart` hook you have installed. One measured reply
+opened "The superpowers skill establishes that I must check for and invoke
+relevant skills before any response" and never got round to naming anything.
+The naming prompt is self-contained; it wants none of that.
 
 **The command also runs in a temporary directory, not jmux's.** An agent CLI
 auto-discovers project context from its working directory, so a naming call
