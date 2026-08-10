@@ -745,6 +745,77 @@ describe("toolbar column routing", () => {
   });
 });
 
+describe("mouse routing with no sidebar", () => {
+  // The whole mouse block used to be gated on `layout.sidebar`, on the reading
+  // that null meant "terminal too narrow for chrome". `Ctrl-a \` hides the
+  // sidebar with the toolbar and panel still on screen, and that gate sent
+  // every click straight to the pty — the buttons, the panel tabs and the
+  // divider drag all dead while it was hidden.
+  const hiddenLayout = (diffState: "off" | "split" = "off", panelCols = 0): FrameLayout =>
+    computeFrameLayout({
+      termCols: 120,
+      termRows: 40,
+      sidebarWidth: 26,
+      sidebarHidden: true,
+      borderWidth: 1,
+      toolbarRows: 1,
+      diffState,
+      requestedPanelCols: panelCols,
+      frameRulesEnabled: false,
+      footerEnabled: false,
+    });
+
+  test("a toolbar click still dispatches, with main starting at column 0", () => {
+    let clickedCol = -1;
+    const layout = hiddenLayout();
+    expect(layout.sidebar).toBeNull();
+    expect(layout.main.x).toBe(0);
+    const router = new InputRouter(
+      {
+        onPtyData: () => {},
+        onSidebarClick: () => {},
+        onToolbarClick: (col) => { clickedCol = col; },
+      },
+      layout,
+    );
+    router.handleInput("\x1b[<0;6;1M"); // gridX 5, toolbar row
+    expect(clickedCol).toBe(5);
+  });
+
+  test("a click in the leftmost column is content, not a sidebar row", () => {
+    let sidebarClicks = 0;
+    let ptyData = "";
+    const layout = hiddenLayout();
+    const router = new InputRouter(
+      {
+        onPtyData: (d) => { ptyData += d; },
+        onSidebarClick: () => { sidebarClicks += 1; },
+      },
+      layout,
+    );
+    router.handleInput("\x1b[<0;1;5M"); // gridX 0, a content row
+    expect(sidebarClicks).toBe(0);
+    // Translated by main.x (0) and contentTop (1), so tmux sees its own row 4.
+    expect(ptyData).toBe("\x1b[<0;1;4M");
+  });
+
+  test("a click in the panel still reaches the panel", () => {
+    let panelFocusToggles = 0;
+    const layout = hiddenLayout("split", 40);
+    expect(layout.panel).not.toBeNull();
+    const router = new InputRouter(
+      {
+        onPtyData: () => {},
+        onSidebarClick: () => {},
+        onDiffPanelFocusToggle: () => { panelFocusToggles += 1; },
+      },
+      layout,
+    );
+    router.handleInput(`\x1b[<0;${layout.panel!.x + 2};5M`);
+    expect(panelFocusToggles).toBe(1);
+  });
+});
+
 describe("chrome row classification and routing", () => {
   test("classifyRow reads toolbar/rule/content/footer off the layout", () => {
     const layout = chromeLayout(24);

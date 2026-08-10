@@ -47,9 +47,11 @@ function makeLayout(opts: {
     }
   }
 
-  const termCols = sidebar
-    ? sidebar.w + 1 + mainCols + (mode === "split" ? 1 + (panelSpan?.w ?? 0) : 0)
-    : mainCols;
+  // The panel's columns count whether or not there is a sidebar to their
+  // left — the sidebar-less arm used to stop at mainCols, which put the panel
+  // off the end of the grid entirely.
+  const panelCols = mode === "split" ? 1 + (panelSpan?.w ?? 0) : 0;
+  const termCols = (sidebar ? sidebar.w + 1 : 0) + mainCols + panelCols;
 
   // These fixtures bypass computeFrameLayout's degradation ladder — callers
   // opt into the footer rows directly via footerEnabled rather than via
@@ -222,6 +224,81 @@ describe("compositeGrids", () => {
     const layout = makeLayout({ sidebarCols: 4, mainCols: 20, termRows: 6 });
     const result = compositeGrids(layout, main, sidebar, null, createGrid(6, 2));
     expect(result.cells.some((row) => row.some((c) => c.image))).toBe(false);
+  });
+});
+
+describe("compositeGrids with no sidebar", () => {
+  // A missing sidebar subtracts the sidebar and nothing else. This used to
+  // `return main` — dropping the toolbar, the rules, the diff panel and the
+  // modal overlay with it — which was invisible while the only way to lose the
+  // sidebar was a terminal too narrow to carry chrome anyway. `Ctrl-a \` made
+  // it reachable on a wide one, where it read as the diff panel, the palette
+  // and the toolbar all being broken at once.
+  const tab = (over: Record<string, unknown> = {}): WindowTab => ({
+    windowId: "@1", index: 0, name: "win", active: true,
+    bell: false, zoomed: false, ...over,
+  } as WindowTab);
+
+  test("main starts at column 0, with no border column anywhere", () => {
+    const main = createGrid(10, 2);
+    writeString(main, 0, 0, "main!!");
+    const layout = makeLayout({ sidebarCols: null, mainCols: 10, termRows: 2 });
+    const result = compositeGrids(layout, main, null);
+    expect(result.cols).toBe(10);
+    expect(result.cells[0][0].char).toBe("m");
+    expect(result.cells.some((row) => row.some((c) => c.char === BORDER_CHAR))).toBe(false);
+  });
+
+  test("the toolbar is still painted, from column 0", () => {
+    const main = createGrid(40, 4);
+    const layout = makeLayout({ sidebarCols: null, mainCols: 40, toolbarRows: 1, termRows: 4 });
+    const result = compositeGrids(layout, main, null, {
+      buttons: buildToolbarButtons({ panelActive: false }),
+      mainCols: 40,
+      tabs: [tab({ name: "shell" })],
+    });
+    const row0 = result.cells[0].map((c) => c.char).join("");
+    expect(row0).toContain("shell");
+    expect(row0.trimStart().startsWith("shell")).toBe(true);
+  });
+
+  test("the diff panel is still painted, beside main across a divider", () => {
+    const main = createGrid(20, 4);
+    const panel = createGrid(10, 4);
+    writeString(panel, 0, 0, "PANEL");
+    const layout = makeLayout({
+      sidebarCols: null, mainCols: 20, termRows: 4,
+      panel: { cols: 10, mode: "split" },
+    });
+    const result = compositeGrids(layout, main, null, null, null, {
+      grid: panel, mode: "split", focused: false,
+    });
+    expect(layout.panel).not.toBeNull();
+    const panelX = layout.panel!.x;
+    expect(result.cells[0].slice(panelX, panelX + 5).map((c) => c.char).join("")).toBe("PANEL");
+    expect(result.cells[0][layout.divider!].char).toBe(frame.divider);
+  });
+
+  test("a modal overlay is still painted", () => {
+    const main = createGrid(40, 12);
+    const modal = createGrid(10, 3);
+    writeString(modal, 0, 0, "PALETTE");
+    const layout = makeLayout({ sidebarCols: null, mainCols: 40, termRows: 12 });
+    const result = compositeGrids(layout, main, null, null, modal);
+    const painted = result.cells.map((row) => row.map((c) => c.char).join("")).join("\n");
+    expect(painted).toContain("PALETTE");
+  });
+
+  test("the top rule spans the frame with no junction to draw", () => {
+    const main = createGrid(20, 4);
+    const layout = makeLayout({
+      sidebarCols: null, mainCols: 20, toolbarRows: 1, termRows: 6,
+      frameRulesEnabled: true,
+    });
+    const result = compositeGrids(layout, main, null);
+    const rule = result.cells[layout.topRuleRow!];
+    expect(rule.every((c) => c.char === frame.ruleLight)).toBe(true);
+    expect(rule.some((c) => c.char === frame.crossDown)).toBe(false);
   });
 });
 

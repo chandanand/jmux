@@ -593,13 +593,20 @@ export class InputRouter {
     // Check for SGR mouse events. Grid-space conversion happens exactly once,
     // here — `gridX`/`gridY` are 0-indexed and every hit-test below reads
     // spans off `this.layout` rather than recomputing offsets from scattered
-    // fields (see src/frame-layout.ts). `layout.sidebar` doubles as the gate
-    // that used to be `sidebarVisible`: it's null exactly when the terminal
-    // is too narrow for jmux's chrome, in which case mouse sequences fall
-    // through to the default PTY passthrough below, same as before.
+    // fields (see src/frame-layout.ts).
+    //
+    // A missing sidebar is a sidebar of zero columns, not a reason to stop
+    // classifying. This block used to be gated on `layout.sidebar` outright,
+    // on the reading that null meant "the terminal is too narrow for jmux's
+    // chrome" — but `Ctrl-a \` hides the sidebar with every other piece of
+    // chrome still on screen, and the gate took the toolbar's buttons, the
+    // panel's tabs, link clicks, hover and the divider drag down with it.
+    // Every test below reads `sidebarCols`, which is 0 in that case, so the
+    // sidebar's own branches fall through on arithmetic rather than needing a
+    // second path.
     const layout = this.layout;
-    if (mouse && layout.sidebar) {
-      const sidebar = layout.sidebar;
+    if (mouse) {
+      const sidebarCols = layout.sidebar?.w ?? 0;
       const gridX = mouse.x - 1;
       const gridY = mouse.y - 1;
       const isMotion = (mouse.button & 32) !== 0;
@@ -634,7 +641,7 @@ export class InputRouter {
           : hitHandle(layout, gridX) ?? this.hitPanelSplit(gridX, gridY);
         if (hoverHandle) {
           this.opts.onHover({ area: "handle", handle: hoverHandle });
-        } else if (gridX < sidebar.w) {
+        } else if (gridX < sidebarCols) {
           this.opts.onHover({ area: "sidebar", row: gridY });
         } else if (!this.modalOpen) {
           if (gridY < layout.toolbarRows) {
@@ -657,7 +664,7 @@ export class InputRouter {
       // sees a stray event.
       if (
         !this.modalOpen &&
-        gridX >= sidebar.w &&
+        gridX >= sidebarCols &&
         !isMotion &&
         !isWheel &&
         (mouse.button & 0x03) === 0
@@ -689,7 +696,7 @@ export class InputRouter {
         }
       }
 
-      if (gridX < sidebar.w) {
+      if (gridX < sidebarCols) {
         // Wheel events: button 64 = up, 65 = down
         if (isWheel) {
           const delta = (mouse.button & 1) ? 3 : -3;
