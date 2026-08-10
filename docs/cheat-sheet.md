@@ -45,7 +45,7 @@ bucket into headers, sorting decides the order *within* a bucket.
 |-----|--------|----------------|
 | `Ctrl-a G` | Cycle grouping | `Flat` → `Project` → `Status` → `Stage` |
 | `Ctrl-a s` | Cycle sort within a group | `Name` → `Activity` → `Status` |
-| `Ctrl-a f` | Cycle filter | `All` → `Needs you` → `Active` |
+| `Ctrl-a f` | Cycle filter | `All` → `Started` → `Needs you` → `Active` |
 
 The current modes show as chips at the top of the sidebar (`⊞ Status  ⇅ Activity`),
 alongside a count of sessions wanting your attention. `Ctrl-a s` deliberately
@@ -62,6 +62,7 @@ claims, list flat below the stage groups. See [Workflow](workflow.md#your-stages
 | Group `Status` | One header per agent state, ordered by urgency rather than alphabetically: **Needs you → Running → Active → Done → Idle**. That order is fixed and does not follow the sort mode. |
 | Sort `Activity` | Most recent signal of life first — an agent-state change, an OTEL request, or tmux output. |
 | Sort `Status` | Same urgency rank as the status grouping, then recency, then name. |
+| Filter `Started` | Every session, but no [ghost rows](workflow.md#unstarted-work-in-the-sidebar) — the stage layout of the work that exists. Only bites under `Stage`, where ghosts sit inside each band; on the other axes they collect in one `Up next` band at the bottom and the mode is the same as `All`. |
 | Filter `Needs you` | Only sessions whose agent is waiting on you. |
 | Filter `Active` | Waiting *or* running — the sessions actually doing something. |
 

@@ -9,7 +9,7 @@ import type { AgentState } from "./types";
 
 export type GroupMode = "none" | "project" | "status" | "stage";
 export type SortMode = "name" | "activity" | "status";
-export type FilterMode = "all" | "attention" | "active";
+export type FilterMode = "all" | "started" | "attention" | "active";
 
 // The stage a session bands under used to live here as `StageBucket`. It is now
 // one field of `SessionWorkflow` (workflow-drift.ts), which is built in the same
@@ -31,7 +31,7 @@ export interface SessionSortInfo {
 
 export const GROUP_MODES: readonly GroupMode[] = ["none", "project", "status", "stage"];
 export const SORT_MODES: readonly SortMode[] = ["name", "activity", "status"];
-export const FILTER_MODES: readonly FilterMode[] = ["all", "attention", "active"];
+export const FILTER_MODES: readonly FilterMode[] = ["all", "started", "attention", "active"];
 
 // Priority order: "needs you" first, "done" and idle last. Drives both the
 // status member-sort tie-break and the header order of status groups.
@@ -75,6 +75,7 @@ const SORT_LABELS: Record<SortMode, string> = {
 };
 const FILTER_LABELS: Record<FilterMode, string> = {
   all: "all",
+  started: "started only",
   attention: "needs you",
   active: "active",
 };
@@ -103,6 +104,7 @@ const SORT_SHORT: Record<SortMode, string> = {
 };
 const FILTER_SHORT: Record<FilterMode, string> = {
   all: "All",
+  started: "Started",
   attention: "Needs you",
   active: "Active",
 };
@@ -131,12 +133,44 @@ export function statusGroupLabel(s: SessionStatus): string {
 export function matchesFilter(status: SessionStatus, filter: FilterMode): boolean {
   switch (filter) {
     case "all":
+    // "started only" narrows the sidebar to work that *exists*, which is a
+    // statement about ghost rows and not about sessions — every session is
+    // started by definition. So it is "all" here, and the whole of the mode
+    // lives in `filterShowsGhosts`.
+    case "started":
       return true;
     case "attention":
       return status === "waiting";
     case "active":
       return status === "waiting" || status === "running";
   }
+}
+
+/**
+ * Whether ghost rows are emitted at all, given the filter AND the grouping axis.
+ *
+ * Two axes rather than one equality, because the filters suppress ghosts for
+ * two different reasons:
+ *
+ *  - "needs you" / "active" select on agent state, which a ghost has none of —
+ *    it can neither match one nor be honestly excluded by one. Leaving them up
+ *    would answer "show me only the sessions wanting my attention" with a list
+ *    of work nobody has started, so they go on every axis.
+ *  - "started only" is a statement about the *stage* axis specifically, where
+ *    ghosts sit inside every band, below that band's sessions — there is no way
+ *    to read the stage layout of the work you have without also reading the work
+ *    you have not. On every other axis ghosts collect into one flat "Up next"
+ *    band at the bottom, where they are neither interleaved nor in the way, so
+ *    there the mode is deliberately identical to "all".
+ *
+ * That last clause is what makes "started only" inert off the stage axis, which
+ * `applySidebarFilter` in main.ts discloses rather than leaving to be inferred
+ * from a header chip that reads "Started" over an unchanged list.
+ */
+export function filterShowsGhosts(filter: FilterMode, group: GroupMode): boolean {
+  if (filter === "all") return true;
+  if (filter === "started") return group !== "stage";
+  return false;
 }
 
 // The single-axis value persisted before group and sort split into two controls.

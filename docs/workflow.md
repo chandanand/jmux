@@ -408,10 +408,18 @@ so a stage you switched off cannot come back through the other placement:
   Parked ─────────────(8)
 ```
 
-Ghost rows are click-activated in both placements and never join
-`Ctrl-Shift-↑`/`↓` session cycling — a navigation key that provisioned a worktree
-would be a nasty surprise. They are also hidden entirely by `Ctrl-a f`: both
-filters select on agent state, which unstarted work does not have.
+Ghost rows behave the same in both placements: clicking one previews it, and
+`Ctrl-Shift-↑`/`↓` walks it alongside your sessions.
+
+`Ctrl-a f` hides them, and which mode does depends on the axis:
+
+| Filter | Effect on unstarted rows |
+|--------|--------------------------|
+| `Started` | Hidden under `Stage`, where they sit inside every band. Left alone on the other axes, where they are already gathered into one `Up next` band at the bottom — so on those axes the mode is the same as `All`, and jmux says so when you choose it. |
+| `Needs you`, `Active` | Hidden on every axis. Both select on agent state, which unstarted work does not have, so it can neither match one nor be honestly excluded by one. |
+
+`Started` is the one to reach for when you want the stage layout of the work that
+exists: every session, including the idle ones the other two filters drop.
 
 ---
 
