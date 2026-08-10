@@ -87,6 +87,14 @@ it calls `orderSessions({ ..., includeParked: true })` and then emits headers,
 collapse, ghosts and issue rows over the result. The grid calls the same function
 with its own axes and `includeParked: false`.
 
+One asymmetry the extraction has to preserve: **ghost placement can create bands
+`orderSessions` never returns.** A stage holding only ghosts still gets a band
+(`sidebar.ts:593–618`) — that is the whole point of the stage placement, and it
+is why a ghost carries its own stage label and rank. So `buildRenderPlan` merges
+ghost-only stage bands into the returned list and re-sorts the group bands by
+rank before emitting. `orderSessions` never sees a ghost, and the grid therefore
+cannot grow a band from one.
+
 Parked exclusion is stated here rather than inherited from the sidebar's collapse
 default, because the grid has no disclosure gesture to inherit it from. Parked
 work has been handed off; the grid is live work.
@@ -207,11 +215,16 @@ sentence no longer has a referent. `parsePinValue(raw): "on" | null` replaces
 | Session hidden | No session tile |
 | Force-on pane **is** its session's representative | The session tile, labelled as a pane tile; not two tiles |
 | Force-on pane is a sibling in a member session | Extra tile, inserted directly after its session's tile |
-| Force-on pane in a non-member session | Tile in a leading `Pinned` band |
+| Force-on pane in a non-member session | Tile in a leading `Added` band |
 | Force-on pane in a hidden session | Tile appears — the pane names one thing, the hide names a whole session, and the more specific wins |
 | Two force-on panes in one session | Two tiles, ordered by pane id |
 | Force-on pane dies | Tile removed; the stale option is cleared by `pruneExcept` |
 | Hidden session dies | Option dies with the session |
+
+The band holding force-on panes from non-member sessions is called **Added**, not
+"Pinned": `PINNED_GROUP_LABEL` already means pinned *sessions* (`sidebar.ts:454`),
+a separate concept that floats sessions to the top of the sidebar and that the
+grid honours as its own first band.
 
 A hidden session is discoverable, not silent: the palette carries **Show hidden
 sessions (N)…** whenever N > 0, and the empty state names the count. An exception
@@ -223,6 +236,13 @@ you cannot see is an exception you cannot undo.
 tile — hiding the session for a session tile, clearing `@jmux-pinned` for a pane
 tile. In a session it force-ons the current pane. Both read as "act on the thing
 I am looking at", the rule the info panel's action bar already follows.
+
+**A tile can be both**, by row 3 of the table: a force-on pane that is also its
+session's representative renders as one tile backed by two facts. Pressing
+`Ctrl-a P` there must do *both* — hide the session and clear the force-on — or
+the key removes one reason the tile is present, the other keeps it on screen, and
+the press reads as broken. "Remove what I am looking at" is the contract; it is
+not satisfied by removing one of two causes.
 
 `autoPinAgentPanes` is deleted — auto *is* the baseline now, and a setting that
 turned derived membership off would leave an empty grid with no way to fill it.
@@ -303,6 +323,12 @@ groupBy: "status", sortBy: "status" }` — and `commandCenterAxes` seeds from it
 The grid does **not** seed from the sidebar: the sidebar defaults to `filter:
 "all"` (`sidebar.ts:992`), which on a 25-session machine is 25 mirrors on first
 open. The default view *is* the first-run state.
+
+The grid's filter **persists**, where the sidebar's deliberately does not
+(`config.ts:175`). That is not an oversight copied wrong: the sidebar's filter is
+a transient narrowing of a list that is always on screen, while the grid's filter
+*is* its membership rule and is half of what a saved view means. A view whose
+filter reset on restart would not be saved.
 
 `normalizeViews` keeps `normalizeTabs`' defensive shape and additionally clamps
 each axis to its legal enum, falling back to the seed's value. `slugifyTabName`
@@ -413,6 +439,18 @@ tile:
 | View switch, axis cycle, view CRUD | axes |
 | Config file reload | views, cap, axes |
 
+The debounce is **trailing-edge**, so a burst of control-channel events coalesces
+into one run that happens after the last of them. A leading-edge debounce would
+drop the state the burst was reporting.
+
+Two subscriptions feed it. The existing per-pane one for `@jmux-pinned`
+(`main.ts:10076`) gains a session-scoped sibling for the hide option,
+`#{S:#{session_id}=#{@jmux-grid-hidden} }` — verified to expand correctly against
+a scratch tmux. Note that `#{P:…}` loops only the panes of the *current window*,
+so the pin subscription has always been a partial trigger; a pin written by `ctl`
+in another window lands on the poll tick instead, which is why `reconcileGrid`
+must be on the poll's invalidation list and not only on the subscription's.
+
 The sidebar's Overview row stops counting `pinnedPanes` (`sidebar.ts:669`) — a
 derived grid can be full while zero panes are pinned. `reconcileGrid` computes
 the count and state tally and calls `sidebar.setGridSummary({ count, tally })`,
@@ -458,7 +496,10 @@ Unit, all pure modules:
 - `session-order.test.ts` — `orderSessions` is collapse-independent; parked
   excluded under `includeParked: false`; `buildRenderPlan`'s `displayOrder`
   equals the concatenated bands **when nothing is collapsed**, which pins the
-  refactor without enshrining disclosure state.
+  refactor without enshrining disclosure state. Writing that case needs care:
+  Parked inverts the collapse default (`sidebar.ts:747`), so "Parked not
+  collapsed" means `collapsedGroups.has("parked")` is **true**, and a test that
+  passes an empty set is asserting the opposite of what it reads as.
 - `glass/representative.test.ts` — each precedence step in isolation and in
   conflict; a dead override falls through; an explicit pane belonging to another
   session is rejected; two kinded panes elect the more urgent by `outranks`; no
