@@ -51,6 +51,11 @@ is pane-scoped because a session can host several agents in splits and a
 session-scoped write would let the last one clobber its siblings. A title has
 the opposite shape: one session, one row, one name. There is nothing to roll up.
 
+Beside it, `@jmux-title-signature` holds the signature of the input the current
+title came from — or the literal `manual` when the human named the session
+themselves. It is what makes the cache and the rename rule outlive a restart;
+see "Triggers" and "Decisions taken without being asked" below.
+
 ## Generation
 
 ### Transport
@@ -61,7 +66,7 @@ rather than in `repoDefaults`:
 
 ```jsonc
 "sessionTitle": {
-  "command": "claude -p --model haiku",
+  "command": ["claude", "-p", "--model", "haiku"],
   "timeoutMs": 20000,
   "maxChars": 48
 }
@@ -70,11 +75,15 @@ rather than in `repoDefaults`:
 **The command is the entire provider story.** jmux writes the prompt to stdin
 and reads one line from stdout. `codex exec`, `llm -m gpt-4o-mini`,
 `ollama run qwen2.5` and a shell script the user wrote all work with no jmux
-code, and the model choice is a flag in a string the user already controls.
-There is no provider registry, no API key handling, and no second
-authentication story in a tool that currently has none — the command reuses
-whatever the user has already authenticated. Parsed with the existing
-`shell-quote.ts`, the same shape as `diffPanel.hunkCommand`.
+code, and the model choice is a flag the user already controls. There is no
+provider registry, no API key handling, and no second authentication story in a
+tool that currently has none — the command reuses whatever the user has already
+authenticated.
+
+**argv rather than a shell string**, so there is no quoting question and no
+parser. `shell-quote.ts` only *quotes* — it has nothing that parses a command
+line — and `diffPanel.hunkCommand` is a bare binary name handed to `Bun.which`,
+so there is no precedent to follow into writing one.
 
 **`command` unset is off, and the value is the switch.** No separate boolean can
 disagree with it — the same rule `showUnstartedInSidebar` follows, and for the
@@ -97,10 +106,10 @@ common case.
 
 `@jmux-prompt` is pane-scoped, because the hook that writes it knows a pane and
 not much else — the same reason `@jmux-agent-state` is. The generator asks for a
-session, so it reads the prompt off the pane the existing rollup already elected
-to speak for that session (`outranks`, `agent-state-rollup.ts`). A session is
-never summarised two different ways depending on who asked, which is the rule
-that helper exists to enforce.
+session, and takes the **first non-empty value across that session's panes**.
+Deliberately not an `outranks()` rollup: that helper ranks by *urgency*, which a
+prompt does not have, and the hook writes each pane's value exactly once, so
+first-non-empty is already deterministic.
 
 pi has no prompt event in its extension API — the same gap that already stops it
 reporting `waiting` — so pi sessions with no issue land on the git tier. This is
@@ -240,10 +249,11 @@ mapped in `rowToSessionIndex`.
 
 ### Other surfaces
 
-The command palette, glass tabs, the switch and new-session modals and
-`ctl session list` lead with the title and keep the real name as secondary text;
-`ctl` returns both as separate fields, because a machine consumer needs the one
-that addresses a tmux session.
+The command palette, the Command Center's pane labels (`buildPaneLabel` — not
+`glass/tabs.ts`, which is the Diff/Overview strip and holds no session names)
+and `ctl session list` lead with the title and keep the real name as secondary
+text; `ctl` returns both as separate fields, because a machine consumer needs
+the one that addresses a tmux session.
 
 **Palette fuzzy match runs over title and name both**, so the slug never stops
 being typeable. A human who has typed `tra-123` for two days should not have to
@@ -290,10 +300,16 @@ as each signature is first seen. That is a burst, drained at two concurrent, and
 a one-time cost. Naming lazily only when a session is looked at would be more
 machinery for less.
 
-**A hand-typed rename wins permanently.** Renaming a session clears
-`@jmux-session-title` and stops jmux generating another. An explicit act beats a
-generated guess, and a title that reappeared over a name the human had just
-typed would be the worst behaviour in the feature.
+**A hand-typed rename wins permanently.** Renaming a session unsets
+`@jmux-session-title` and stamps `@jmux-title-signature` with the literal
+`manual`, which the generator skips. The sentinel lives in a tmux option rather
+than an in-memory set precisely so "permanently" survives a restart: an explicit
+act beats a generated guess, and a title reappearing over a name the human had
+just typed would be the worst behaviour in the feature.
+
+That signature option earns its place twice. It is also the cache key that stops
+a restart re-titling every session, which is what keeps the burst below a
+one-time cost.
 
 ## Non-goals
 
