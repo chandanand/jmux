@@ -1965,17 +1965,19 @@ describe("Sidebar — sort & filter", () => {
 
   const ghost = (issueId: string, identifier: string, title: string) => ({ issueId, identifier, title });
 
-  test("ghosts render identifier and title over two rows, under an Up next header", () => {
+  test("ghosts render title then identifier over two rows, under an Up next header", () => {
     const sb = seeded();
     sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
     const header = linesWith(sb, "Up next");
     const id = linesWith(sb, "ENG-142");
     const title = linesWith(sb, "fix flaky auth test");
     expect(header).toBeGreaterThan(-1);
-    expect(header).toBeLessThan(id);
-    // The title sits on the row directly below its identifier — a session row's
-    // exact geometry, which is what makes the ghost a preview of what it becomes.
-    expect(title).toBe(id + 1);
+    expect(header).toBeLessThan(title);
+    // The identifier sits on the row directly below the title — a *live*
+    // session row's exact geometry (name/title on row 1, issue badge on row 2),
+    // which is what makes the ghost a preview of what it becomes. Drawn the
+    // other way up, starting it would swap both facts at once.
+    expect(id).toBe(title + 1);
   });
 
   test("the band sits below live sessions and above Parked", () => {
@@ -1995,17 +1997,17 @@ describe("Sidebar — sort & filter", () => {
   test("both of a ghost's rows resolve to the same selection", () => {
     const sb = seeded();
     sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
-    const idRow = linesWith(sb, "ENG-142");
-    expect(sb.getSelectionByRow(idRow)).toEqual({ type: "ghost", issueId: "i1" });
-    expect(sb.getSelectionByRow(idRow + 1)).toEqual({ type: "ghost", issueId: "i1" });
+    const titleRow = linesWith(sb, "fix flaky auth test");
+    expect(sb.getSelectionByRow(titleRow)).toEqual({ type: "ghost", issueId: "i1" });
+    expect(sb.getSelectionByRow(titleRow + 1)).toEqual({ type: "ghost", issueId: "i1" });
   });
 
   test("a ghost row is not a session row — it never resolves to one", () => {
     const sb = seeded();
     sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
-    const idRow = linesWith(sb, "ENG-142");
-    expect(sb.getSessionByRow(idRow)).toBeNull();
-    expect(sb.getSessionByRow(idRow + 1)).toBeNull();
+    const titleRow = linesWith(sb, "fix flaky auth test");
+    expect(sb.getSessionByRow(titleRow)).toBeNull();
+    expect(sb.getSessionByRow(titleRow + 1)).toBeNull();
   });
 
   test("ghosts stay out of displayOrder — it is the session cycle", () => {
@@ -2076,16 +2078,16 @@ describe("Sidebar — sort & filter", () => {
   test("setFocusedGhost paints both of the ghost's rows as active", () => {
     const sb = seeded();
     sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
-    const idRow = linesWith(sb, "ENG-142");
+    const titleRow = linesWith(sb, "fix flaky auth test");
 
-    const plain = sb.getGrid().cells[idRow]![0]!.bg;
+    const plain = sb.getGrid().cells[titleRow]![0]!.bg;
     sb.setFocusedGhost("i1");
     const focused = sb.getGrid();
-    expect(focused.cells[idRow]![0]!.bg).not.toBe(plain);
-    expect(focused.cells[idRow + 1]![0]!.bg).toBe(focused.cells[idRow]![0]!.bg);
+    expect(focused.cells[titleRow]![0]!.bg).not.toBe(plain);
+    expect(focused.cells[titleRow + 1]![0]!.bg).toBe(focused.cells[titleRow]![0]!.bg);
 
     sb.setFocusedGhost(null);
-    expect(sb.getGrid().cells[idRow]![0]!.bg).toBe(plain);
+    expect(sb.getGrid().cells[titleRow]![0]!.bg).toBe(plain);
   });
 
   test("focusing one ghost leaves its siblings unpainted", () => {

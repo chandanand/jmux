@@ -163,20 +163,21 @@ const HOVER_DETAIL_ATTRS: CellAttrs = {
   bgMode: ColorMode.RGB,
 };
 
-// Ghost rows. The identifier is secondary rather than primary text and the
-// marker is a hollow ring against the live rows' filled dot — a ghost must read
-// as "not running yet" at a glance, or the sidebar stops being a truthful
-// picture of what exists.
+// Ghost rows. The title is secondary rather than primary text and the marker is
+// a hollow ring against the live rows' filled dot — a ghost must read as "not
+// running yet" at a glance, or the sidebar stops being a truthful picture of
+// what exists. The attrs follow the *rows*, not the fields: row 1 is the
+// louder one on a live session and stays the louder one here.
 const GHOST_MARK_ATTRS: CellAttrs = {
   fg: tokens.textTertiary.fg,
   fgMode: tokens.textTertiary.fgMode,
   dim: tokens.textTertiary.dim,
 };
-const GHOST_ID_ATTRS: CellAttrs = {
+const GHOST_TITLE_ATTRS: CellAttrs = {
   fg: tokens.textSecondary.fg,
   fgMode: tokens.textSecondary.fgMode,
 };
-const GHOST_TITLE_ATTRS: CellAttrs = { dim: true };
+const GHOST_ID_ATTRS: CellAttrs = { dim: true };
 
 // Disclosed issue rows under an expanded session. Everything here is quieter
 // than the session row above it: these are its contents, not peers of it, and a
@@ -333,8 +334,8 @@ export function rebuildSidebarColors(): void {
   GHOST_MARK_ATTRS.fgMode = tokens.textTertiary.fgMode;
   GHOST_MARK_ATTRS.dim = tokens.textTertiary.dim;
 
-  GHOST_ID_ATTRS.fg = tokens.textSecondary.fg;
-  GHOST_ID_ATTRS.fgMode = tokens.textSecondary.fgMode;
+  GHOST_TITLE_ATTRS.fg = tokens.textSecondary.fg;
+  GHOST_TITLE_ATTRS.fgMode = tokens.textSecondary.fgMode;
 }
 // Group-header label tone — textSecondary, not the old bold palette-8. (The
 // Command Center header, which shares this const, re-adds bold explicitly at
@@ -1618,9 +1619,18 @@ export class Sidebar {
 
   /**
    * An unstarted issue, in a live session row's geometry: marker in column 1,
-   * identifier at the name column, title on the detail row. Both rows map to the
-   * same selection, exactly as a session's two rows do, so a click anywhere on
-   * the pair activates it.
+   * the issue title at the name column, the identifier on the detail row. Both
+   * rows map to the same selection, exactly as a session's two rows do, so a
+   * click anywhere on the pair activates it.
+   *
+   * **Title above identifier, because that is the row it turns into.** A live
+   * session leads row 1 with what it is doing (its generated title, or its
+   * name) and carries the issue badge on row 2. A ghost drawn the other way up
+   * would swap both facts the moment it was started — the single most visible
+   * change on the screen for a row whose whole justification is that starting
+   * it changes nothing but the state. This way the identifier stays put and
+   * row 1 goes from the issue's own title to the model's phrase for the work,
+   * which is as close as the two rows can get.
    *
    * Painted as active when the preview surface is showing this issue. A ghost
    * has no session to be attached to, but the rail does not mark attachment —
@@ -1631,43 +1641,43 @@ export class Sidebar {
    */
   private renderGhost(
     grid: CellGrid,
-    idRow: number,
+    titleRow: number,
     item: Extract<RenderItem, { type: "ghost" }>,
   ): void {
     const ghost = this.ghosts[item.ghostIndex];
     if (!ghost) return;
 
-    const titleRow = idRow + 1;
+    const idRow = titleRow + 1;
     const isActive = this.focusedGhostId !== null && ghost.issueId === this.focusedGhostId;
     const isHovered = !isActive && this.hoveredRow !== null &&
-      (this.hoveredRow === idRow || this.hoveredRow === titleRow);
+      (this.hoveredRow === titleRow || this.hoveredRow === idRow);
     const bgAttrs: CellAttrs = isActive
       ? { bg: ACTIVE_BG, bgMode: ColorMode.RGB }
       : isHovered
         ? { bg: HOVER_BG, bgMode: ColorMode.RGB }
         : {};
 
-    this.rowToSelection.set(idRow, { type: "ghost", issueId: ghost.issueId });
-    if (titleRow < this.height) {
-      this.rowToSelection.set(titleRow, { type: "ghost", issueId: ghost.issueId });
+    this.rowToSelection.set(titleRow, { type: "ghost", issueId: ghost.issueId });
+    if (idRow < this.height) {
+      this.rowToSelection.set(idRow, { type: "ghost", issueId: ghost.issueId });
     }
 
-    this.paintRowChrome(grid, idRow, isActive, isHovered);
     this.paintRowChrome(grid, titleRow, isActive, isHovered);
+    this.paintRowChrome(grid, idRow, isActive, isHovered);
 
     // A hollow ring where a live row carries its filled activity dot.
-    writeString(grid, idRow, 1, "○", { ...GHOST_MARK_ATTRS, ...bgAttrs });
+    writeString(grid, titleRow, 1, "○", { ...GHOST_MARK_ATTRS, ...bgAttrs });
 
     const textStart = 3;
     const maxCols = this.width - textStart - 1;
     if (maxCols <= 0) return;
 
-    writeString(grid, idRow, textStart, truncateToCols(ghost.identifier, maxCols),
-      { ...GHOST_ID_ATTRS, ...bgAttrs });
-
-    if (titleRow >= this.height) return;
     writeString(grid, titleRow, textStart, truncateToCols(ghost.title, maxCols),
       { ...GHOST_TITLE_ATTRS, ...bgAttrs });
+
+    if (idRow >= this.height) return;
+    writeString(grid, idRow, textStart, truncateToCols(ghost.identifier, maxCols),
+      { ...GHOST_ID_ATTRS, ...bgAttrs });
   }
 
   /**

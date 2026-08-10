@@ -151,15 +151,23 @@ and the handed-off work under `Waiting`:
   ⊞ Stage  ⇅ Name
 
   URGENT (1)
-    TRA-1387 · payment-retry
+    Retry the payment webhook on 5xx
+    TRA-1387
 
   IN PROGRESS (2)
-    TRA-1402 · search-index
-    TRA-1399 · session-replay
+    Rebuild the search index
+    TRA-1402
+    Rebuild the session replay index
+    TRA-1399
 
   jmux
   dotfiles
 ```
+
+(Row 1 is each session's generated title, or its plain name where there is no
+`sessionTitle.command` — see [Session titles](configuration.md#session-titles-sessiontitle).
+Row 2 would normally carry the stage word after the badge; under `Stage`
+grouping the header already says it, so those columns go back to the row.)
 
 A session lands in the stage that claims its linked issue's status. Headers come
 out in your own stage order, not alphabetically — `Urgent` is above `In Progress`
@@ -260,21 +268,25 @@ work sitting in each stage that **nobody has picked up** — issues with no sess
   ⊞ Stage  ⇅ Name
 
   URGENT (2)
-    TRA-1387 · payment-retry
-  ○ TRA-1402
-    Retry storms on the payment webhook
+  ● Retry the payment webhook on 5xx
+    TRA-1387
+  ○ Retry storms on the payment webhook
+    TRA-1402
 
   IN PROGRESS (1)
-    TRA-1399 · session-replay
+  ● Rebuild the session replay index
+    TRA-1399
 
   IN REVIEW (1)
-  ○ TRA-1355
-    Cursor pagination for /events
+  ○ Cursor pagination for /events
+    TRA-1355
 ```
 
 A hollow `○` where a live session carries its filled activity dot. The row uses a
-session row's exact two-row shape — identifier where the name goes, title where
-the issue badge goes — because that is the row it turns into.
+session row's exact two-row shape — the issue title where a live session's name
+or generated title goes, the identifier where its issue badge goes — because that
+is the row it turns into. Starting one leaves the identifier exactly where it was
+and replaces the line above it with the model's phrase for the work.
 
 **Clicking one previews it** — it does not start anything. The main area is
 replaced by the issue and, above the description, exactly what starting it would
@@ -386,11 +398,12 @@ so a stage you switched off cannot come back through the other placement:
 
 ```
   jmux
-    TRA-1399 · session-replay
+  ● Rebuild the session replay index
+    TRA-1399
 
   Up next ───────────────
-  ○ TRA-1402
-    Retry storms on the payment webhook
+  ○ Retry storms on the payment webhook
+    TRA-1402
 
   Parked ─────────────(8)
 ```
