@@ -3302,6 +3302,9 @@ async function openDiffViewPicker(): Promise<void> {
   scheduleRender();
 }
 
+/** Long enough for a cold `git log` on a large repo, short enough to notice. */
+const GIT_TIMEOUT_MS = 10_000;
+
 /**
  * Run a git command and hand back its stdout, or null if it failed.
  *
@@ -3312,9 +3315,20 @@ async function openDiffViewPicker(): Promise<void> {
 async function gitOutput(cwd: string, args: string[]): Promise<string | null> {
   try {
     const proc = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "ignore" });
-    const out = await new Response(proc.stdout).text();
-    await proc.exited;
-    return proc.exitCode === 0 ? out : null;
+    // Bounded for the same reason `spawnTitleRunner` is: a worktree on a
+    // stalled network mount makes git hang rather than fail, and callers memo
+    // the *in-flight promise* — so one wedged process is not one slow session,
+    // it is a permanently-pending entry that every later awaiter joins.
+    const timer = setTimeout(() => proc.kill(), GIT_TIMEOUT_MS);
+    try {
+      const out = await new Response(proc.stdout).text();
+      await proc.exited;
+      // A killed git exits on a signal, so `exitCode` is null and this is a
+      // failure — which is the honest answer: it produced no complete output.
+      return proc.exitCode === 0 ? out : null;
+    } finally {
+      clearTimeout(timer);
+    }
   } catch {
     return null;
   }
@@ -3460,6 +3474,9 @@ async function fetchSessions(): Promise<void> {
  */
 type GitTierResult = { input: TitleInput | null; durable: boolean };
 
+/** How long a "no commits of its own yet" answer is believed before re-reading. */
+const GIT_TIER_RETRY_MS = 60_000;
+
 /**
  * The git tier's answer per session, so the only tier that costs subprocesses
  * pays for them once.
@@ -3475,8 +3492,50 @@ type GitTierResult = { input: TitleInput | null; durable: boolean };
  * refreshes during the first (slow) read shares one pair of subprocesses
  * instead of starting a pair each — the same single-flight discipline
  * `TitleGenerator` applies to the model call.
+ *
+ * **A non-durable answer is kept and expired, never dropped.** "This branch has
+ * no commits of its own yet" is the one answer the branch does not settle, but
+ * dropping the entry made it the one answer that cost a fresh `git rev-parse`
+ * plus `git log` on *every* caller: `requestSessionTitles` runs from
+ * `fetchSessions`, `lookupSessionDetails`, `fetchAgentState` (roughly once a
+ * second while agents are active) and the poll coordinator's `onUpdate`. The
+ * documented getting-started flow is a handful of wtm worktrees with no
+ * tracker configured, which is a couple of dozen git processes a second,
+ * sustained, to keep re-learning that there is still nothing to name from —
+ * and a session that never commits never stops.
+ * The answer can only change when a commit lands, which a minute's delay in
+ * noticing costs nobody anything.
  */
-const gitTitleInputs = new Map<string, { branch: string; pending: Promise<GitTierResult> }>();
+interface GitTierEntry {
+  branch: string;
+  startedAt: number;
+  pending: Promise<GitTierResult>;
+  /**
+   * The settled answer, or null while the read is still in flight.
+   *
+   * Kept on the entry so staleness is decided *without* awaiting — the check
+   * runs before we know whether to reuse the promise, and awaiting first would
+   * put the whole point of the single-flight memo back to front.
+   */
+  result: GitTierResult | null;
+}
+
+const gitTitleInputs = new Map<string, GitTierEntry>();
+
+function startGitTierRead(
+  dir: string,
+  branch: string,
+  project: string | undefined,
+): GitTierEntry {
+  // The entry has to exist before the promise, because the promise writes
+  // `result` back onto it — hence the cast, resolved on the very next line.
+  const entry = { branch, startedAt: Date.now(), result: null } as GitTierEntry;
+  entry.pending = readGitTitleInput(dir, branch, project).then((r) => {
+    entry.result = r;
+    return r;
+  });
+  return entry;
+}
 
 async function readGitTitleInput(
   dir: string,
@@ -3504,19 +3563,19 @@ async function resolveGitTitleInput(session: SessionInfo): Promise<TitleInput | 
   if (!dir || !branch) return null;
 
   const cached = gitTitleInputs.get(session.id);
+  // An in-flight entry is always reused — that is the single flight. A settled
+  // one is reused unless the branch moved, or unless it settled on the one
+  // answer a branch cannot settle and the retry window has since passed.
+  const settled = cached?.result ?? null;
+  const expired =
+    settled !== null && !settled.durable && Date.now() - cached!.startedAt >= GIT_TIER_RETRY_MS;
   const entry =
-    cached && cached.branch === branch
+    cached && cached.branch === branch && !expired
       ? cached
-      : { branch, pending: readGitTitleInput(dir, branch, session.project) };
+      : startGitTierRead(dir, branch, session.project);
   gitTitleInputs.set(session.id, entry);
 
-  const result = await entry.pending;
-  // Guarded on identity: a branch change during the read has already replaced
-  // this entry, and dropping the new one would lose its answer.
-  if (!result.durable && gitTitleInputs.get(session.id) === entry) {
-    gitTitleInputs.delete(session.id);
-  }
-  return result.input;
+  return (await entry.pending).input;
 }
 
 /**
