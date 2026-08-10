@@ -361,6 +361,14 @@ there is no quoting question and no command-line parser to get wrong.
 wrote all work — the model choice is a flag you already control, and jmux
 keeps no provider registry and no second credentials story.
 
+**What jmux sends it leaves your machine if the command does.** The prompt
+carries your issue identifiers, titles and descriptions, your first prompt to
+the agent, or your branch name and commit subjects — see the three tiers below.
+Point `command` at a hosted model and all of that goes to that provider under
+their terms; point it at a local one (`["ollama", "run", "qwen2.5"]`) and it
+does not leave the machine. jmux itself makes no network call for this and
+stores nothing beyond the resulting title.
+
 jmux names a session from the strongest of three inputs it has, in order:
 
 1. **Linked issues** — identifier, title and description, once the session
@@ -392,7 +400,15 @@ current input regardless of what's cached.
 `maxChars` caps what gets **stored**, not what the sidebar shows. The sidebar
 truncates row 1 to whatever the (26-column default) sidebar width has room
 for; the command palette and `ctl session list`/`info` show the whole stored
-title. The default is 48, generous enough for those wider surfaces.
+title. The default is 48, generous enough for those wider surfaces. It is
+clamped to 8–200 and `timeoutMs` to 1000–120000, because there is no useful
+title in four characters and `maxChars: 0` would store a bare `…`.
+
+`command` is checked at startup and on every config reload: a shell string
+instead of an argv array, an empty array, or a binary that isn't on `PATH`
+each print one line to stderr and to `jmux.log` and leave naming off. Without
+that check all three fail the same way a working setup that simply hasn't
+named anything yet looks — nothing on screen, ever, with no way to tell which.
 
 Renaming a session by hand (`Ctrl-a p` → **Rename session**) always wins: it
 clears any generated title and marks the session so titling never overwrites

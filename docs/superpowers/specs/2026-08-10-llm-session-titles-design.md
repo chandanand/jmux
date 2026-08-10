@@ -232,9 +232,11 @@ issues. Then the stage word, the timer, the MR id and the pipeline glyph.
 **The branch leaves the sidebar.** It was only ever visible *as* row 1's session
 name, and row 1 is now the title; keeping it on row 2 at a 26-column default
 would truncate it to nothing useful while displacing the timer, which is what
-tells the human an agent has been stuck for forty minutes. It remains on the
-ghost preview and the info panel, which is where a question about the branch is
-actually asked.
+tells the human an agent has been stuck for forty minutes. On the wtm flow the
+session name still *is* the branch, so row 1 shows it until a title supersedes
+it, and the ghost preview's pre-flight still names the branch a not-yet-started
+issue would get. Nothing renders a running session's branch anywhere else — the
+info panel has no branch field.
 
 **Row 2 drop order, right to left:** timer → stage word → stage glyph → drift
 marker → MR id → and never the issue badge. The badge is now the row's identity;

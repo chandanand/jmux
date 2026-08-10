@@ -22,8 +22,9 @@ The sidebar shows all sessions with:
 Each session's row 1 is its **title** when one has generated — see
 [Session titles](configuration.md#session-titles-sessiontitle) — or its plain
 tmux session name otherwise; row 2 leads with its linked issue badge (`TRA-123
-+4`), not a branch name. The branch still shows on the ghost preview and the
-info panel.
++4`), not a branch name. For a worktree session the branch *is* the session
+name, so it is on row 1 until a title replaces it; the branch a **ghost** row
+would get is spelled out on its pre-flight preview.
 
 ### Grouping, sorting and filtering
 
