@@ -777,6 +777,21 @@ describe("chrome chords on a full-screen surface", () => {
     expect(surfaceSaw).toBe("");
   });
 
+  test("Ctrl-a g asks for the panel instead of reaching the surface", () => {
+    // The swap itself (leave the surface, then show the panel) is main.ts's
+    // requestDiffPanel; the router's whole job here is not to swallow the key.
+    let diffToggles = 0;
+    let surfaceSaw = "";
+    const router = surfaceRouter({
+      onDiffToggle: () => { diffToggles += 1; },
+      onModalInput: (d) => { surfaceSaw += d; },
+    });
+    router.handleInput("\x01");
+    router.handleInput("g");
+    expect(diffToggles).toBe(1);
+    expect(surfaceSaw).toBe("");
+  });
+
   test("any other chord flushes the prefix and the key to the surface, in order", () => {
     let toggled = 0;
     let surfaceSaw = "";

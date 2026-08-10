@@ -443,6 +443,12 @@ export class InputRouter {
           this.surfacePrefixDeferred = false;
           // --- keymap:surface-prefix start ---
           if (data === "\\") { this.opts.onSidebarToggle?.(); return; }
+          // The panel and a full-screen surface cannot share the frame — the
+          // surface takes the whole main area and the panel is docked chrome
+          // beside it. So this is a swap, resolved by main.ts: asking for the
+          // panel leaves the surface. Doing nothing (today's behaviour) is the
+          // one option that answers neither.
+          if (data === "g") { this.opts.onDiffToggle?.(); return; }
           // --- keymap:surface-prefix end ---
           if (deferred) this.opts.onModalInput?.("\x01");
           this.opts.onModalInput?.(data);

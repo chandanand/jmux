@@ -2931,6 +2931,33 @@ function toggleSidebar(): void {
   }
 }
 
+/**
+ * `Ctrl-a g` — show me the panel, from wherever I am.
+ *
+ * On the normal frame that is the plain toggle. On a full-screen surface
+ * (settings, workflow, ghost preview) it is a swap: the surface owns the whole
+ * main area and the panel is docked chrome beside it, so the two cannot share
+ * the frame and the surface steps aside.
+ *
+ * The second branch is what stops the swap from being a no-op. A panel opened
+ * before the surface was is still `isActive()` while the surface paints over
+ * it — invisible, because the surface render paths pass no panel — so toggling
+ * blindly would close it, and `g` would read as "left the preview and nothing
+ * else". Leaving the surface is what makes it visible again.
+ */
+function requestDiffPanel(): void {
+  if (ghostPreview.isOpen || settingsScreen.isOpen || workflowScreen.isOpen) {
+    if (ghostPreview.isOpen) closeGhostPreview();
+    if (settingsScreen.isOpen) toggleSettingsScreen();
+    if (workflowScreen.isOpen) toggleWorkflowScreen();
+    if (diffPanel.isActive()) {
+      scheduleRender();
+      return;
+    }
+  }
+  void toggleDiffPanel();
+}
+
 async function toggleDiffPanel(): Promise<void> {
   const wasActive = diffPanel.isActive();
   diffPanel.toggle();
@@ -4334,7 +4361,7 @@ const inputRouter = new InputRouter(
     onGlassTabSwitch: (n) => { const tab = commandCenterTabs[n - 1]; if (tab) switchCommandCenterTab(tab.id); },
     onGlassTabRelative: (delta) => switchCommandCenterTabRelative(delta),
     onGlassDetach: () => detachClient(),
-    onDiffToggle: () => toggleDiffPanel(),
+    onDiffToggle: () => requestDiffPanel(),
     onDiffZoom: () => zoomDiffPanel(),
     onDiffSendReview: () => void sendReviewToAgent(),
     onDiffViewPicker: () => void openDiffViewPicker(),
