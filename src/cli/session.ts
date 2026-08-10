@@ -3,6 +3,8 @@ import { INTERNAL_SESSION_FILTER } from "../glass/internal-sessions";
 import { runTmuxDirect } from "./tmux";
 import { resolveCurrentSession, tmuxOrThrow, CliError, type CliContext } from "./context";
 import type { ParsedCtlArgs } from "../cli";
+import { US, splitFields } from "../tmux-fields";
+import { SESSION_TITLE_OPTION, TITLE_SIGNATURE_OPTION, MANUAL_SIGNATURE } from "../session-title/display";
 
 export interface SessionEntry {
   id: string;
@@ -11,22 +13,43 @@ export interface SessionEntry {
   attached: boolean;
   windows: number;
   path: string;
+  /** A model-generated phrase, additional to `name` — see displaySessionName. */
+  title?: string;
 }
+
+/**
+ * US-separated, not colon-separated: `path` was already free-form (a Windows
+ * path carries colons of its own) and a rejoin-from-index-N trick only works
+ * when the free-form field is last. `title` is a sentence a model wrote and
+ * would routinely contain a colon too, and it has to sit ahead of `path` to
+ * share this format with `info`'s -f filter construction — so there is no
+ * "last field" to lean on any more. tmux session/pane names can't contain the
+ * US byte, which is what makes it safe as a delimiter (see tmux-fields.ts).
+ */
+export const SESSION_FIELDS_FORMAT = [
+  "#{session_id}",
+  "#{session_name}",
+  "#{session_activity}",
+  "#{session_attached}",
+  "#{session_windows}",
+  "#{pane_current_path}",
+  `#{${SESSION_TITLE_OPTION}}`,
+].join(US);
 
 export function parseSessionListOutput(lines: string[]): SessionEntry[] {
   return lines
     .filter((l) => l.length > 0)
     .map((line) => {
-      const parts = line.split(":");
-      // Format: id:name:activity:attached:windows:path...
-      // path may contain colons, so rejoin everything from index 5 onward
-      const id = parts[0];
-      const name = parts[1];
-      const activity = parseInt(parts[2], 10);
-      const attached = parts[3] === "1";
-      const windows = parseInt(parts[4], 10);
-      const path = parts.slice(5).join(":");
-      return { id, name, activity, attached, windows, path };
+      const [id, name, activity, attached, windows, path, title] = splitFields(line);
+      return {
+        id: id ?? "",
+        name: name ?? "",
+        activity: parseInt(activity ?? "0", 10),
+        attached: attached === "1",
+        windows: parseInt(windows ?? "0", 10),
+        path: path ?? "",
+        ...(title ? { title } : {}),
+      };
     });
 }
 
@@ -105,7 +128,7 @@ export function handleSession(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
   switch (action) {
     case "list": {
       const result = runTmuxDirect(
-        ["list-sessions", "-f", INTERNAL_SESSION_FILTER, "-F", "#{session_id}:#{session_name}:#{session_activity}:#{session_attached}:#{session_windows}:#{pane_current_path}"],
+        ["list-sessions", "-f", INTERNAL_SESSION_FILTER, "-F", SESSION_FIELDS_FORMAT],
         ctx.socket,
       );
       // If no sessions exist, tmux exits non-zero — treat as empty list
@@ -146,7 +169,7 @@ export function handleSession(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
       const target = flags.target;
 
       const sessionResult = runTmuxDirect(
-        ["list-sessions", "-F", "#{session_id}:#{session_name}:#{session_activity}:#{session_attached}:#{session_windows}:#{pane_current_path}", "-f", `#{==:#{session_name},${target}}`],
+        ["list-sessions", "-F", SESSION_FIELDS_FORMAT, "-f", `#{==:#{session_name},${target}}`],
         ctx.socket,
       );
       tmuxOrThrow(sessionResult);
@@ -227,6 +250,16 @@ export function handleSession(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
       const target = flags.target;
       const newName = sanitizeTmuxSessionName(flags.name);
       tmuxOrThrow(runTmuxDirect(["rename-session", "-t", target, newName], ctx.socket));
+      // Stamp the same sentinel the TUI's own rename does, so a title
+      // generated before this rename (or one already in flight elsewhere)
+      // never overwrites a name the caller just set on purpose. `-t` and `-u`
+      // are kept as separate argv elements — "-tu" reads as "-t" taking the
+      // literal argument "u", which tmux rejects as "invalid option: <target>".
+      runTmuxDirect(["set-option", "-t", newName, "-u", SESSION_TITLE_OPTION], ctx.socket);
+      runTmuxDirect(
+        ["set-option", "-t", newName, TITLE_SIGNATURE_OPTION, MANUAL_SIGNATURE],
+        ctx.socket,
+      );
       return { renamed: newName, from: target };
     }
 

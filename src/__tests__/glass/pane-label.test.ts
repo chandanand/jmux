@@ -34,4 +34,13 @@ describe("buildPaneLabel", () => {
       }),
     ).toBe("web › bun");
   });
+
+  test("uses whatever display name it is handed", () => {
+    expect(buildPaneLabel({
+      sessionName: "Fix stale cache headers",
+      paneTitle: "claude",
+      paneCurrentCommand: "claude",
+      paneCurrentPath: "/tmp",
+    })).toBe("Fix stale cache headers › claude");
+  });
 });

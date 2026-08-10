@@ -89,6 +89,7 @@ import {
   PROMPT_OPTION,
   TITLE_CAPTURE_OPTION,
   MANUAL_SIGNATURE,
+  displaySessionName,
 } from "./session-title/display";
 import {
   titleSignature,
@@ -5271,9 +5272,15 @@ function buildPaletteCommands(): PaletteCommand[] {
   // Dynamic: switch to session (excluding current)
   for (const session of currentSessions) {
     if (session.id === currentSessionId) continue;
+    const shown = displaySessionName(session);
+    // Both strings go in the label because `refilter` fuzzy-matches the label
+    // and nothing else. A human who has typed `tra-123` for two days should not
+    // have to learn a new string to reach the same session.
     commands.push({
       id: `switch-session:${session.id}`,
-      label: `Switch to ${session.name}`,
+      label: shown === session.name
+        ? `Switch to ${session.name}`
+        : `Switch to ${shown} (${session.name})`,
       category: "session",
     });
   }
@@ -7716,6 +7723,14 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       });
       modal.open();
       openModal(modal, async (name) => {
+        // Forget the PRE-rename name: the generator's cache and any in-flight
+        // request are keyed on it, and this rename changes what tmux calls the
+        // session out from under that key. Forgetting bumps the generation, so
+        // a request already dispatched still finishes but its result is
+        // discarded on arrival instead of landing under a name that may by
+        // then belong to a different session — the MANUAL_SIGNATURE stamp
+        // below stops *future* requests, this stops one already in flight.
+        titleGenerator?.forget(currentName);
         // The title is unset rather than replaced, so the row falls back to the
         // name the human just typed — the same fallback as every other absence.
         // The `manual` sentinel lives in a tmux option so a restart cannot
@@ -9151,6 +9166,7 @@ const PIN_LABEL_FORMAT = [
   "#{pane_title}",
   "#{pane_current_command}",
   "#{pane_current_path}",
+  `#{${SESSION_TITLE_OPTION}}`,
 ].join(US);
 
 function refreshPinnedPanes(): void {
@@ -9166,12 +9182,14 @@ function refreshPinnedPanes(): void {
   // Per-pane labels + home session names for building entries/specs.
   const labelByPane = new Map<string, { label: string; sessionName: string }>();
   for (const row of glassRunner.run(["list-panes", "-a", "-F", PIN_LABEL_FORMAT]).lines) {
-    const [paneId, sessionName, paneTitle, cmd, path] = splitFields(row);
+    const [paneId, sessionName, paneTitle, cmd, path, sessionTitle] = splitFields(row);
     if (!paneId) continue;
+    const shown = displaySessionName({ name: sessionName ?? "", title: sessionTitle });
     labelByPane.set(paneId, {
+      // The real name — it addresses a tmux session and must not become a phrase.
       sessionName: sessionName ?? "",
       label: buildPaneLabel({
-        sessionName: sessionName ?? "",
+        sessionName: shown,
         paneTitle: paneTitle ?? "",
         paneCurrentCommand: cmd ?? "",
         paneCurrentPath: path ?? "",

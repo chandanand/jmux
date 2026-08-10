@@ -1004,7 +1004,10 @@ export class Sidebar {
 
   private buildSortInfos(): SessionSortInfo[] {
     return this.sessions.map((s) => ({
-      name: s.name,
+      // Sort on what the row shows, not the tmux name underneath it — the same
+      // rule `sectionedViewNotice` enforces elsewhere: a visible list ordered
+      // by a hidden key reads as broken, not merely different.
+      name: displaySessionName(s),
       status: this.statusOf(s),
       lastActivity: this.lastActivityOf(s),
     }));

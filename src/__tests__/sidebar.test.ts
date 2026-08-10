@@ -3069,4 +3069,18 @@ describe("session titles", () => {
     expect(row).toContain("tra-123");
     expect(row).not.toContain("Fix stale cache headers");
   });
+
+  // Sorting by name has to key on the string the row shows, or the sidebar
+  // reads as broken: a human sorting "by name" is sorting by what they read,
+  // not by a tmux slug they never see. With real names alone "$1" would sort
+  // before "$2"; the title flips it, which is what proves the fix is live.
+  test("sort by name orders on the title, not the tmux session name", () => {
+    const sidebar = new Sidebar(40, 30);
+    sidebar.updateSessions([
+      { id: "$1", name: "abc-real", attached: true, activity: 0, windowCount: 1 },
+      { id: "$2", name: "xyz-real", attached: true, activity: 0, windowCount: 1, title: "aardvark task" },
+    ]);
+    sidebar.setSortMode("name");
+    expect(sidebar.getDisplayOrderIds()).toEqual(["$2", "$1"]);
+  });
 });

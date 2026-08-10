@@ -325,8 +325,11 @@ message for the human, not something to work around.
 
 ### session list
 ```json
-{"sessions": [{"id": "$1", "name": "my-project", "windows": 3, "attached": true, "activity": 1712678400, "path": "/path/to/project"}]}
+{"sessions": [{"id": "$1", "name": "my-project", "windows": 3, "attached": true, "activity": 1712678400, "path": "/path/to/project", "title": "Fix stale cache headers"}]}
 ```
+`title` is the model-generated display phrase, present only once one has been
+generated. `name` is still the real tmux session name — use it to address the
+session with any other `session`/`pane`/`window` subcommand.
 
 ### session create / run-claude
 ```json
@@ -335,7 +338,7 @@ message for the human, not something to work around.
 
 ### session info
 ```json
-{"id": "$1", "name": "my-project", "windows": 2, "attached": true, "path": "/path", "windows_detail": [{"id": "@1", "index": 0, "name": "claude", "active": true, "zoomed": false, "bell": false}]}
+{"id": "$1", "name": "my-project", "windows": 2, "attached": true, "path": "/path", "title": "Fix stale cache headers", "windows_detail": [{"id": "@1", "index": 0, "name": "claude", "active": true, "zoomed": false, "bell": false}]}
 ```
 
 ### pane capture
