@@ -26,6 +26,10 @@ function makeSessions(
   }));
 }
 
+function rowText(grid: ReturnType<Sidebar["getGrid"]>, row: number, width = SIDEBAR_WIDTH): string {
+  return Array.from({ length: width }, (_, i) => grid.cells[row][i].char).join("");
+}
+
 describe("Sidebar", () => {
   test("renders header row with the group + sort chips", () => {
     const sidebar = new Sidebar(SIDEBAR_WIDTH, 30);
@@ -136,7 +140,7 @@ describe("Sidebar", () => {
     expect(row4).toContain("Code/work");
   });
 
-  test("grouped sessions show branch on detail line", () => {
+  test("grouped sessions show no branch on the detail line", () => {
     const sidebar = new Sidebar(SIDEBAR_WIDTH, 30);
     sidebar.updateSessions(
       makeSessions([
@@ -158,11 +162,13 @@ describe("Sidebar", () => {
       { length: SIDEBAR_WIDTH },
       (_, i) => grid.cells[7][i].char,
     ).join("");
-    expect(detailRow).toContain("main");
+    // The branch left the sidebar entirely — it was only ever visible as row
+    // 1's name, and with no title it falls back to the real session name there.
+    expect(detailRow).not.toContain("main");
     expect(detailRow).not.toContain("Code/work");
   });
 
-  test("ungrouped sessions show branch on detail line", () => {
+  test("ungrouped sessions show no branch on the detail line", () => {
     const sidebar = new Sidebar(SIDEBAR_WIDTH, 30);
     sidebar.updateSessions(
       makeSessions([
@@ -175,7 +181,7 @@ describe("Sidebar", () => {
       { length: SIDEBAR_WIDTH },
       (_, i) => grid.cells[5][i].char,
     ).join("");
-    expect(detailRow).toContain("dev");
+    expect(detailRow).not.toContain("dev");
   });
 
   test("highlights active session with an accent marker", () => {
@@ -860,7 +866,7 @@ describe("Sidebar", () => {
     expect(row[timerCol].dim).toBe(true);
   });
 
-  test("timer truncates branch text when space is tight", () => {
+  test("with no branch to compete for space, the timer renders in full", () => {
     const sidebar = new Sidebar(SIDEBAR_WIDTH, 30);
     sidebar.updateSessions(
       makeSessions([
@@ -879,7 +885,9 @@ describe("Sidebar", () => {
       { length: SIDEBAR_WIDTH },
       (_, i) => grid.cells[7][i].char,
     ).join("");
-    expect(detailText).toContain("…");
+    // The branch used to compete with the timer for this row's width and
+    // truncate to an ellipsis; it is gone, so nothing does.
+    expect(detailText).not.toContain("…");
     expect(detailText).toContain("4:0");
   });
 
@@ -1378,20 +1386,25 @@ describe("Sidebar pipeline glyphs", () => {
 });
 
 describe("Sidebar inline link data", () => {
-  test("renders linear ID on name row", () => {
+  test("renders linear ID on the detail row, session name on the row above", () => {
     const sidebar = new Sidebar(SIDEBAR_WIDTH, 30);
     sidebar.updateSessions(makeSessions([{ name: "api" }]));
     sidebar.setSessionContexts(makeContexts([{
       name: "api", issueIds: ["ENG-1234"],
     }]));
     const grid = sidebar.getGrid();
-    // Row 2: overview, Row 3: spacer, Row 4: session name row
+    // Row 2: overview, Row 3: spacer, Row 4: session name row, Row 5: detail row
     const nameRow = Array.from(
       { length: SIDEBAR_WIDTH },
       (_, i) => grid.cells[4][i].char,
     ).join("");
-    expect(nameRow).toContain("ENG-1234");
+    const detailRow = Array.from(
+      { length: SIDEBAR_WIDTH },
+      (_, i) => grid.cells[5][i].char,
+    ).join("");
+    expect(nameRow).not.toContain("ENG-1234");
     expect(nameRow).toContain("api");
+    expect(detailRow).toContain("ENG-1234");
   });
 
   test("renders MR ID on detail row", () => {
@@ -2628,46 +2641,56 @@ describe("Sidebar workflow field", () => {
 
   const rows = (sidebar: Sidebar) =>
     sidebar.getGrid().cells.map((row) => row.map((c) => c.char).join(""));
-  /** The session's detail row: the one carrying its branch or its workflow word. */
+  /** The session's detail row: the one carrying its workflow word. */
   const detailRow = (sidebar: Sidebar, needle: string) =>
     rows(sidebar).find((r) => r.includes(needle));
+  /** The session's own name row — never the workflow word, never a branch. */
+  const findNameRow = (sidebar: Sidebar) =>
+    rows(sidebar).findIndex((r) => r.includes("api"));
 
-  test("a wide sidebar leads the detail row with the stage word, then the branch", () => {
+  // The branch left the sidebar with this move: it was only ever visible as
+  // row 1's name, and `build()` sets no issue context, so there is nothing at
+  // all on the left of these rows besides the field itself.
+  test("a wide sidebar shows the stage word on the detail row; no branch appears", () => {
     const row = detailRow(build(), "Review")!;
     expect(row).toBeDefined();
     expect(row).toContain("Review");
-    expect(row).toContain("feat/importer");
-    expect(row.indexOf("Review")).toBeLessThan(row.indexOf("feat/importer"));
+    expect(row).not.toContain("feat/importer");
   });
 
   // The field was added to an existing row; it has to take that row's state
-  // styling like everything already on it. Resting it is a touch quieter than
-  // the branch, which is deliberate — on the active row it must not stay dim
-  // in the one place the user is looking.
+  // styling like everything already on it, rather than staying dim in the one
+  // place the user is looking. Resting, it sets a specific quiet color
+  // (WORKFLOW_ATTRS); active, it inherits the row's own detail styling and
+  // sets none of its own — the two are observably different fg values.
   test("the field lights up with its row when that row is active", () => {
+    const resting = build();
+    const restRowIdx = rows(resting).findIndex((r) => r.includes("Review"));
+    const restText = rows(resting)[restRowIdx]!;
+    const restCell = resting.getGrid().cells[restRowIdx]![restText.indexOf("Review")]!;
+
     const sidebar = build();
     sidebar.setActiveSession("$0");
-    const grid = sidebar.getGrid();
     const rowIdx = rows(sidebar).findIndex((r) => r.includes("Review"));
     expect(rowIdx).toBeGreaterThan(-1);
+    const text = rows(sidebar)[rowIdx]!;
+    const activeCell = sidebar.getGrid().cells[rowIdx]![text.indexOf("Review")]!;
 
-    const cellAt = (needle: string) => {
-      const text = rows(sidebar)[rowIdx]!;
-      return grid.cells[rowIdx]![text.indexOf(needle)]!;
-    };
-    expect(cellAt("Review").fg).toBe(cellAt("feat/importer").fg);
-    expect(cellAt("Review").dim).toBe(cellAt("feat/importer").dim);
+    expect(activeCell.fg).not.toBe(restCell.fg);
   });
 
-  test("no workflow resolved leaves the row exactly as it was", () => {
-    const row = detailRow(build(WIDE, null), "feat/importer")!;
-    expect(row).toContain("feat/importer");
+  test("no workflow resolved leaves the row without a stage word", () => {
+    const sidebar = build(WIDE, null);
+    const nameRowIdx = findNameRow(sidebar);
+    expect(nameRowIdx).toBeGreaterThan(-1);
+    const row = rows(sidebar)[nameRowIdx + 1]!;
     expect(row).not.toContain("Review");
   });
 
-  // The branch is derived from the session name one row above, so it is the one
-  // field here repeating something already on screen.
-  test("the branch truncates, then drops, before the stage word gives way", () => {
+  // Nothing follows the field any more, so there is nothing left for it to
+  // compete with as the sidebar narrows — this only pins down that a branch
+  // never reappears to take the space back.
+  test("the stage word has no branch to compete with at any width", () => {
     expect(detailRow(build(22), "Review")).toContain("Review");
     const narrow = detailRow(build(15), "Review");
     expect(narrow).toContain("Review");
@@ -2680,18 +2703,17 @@ describe("Sidebar workflow field", () => {
     expect(row).not.toContain("Review");
   });
 
-  // A separator divides two words. The last-resort forms are markers, not
-  // words — and `·` is both the backlog/unknown glyph and the character inside
-  // the separator, so `· · feat/x` would put three visual tokens on a row
-  // saying two things. `unknown` is the default when an adapter populates no
-  // stateType, which makes this the common case, not an exotic one.
-  // Reachable whenever the stage label is wider than the separator plus the
-  // branch minimum — "In Progress" and "In Review" both are.
-  test("a marker form is not followed by the word separator", () => {
-    const row = detailRow(build(13, wf({ label: "In Progress", stateType: undefined })), "feat")!;
-    expect(row).toBeDefined();
+  // `unknown` is the default when an adapter populates no stateType, which
+  // makes this the common case, not an exotic one. With no badge, the field is
+  // the only thing on the row's left, so it renders alone — nothing follows it
+  // to collide with.
+  test("a marker form renders alone, with nothing after it", () => {
+    const sidebar = build(13, wf({ label: "In Progress", stateType: undefined }));
+    const nameRowIdx = findNameRow(sidebar);
+    const row = rows(sidebar)[nameRowIdx + 1]!;
+    expect(row).toContain("·");
     expect(row).not.toContain("· ·");
-    expect(row).toContain("· feat");
+    expect(row).not.toContain("In Progress");
   });
 
   test("the drift marker gets the same treatment", () => {
@@ -2700,14 +2722,15 @@ describe("Sidebar workflow field", () => {
       drift: "Ready for Release",
       driftByIssue: new Map([["a", "Ready for Release"]]),
     });
-    const row = detailRow(build(20, narrow), "feat")!;
-    expect(row).toBeDefined();
-    expect(row).toContain("! feat");
+    const sidebar = build(20, narrow);
+    const nameRowIdx = findNameRow(sidebar);
+    const row = rows(sidebar)[nameRowIdx + 1]!;
+    expect(row).toContain("!");
     expect(row).not.toContain("! ·");
   });
 
-  // A row reading "Review" under a "REVIEW" header says nothing and costs the
-  // branch six columns to say it.
+  // A row reading "Review" under a "REVIEW" header says nothing, and there is
+  // no branch left for the freed width to go to — the row is simply shorter.
   describe("grouped by stage, the header already says it", () => {
     function grouped(width = WIDE, workflow = wf()) {
       const sidebar = new Sidebar(width, 30);
@@ -2717,16 +2740,14 @@ describe("Sidebar workflow field", () => {
       return sidebar;
     }
 
-    test("the stage word drops from the row and the branch takes the width back", () => {
+    test("the stage word drops from the row, and nothing replaces it", () => {
       const sidebar = grouped();
       const all = rows(sidebar);
       const header = all.findIndex((r) => r.includes("Review"));
-      const branchRow = all.findIndex((r) => r.includes("feat/importer"));
       expect(header).toBeGreaterThan(-1);
-      expect(branchRow).toBeGreaterThan(header);
       // The only "Review" on screen is the header itself.
       expect(all.filter((r) => r.includes("Review")).length).toBe(1);
-      expect(all[branchRow]).not.toContain("·");
+      expect(all.some((r) => r.includes("feat/importer"))).toBe(false);
     });
 
     // The header supplies where the ticket is; the disagreement is about where
@@ -2745,19 +2766,19 @@ describe("Sidebar workflow field", () => {
       sidebar.setPinnedSessions(new Set(["api"]));
       const all = rows(sidebar);
       expect(all.some((r) => r.includes("Pinned"))).toBe(true);
-      expect(all.some((r) => r.includes("Review · feat/importer"))).toBe(true);
+      expect(all.some((r) => r.includes("Review"))).toBe(true);
     });
 
     // Its sessions fall to the flat remainder, where nothing names the stage.
     test("a session whose stage draws no band keeps its word", () => {
       const sidebar = grouped(WIDE, wf({ band: null }));
-      expect(rows(sidebar).some((r) => r.includes("Review · feat/importer"))).toBe(true);
+      expect(rows(sidebar).some((r) => r.includes("Review"))).toBe(true);
     });
 
     test("on every other axis the word stays", () => {
       const sidebar = grouped();
       sidebar.setGroupMode("project");
-      expect(rows(sidebar).some((r) => r.includes("Review · feat/importer"))).toBe(true);
+      expect(rows(sidebar).some((r) => r.includes("Review"))).toBe(true);
     });
   });
 
@@ -2856,5 +2877,62 @@ describe("Sidebar workflow field", () => {
       expect(row).toContain("Todo");
       expect(row).not.toContain("→");
     });
+  });
+});
+
+// Row 1 becomes the title (or the real name, with none), and the issue badge
+// moves down to lead row 2 — see the module doc comment on renderSession.
+describe("session titles", () => {
+  const titled: SessionInfo[] = [{
+    id: "$0", name: "tra-123", attached: true, activity: 0, windowCount: 1,
+    gitBranch: "feat/cache", title: "Fix stale cache headers",
+  }];
+
+  // Row 2: overview, Row 3: spacer, Row 4: session name row, Row 5: detail row
+  // — the permanent overview block every other describe block in this file
+  // accounts for (see e.g. "renders ungrouped sessions without a group header").
+  test("row 1 shows the title instead of the session name", () => {
+    const sidebar = new Sidebar(40, 30);
+    sidebar.updateSessions(titled);
+    const grid = sidebar.getGrid();
+    expect(rowText(grid, 4, 40)).toContain("Fix stale cache headers");
+    expect(rowText(grid, 4, 40)).not.toContain("tra-123");
+  });
+
+  test("row 1 falls back to the session name when there is no title", () => {
+    const sidebar = new Sidebar(40, 30);
+    sidebar.updateSessions([{ ...titled[0], title: undefined }]);
+    expect(rowText(sidebar.getGrid(), 4, 40)).toContain("tra-123");
+  });
+
+  test("the branch no longer appears on row 2", () => {
+    const sidebar = new Sidebar(40, 30);
+    sidebar.updateSessions(titled);
+    expect(rowText(sidebar.getGrid(), 5, 40)).not.toContain("feat/cache");
+  });
+
+  test("row 2 leads with the issue badge", () => {
+    const sidebar = new Sidebar(40, 30);
+    sidebar.updateSessions(titled);
+    sidebar.setSessionContexts(new Map([["tra-123", {
+      issues: [
+        { id: "1", identifier: "TRA-123", title: "Cache", status: "In Review", stateType: "started" },
+        { id: "2", identifier: "TRA-124", title: "More", status: "In Review", stateType: "started" },
+      ],
+      mrs: [],
+    } as unknown as SessionContext]]));
+    const row2 = rowText(sidebar.getGrid(), 5, 40);
+    expect(row2.trimStart().startsWith("▸ TRA-123 +1")).toBe(true);
+    expect(rowText(sidebar.getGrid(), 4, 40)).not.toContain("TRA-123");
+  });
+
+  test("the issue badge survives a width that drops everything else", () => {
+    const sidebar = new Sidebar(16, 30);
+    sidebar.updateSessions(titled);
+    sidebar.setSessionContexts(new Map([["tra-123", {
+      issues: [{ id: "1", identifier: "TRA-123", title: "Cache", status: "In Review", stateType: "started" }],
+      mrs: [],
+    } as unknown as SessionContext]]));
+    expect(rowText(sidebar.getGrid(), 5, 16)).toContain("TRA-123");
   });
 });

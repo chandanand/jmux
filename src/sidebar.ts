@@ -201,8 +201,6 @@ const ISSUE_STATUS_ATTRS: CellAttrs = {
 const ISSUE_DONE_ATTRS: CellAttrs = { dim: true };
 /** Below this a title is a stub rather than information, so it is dropped. */
 const ISSUE_TITLE_MIN_COLS = 6;
-/** The same judgement for a branch name on a session's detail row. */
-const BRANCH_MIN_COLS = 4;
 // Status shorthand, from the tracker-agnostic stateType rather than the status
 // name: names are workspace-defined ("QA Failed", "Ready for review") and no
 // abbreviation of them is safe, while these six categories are fixed.
@@ -1831,31 +1829,18 @@ export class Sidebar {
         ? { bg: HOVER_BG, bgMode: ColorMode.RGB }
         : {};
 
-    // --- Row 1: session name (left) + mode badge + linear ID (right) ---
+    // --- Row 1: the session's display name (left) + mode badge (right) ---
     //
-    // The badge carries a disclosure chevron when the session holds more than
-    // one issue, and clicking it expands the list in place. Prepended into the
-    // badge string rather than placed in its own column so the right-alignment
-    // stays a single measurement — the same reason `linearId` is one
-    // preformatted string and not a pair of fields.
+    // The name is the generated title when there is one and the real tmux name
+    // when there is not — `displaySessionName` is the only place that decides,
+    // so no surface can disagree with another about what a session is called.
+    // The mode badge takes the right-hand slot the issue badge used to hold;
+    // that badge is now row 2's identity field.
     const nameStart = 3;
-    const expandable = this.canExpandSession(session.name);
-    const badgeText = view.linearId ?? "";
-    const linearIdStr = badgeText && expandable
-      ? `${this.expandedSessions.has(session.name) ? "▾" : "▸"} ${badgeText}`
-      : badgeText;
-    const linearIdCol = linearIdStr ? this.width - textCols(linearIdStr) - 1 : this.width;
     const hasBadge = view.modeBadge !== null;
-    const badgeCol = hasBadge
-      ? (linearIdStr ? linearIdCol - 2 : this.width - 2)
-      : -1;
-    const reserveRight = (linearIdStr ? linearIdCol - 1 : this.width - 1)
-      - (hasBadge ? 2 : 0);
-    const nameMaxLen = reserveRight - nameStart;
-    let displayName = view.sessionName;
-    if (displayName.length > nameMaxLen) {
-      displayName = displayName.slice(0, Math.max(0, nameMaxLen - 1)) + "\u2026";
-    }
+    const reserveRight = this.width - 1 - (hasBadge ? 2 : 0);
+    const nameMaxCols = reserveRight - nameStart;
+    const displayName = truncateToCols(view.title ?? view.sessionName, Math.max(0, nameMaxCols));
 
     const nameAttrs: CellAttrs = isActive
       ? { ...ACTIVE_NAME_ATTRS }
@@ -1864,7 +1849,8 @@ export class Sidebar {
         : { ...INACTIVE_NAME_ATTRS };
     writeString(grid, nameRow, nameStart, displayName, nameAttrs);
 
-    if (hasBadge && badgeCol >= 0) {
+    if (hasBadge) {
+      const badgeCol = this.width - 2;
       let glyph: string;
       let badgeAttrs: CellAttrs;
       if (view.modeBadge === "P") {
@@ -1880,23 +1866,14 @@ export class Sidebar {
       writeString(grid, nameRow, badgeCol, glyph, { ...badgeAttrs, ...bgAttrs });
     }
 
-    if (linearIdStr) {
-      const linkAttrs: CellAttrs = { ...DIM_ATTRS, ...bgAttrs };
-      writeString(grid, nameRow, linearIdCol, linearIdStr, linkAttrs);
-      // The whole badge is the disclosure target, not just the chevron: a
-      // one-column hit box on a 26-column sidebar is a dare, not an affordance.
-      // Recorded per row because a session's badge moves with it, the same way
-      // the header chips record their own columns each render.
-      if (expandable) {
-        this.rowToDisclosure.set(nameRow, {
-          sessionName: session.name,
-          startCol: linearIdCol,
-          endCol: linearIdCol + textCols(linearIdStr) - 1,
-        });
-      }
-    }
-
-    // --- Row 2: branch (left) + timer (center-right) + MR ID + pipeline glyph (right) ---
+    // --- Row 2: issue badge (left) · workflow field · timer · MR · glyph ---
+    //
+    // The badge moved down from row 1, which the title now fills. It leads the
+    // row and never drops: it is the row's identity, and a row that has dropped
+    // it says nothing about which work it is. The branch used to sit here and no
+    // longer appears at all — it was only ever visible *as* row 1's name, and at
+    // a 26-column default keeping it would truncate it to a stub while
+    // displacing the timer, which is what says an agent has been stuck.
     if (detailRow >= this.height) return;
 
     const detailAttrs: CellAttrs = isActive
@@ -1955,7 +1932,7 @@ export class Sidebar {
       }
     }
 
-    // Pinned pane count (right side, before branch)
+    // Pinned pane count (right side, before the badge/workflow cluster)
     if (item.pinnedCount && item.pinnedCount > 0) {
       const pinnedStr = `(${item.pinnedCount} pinned)`;
       const pinnedCol = rightEdge - pinnedStr.length + 1;
@@ -1965,43 +1942,57 @@ export class Sidebar {
       }
     }
 
-    // Workflow field (left, before the branch) + branch.
+    // Issue badge (left) + workflow field.
     //
-    // The field outranks the branch because on the wtm flow the branch name is
-    // derived from the session name one row above: it is the only field here
-    // repeating something already on screen, while the workflow position is
-    // derivable from nothing else.
+    // The badge carries a disclosure chevron when the session holds more than
+    // one issue, and clicking it expands the list in place. Prepended into the
+    // badge string rather than placed in its own column so the right-alignment
+    // stays a single measurement — the same reason `linearId` is one
+    // preformatted string and not a pair of fields.
     const detailStart = 3;
     let leftCol = detailStart;
-    let fieldTerse = false;
+    const expandable = this.canExpandSession(session.name);
+    const badgeText = view.linearId ?? "";
+    const linearIdStr = badgeText && expandable
+      ? `${this.expandedSessions.has(session.name) ? "▾" : "▸"} ${badgeText}`
+      : badgeText;
+    if (linearIdStr) {
+      const cols = Math.min(textCols(linearIdStr), rightEdge - leftCol + 1);
+      if (cols > 0) {
+        writeString(grid, detailRow, leftCol, truncateToCols(linearIdStr, cols),
+          { ...DIM_ATTRS, ...bgAttrs });
+        // The whole badge is the disclosure target, not just the chevron: a
+        // one-column hit box on a 26-column sidebar is a dare, not an
+        // affordance. Recorded on the row the badge is actually drawn on.
+        if (expandable) {
+          this.rowToDisclosure.set(detailRow, {
+            sessionName: session.name,
+            startCol: leftCol,
+            endCol: leftCol + cols - 1,
+          });
+        }
+        leftCol += cols;
+      }
+    }
+
+    // No `fieldTerse` any more: it existed only to pick the separator before the
+    // branch, and the branch is gone. `workflowFieldText` still returns `terse`
+    // for callers that have something after the field; this one does not.
     const wf = this.sessionWorkflow.get(session.name);
     if (wf) {
-      const field = workflowFieldText(wf, rightEdge - detailStart + 1, item.stageInHeader);
-      if (field.text) {
+      const sep = leftCol === detailStart ? "" : WORKFLOW_SEP;
+      const budget = rightEdge - (leftCol + textCols(sep)) + 1;
+      const field = workflowFieldText(wf, Math.max(0, budget), item.stageInHeader);
+      if (field.text && textCols(field.text) <= budget) {
+        if (sep) writeString(grid, detailRow, leftCol, sep, detailAttrs);
+        const fieldCol = leftCol + textCols(sep);
         // Drift keeps the attention colour in every state — that is what it is
-        // for. Otherwise the field follows the row it sits on: resting, it is a
-        // touch quieter than the branch beside it, but on the active or hovered
-        // row it lights up with everything else rather than staying dim in the
-        // one place the user is looking.
-        writeString(grid, detailRow, leftCol, field.text, wf.drift
+        // for. Otherwise the field follows the row it sits on.
+        writeString(grid, detailRow, fieldCol, field.text, wf.drift
           ? { ...this.stateAttrs.waiting, ...bgAttrs }
           : isActive || isHovered
             ? detailAttrs
             : { ...WORKFLOW_ATTRS, ...bgAttrs });
-        leftCol += textCols(field.text);
-        fieldTerse = field.terse;
-      }
-    }
-
-    if (view.branch) {
-      const sep = leftCol === detailStart ? "" : fieldTerse ? " " : WORKFLOW_SEP;
-      const branchCol = leftCol + textCols(sep);
-      const maxLen = rightEdge - branchCol + 1;
-      // Below this a branch is a stub rather than information, so it drops
-      // entirely — the same judgement ISSUE_TITLE_MIN_COLS makes for a title.
-      if (maxLen >= BRANCH_MIN_COLS) {
-        if (sep) writeString(grid, detailRow, leftCol, sep, detailAttrs);
-        writeString(grid, detailRow, branchCol, truncateToCols(view.branch, maxLen), detailAttrs);
       }
     }
 

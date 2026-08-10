@@ -50,21 +50,40 @@ describe("buildSessionView", () => {
     expect(view.sessionId).toBe("$0");
     expect(view.sessionName).toBe("test-session");
     expect(view.linearId).toBeNull();
-    expect(view.branch).toBeNull();
     expect(view.mrId).toBeNull();
     expect(view.pipelineState).toBeNull();
     expect(view.timerText).toBeNull();
     expect(view.hasActivity).toBe(false);
   });
 
-  test("uses gitBranch from session", () => {
+  // `branch` left the view when it left the sidebar — gitBranch feeds nothing
+  // here now, which is what "the view carries no branch field" pins down.
+  test("gitBranch no longer surfaces on the view", () => {
     const view = buildSessionView(
       makeSession({ gitBranch: "feat/cool" }),
       undefined,
       undefined,
       new Set(),
     );
-    expect(view.branch).toBe("feat/cool");
+    expect("branch" in view).toBe(false);
+  });
+
+  test("the view carries the title and no longer carries the branch", () => {
+    const view = buildSessionView(
+      { id: "$1", name: "tra-123", attached: true, activity: 0, windowCount: 1,
+        gitBranch: "feat/cache", title: "Fix stale cache headers" },
+      undefined, undefined, new Set(), null,
+    );
+    expect(view.title).toBe("Fix stale cache headers");
+    expect("branch" in view).toBe(false);
+  });
+
+  test("the title is null when the session has none", () => {
+    const view = buildSessionView(
+      { id: "$1", name: "tra-123", attached: true, activity: 0, windowCount: 1 },
+      undefined, undefined, new Set(), null,
+    );
+    expect(view.title).toBeNull();
   });
 
   test("populates linearId from the driving issue, counting the rest", () => {

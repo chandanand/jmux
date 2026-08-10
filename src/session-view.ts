@@ -23,18 +23,22 @@ export interface SessionView {
   hasActivity: boolean;
   indicatorKind: IndicatorKind;
 
-  // Row 1, between name and Linear ID
+  // Row 1, right-aligned
   modeBadge: ModeBadge;
 
   /**
-   * Row 1, right-aligned: the driving issue, suffixed with `+N` when the
+   * Row 1: the generated title, or null. The sidebar renders
+   * `displaySessionName`, so null is simply the real name — the behaviour that
+   * shipped before titles existed, and the only fallback there is.
+   */
+  title: string | null;
+
+  /**
+   * Row 2, left-aligned: the driving issue, suffixed with `+N` when the
    * session carries more. One preformatted string rather than a pair of
    * fields, so the sidebar's right-alignment math stays a single measurement.
    */
   linearId: string | null;
-
-  // Row 2, left-aligned
-  branch: string | null;
 
   // Row 2, center-right
   timerText: string | null;
@@ -240,8 +244,8 @@ export function buildSessionView(
     hasActivity: activitySet.has(session.id),
     indicatorKind,
     modeBadge,
+    title: session.title?.trim() || null,
     linearId,
-    branch: session.gitBranch ?? null,
     timerText,
     timerRemaining,
     mrId,
