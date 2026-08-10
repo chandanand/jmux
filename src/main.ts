@@ -97,7 +97,7 @@ import {
   promptTextFromHook,
   type TitleInput,
 } from "./session-title/prompt";
-import { TitleGenerator, spawnTitleRunner } from "./session-title/generator";
+import { TitleGenerator, spawnTitleRunner, resolveTitleConfig } from "./session-title/generator";
 import {
   linkKey,
   drivingIssue,
@@ -516,27 +516,42 @@ let diffPanelSplitRatio = configStore.config.diffPanel?.splitRatio ?? 0.4;
 let hunkCommand = configStore.config.diffPanel?.hunkCommand ?? "hunk";
 
 /**
+ * Config complaints already said, so a hot reload of an unrelated key doesn't
+ * repeat them. Keyed on the message itself: the same bad value stays quiet,
+ * a *newly* bad one still speaks up.
+ */
+const titleConfigWarnings = new Set<string>();
+
+function warnTitleConfig(message: string): void {
+  if (titleConfigWarnings.has(message)) return;
+  titleConfigWarnings.add(message);
+  // Both channels on purpose. stderr is what a user watching their first run
+  // sees; jmux.log is what they can still read after the alt screen has taken
+  // the terminal, which is where a hot-reload complaint lands.
+  process.stderr.write(`${message}\n`);
+  logError("jmux", message);
+}
+
+/**
  * The session-title generator, or null when titling is off.
  *
  * `sessionTitle.command` unset is the entire off switch — no second boolean —
  * so a null generator is what every caller checks, and the whole feature
- * disappears behind one `?.`.
+ * disappears behind one `?.`. A *malformed* `sessionTitle` block lands on the
+ * same null, but says so first: see `resolveTitleConfig` for why silence there
+ * is indistinguishable from the off state and therefore unusable.
  *
- * Everything this touches *at call time* is declared above it (`configStore`).
- * `currentSessions` and `control` are only reached from inside the callback,
- * which cannot run before the first title comes back — see boot-smoke.test.ts
- * for why that distinction is load-bearing at module scope in this file.
+ * Everything this touches *at call time* is declared above it (`configStore`,
+ * `warnTitleConfig`). `currentSessions`, `control` and `showToast` are only
+ * reached from inside the callbacks, which cannot run before the first title
+ * comes back — see boot-smoke.test.ts for why that distinction is load-bearing
+ * at module scope in this file.
  */
 function makeTitleGenerator(): TitleGenerator | null {
-  const cfg = configStore.config.sessionTitle;
-  if (!cfg?.command || cfg.command.length === 0) return null;
+  const cfg = resolveTitleConfig(configStore.config.sessionTitle ?? null, warnTitleConfig);
+  if (!cfg) return null;
   return new TitleGenerator(
-    {
-      command: cfg.command,
-      timeoutMs: cfg.timeoutMs ?? 20_000,
-      maxChars: cfg.maxChars ?? 48,
-      maxConcurrent: 2,
-    },
+    cfg,
     spawnTitleRunner,
     (sessionName, title, signature) => {
       const session = currentSessions.find((s) => s.name === sessionName);
@@ -547,6 +562,11 @@ function makeTitleGenerator(): TitleGenerator | null {
             `set-option -t ${tq(session.id)} ${TITLE_SIGNATURE_OPTION} ${tq(signature)}`,
         )
         .catch(() => {});
+    },
+    // Explicitly-requested runs only — the generator decides which those are.
+    (sessionName, reason) => {
+      logError("jmux", `session title for ${sessionName} failed: ${reason}`);
+      showToast(`Could not name ${sessionName} — ${reason}`);
     },
   );
 }
@@ -3654,6 +3674,16 @@ async function requestSessionTitles(sessions: readonly SessionInfo[]): Promise<v
  * The stored title is left on screen rather than unset. It is replaced when the
  * new one lands, so the row changes once instead of flickering back to the raw
  * session name in between.
+ *
+ * **And every outcome answers, which is what separates this from an automatic
+ * run.** "A naming failure is silent" governs writes jmux makes on its own
+ * initiative — the same distinction `transitionConfirm` draws for `ctl issue
+ * move`. This one was asked for, so a precondition failure, the dispatch
+ * itself, and a model that never answers all say so: the model call takes tens
+ * of seconds and the row does not change until it lands, so with no
+ * acknowledgement the command is indistinguishable from a key that did nothing
+ * — and pressing it again does nothing either, because `forget()` has already
+ * run and the second press finds the same question already in flight.
  */
 async function retitleCurrentSession(): Promise<void> {
   if (!titleGenerator) {
@@ -3666,8 +3696,21 @@ async function retitleCurrentSession(): Promise<void> {
     return;
   }
 
+  // Reachable, not defensive: in the Command Center `currentSessionId` is the
+  // internal park session, which `INTERNAL_SESSION_FILTER` keeps out of
+  // `currentSessions` — so the command has a session to act on tmux's account
+  // and none on jmux's. A bare return there is the silent no-op this whole
+  // command exists to be the cure for.
   const session = currentSessions.find((s) => s.id === currentSessionId);
-  if (!session) return;
+  if (!session) {
+    showNotice({
+      title: "No session to re-name",
+      message: "Nothing is attached that jmux can name — the Command Center is not a session.",
+      hint: "Leave the Command Center, or switch to the session you want named, and try again.",
+      tone: "warn",
+    });
+    return;
+  }
 
   // Before resolving, not after: `resolveGitTitleInput` returns the memo's
   // already-resolved entry for an unchanged branch rather than re-running
@@ -3700,7 +3743,11 @@ async function retitleCurrentSession(): Promise<void> {
   await control
     .sendCommand(`set-option -t ${tq(session.id)} -u ${TITLE_SIGNATURE_OPTION}`)
     .catch(() => {});
-  titleGenerator.request(session.name, titleSignature(input), buildTitlePrompt(input));
+  // `explicit` is what routes a failure back to `onFailure` above; automatic
+  // runs stay silent, or one unreachable command would report itself on every
+  // poll for the life of the process.
+  titleGenerator.request(session.name, titleSignature(input), buildTitlePrompt(input), true);
+  showToast(`Asking the model to name ${displaySessionName(session)}…`);
 }
 
 /**
