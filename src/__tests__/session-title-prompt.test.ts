@@ -119,4 +119,11 @@ describe("parseTitle", () => {
     expect(parseTitle("   \n\n  ", 48)).toBeNull();
     expect(parseTitle('""', 48)).toBeNull();
   });
+
+  test("strips curly/typographic quotes", () => {
+    // U+201C LEFT DOUBLE QUOTATION MARK, U+201D RIGHT DOUBLE QUOTATION MARK
+    expect(parseTitle("\u201cFix cache\u201d", 48)).toBe("Fix cache");
+    // U+2018 LEFT SINGLE QUOTATION MARK, U+2019 RIGHT SINGLE QUOTATION MARK
+    expect(parseTitle("\u2018Fix cache\u2019", 48)).toBe("Fix cache");
+  });
 });

@@ -95,8 +95,8 @@ export function parseTitle(raw: string, maxChars: number): string | null {
 
   let text = first
     .replace(/^#+\s*/, "")
-    .replace(/^["'`"']+/, "")
-    .replace(/["'`"']+$/, "")
+    .replace(/^["'`\u201c\u2018]+/, "")
+    .replace(/["'`\u201d\u2019]+$/, "")
     .replace(/[.\s]+$/, "")
     .trim();
 
