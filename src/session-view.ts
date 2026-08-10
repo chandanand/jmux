@@ -27,9 +27,12 @@ export interface SessionView {
   modeBadge: ModeBadge;
 
   /**
-   * Row 1: the generated title, or null. The sidebar renders
-   * `displaySessionName`, so null is simply the real name — the behaviour that
-   * shipped before titles existed, and the only fallback there is.
+   * Row 1: the generated title, unprocessed, or null when the session has
+   * none. Deliberately not trimmed or empty-checked here — that decision
+   * belongs to `displaySessionName` alone (`session-title/display.ts`), the
+   * one place that decides what a session is called. A second trim-and-
+   * fallback here would be the same decision living in two places, able to
+   * disagree with the first the moment either one changes.
    */
   title: string | null;
 
@@ -244,7 +247,7 @@ export function buildSessionView(
     hasActivity: activitySet.has(session.id),
     indicatorKind,
     modeBadge,
-    title: session.title?.trim() || null,
+    title: session.title ?? null,
     linearId,
     timerText,
     timerRemaining,

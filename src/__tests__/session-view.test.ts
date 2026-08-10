@@ -86,6 +86,19 @@ describe("buildSessionView", () => {
     expect(view.title).toBeNull();
   });
 
+  // The trim-and-empty-is-absent decision belongs to `displaySessionName`
+  // alone (session-title/display.ts), not to this function — a second
+  // decision here would be the same rule living in two places. Pinned by
+  // checking the one case where trimming would change the answer: this view
+  // must carry the whitespace through unchanged, not pre-empt the decision.
+  test("a whitespace-only title passes through unchanged, untrimmed", () => {
+    const view = buildSessionView(
+      { id: "$1", name: "tra-123", attached: true, activity: 0, windowCount: 1, title: "   " },
+      undefined, undefined, new Set(), null,
+    );
+    expect(view.title).toBe("   ");
+  });
+
   test("populates linearId from the driving issue, counting the rest", () => {
     const ctx = makeCtx({
       issues: [

@@ -2716,6 +2716,27 @@ describe("Sidebar workflow field", () => {
     expect(row).not.toContain("In Progress");
   });
 
+  // The separator now sits between the badge and the field, not between the
+  // field and a branch — but the collision it has to avoid is the same one:
+  // `·` is both the backlog/unknown glyph and the character inside the
+  // separator, so an unconditional full separator ahead of a terse field
+  // renders "· ·", indistinguishable as one thing or two. Reachable at the
+  // sidebar's own documented default width (26) with a two-issue badge.
+  test("a marker form is not preceded by the full separator when a badge leads the row", () => {
+    const sidebar = build(26, wf({ label: "In Progress", stateType: undefined }));
+    sidebar.setSessionContexts(new Map([["api", {
+      issues: [
+        { id: "a", identifier: "TRA-123", title: "One", status: "Todo", stateType: "unstarted" },
+        { id: "b", identifier: "TRA-124", title: "Two", status: "Todo", stateType: "unstarted" },
+      ],
+      mrs: [],
+    } as unknown as SessionContext]]));
+    const row = detailRow(sidebar, "TRA-123")!;
+    expect(row).toBeDefined();
+    expect(row).not.toContain("· ·");
+    expect(row).toContain("·");
+  });
+
   test("the drift marker gets the same treatment", () => {
     const narrow = wf({
       label: "In Progress",
@@ -2727,6 +2748,53 @@ describe("Sidebar workflow field", () => {
     const row = rows(sidebar)[nameRowIdx + 1]!;
     expect(row).toContain("!");
     expect(row).not.toContain("! ·");
+  });
+
+  test("the drift marker gets the same treatment, with a badge leading the row", () => {
+    const narrow = wf({
+      label: "In Progress",
+      drift: "Ready for Release",
+      driftByIssue: new Map([["a", "Ready for Release"]]),
+    });
+    const sidebar = build(26, narrow);
+    sidebar.setSessionContexts(new Map([["api", {
+      issues: [
+        { id: "a", identifier: "TRA-123", title: "One", status: "Todo", stateType: "unstarted" },
+        { id: "b", identifier: "TRA-124", title: "Two", status: "Todo", stateType: "unstarted" },
+      ],
+      mrs: [],
+    } as unknown as SessionContext]]));
+    const row = detailRow(sidebar, "TRA-123")!;
+    expect(row).toBeDefined();
+    expect(row).toContain("!");
+    expect(row).not.toContain("! ·");
+  });
+
+  // A label can sit in the two-column band where it fits the budget the
+  // narrow separator implies but not the budget the full separator costs
+  // back — a short badge ("TRA-1", not "TRA-123") is what opens that band at
+  // this width. Measuring twice would disagree with itself here: the first
+  // pass sees "In Progress" fit and reaches for the full separator, but the
+  // budget that separator leaves is one column short, so a naive
+  // re-measurement falls to the terse glyph while the separator still
+  // assumes a word — reproducing "· ·" by a different path than the one
+  // above. The resolution falls back to the first (self-consistent)
+  // measurement instead: a full word gets a single space rather than either
+  // a doubled dot or an invented three-candidate degrade step.
+  test("a label straddling the separator's budget keeps its word, with a single space", () => {
+    const sidebar = build(26, wf({ label: "In Progress", stateType: undefined }));
+    sidebar.setSessionContexts(new Map([["api", {
+      issues: [
+        { id: "a", identifier: "TRA-1", title: "One", status: "Todo", stateType: "unstarted" },
+        { id: "b", identifier: "TRA-2", title: "Two", status: "Todo", stateType: "unstarted" },
+      ],
+      mrs: [],
+    } as unknown as SessionContext]]));
+    const row = detailRow(sidebar, "TRA-1")!;
+    expect(row).toBeDefined();
+    expect(row).toContain("In Progress");
+    expect(row).not.toContain("· ·");
+    expect(row).not.toContain("· In Progress"); // not the full " · " separator either
   });
 
   // A row reading "Review" under a "REVIEW" header says nothing, and there is
@@ -2760,13 +2828,18 @@ describe("Sidebar workflow field", () => {
     });
 
     // A session under group=stage can still land in Pinned or Parked, whose
-    // headers name neither — so the word has to come back.
+    // headers name neither — so the word has to come back. Asserted against
+    // the session's own detail row rather than "some row contains Review":
+    // a stage band header reading "Review" would satisfy that too, and this
+    // describe block's whole subject is telling the two apart.
     test("a pinned session keeps its stage word, since no header names it", () => {
       const sidebar = grouped();
       sidebar.setPinnedSessions(new Set(["api"]));
       const all = rows(sidebar);
       expect(all.some((r) => r.includes("Pinned"))).toBe(true);
-      expect(all.some((r) => r.includes("Review"))).toBe(true);
+      const nameRowIdx = all.findIndex((r) => r.includes("api"));
+      expect(nameRowIdx).toBeGreaterThan(-1);
+      expect(all[nameRowIdx + 1]).toContain("Review");
     });
 
     // Its sessions fall to the flat remainder, where nothing names the stage.
@@ -2934,5 +3007,66 @@ describe("session titles", () => {
       mrs: [],
     } as unknown as SessionContext]]));
     expect(rowText(sidebar.getGrid(), 5, 16)).toContain("TRA-123");
+  });
+
+  // Row 2's drop order is timer → stage word → stage glyph → drift marker →
+  // MR id, with the badge last of all — so at a width where both cannot fit,
+  // the badge is what survives and the MR id is what goes, not the reverse.
+  test("the badge outranks the MR id when both cannot fit", () => {
+    const sidebar = new Sidebar(18, 30);
+    sidebar.updateSessions(titled);
+    sidebar.setSessionContexts(new Map([["tra-123", {
+      issues: [
+        { id: "1", identifier: "TRA-123", title: "Cache", status: "In Review", stateType: "started" },
+        { id: "2", identifier: "TRA-124", title: "More", status: "In Review", stateType: "started" },
+      ],
+      mrs: [{ id: "acme/repo#4321", createdAt: Date.now() }],
+    } as unknown as SessionContext]]));
+    const row2 = rowText(sidebar.getGrid(), 5, 18);
+    expect(row2).toContain("TRA-123");
+    expect(row2).not.toContain("#4321");
+  });
+
+  test("a long title truncates with an ellipsis at a narrow width", () => {
+    const sidebar = new Sidebar(24, 30);
+    sidebar.updateSessions([{
+      id: "$0", name: "tra-123", attached: true, activity: 0, windowCount: 1,
+      title: "This title is far too long to fit in the sidebar at all",
+    }]);
+    const row = rowText(sidebar.getGrid(), 4, 24);
+    expect(row).toContain("…");
+    expect(row).not.toContain("too long to fit");
+  });
+
+  // Column bookkeeping for a title is sensitive precisely because a title is
+  // human text a model produced, and may contain CJK or emoji — the one
+  // string on this row that .length would get wrong. Checked here, not just
+  // in truncateToCols's own unit tests, because what matters is that
+  // sidebar.ts actually passes it a column budget rather than a character
+  // count: the mode badge sits at a fixed column right after the name, and a
+  // character-count truncation would let a wide title overrun it.
+  test("a title with wide characters truncates on the column budget, not the character count", () => {
+    const sidebar = new Sidebar(30, 30);
+    sidebar.updateSessions([{
+      id: "$0", name: "tra-123", attached: true, activity: 0, windowCount: 1,
+      title: "测试测试测试测试测试测试测试测试测试测试测试测试测试测试测",
+    }]);
+    sidebar.setSessionOtelState("$0", { ...makeSessionOtelState(), permissionMode: "plan" });
+    const grid = sidebar.getGrid();
+    const row = rowText(grid, 4, 30);
+    expect(row).toContain("…");
+    expect(grid.cells[4][28]!.char).toBe("P");
+  });
+
+  // Proves the trim-and-fallback decision actually runs through
+  // `displaySessionName` rather than a reimplementation in sidebar.ts: a
+  // whitespace-only title is truthy, so a naive `view.title ?? sessionName`
+  // would display it as blank space instead of falling back to the name.
+  test("a whitespace-only title falls back to the session name", () => {
+    const sidebar = new Sidebar(40, 30);
+    sidebar.updateSessions([{ ...titled[0], title: "   " }]);
+    const row = rowText(sidebar.getGrid(), 4, 40);
+    expect(row).toContain("tra-123");
+    expect(row).not.toContain("Fix stale cache headers");
   });
 });

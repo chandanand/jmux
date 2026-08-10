@@ -8,6 +8,7 @@ import {
   buildSessionIssueRows,
   type SessionIssueRow,
 } from "./session-view";
+import { displaySessionName } from "./session-title/display";
 import { theme } from "./theme";
 import { tokens, frame } from "./chrome-tokens";
 import { stateAttrs, type StateColor } from "./state-colors";
@@ -1840,7 +1841,10 @@ export class Sidebar {
     const hasBadge = view.modeBadge !== null;
     const reserveRight = this.width - 1 - (hasBadge ? 2 : 0);
     const nameMaxCols = reserveRight - nameStart;
-    const displayName = truncateToCols(view.title ?? view.sessionName, Math.max(0, nameMaxCols));
+    const displayName = truncateToCols(
+      displaySessionName({ name: view.sessionName, title: view.title ?? undefined }),
+      Math.max(0, nameMaxCols),
+    );
 
     const nameAttrs: CellAttrs = isActive
       ? { ...ACTIVE_NAME_ATTRS }
@@ -1885,7 +1889,10 @@ export class Sidebar {
     // Compute right-side content and its column positions (right to left)
     let rightEdge = this.width - 1; // rightmost column available
 
-    // Pipeline glyph (rightmost)
+    // Pipeline glyph (rightmost). Unconditional — no floor check, matching
+    // the row's long-standing priority: it is one or two columns at the very
+    // edge and has always been drawn before anything else on this row claims
+    // space.
     let glyphStr: string | null = null;
     let glyphAttrs: CellAttrs | null = null;
     if (view.pipelineState) {
@@ -1897,52 +1904,12 @@ export class Sidebar {
       rightEdge -= 2; // glyph + 1 space before it
     }
 
-    // MR ID (before glyph)
-    if (view.mrId) {
-      const mrCol = rightEdge - view.mrId.length + 1;
-      if (mrCol > nameStart) {
-        writeString(grid, detailRow, mrCol, view.mrId, { ...DIM_ATTRS, ...bgAttrs });
-        rightEdge = mrCol - 2; // 1 space gap before MR ID
-      }
-    }
-
-    // Timer (before MR ID)
-    if (view.timerText) {
-      const timerAttrs = cacheTimerAttrs(view.timerRemaining, isActive, isHovered);
-      const timerCol = rightEdge - view.timerText.length + 1;
-      if (timerCol > nameStart) {
-        writeString(grid, detailRow, timerCol, view.timerText, timerAttrs);
-        rightEdge = timerCol - 2;
-      }
-    }
-
-    // Context figure (before the timer) — only for a NON-promoted session,
-    // which has no row 3 to carry it. A promoted session leaves it on row 3
-    // beside its state label. Dropped first when the cluster runs out of room,
-    // since it is the least urgent field here.
-    if (!agentStateRecord) {
-      const otelForRow2 = this.otelStates.get(session.id);
-      const contextText = otelForRow2 ? buildSessionRow3(otelForRow2, this.width - 3, null).text.trim() : "";
-      if (contextText) {
-        const ctxCol = rightEdge - contextText.length + 1;
-        if (ctxCol > nameStart) {
-          writeString(grid, detailRow, ctxCol, contextText, { ...DIM_ATTRS, ...bgAttrs });
-          rightEdge = ctxCol - 2;
-        }
-      }
-    }
-
-    // Pinned pane count (right side, before the badge/workflow cluster)
-    if (item.pinnedCount && item.pinnedCount > 0) {
-      const pinnedStr = `(${item.pinnedCount} pinned)`;
-      const pinnedCol = rightEdge - pinnedStr.length + 1;
-      if (pinnedCol > 3) {
-        writeString(grid, detailRow, pinnedCol, pinnedStr, { ...DIM_ATTRS, ...bgAttrs });
-        rightEdge = pinnedCol - 2;
-      }
-    }
-
-    // Issue badge (left) + workflow field.
+    // Issue badge (left). Computed here — before MR id, timer, the context
+    // figure and the pinned count — so it claims its space first: the badge
+    // never drops, so nothing to its right may encroach on what it needs.
+    // Drop order is timer → stage word → stage glyph → drift marker → MR id,
+    // with the badge last of all, which only holds if the badge is laid out
+    // before anything it's supposed to outlast, not after.
     //
     // The badge carries a disclosure chevron when the session holds more than
     // one issue, and clicking it expands the list in place. Prepended into the
@@ -1975,14 +1942,97 @@ export class Sidebar {
       }
     }
 
-    // No `fieldTerse` any more: it existed only to pick the separator before the
-    // branch, and the branch is gone. `workflowFieldText` still returns `terse`
-    // for callers that have something after the field; this one does not.
+    // MR ID (before glyph). Floored on `leftCol`, not the row's own margin —
+    // it yields to the badge, so it drops before the badge ever would.
+    if (view.mrId) {
+      const mrCol = rightEdge - view.mrId.length + 1;
+      if (mrCol > leftCol) {
+        writeString(grid, detailRow, mrCol, view.mrId, { ...DIM_ATTRS, ...bgAttrs });
+        rightEdge = mrCol - 2; // 1 space gap before MR ID
+      }
+    }
+
+    // Timer (before MR ID). Same floor — and the first of this cluster to
+    // drop, per the same priority order.
+    if (view.timerText) {
+      const timerAttrs = cacheTimerAttrs(view.timerRemaining, isActive, isHovered);
+      const timerCol = rightEdge - view.timerText.length + 1;
+      if (timerCol > leftCol) {
+        writeString(grid, detailRow, timerCol, view.timerText, timerAttrs);
+        rightEdge = timerCol - 2;
+      }
+    }
+
+    // Context figure (before the timer) — only for a NON-promoted session,
+    // which has no row 3 to carry it. A promoted session leaves it on row 3
+    // beside its state label. Dropped first when the cluster runs out of room,
+    // since it is the least urgent field here.
+    if (!agentStateRecord) {
+      const otelForRow2 = this.otelStates.get(session.id);
+      const contextText = otelForRow2 ? buildSessionRow3(otelForRow2, this.width - 3, null).text.trim() : "";
+      if (contextText) {
+        const ctxCol = rightEdge - contextText.length + 1;
+        if (ctxCol > leftCol) {
+          writeString(grid, detailRow, ctxCol, contextText, { ...DIM_ATTRS, ...bgAttrs });
+          rightEdge = ctxCol - 2;
+        }
+      }
+    }
+
+    // Pinned pane count (right side, before the badge/workflow cluster)
+    if (item.pinnedCount && item.pinnedCount > 0) {
+      const pinnedStr = `(${item.pinnedCount} pinned)`;
+      const pinnedCol = rightEdge - pinnedStr.length + 1;
+      if (pinnedCol > leftCol) {
+        writeString(grid, detailRow, pinnedCol, pinnedStr, { ...DIM_ATTRS, ...bgAttrs });
+        rightEdge = pinnedCol - 2;
+      }
+    }
+
+    // Workflow field, after the badge and the right cluster have both staked
+    // their columns.
+    //
+    // No `fieldTerse` state variable any more — it used to be set once and
+    // read later; here the same idea has to be resolved locally, because the
+    // separator's width depends on whether the field turns out terse, and the
+    // field's own budget depends on the separator's width. `·` is both the
+    // backlog/unknown glyph and the character inside the separator, so an
+    // unconditional full separator ahead of a terse field renders "· ·" —
+    // the exact collision the old `fieldTerse` existed to avoid, just on the
+    // other side of the field now that the badge leads instead of the branch
+    // trailing.
+    //
+    // Resolved by measuring once against the widest possible budget (as if
+    // the separator were the narrow one-space form) to learn the field's
+    // shape. A non-terse result there calls for the wider three-character
+    // separator, which costs back the two columns the first pass assumed it
+    // had — so it is re-measured against what that separator actually
+    // leaves. In the two-column-wide band where a label fits the wide budget
+    // but not the tight one, that re-measurement can fall all the way to
+    // terse, disagreeing with the separator already chosen on its behalf —
+    // the same collision this whole resolution exists to prevent, just
+    // reached by a different path. Rather than trust a result that disagrees
+    // with the separator it would be paired with, that case falls back to
+    // the first measurement, which is self-consistent by construction: it
+    // was measured against the budget its own separator choice implies.
     const wf = this.sessionWorkflow.get(session.name);
     if (wf) {
-      const sep = leftCol === detailStart ? "" : WORKFLOW_SEP;
+      const hasBadge = leftCol !== detailStart;
+      const narrowSep = hasBadge ? " " : "";
+      const wideBudget = Math.max(0, rightEdge - (leftCol + textCols(narrowSep)) + 1);
+      const fieldWide = workflowFieldText(wf, wideBudget, item.stageInHeader);
+      let sep = hasBadge ? (fieldWide.terse ? " " : WORKFLOW_SEP) : "";
+      let field = fieldWide;
+      if (sep !== narrowSep) {
+        const tightBudget = Math.max(0, rightEdge - (leftCol + textCols(sep)) + 1);
+        const fieldTight = workflowFieldText(wf, tightBudget, item.stageInHeader);
+        if (fieldTight.terse) {
+          sep = narrowSep; // fall back to the self-consistent pairing above
+        } else {
+          field = fieldTight;
+        }
+      }
       const budget = rightEdge - (leftCol + textCols(sep)) + 1;
-      const field = workflowFieldText(wf, Math.max(0, budget), item.stageInHeader);
       if (field.text && textCols(field.text) <= budget) {
         if (sep) writeString(grid, detailRow, leftCol, sep, detailAttrs);
         const fieldCol = leftCol + textCols(sep);
