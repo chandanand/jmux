@@ -192,9 +192,10 @@ That is your **stage** label, not the raw tracker status — the word you chose 
 and each disclosed row spells its own status out. A status that no stage claims
 has nothing to abbreviate to, so it prints as-is.
 
-The field's neighbours are the issue badge to its left, which leads the row and
-never drops, and a timer/MR cluster to its right. Narrow the sidebar and the
-timer drops first, then the stage word becomes a one-character glyph.
+The issue badge to its left always keeps its space, and the timer/MR cluster to
+its right claims what it needs before the field does. Narrow the sidebar and
+the field is squeezed first: the stage word gives way to a one-character
+glyph, then disappears, while the timer and MR id beside it are still there.
 
 **Grouped by `Stage`, the word goes away** — the band header above the row
 already says it, and a row reading `Review` under a `REVIEW` header is six

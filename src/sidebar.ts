@@ -1912,9 +1912,13 @@ export class Sidebar {
     // Issue badge (left). Computed here — before MR id, timer, the context
     // figure and the pinned count — so it claims its space first: the badge
     // never drops, so nothing to its right may encroach on what it needs.
-    // Drop order is timer → stage word → stage glyph → drift marker → MR id,
-    // with the badge last of all, which only holds if the badge is laid out
-    // before anything it's supposed to outlast, not after.
+    // Everything else on the row claims next, each taking what it needs from
+    // `rightEdge` if it fits — MR id, timer, context figure, pinned count, in
+    // that order. The workflow field is computed last of all, from whatever
+    // is left of `rightEdge` once those four have staked their columns —
+    // which makes it the first field on the row to degrade as the sidebar
+    // narrows: the full label gives way to a glyph, then nothing, while the
+    // timer and MR id beside it are still intact.
     //
     // The badge carries a disclosure chevron when the session holds more than
     // one issue, and clicking it expands the list in place. Prepended into the

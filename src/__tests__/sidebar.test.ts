@@ -3009,9 +3009,11 @@ describe("session titles", () => {
     expect(rowText(sidebar.getGrid(), 5, 16)).toContain("TRA-123");
   });
 
-  // Row 2's drop order is timer → stage word → stage glyph → drift marker →
-  // MR id, with the badge last of all — so at a width where both cannot fit,
-  // the badge is what survives and the MR id is what goes, not the reverse.
+  // The issue badge is the only protected field on row 2 — it claims its
+  // columns first and never drops. The MR id is part of the right-hand
+  // cluster that claims next, ahead of the workflow field, but still behind
+  // the badge — so at a width where both cannot fit, the badge is what
+  // survives and the MR id is what goes, not the reverse.
   test("the badge outranks the MR id when both cannot fit", () => {
     const sidebar = new Sidebar(18, 30);
     sidebar.updateSessions(titled);
