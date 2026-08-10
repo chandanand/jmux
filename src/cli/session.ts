@@ -68,6 +68,14 @@ export interface AttentionCommand {
  * - `set` always sets `@jmux-attention 1`; with a reason it sets the reason,
  *   without one it clears any stale reason.
  * - `clear` unsets both options (idempotent — `-u` on an unset option is fine).
+ *
+ * The flag moves last on `set` and first on `clear`, because every reader
+ * watches the flag and each command is a separate round trip to the server.
+ * Ordered the other way, `set` briefly reads as flagged with no reason (or with
+ * the *previous* reason), and `clear` as unflagged-but-still-explained. The
+ * flag is the trigger, so it is written once the payload beside it is already
+ * true — the same rule the setup pane's own writes follow in
+ * `buildSetupCommand`.
  */
 export function buildAttentionCommands(
   verb: string,
@@ -75,20 +83,21 @@ export function buildAttentionCommands(
   reason: string | null,
 ): AttentionCommand[] {
   if (verb === "set") {
-    const cmds: AttentionCommand[] = [
-      { args: ["set-option", "-t", target, "@jmux-attention", "1"], required: true },
-    ];
-    if (reason !== null) {
-      cmds.push({
-        args: ["set-option", "-t", target, "@jmux-attention-reason", reason],
-        required: true,
-      });
-    } else {
-      cmds.push({
-        args: ["set-option", "-t", target, "-u", "@jmux-attention-reason"],
-        required: false,
-      });
-    }
+    const cmds: AttentionCommand[] =
+      reason !== null
+        ? [
+            {
+              args: ["set-option", "-t", target, "@jmux-attention-reason", reason],
+              required: true,
+            },
+          ]
+        : [
+            {
+              args: ["set-option", "-t", target, "-u", "@jmux-attention-reason"],
+              required: false,
+            },
+          ];
+    cmds.push({ args: ["set-option", "-t", target, "@jmux-attention", "1"], required: true });
     return cmds;
   }
   if (verb === "clear") {
