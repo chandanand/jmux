@@ -108,6 +108,37 @@ export function buildTitlePrompt(input: TitleInput): string {
 }
 
 /**
+ * Escape sequences, in the three shapes a program that thinks it is talking to
+ * a terminal actually emits: CSI (`ESC [ … final`, which is every SGR colour),
+ * OSC (`ESC ] … BEL` or `ST`), and the two-character Fe escapes.
+ *
+ * Stripped before the text is looked at rather than after, so an ANSI-only
+ * first line (`ESC [2K` on its own, from a command that clears the line before
+ * printing) falls through to the line that actually carries the answer instead
+ * of being taken as the answer and rejected as empty.
+ */
+const ESCAPE_SEQUENCE =
+  /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][\s\S]*?(?:\x07|\x1b\\)|[@-Z\\-_])/g;
+
+/**
+ * Whatever control characters survive the sweep above — a lone `ESC` with no
+ * body, a stray `BEL`, a `US`. Tab is spared because the whitespace collapse
+ * below turns it into a space; deleting it outright would join two words.
+ *
+ * This is not tidiness. The naming command is an arbitrary user-configured
+ * subprocess and "the CLI I pointed at colourises its output" is an ordinary
+ * first-run configuration, not an attack. What comes back is written into a
+ * `CellGrid` cell and emitted to the real terminal verbatim, and `cellWidth`
+ * scores `ESC` as one column — so a single leaked escape puts the frame's
+ * column model and the terminal's cursor out of step for the rest of the
+ * frame and defeats the renderer's SGR diffing. `US` (\x1f) is worse than
+ * cosmetic: it is the field separator in `SESSION_LIST_FORMAT`, so a title
+ * carrying one shifts `@jmux-title-signature` out of its column, and a title
+ * ending `…\x1fmanual` would mark the session hand-named for good.
+ */
+const CONTROL_CHARS = /[\x00-\x08\x0a-\x1f\x7f]/g;
+
+/**
  * What we will accept as a title.
  *
  * Validated rather than trusted: a model asked for one line will sometimes
@@ -117,7 +148,14 @@ export function buildTitlePrompt(input: TitleInput): string {
  * this to one code path.
  */
 export function parseTitle(raw: string, maxChars: number): string | null {
-  const first = raw.split("\n").map((l) => l.trim()).find((l) => l.length > 0);
+  const first = raw
+    .replace(ESCAPE_SEQUENCE, "")
+    // CR is a line break here, not a character to delete: a command that ends
+    // its lines `\r\n`, or redraws one in place, means a break in both cases,
+    // and deleting it instead would run two words together.
+    .split(/[\n\r]/)
+    .map((l) => l.replace(CONTROL_CHARS, "").replace(/\s+/g, " ").trim())
+    .find((l) => l.length > 0);
   if (!first) return null;
 
   let text = first

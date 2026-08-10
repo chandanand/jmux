@@ -157,6 +157,53 @@ describe("parseTitle", () => {
     expect(parseTitle('""', 48)).toBeNull();
   });
 
+  // The naming command is an arbitrary user-configured subprocess and its
+  // stdout is not trusted. Anything that survives here is written into a
+  // CellGrid cell and emitted to the real terminal verbatim; `cellWidth`
+  // scores ESC as one column, so one leaked escape desynchronises the frame's
+  // column model from the terminal's cursor for the rest of the frame. US
+  // (\x1f) is worse: it is the SESSION_LIST_FORMAT field separator, so a
+  // title carrying one shifts @jmux-title-signature out of its column.
+  test("strips SGR colour a command wrapped its answer in", () => {
+    expect(parseTitle("\x1b[1;32mFix stale cache headers\x1b[0m\n", 48))
+      .toBe("Fix stale cache headers");
+  });
+
+  test("strips a leading escape-only line rather than taking it as the answer", () => {
+    expect(parseTitle("\x1b[2K\x1b[G\nFix cache\n", 48)).toBe("Fix cache");
+  });
+
+  test("strips an OSC title-setting sequence", () => {
+    expect(parseTitle("\x1b]0;some window title\x07Fix cache", 48)).toBe("Fix cache");
+  });
+
+  test("deletes a bare US, which would otherwise shift the session-list fields", () => {
+    const out = parseTitle("Fix cache\x1fmanual", 48);
+    expect(out).toBe("Fix cachemanual");
+    expect(out).not.toContain("\x1f");
+  });
+
+  test("no control character survives, whatever the shape", () => {
+    const out = parseTitle("\x1b[1mFi\x07x\x1b ca\x00che\x1b[0m\x0d", 48)!;
+    expect(out).toBeTruthy();
+    expect(/[\x00-\x1f\x7f]/.test(out)).toBe(false);
+  });
+
+  test("returns null when the output is nothing but control characters", () => {
+    expect(parseTitle("\x1b[31m\x1b[0m\n", 48)).toBeNull();
+    expect(parseTitle("\x00\x07\x1f\x7f", 48)).toBeNull();
+    expect(parseTitle("\x1b[2J\x1b[H", 48)).toBeNull();
+  });
+
+  test("collapses the whitespace runs a stripped sequence leaves behind", () => {
+    expect(parseTitle("Fix   \t  stale\x1b[0m  cache", 48)).toBe("Fix stale cache");
+  });
+
+  test("a CR is a line break, not a character to delete", () => {
+    expect(parseTitle("Fix cache\r\nand more", 48)).toBe("Fix cache");
+    expect(parseTitle("first\rsecond", 48)).toBe("first");
+  });
+
   test("strips curly/typographic quotes", () => {
     // U+201C LEFT DOUBLE QUOTATION MARK, U+201D RIGHT DOUBLE QUOTATION MARK
     expect(parseTitle("\u201cFix cache\u201d", 48)).toBe("Fix cache");
