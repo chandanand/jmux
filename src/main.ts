@@ -7978,6 +7978,16 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
   if (commandId === "show-hidden-sessions" && sublistOptionId) {
     for (const cmd of buildGridHiddenCommands("unhide", sublistOptionId)) glassRunner.run(cmd.args);
     invalidateGrid();
+    // Clearing the hide is not the same as the session appearing: the active
+    // view's filter still has to select it, and a session hidden while idle
+    // usually still is. Without this the row simply leaves the palette — which
+    // reads as "done" while the grid is unchanged, the same silent-no-op the
+    // hide list exists to prevent.
+    const name = currentSessions.find((s) => s.id === sublistOptionId)?.name ?? sublistOptionId;
+    showNotice({
+      title: "Command Center",
+      message: `${name} is no longer hidden. It joins the grid when the current view selects it — ⌃a f widens the filter.`,
+    });
     return;
   }
 

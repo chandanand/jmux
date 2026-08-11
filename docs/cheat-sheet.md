@@ -69,7 +69,10 @@ claims, list flat below the stage groups. See [Workflow](workflow.md#your-stages
 Four bands sit outside the grouping, in fixed positions:
 
 - **Command Center** is always the first row.
-- **Pinned** is the top group whenever any pane is pinned.
+- **Pinned** is the top group whenever any *session* is pinned. This is a
+  different thing from pinning a *pane* to the Command Center — that one keeps a
+  session on the grid and chooses the pane its tile shows, and has no effect on
+  sidebar order.
 - **Up next** holds unstarted issues — work with no session yet — when the
   sidebar is grouped by anything other than `Stage`. Under `Stage` those rows sit
   in their own stage's band instead. Off until you set a count on the workflow
