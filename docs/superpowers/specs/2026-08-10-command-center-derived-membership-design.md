@@ -750,8 +750,10 @@ the six tab-CRUD palette commands and `NEW_TAB_OPTION_ID`; `detectAgentPanes` an
 `glass/auto-detect.ts` entirely; `--tab` / `loadTabRegistry` /
 `resolveTabFlagToId`; `ctl cc tabs`.
 
-`buildPaneLabel` is **not** deleted — it becomes the label suffix when a tile
-shows a non-default face.
+`buildPaneLabel` **is** deleted — see the amendment in the label section above.
+`paneIdentity` is the half that survives, and `buildTileLabel` composes it onto
+the session's identity. An earlier draft of this spec said the opposite in this
+list; the label section is the one that governs.
 
 ADR 0003 is superseded. ADR 0005 records one-tile-per-session, derived
 membership, the two-option exception model, and the corrected resource claim

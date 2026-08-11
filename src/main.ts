@@ -9727,7 +9727,15 @@ function applyGridSnapshot(snap: GridSnapshot): void {
       // filtered, parked, hidden or paneless — and widening the view recovers
       // it. `hiddenCount` is the `@jmux-grid-hidden` exception alone, which no
       // filter will bring back: it needs the palette's "Show hidden sessions".
-      excludedCount: Math.max(0, shared.sessions.length - specs.length),
+      // Disjoint, deliberately: a hidden session is already subtracted out of
+      // `excludedCount` so it is reported once, under the clause whose remedy
+      // actually works on it. Counting it in both rendered "3 not shown  3
+      // hidden" for the same three sessions, sending the user to ⌃a f for
+      // something no filter can recover.
+      excludedCount: Math.max(
+        0,
+        shared.sessions.length - specs.length - gridHiddenSessionIds.size,
+      ),
       hiddenCount: gridHiddenSessionIds.size,
     });
   }

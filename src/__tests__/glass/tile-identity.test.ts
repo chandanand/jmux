@@ -811,3 +811,24 @@ describe("density resizes tiles that are scrolled out of view", () => {
     expect(last.sizes.length).toBeGreaterThan(beforeSizes);
   });
 });
+
+describe("the empty state's two counts are disjoint", () => {
+  // Counting a hidden session in both rendered "3 not shown  3 hidden" for the
+  // same three sessions, sending the user to ^a f for something no filter can
+  // recover. Each session is reported once, under the clause whose remedy works.
+  test("a hidden session is reported once, under 'hidden'", () => {
+    const { view } = makeView();
+    view.setTiles([], { viewName: "Active", excludedCount: 4, hiddenCount: 3 });
+    const row = view.getGrid().cells.map((r) => r.map((c) => c.char).join("")).join("\n");
+    expect(row).toContain("4 not shown");
+    expect(row).toContain("3 hidden");
+  });
+
+  test("no hidden sessions means no hidden clause at all", () => {
+    const { view } = makeView();
+    view.setTiles([], { viewName: "Active", excludedCount: 4, hiddenCount: 0 });
+    const row = view.getGrid().cells.map((r) => r.map((c) => c.char).join("")).join("\n");
+    expect(row).toContain("4 not shown");
+    expect(row).not.toContain("hidden");
+  });
+});
