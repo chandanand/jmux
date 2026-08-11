@@ -32,6 +32,18 @@ export interface PaneRow {
   forcedOn: boolean;
   /** window_active && pane_active — see module doc on why not pane_active alone. */
   sessionActive: boolean;
+  /**
+   * This pane's own agent state, or null.
+   *
+   * Null for every pane that does not declare a `kind`, even when tmux reported
+   * a state for it. `@jmux-agent-state` is written at pane scope by the hooks
+   * but **a pane-context format read inherits the session's value**, so in a
+   * session where any agent is running, `#{@jmux-agent-state}` is non-empty for
+   * the shells, the editors and the log tails too — and `since` inherits with
+   * it, so they are not even distinguishable by age. `kind` is the only
+   * pane-level identity with no inheritance source, which is what makes it the
+   * usable gate.
+   */
   state: AgentState | null;
   since: number | null;
 }
@@ -52,14 +64,20 @@ export function parsePaneRowLines(lines: string[]): PaneRow[] {
     const [paneId, kind, command, pinned, windowActive, paneActive, state, since] =
       splitFields(line);
     if (!paneId) continue;
+    // A state without a kind beside it is the session's, inherited — see the
+    // note on `PaneRow.state`. Taking it at face value made every shell in an
+    // agent's session look equally urgent *and* equally old, so `outranks` tied
+    // on both and the winner fell through to the lowest pane id: a session whose
+    // shell happened to be %1 and whose agent was %2 showed the shell.
+    const declaresKind = (kind ?? "") !== "";
     out.push({
       paneId,
       kind: kind ?? "",
       command: command ?? "",
       forcedOn: !!pinned,
       sessionActive: windowActive === "1" && paneActive === "1",
-      state: VALID_AGENT_STATES.has(state ?? "") ? (state as AgentState) : null,
-      since: parseSince(since ?? ""),
+      state: declaresKind && VALID_AGENT_STATES.has(state ?? "") ? (state as AgentState) : null,
+      since: declaresKind ? parseSince(since ?? "") : null,
     });
   }
   return out;

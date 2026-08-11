@@ -69,8 +69,8 @@ export interface Binding {
    * reads out of input-router.ts, so a chord added to the router without a row
    * here (or vice versa) fails the build. Absent on jmux bindings that are
    * *not* single-byte prefix chords — the Ctrl-Shift-Up/Down session walk is
-   * matched as a whole escape sequence, and the Command Center's tab digits
-   * are matched as a range rather than byte by byte.
+   * matched as a whole escape sequence, and the Command Center's view-switch
+   * digits are matched as a range rather than byte by byte.
    */
   prefixKey?: string;
   /**
@@ -632,11 +632,7 @@ export const KEYMAP: readonly Binding[] = [
     // choose-session: jmux ships Ctrl-a I / Ctrl-a i in customize-mode's place.
   },
   {
-    // id kept as "cc-tab-n": phase 9 renames the tab vocabulary wholesale
-    // (tabs.ts, cli/cc.ts) and this row's id goes with it. The label changes
-    // now because the strip these chords drive shows views, not tabs, as of
-    // this phase.
-    id: "cc-tab-n",
+    id: "cc-view-n",
     keys: "Ctrl-a 1…9",
     label: "Switch to view N",
     section: "Command Center",
@@ -644,7 +640,7 @@ export const KEYMAP: readonly Binding[] = [
     context: IN_GLASS,
   },
   {
-    id: "cc-tab-prev",
+    id: "cc-view-prev",
     keys: "Ctrl-a [",
     label: "Previous view",
     section: "Command Center",
@@ -654,7 +650,7 @@ export const KEYMAP: readonly Binding[] = [
     arms: ["glass"],
   },
   {
-    id: "cc-tab-next",
+    id: "cc-view-next",
     keys: "Ctrl-a ]",
     label: "Next view",
     section: "Command Center",

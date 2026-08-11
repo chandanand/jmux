@@ -1434,14 +1434,14 @@ describe("panel filter mode", () => {
 });
 
 describe("glass-buffered prefix + Ctrl-a <n>", () => {
-  test("Ctrl-a then digit switches tabs and forwards nothing to the tile", () => {
+  test("Ctrl-a then digit switches views and forwards nothing to the tile", () => {
     const sent: string[] = [];
     const switched: number[] = [];
     const router = new InputRouter({
       onPtyData: (d) => sent.push(d),
       onSidebarClick: () => {},
       glassActive: () => true,
-      onGlassTabSwitch: (n) => switched.push(n),
+      onGlassViewSwitch: (n) => switched.push(n),
     }, baseLayout(26));
     router.handleInput("\x01");
     router.handleInput("2");
@@ -1461,14 +1461,14 @@ describe("glass-buffered prefix + Ctrl-a <n>", () => {
     expect(sent).toEqual(["\x01", "k"]);
   });
 
-  test("Ctrl-a then [ / ] switch to prev/next tab and forward nothing", () => {
+  test("Ctrl-a then [ / ] switch to prev/next view and forward nothing", () => {
     const sent: string[] = [];
     const deltas: number[] = [];
     const router = new InputRouter({
       onPtyData: (d) => sent.push(d),
       onSidebarClick: () => {},
       glassActive: () => true,
-      onGlassTabRelative: (delta) => deltas.push(delta),
+      onGlassViewRelative: (delta) => deltas.push(delta),
     }, baseLayout(26));
     router.handleInput("\x01");
     router.handleInput("[");
@@ -1633,7 +1633,7 @@ describe("glass strip mouse routing", () => {
   // task report for the corroborating renderer.ts trace.)
   const press = (col: number, row: number) => `\x1b[<0;${col};${row}M`;
 
-  test("a click on the strip row routes to onGlassTabClick", () => {
+  test("a click on the strip row routes to onGlassViewClick", () => {
     const tabClicks: number[] = [];
     const tileClicks: Array<[number, number]> = [];
     const router = new InputRouter({
@@ -1641,7 +1641,7 @@ describe("glass strip mouse routing", () => {
       onSidebarClick: () => {},
       glassActive: () => true,
       glassStripRows: () => 1,
-      onGlassTabClick: (x) => tabClicks.push(x),
+      onGlassViewClick: (x) => tabClicks.push(x),
       onGlassClick: (x, y) => tileClicks.push([x, y]),
     }, baseLayout(26));
     router.handleInput(press(30, 1)); // row 1 = strip
@@ -1657,7 +1657,7 @@ describe("glass strip mouse routing", () => {
       glassActive: () => true,
       glassStripRows: () => 1,
       onGlassClick: (x, y) => tileClicks.push([x, y]),
-      onGlassTabClick: () => {},
+      onGlassViewClick: () => {},
     }, baseLayout(26));
     router.handleInput(press(30, 5)); // row 5: cy = (5-1) - 1 stripRow = 3
     expect(tileClicks).toEqual([[2, 3]]);

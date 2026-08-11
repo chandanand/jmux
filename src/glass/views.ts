@@ -6,9 +6,11 @@
 // here touches tmux or config I/O — see config.ts for the migration that
 // seeds/persists this shape, and main.ts (phase 6) for wiring.
 //
-// Deliberately parallel to glass/tabs.ts, which this replaces once its last
-// consumers (main.ts, cli/cc.ts) move off it — duplication here is correct,
-// not laziness: tabs.ts is deleted outright in that phase, not refactored.
+// Was deliberately parallel to glass/tabs.ts rather than a refactor of it —
+// duplication was correct, not laziness, because the two modules answered
+// different questions (a hand-assigned registry vs. derived membership) right
+// up until main.ts and cli/cc.ts moved off tabs.ts, at which point it (and
+// glass/reload.ts, its hot-reload clamp) were deleted outright.
 
 import type { FilterMode, GroupMode, SortMode } from "../sidebar-sort";
 import { FILTER_MODES, GROUP_MODES, SORT_MODES } from "../sidebar-sort";

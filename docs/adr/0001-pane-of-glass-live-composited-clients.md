@@ -66,3 +66,19 @@ and leave at will.
   Auto-detection is an optional convenience, not the core mechanism: the baseline
   model is that users pin panes explicitly. Auto-detected panes are never written
   to `@jmux-pinned`.
+
+## Correction (2026-08-10)
+
+The claim above that "only visible tiles parse; off-screen tiles are paused" was
+**stale when written and stays wrong under ADR 0005's derived membership**.
+`planTiles` (`glass/tile-plan.ts`) takes no notion of viewport or scroll
+position, and every spawned tile's pty writes into its `ScreenBridge`
+unconditionally (`glass/view.ts`); visibility is consulted only at draw time, to
+decide which tiles' composited output actually reaches the frame. A tile that
+scrolled off-screen, or that left membership and is sitting in its
+grace-retained window (ADR 0005), still runs a live attached tmux client and a
+live xterm.js parser — the cap on resource use is the **client cap**
+(`commandCenter.maxTiles`, `planTiles`'s admission step), not viewport
+visibility. This ADR is left as written above, recording what was decided at the
+time; the correction lives here rather than editing the Consequences section in
+place.

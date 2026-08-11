@@ -133,10 +133,10 @@ export interface InputRouterOptions {
   onGlassMouse?: (x: number, y: number, button: number, release: boolean) => void; // wheel/scroll → tile under cursor
   onGlassFocusMove?: (dir: "left" | "right" | "up" | "down") => void; // Shift+arrows
   onGlassDetach?: () => void;                        // prefix+d in glass → detach jmux, not the focused tile
-  onGlassTabSwitch?: (index: number) => void;       // glass-only Ctrl-a <n> → switch tab
-  onGlassTabRelative?: (delta: number) => void;     // glass-only Ctrl-a [ / ] → prev/next tab
-  glassStripRows?: () => number;                    // tab-strip row count (0 when hidden)
-  onGlassTabClick?: (x: number) => void;            // content-relative click on the strip row
+  onGlassViewSwitch?: (index: number) => void;      // glass-only Ctrl-a <n> → switch view
+  onGlassViewRelative?: (delta: number) => void;    // glass-only Ctrl-a [ / ] → prev/next view
+  glassStripRows?: () => number;                    // strip row count (0 when hidden)
+  onGlassViewClick?: (x: number) => void;           // content-relative click on the strip row
   // Ctrl-a C — everywhere (ordinary + glass): toggle the Command Center.
   onGlassToggle?: () => void;
   // Ctrl-a P — everywhere: in the grid, remove the focused session; outside
@@ -474,7 +474,7 @@ export class InputRouter {
           return;
         }
 
-        // Glass owns the post-prefix byte: digits switch tabs, jmux chords
+        // Glass owns the post-prefix byte: digits switch views, jmux chords
         // intercept, everything else flushes the deferred prefix to the tile.
         //
         // The sentinel comments below delimit this arm for keymap.test.ts,
@@ -487,12 +487,12 @@ export class InputRouter {
           const deferred = this.glassPrefixDeferred;
           this.glassPrefixDeferred = false;
           if (data >= "1" && data <= "9") {
-            this.opts.onGlassTabSwitch?.(parseInt(data, 10));
+            this.opts.onGlassViewSwitch?.(parseInt(data, 10));
             return;
           }
           // --- keymap:glass-prefix start ---
-          if (data === "[") { this.opts.onGlassTabRelative?.(-1); return; }
-          if (data === "]") { this.opts.onGlassTabRelative?.(1); return; }
+          if (data === "[") { this.opts.onGlassViewRelative?.(-1); return; }
+          if (data === "]") { this.opts.onGlassViewRelative?.(1); return; }
           if (data === "d") { this.opts.onGlassDetach?.(); return; }
           if (data === "?") { this.opts.onHelp?.(); return; }
           if (data === "p") { this.opts.onModalToggle?.(); return; }
@@ -822,10 +822,10 @@ export class InputRouter {
         const bareMotion = isMotion && (mouse.button & 0x03) === 3;
         if (bareMotion) return; // ignore hover motion (no button held)
 
-        // Strip row: a button-down switches tabs; ignore wheel/release/motion here.
+        // Strip row: a button-down switches views; ignore wheel/release/motion here.
         if (yInContent < stripRows) {
           if (!mouse.release && !isMotion && !isWheel) {
-            this.opts.onGlassTabClick?.(cx);
+            this.opts.onGlassViewClick?.(cx);
           }
           return;
         }

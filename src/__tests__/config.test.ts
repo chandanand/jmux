@@ -99,24 +99,19 @@ describe("migrateCommandCenterConfig", () => {
     expect(config.commandCenter).toEqual({ maxTiles: DEFAULT_MAX_CLIENTS });
   });
 
-  // Transitional invariant, not a permanent guarantee. `commandCenterTabs` is
-  // still read by live code — `main.ts` builds the strip's tab registry from
-  // it, and so does `cli/cc.ts` — so deleting it here would collapse every
-  // named tab to the default. `autoPinAgentPanes` is read by nothing now, but
-  // a key is not deleted by dropping its TS field: `persist()` writes the whole
-  // loaded object back. Both deletions land with phase 9, and this test's
-  // deletion is the signal that the transition finished, not a loosening of
-  // coverage.
-  test("leaves commandCenterTabs and autoPinAgentPanes untouched — the keys outlive their readers", () => {
+  // Both keys' readers (`main.ts`'s tab registry, `cli/cc.ts`'s `cc tabs`) are
+  // gone as of phase 9, so the migration now deletes them outright instead of
+  // preserving them — the inverse of what this test asserted before.
+  test("deletes commandCenterTabs and autoPinAgentPanes from disk — nothing reads them any more", () => {
     const raw = {
       commandCenterTabs: [{ id: "default", name: "Main" }, { id: "backend", name: "Backend" }],
       autoPinAgentPanes: true,
     };
     const { config, changed } = migrateCommandCenterConfig(raw);
-    expect(config.commandCenterTabs).toEqual(raw.commandCenterTabs);
-    expect(config.autoPinAgentPanes).toBe(true);
-    // Seeding the new fields alone still shouldn't dirty an otherwise-fine config.
-    expect(changed).toBe(false);
+    expect(config.commandCenterTabs).toBeUndefined();
+    expect(config.autoPinAgentPanes).toBeUndefined();
+    // A present-but-dead key being dropped is a real disk mutation.
+    expect(changed).toBe(true);
   });
 
   test("populates every new field in-memory from nothing, but reports no change", () => {
@@ -259,23 +254,27 @@ describe("ConfigStore", () => {
     expect(onDisk.repoDefaults.claudeCommand).toBe("cc");
   });
 
-  // Transitional — see the same-titled note on migrateCommandCenterConfig's
-  // own test above. Deleted in phase 9 once main.ts/cli/cc.ts no longer read
-  // either key.
-  test("loadUserConfig leaves commandCenterTabs and autoPinAgentPanes on disk untouched", () => {
+  test("loadUserConfig deletes commandCenterTabs and autoPinAgentPanes from disk", () => {
     writeFileSync(cfgPath, JSON.stringify({
       commandCenterTabs: [{ id: "default", name: "Main" }, { id: "backend", name: "Backend" }],
       autoPinAgentPanes: true,
     }));
     const store = new ConfigStore(cfgPath);
-    expect(store.config.commandCenterTabs).toEqual([
-      { id: "default", name: "Main" }, { id: "backend", name: "Backend" },
-    ]);
-    expect(store.config.autoPinAgentPanes).toBe(true);
+    // Both fields are gone from the type entirely — cast through `any` for
+    // the same reason the on-disk check below parses raw JSON instead of
+    // reading a typed field that no longer exists.
+    expect((store.config as any).commandCenterTabs).toBeUndefined();
+    expect((store.config as any).autoPinAgentPanes).toBeUndefined();
     expect(store.config.commandCenterViews).toHaveLength(1);
     expect(store.config.commandCenterActiveViewId).toBe(DEFAULT_VIEW_SEED_ID);
     expect(store.config.commandCenterAxes).toEqual({ filter: "active", groupBy: "status", sortBy: "status" });
     expect(store.config.commandCenter?.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
+
+    // The migration persisted to disk — both keys are gone there too, not
+    // merely absent from the in-memory view.
+    const onDisk = JSON.parse(require("fs").readFileSync(cfgPath, "utf-8"));
+    expect(onDisk.commandCenterTabs).toBeUndefined();
+    expect(onDisk.autoPinAgentPanes).toBeUndefined();
   });
 
   test("loadUserConfig repairs a present-but-invalid Command Center config and persists once", () => {

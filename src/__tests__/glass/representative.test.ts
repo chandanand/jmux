@@ -20,6 +20,55 @@ function row(over: Partial<PaneRow> & { paneId: string }): PaneRow {
   };
 }
 
+// `@jmux-agent-state` is written at pane scope by the hooks, but a *pane-context
+// format read inherits the session's value* — verified against tmux 3.7b:
+//   tmux set-option -t <session> @jmux-agent-state running
+//   tmux list-panes -a -F '#{pane_id} [#{@jmux-agent-state}]'
+//   %0 [running]   %1 [running]
+// So in any session where an agent is running, every shell, editor and log tail
+// reports that state, and `since` inherits with them — leaving them
+// indistinguishable even by age. `kind` has no session-scoped writer, so it is
+// the only usable gate.
+describe("inherited agent state is not the pane's own", () => {
+  const row = (paneId: string, kind: string, state: string, since: string) =>
+    [paneId, kind, "zsh", "", "1", paneId === "%1" ? "1" : "0", state, since].join("\x1f");
+
+  test("a pane with no kind reports no state, however loudly tmux says otherwise", () => {
+    const [shell] = parsePaneRowLines([row("%1", "", "running", "100")]);
+    expect(shell!.state).toBeNull();
+    expect(shell!.since).toBeNull();
+  });
+
+  test("a pane that declares a kind keeps its state", () => {
+    const [agent] = parsePaneRowLines([row("%2", "claude", "running", "100")]);
+    expect(agent!.state).toBe("running");
+    expect(agent!.since).toBe(100);
+  });
+
+  test("the shell at the lower pane id no longer beats the agent", () => {
+    // The exact shape of the reported bug: shell %1, agent %2, both carrying the
+    // session's inherited `running` at the same `since`. Taken at face value
+    // `outranks` tied on state AND on age, so the winner fell through to the
+    // lowest pane id — the shell.
+    const panes = parsePaneRowLines([
+      row("%1", "", "running", "100"),
+      row("%2", "claude", "running", "100"),
+    ]);
+    expect(electRepresentative(panes, null, null)).toBe("%2");
+  });
+
+  test("with no agent anywhere, the active pane still wins over the lowest id", () => {
+    // The legacy path the old detectAgentPanes called signal 2: a session whose
+    // state is set but where nothing declares a kind. Nulling the inherited
+    // state is what lets sessionActive answer instead of pane-id order.
+    const panes = parsePaneRowLines([
+      row("%1", "", "running", "100"),   // sessionActive per `row`
+      row("%2", "", "running", "100"),
+    ]);
+    expect(electRepresentative(panes, null, null)).toBe("%1");
+  });
+});
+
 describe("parsePaneRowLines", () => {
   test("PANE_ROW_FORMAT requests the eight fields, US-separated", () => {
     expect(PANE_ROW_FORMAT).toBe(

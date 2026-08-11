@@ -236,17 +236,55 @@ Shift-arrow pane navigation is smart-splits.nvim aware — if the active pane is
 
 ## Command Center
 
-A grid of live, drivable mirror tiles of pinned panes — borders colored by agent state. Non-destructive: panes never leave their own session. Open it from the **Command Center** entry at the top of the sidebar.
+A grid of live, drivable mirror tiles — one per session, borders colored by agent
+state. Non-destructive: panes never leave their own session. Membership is
+**derived**, not hand-placed: the grid shows whatever sessions the active view's
+filter/group/sort would put in the sidebar, the same way the sidebar itself
+derives its rows. Open it from the **Command Center** entry at the top of the
+sidebar, or `Ctrl-a C` from anywhere.
 
-| Key | Action |
-|-----|--------|
-| `Ctrl-a <number>` | Switch to tab N (when open) |
-| `Ctrl-a [` / `Ctrl-a ]` | Previous / next tab, wrapping (when open) |
-| Click a tab chip | Switch to that tab |
-| Shift-arrows | Move focus between tiles |
-| Mouse wheel | Scroll the tile under the cursor |
+| Key | Arm | Action |
+|-----|-----|--------|
+| `Ctrl-a C` | everywhere | Toggle the Command Center |
+| `Ctrl-a P` | everywhere | In the grid: remove the focused session from it. In a session: add the current pane's session, showing this pane |
+| `Ctrl-a ↵` | in the grid | Open the focused tile's session full-size, on its displayed pane |
+| `Ctrl-a x` | in the grid | Cycle the focused tile's face — which pane of a multi-agent session it shows |
+| `Ctrl-a z` | in the grid | Zoom the focused tile to full size, or restore |
+| `Ctrl-a G` / `s` / `f` | in the grid | Cycle the grid's own grouping / sort / filter — independent of the sidebar's |
+| `Ctrl-a 1…9` | in the grid | Switch to view N |
+| `Ctrl-a [` / `Ctrl-a ]` | in the grid | Previous / next view, wrapping |
+| `Ctrl-a d` | in the grid | Detach jmux (not the focused tile) |
+| Shift-arrows | in the grid | Move focus between tiles |
+| Click a view chip | in the grid | Switch to that view |
+| Mouse wheel | in the grid | Scroll the tile under the cursor |
 
-Pin panes and manage tabs from the command palette (`Ctrl-a p`): **Pin to Command Center**, **Move tile to tab…**, **Unpin tile**, **New / Rename / Delete tab**, **Switch to tab…**. Tabs let you group pinned panes from *different sessions* into named buckets; a pane lives in exactly one tab and tabs persist in `~/.config/jmux/config.json`. The `Ctrl-a [` / `]` chords are scoped to the Command Center, so copy-mode/paste in normal panes is untouched.
+**Why one tile per session:** tmux ties the current window and zoom to the
+*session*, not the client, so two tiles can't show two panes of one session at
+once by any arrangement of pins. A session with several agent panes shows one at
+a time; `Ctrl-a x` cycles between them, and the focused tile's bottom border
+names the position (`⌃a x agent 2/3`) so the others are a visible fact before
+you press anything.
+
+**Views** replace the old tab strip — a view is a named preset of the grid's own
+filter/group/sort axes (not a hand-picked pane list), always visible along the
+top as a strip of chips. Switching views adopts that view's axes outright,
+discarding any live narrowing (a `·` marks the active chip when its axes have
+drifted from what's saved); **Save current axes as view…** in the palette keeps
+them instead. The grid ships one seeded view, **Active**.
+
+Two exceptions layer on top of the derived set, both from the command palette
+(`Ctrl-a p`) or `jmux ctl`: **Pin to Command Center** keeps a session on the grid
+even when the view's axes wouldn't include it, and prefers this pane as the
+session's face; **Unpin from Command Center** drops that preference. A session
+removed from the grid with `Ctrl-a P` stays off it (via `@jmux-grid-hidden`)
+until you bring it back — the palette's **Show hidden sessions (N)…** lists
+every session currently hidden this way, so an exception is never invisible.
+Hiding a session always wins over a pin left on one of its panes: hide's subject
+is the whole session, a pin's subject is one pane in it, so pinning a pane can't
+silently undo an explicit "keep this session off my grid".
+
+An empty grid names the active view and how to widen it (`⌃a f  all sessions`,
+`⌃a 1…9  switch view`), plus how many sessions are hidden.
 
 ---
 
@@ -262,7 +300,7 @@ Press `Ctrl-a p` to open the command palette — a floating overlay for fuzzy-se
 | `Escape` | Back out of sub-list, or close palette |
 | `Ctrl-a p` | Close palette |
 
-**Available commands:** switch sessions, switch windows, new session/window, kill session, close window/pane, split a pane either way, open a browser pane, zoom pane, rename session, **re-name session with the model**, move window, open Claude, keyboard shortcuts, setup, Command Center (pin/unpin, move tile to tab, switch tab, new/rename/delete/reorder tab), sidebar width, Claude command, project directories.
+**Available commands:** switch sessions, switch windows, new session/window, kill session, close window/pane, split a pane either way, open a browser pane, zoom pane, rename session, **re-name session with the model**, move window, open Claude, keyboard shortcuts, setup, Command Center (pin/unpin, save/rename/delete view, switch view, show hidden sessions), sidebar width, Claude command, project directories.
 
 **Re-name session with the model** asks for a fresh title on demand — the
 escape hatch for a [git-tier title frozen](configuration.md#session-titles-sessiontitle)
