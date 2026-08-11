@@ -81,7 +81,40 @@ export function layoutStrip(input: StripInput): PlacedChip[] {
   const budget = fitsAll ? available : Math.max(0, available - HIDDEN_RESERVE);
 
   const items = input.views.map((v, i) => ({ id: v.id, width: widths[i] }));
-  return packChips(items, { start: 0, budget, align: "left", gap: GAP });
+
+  if (fitsAll) {
+    return packChips(items, { start: 0, budget, align: "left", gap: GAP });
+  }
+
+  // Everything doesn't fit — pack a *window* around the active chip rather
+  // than the plain prefix packChips would give: prefix packing drops
+  // whatever falls after the first overflow, which can be the active chip
+  // itself (views "First, Active" on a narrow strip showed "First" and
+  // dropped the one chip that must always be on screen). Mirrors
+  // `layoutPreviewTabs`' widen-from-active algorithm (panel-view-renderer.ts)
+  // — the same "the active item is the one thing a scrollable strip must
+  // never truncate away" rule this codebase already has prior art for.
+  const activeIndex = Math.max(0, input.views.findIndex((v) => v.id === input.activeViewId));
+  let start = activeIndex;
+  let end = activeIndex;
+  let used = widths[activeIndex] ?? 0;
+  for (;;) {
+    const nextW = end + 1 < widths.length ? widths[end + 1]! + GAP : 0;
+    const prevW = start > 0 ? widths[start - 1]! + GAP : 0;
+    const canRight = nextW > 0 && used + nextW <= budget;
+    const canLeft = prevW > 0 && used + prevW <= budget;
+    if (!canRight && !canLeft) break;
+    // Right first when both are open and no wider, so the common case (near
+    // the start, or the whole set fits) reads left-to-right as written.
+    if (canRight && (!canLeft || nextW <= prevW)) { used += nextW; end++; }
+    else { used += prevW; start--; }
+  }
+
+  // The window's own total is <= budget by construction (the loop above only
+  // ever grows it while that holds), so every chip in [start, end] packs —
+  // packChips here can only ever place the whole slice, never a partial
+  // prefix of it.
+  return packChips(items.slice(start, end + 1), { start: 0, budget, align: "left", gap: GAP });
 }
 
 export function renderStrip(

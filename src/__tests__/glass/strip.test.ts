@@ -155,6 +155,42 @@ describe("density label", () => {
     expect(withLabel.length).toBeLessThanOrEqual(withoutLabel.length);
   });
 
+  test("keeps the active chip on screen by sliding the window, not dropping it as the tail", () => {
+    // The exact scenario the finding names: "First, Active" on a strip too
+    // narrow for both. Plain prefix packing keeps "First" (index 0) and
+    // drops "Active" — the one chip that must never disappear, since it also
+    // carries the dirty marker. Mirrors layoutPreviewTabs' widen-from-active
+    // window instead.
+    const twoViews: CommandCenterView[] = [
+      { id: "first", name: "First", filter: "all", groupBy: "status", sortBy: "status" },
+      { id: "active", name: "Active", filter: "active", groupBy: "status", sortBy: "status" },
+    ];
+    const input: StripInput = { ...base, views: twoViews, activeViewId: "active", width: 14 };
+    const chips = layoutStrip(input);
+    expect(chips.map((c) => c.id)).toEqual(["active"]);
+
+    const row = renderStrip(input, chips).cells[0].map((c) => c.char).join("");
+    expect(row).toContain("Active");
+    expect(row).not.toContain("First");
+    expect(row).toContain("+1");
+  });
+
+  test("dirty marker on the active chip survives the same narrow-strip window", () => {
+    const twoViews: CommandCenterView[] = [
+      { id: "first", name: "First", filter: "all", groupBy: "status", sortBy: "status" },
+      { id: "active", name: "Active", filter: "active", groupBy: "status", sortBy: "status" },
+    ];
+    const input: StripInput = { ...base, views: twoViews, activeViewId: "active", width: 17, dirty: true };
+    const row = renderStrip(input).cells[0].map((c) => c.char).join("");
+    expect(row).toContain("Active ·");
+  });
+
+  test("a window that must drop from both sides keeps the middle active chip", () => {
+    const input: StripInput = { ...base, views: many, activeViewId: "d", width: 24 };
+    const chips = layoutStrip(input);
+    expect(chips.some((c) => c.id === "d")).toBe(true);
+  });
+
   test("does not push the active view chip out of a narrow strip", () => {
     // Narrow enough that the second chip ("Backend") is dropped, but wide
     // enough that the first ("Active") — the active chip — still fits
