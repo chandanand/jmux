@@ -30,18 +30,27 @@ import type { SessionWorkflow } from "./workflow-drift";
 import type { GhostEntry } from "./ghosts";
 import type { NavTarget } from "./nav-order";
 
-export interface PinnedPaneEntry {
-  paneId: string;
-  label: string;
-  homeSessionName: string;
-  /** Agent state of this pane's session, for the Command Center breakdown. */
-  agentState?: AgentState | null;
+/**
+ * What the Overview row says about the Command Center: how many sessions the
+ * grid holds, and their agent states.
+ *
+ * Counted by the reconciler, not here. Membership is derived from the grid's
+ * own axes plus its two exceptions, so a grid can be full while not one pane
+ * carries `@jmux-pinned` — the pinned-pane list this replaced could only ever
+ * report the hand-placed half of that, and reported it as the whole.
+ */
+export interface GridSummary {
+  count: number;
+  tally: Record<AgentState, number>;
+}
+
+function emptyGridSummary(): GridSummary {
+  return { count: 0, tally: { running: 0, waiting: 0, complete: 0 } };
 }
 
 export type SidebarSelection =
   | { type: "overview" }
   | { type: "session"; id: string }
-  | { type: "pinnedPane"; paneId: string }
   /** An unstarted issue in the Up next band. Carries only the id: the caller
    * owns the issue data, and the sidebar deliberately knows nothing about
    * trackers (same boundary as `setSessionWorkflow`). */
@@ -418,7 +427,7 @@ type RenderItem =
   // *placed* rather than re-derived at paint time: a session under group=stage
   // can still land in Pinned or Parked, whose headers name neither, and a rule
   // evaluated twice is a rule that can disagree with itself.
-  | { type: "session"; sessionIndex: number; grouped: boolean; groupLabel?: string; pinnedCount?: number; stageInHeader?: boolean }
+  | { type: "session"; sessionIndex: number; grouped: boolean; groupLabel?: string; stageInHeader?: boolean }
   // One issue of an expanded session, drawn directly below that session's own
   // rows. A sub-row, not a peer: it is absent from `displayOrder` and from
   // `navOrder`, because both mean "somewhere to go" and this row's session is
@@ -431,7 +440,7 @@ type RenderItem =
   // row it becomes on activation is the row it was already standing in for.
   | { type: "ghost"; ghostIndex: number }
   | { type: "spacer" }
-  | { type: "overview"; paneCount: number };
+  | { type: "overview"; memberCount: number };
 
 // Pinned and Parked's keys/labels come from `orderSessions` (session-order.ts)
 // now — the bands it returns already carry them, so buildRenderPlan reads
@@ -466,7 +475,7 @@ function buildRenderPlan(
   sessions: SessionInfo[],
   collapsedGroups: Set<string>,
   pinnedNames: Set<string>,
-  pinnedPanes: PinnedPaneEntry[],
+  gridSummary: GridSummary,
   sortInfos: SessionSortInfo[],
   groupMode: GroupMode,
   sortMode: SortMode,
@@ -481,15 +490,6 @@ function buildRenderPlan(
   displayOrder: number[];
   navOrder: NavTarget[];
 } {
-  // Build a map of homeSessionName → count for pinned panes
-  const pinnedPaneCountBySession = new Map<string, number>();
-  for (const pane of pinnedPanes) {
-    pinnedPaneCountBySession.set(
-      pane.homeSessionName,
-      (pinnedPaneCountBySession.get(pane.homeSessionName) ?? 0) + 1,
-    );
-  }
-
   // Which sessions, and in what order — the shared primitive also the Command
   // Center grid derives its membership from. Collapse, ghosts, issue rows and
   // expansion are emission concerns and are layered on below.
@@ -590,7 +590,7 @@ function buildRenderPlan(
   };
 
   // Command Center block first — always present (header + counts only).
-  items.push({ type: "overview", paneCount: pinnedPanes.length });
+  items.push({ type: "overview", memberCount: gridSummary.count });
   items.push({ type: "spacer" });
 
   const emitGroup = (
@@ -625,7 +625,6 @@ function buildRenderPlan(
         sessionIndex: idx,
         grouped: true,
         groupLabel: label,
-        pinnedCount: pinnedPaneCountBySession.get(sessions[idx].name),
         stageInHeader,
       });
     }
@@ -655,7 +654,6 @@ function buildRenderPlan(
       type: "session",
       sessionIndex: idx,
       grouped: false,
-      pinnedCount: pinnedPaneCountBySession.get(sessions[idx].name),
     });
   }
 
@@ -725,8 +723,9 @@ function itemHeight(
   // Identifier row + title row. Fixed at 2: a ghost has no agent to promote,
   // so it never grows the third row a live session can.
   if (item.type === "ghost") return 2;
-  // Command Center: header row + an agent-state breakdown row when panes exist.
-  if (item.type === "overview") return item.paneCount > 0 ? 2 : 1;
+  // Command Center: header row + an agent-state breakdown row when the grid
+  // holds anything.
+  if (item.type === "overview") return item.memberCount > 0 ? 2 : 1;
   return 1; // group-header or spacer
 }
 
@@ -766,7 +765,7 @@ export class Sidebar {
   private parkedSessions = new Set<string>();
   private sessionWorkflow = new Map<string, SessionWorkflow>();
   private ghosts: GhostEntry[] = [];
-  private pinnedPanes: PinnedPaneEntry[] = [];
+  private gridSummary: GridSummary = emptyGridSummary();
   private rowToSelection = new Map<number, SidebarSelection>();
   /** Per row, the badge's clickable columns and the session it discloses. */
   private rowToDisclosure = new Map<
@@ -906,9 +905,37 @@ export class Sidebar {
     return { name: s.name, status: this.statusOf(s), lastActivity: this.lastActivityOf(s) };
   }
 
-  setPinnedPanes(panes: PinnedPaneEntry[]): void {
-    this.pinnedPanes = panes;
+  /**
+   * What the Command Center currently holds. Arrives pre-computed from the
+   * reconciler, the same boundary shape as `setSessionWorkflow`: which sessions
+   * the grid shows depends on its own axes, the two tmux-option exceptions and
+   * the live pane inventory, none of which the sidebar knows about.
+   */
+  setGridSummary(summary: GridSummary): void {
+    this.gridSummary = summary;
     this.rebuildPlan();
+  }
+
+  /**
+   * Everything `orderSessions` takes except the axes — read back off the
+   * sidebar so the Command Center derives its membership from exactly the
+   * inputs the sidebar is rendering from, rather than a second copy that can
+   * disagree. `sortInfos` is index-aligned with `sessions` by construction.
+   */
+  getOrderInputs(): {
+    sessions: SessionInfo[];
+    sortInfos: SessionSortInfo[];
+    pinnedSessions: Set<string>;
+    parkedSessions: Set<string>;
+    workflowByName: Map<string, SessionWorkflow>;
+  } {
+    return {
+      sessions: this.sessions,
+      sortInfos: this.buildSortInfos(),
+      pinnedSessions: this.pinnedSessions,
+      parkedSessions: this.parkedSessions,
+      workflowByName: this.sessionWorkflow,
+    };
   }
 
   private groupMode: GroupMode = "project";
@@ -1003,7 +1030,7 @@ export class Sidebar {
       this.sessions,
       this.collapsedGroups,
       this.pinnedSessions,
-      this.pinnedPanes,
+      this.gridSummary,
       this.buildSortInfos(),
       this.groupMode,
       this.sortMode,
@@ -1429,8 +1456,8 @@ export class Sidebar {
 
         // Header row: "\u2318 Command Center \u00b7 N" (bold).
         const headerAttrs: CellAttrs = { ...GROUP_HEADER_ATTRS, bold: true, ...bgPatch };
-        const headerText = item.paneCount > 0
-          ? `\u2318 Command Center \u00b7 ${item.paneCount}`
+        const headerText = item.memberCount > 0
+          ? `\u2318 Command Center \u00b7 ${item.memberCount}`
           : "\u2318 Command Center";
         const maxHeaderLen = this.width - 2;
         const headerDisplay = headerText.length > maxHeaderLen
@@ -1440,14 +1467,9 @@ export class Sidebar {
         this.rowToSelection.set(screenRow, { type: "overview" });
 
         // Breakdown row: colored "n RUN  n WAIT  n DONE" for non-zero states.
-        if (item.paneCount > 0) {
+        if (item.memberCount > 0) {
           const breakdownRow = screenRow + 1;
-          const tally = { running: 0, waiting: 0, complete: 0 };
-          for (const p of this.pinnedPanes) {
-            if (p.agentState === "running") tally.running++;
-            else if (p.agentState === "waiting") tally.waiting++;
-            else if (p.agentState === "complete") tally.complete++;
-          }
+          const tally = this.gridSummary.tally;
           const segs: { text: string; attrs: CellAttrs }[] = [];
           if (tally.running > 0) segs.push({ text: `${tally.running} RUN`, attrs: this.stateAttrs.running });
           if (tally.waiting > 0) segs.push({ text: `${tally.waiting} WAIT`, attrs: this.stateAttrs.waiting });
@@ -1980,16 +2002,6 @@ export class Sidebar {
           writeString(grid, detailRow, ctxCol, contextText, { ...DIM_ATTRS, ...bgAttrs });
           rightEdge = ctxCol - 2;
         }
-      }
-    }
-
-    // Pinned pane count (right side, before the badge/workflow cluster)
-    if (item.pinnedCount && item.pinnedCount > 0) {
-      const pinnedStr = `(${item.pinnedCount} pinned)`;
-      const pinnedCol = rightEdge - pinnedStr.length + 1;
-      if (pinnedCol > leftCol) {
-        writeString(grid, detailRow, pinnedCol, pinnedStr, { ...DIM_ATTRS, ...bgAttrs });
-        rightEdge = pinnedCol - 2;
       }
     }
 

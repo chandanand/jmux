@@ -58,10 +58,12 @@ describe("buildCcCommands — glass context", () => {
     expect(cmd.disabled).toBeFalsy();
   });
 
-  test("unpin-tile is a disabled hinted row for an auto-pinned tile", () => {
+  test("unpin-tile is a disabled hinted row for a tile nobody pinned", () => {
     const cmd = buildCcCommands({ ...glass, focusedIsAuto: true }).find((c) => c.id === "unpin-tile")!;
     expect(cmd.disabled).toBe(true);
-    expect(cmd.hint).toMatch(/auto-pinned/i);
+    // Derived membership: unpinning a tile that carries no pin would do
+    // nothing, so the row says why rather than failing silently.
+    expect(cmd.hint).toMatch(/matches this view/i);
   });
 
   test("tile-targeted commands are hidden when there is no focused tile", () => {

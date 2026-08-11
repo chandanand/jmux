@@ -109,16 +109,20 @@ export interface JmuxConfig {
   windowBranches?: boolean;
   pinnedSessions?: string[];
   /**
-   * @deprecated Pre-views auto-pin toggle. Membership will be derived from a
-   * view's axes rather than a set of pinned panes, at which point there is
-   * nothing left for this to switch on — but `main.ts` still reads it today
-   * to gate whether agent panes are unioned into Command Center membership,
-   * so it stays live and on disk until that code moves (phase 9). Dropping
-   * the key before then would silently turn auto-pin off for anyone who has
-   * it set.
+   * @deprecated Pre-views auto-pin toggle, read by nothing since membership
+   * became derived: auto *is* the baseline now, so there is nothing left for
+   * this to switch on. The key survives on disk only because `persist()`
+   * writes the whole loaded object back, so removing the field alone would
+   * not remove the key — the migration that deletes it lands with phase 9's,
+   * beside `commandCenterTabs`.
    */
   autoPinAgentPanes?: boolean;
-  /** Case-insensitive regex matched against pane_current_command for auto-pin (e.g. Codex). */
+  /**
+   * Case-insensitive regex matched against `pane_current_command` to decide
+   * which panes are worth *electing* as a session's Command Center face
+   * (`eligiblePanes`, `glass/representative.ts`) — the last-resort signal for
+   * an agent that declares no `@jmux-agent-kind`.
+   */
   agentPaneCommandRegex?: string;
   /**
    * Derive agent state by reading pane text, for agents with no hook or
@@ -414,17 +418,14 @@ function mergeConfigWithDefaults(userConfig: JmuxConfig, defaults: JmuxConfig): 
  * contract as `migrateLegacyConfig`.
  *
  * Deliberately does **not** touch `commandCenterTabs` or `autoPinAgentPanes`.
- * Those are dead in the *target* design but still read by live code today —
- * `main.ts` builds the tab registry from `commandCenterTabs` via
- * `normalizeTabs`, and `autoPinAgentPanes` gates whether agent panes are
- * unioned into Command Center membership. Deleting either key here would be
- * additive in the type system but a real regression for a running user
- * (named tabs vanishing, auto-pin silently turning off) — global constraint 2
- * requires a key be deleted only alongside the code that reads it. `main.ts`
- * moves off `commandCenterTabs` in phase 6 and off `autoPinAgentPanes` in
- * phase 9; the deletion of both keys (and this comment) belongs in whichever
- * migration accompanies that phase's `main.ts` change, once nothing reads
- * them anymore.
+ * `commandCenterTabs` is still read by live code — `main.ts` builds the strip's
+ * tab registry from it via `normalizeTabs`, and `cli/cc.ts` reads it too — and
+ * deleting the key before they move would silently fold every named tab back
+ * to the default. `autoPinAgentPanes` no longer gates anything (derived
+ * membership is the baseline), but a TS field alone is not a key: `persist()`
+ * writes the whole loaded object back, so the key needs an explicit delete.
+ * Both deletions (and this comment) belong in the migration that lands with
+ * phase 9's `main.ts`/`cli/cc.ts` change.
  */
 export function migrateCommandCenterConfig(raw: any): { config: any; changed: boolean } {
   const config = { ...(raw ?? {}) };

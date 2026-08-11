@@ -99,17 +99,15 @@ describe("migrateCommandCenterConfig", () => {
     expect(config.commandCenter).toEqual({ maxTiles: DEFAULT_MAX_CLIENTS });
   });
 
-  // Transitional invariant, not a permanent guarantee: `commandCenterTabs` and
-  // `autoPinAgentPanes` are dead in the target design but still read by live
-  // code — `main.ts` builds the tab registry from `commandCenterTabs` via
-  // `normalizeTabs`, and `autoPinAgentPanes` gates whether agent panes are
-  // unioned into Command Center membership. Deleting either here before that
-  // code moves would be a silent regression: named tabs collapsing to the
-  // default, auto-pin quietly turning off. This test is deleted in phase 9
-  // (`main.ts`/`cli/cc.ts` off `commandCenterTabs`; `autoPinAgentPanes`
-  // retired) — its deletion is the signal that the transition finished, not
-  // a loosening of coverage.
-  test("leaves commandCenterTabs and autoPinAgentPanes untouched — main.ts still reads both", () => {
+  // Transitional invariant, not a permanent guarantee. `commandCenterTabs` is
+  // still read by live code — `main.ts` builds the strip's tab registry from
+  // it, and so does `cli/cc.ts` — so deleting it here would collapse every
+  // named tab to the default. `autoPinAgentPanes` is read by nothing now, but
+  // a key is not deleted by dropping its TS field: `persist()` writes the whole
+  // loaded object back. Both deletions land with phase 9, and this test's
+  // deletion is the signal that the transition finished, not a loosening of
+  // coverage.
+  test("leaves commandCenterTabs and autoPinAgentPanes untouched — the keys outlive their readers", () => {
     const raw = {
       commandCenterTabs: [{ id: "default", name: "Main" }, { id: "backend", name: "Backend" }],
       autoPinAgentPanes: true,

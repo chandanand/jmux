@@ -262,6 +262,16 @@ export class GlassView {
     this.opts.onFrame();
   }
 
+  /**
+   * Which `pane_current_command`s make a pane worth electing. Live-settable
+   * because it is a config field the settings screen edits: a grid holding the
+   * old pattern's answer until the next restart would look like the setting had
+   * no effect. The caller reconciles after this, which is what re-elects.
+   */
+  setAgentPaneRegex(pattern: string | null): void {
+    this.opts.agentPaneRegex = pattern;
+  }
+
   // ── Public API ──────────────────────────────────────────────────────────────
 
   setTiles(specs: GlassTileSpec[], activeTabId: string): void {

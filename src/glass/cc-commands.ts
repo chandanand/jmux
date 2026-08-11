@@ -41,7 +41,7 @@ export function buildCcCommands(input: CcCommandInput): PaletteCommand[] {
       if (input.focusedIsAuto) {
         cmds.push({
           id: "unpin-tile", label: "Unpin tile", category: "command center",
-          disabled: true, hint: "auto-pinned; disable auto-pin or it returns",
+          disabled: true, hint: "on the grid because it matches this view",
         });
       } else {
         cmds.push({ id: "unpin-tile", label: "Unpin tile", category: "command center" });

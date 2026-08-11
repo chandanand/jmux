@@ -75,9 +75,8 @@ function comparePaneIds(a: string, b: string): number {
 
 /**
  * Panes worth cycling: kinded, regex-matched against `pane_current_command`,
- * or force-on. Ordered by pane id. Mirrors `detectAgentPanes`'s command-regex
- * handling exactly — an invalid or empty pattern disables that signal, it
- * does not throw or reject the whole row set.
+ * or force-on. Ordered by pane id. An invalid or empty command pattern
+ * disables that signal; it does not throw or reject the whole row set.
  */
 export function eligiblePanes(
   panes: readonly PaneRow[],

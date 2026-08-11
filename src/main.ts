@@ -10,7 +10,7 @@ import { ScreenBridge } from "./screen-bridge";
 import { Renderer, getToolbarButtonRanges, getToolbarTabRanges, getModalPosition, buildToolbarButtons, type ToolbarConfig } from "./renderer";
 import { InputRouter } from "./input-router";
 import { sidebarWidthForCol, panelWidthForCol, type DragHandle } from "./drag";
-import { Sidebar, rebuildSidebarColors, type PinnedPaneEntry } from "./sidebar";
+import { Sidebar, rebuildSidebarColors } from "./sidebar";
 import {
   GROUP_MODES, SORT_MODES, FILTER_MODES,
   groupModeLabel, sortModeLabel, filterModeLabel, migrateLegacySort,
@@ -167,13 +167,27 @@ import {
 } from "./state-colors";
 import { INTERNAL_SESSION_FILTER, PARK_SESSION } from "./glass/internal-sessions";
 import { PinnedPaneTracker } from "./glass/pinned-pane-tracker";
-import { parsePaneStateLines, PANE_STATE_FORMAT } from "./glass/reflect";
+import type { PaneLocation } from "./glass/types";
 import { US, splitFields } from "./tmux-fields";
-import { buildPaneLabel } from "./glass/pane-label";
-import { AGENT_DETECT_FORMAT, parseAgentDetectLines, detectAgentPanes } from "./glass/auto-detect";
-import { PANE_ROW_FORMAT, parsePaneRowLines, electRepresentative } from "./glass/representative";
+import {
+  PANE_ROW_FORMAT,
+  parsePaneRowLines,
+  electRepresentative,
+  type PaneRow,
+} from "./glass/representative";
+import { orderSessions } from "./session-order";
+import { applyGridExceptions } from "./glass/exceptions";
+import { ReconcileLoop } from "./glass/reconcile-loop";
+import {
+  normalizeViews,
+  normalizeAxes,
+  resolveActiveViewId,
+  reloadViews,
+  type CommandCenterAxes,
+  type CommandCenterView,
+} from "./glass/views";
 import { GlassView, type GlassTileSpec } from "./glass/view";
-import { normalizeTabs, defaultTabId, resolveTabId, summarizeTabState, addTab, renameTab, deleteTab, moveTab, type TabEntry } from "./glass/tabs";
+import { normalizeTabs, defaultTabId, summarizeTabState, addTab, renameTab, deleteTab, moveTab, type TabEntry } from "./glass/tabs";
 import { buildCcCommands, NEW_TAB_OPTION_ID } from "./glass/cc-commands";
 import { stripVisibleFor, renderStrip, layoutStrip, STRIP_ROWS } from "./glass/strip";
 import { chipAtCol, type PlacedChip } from "./band-layout";
@@ -515,7 +529,6 @@ function repoDefaultsView(): ResolvedRepoSettings {
 }
 
 let cacheTimersEnabled = configStore.config.cacheTimers !== false;
-let autoPinAgentPanes = configStore.config.autoPinAgentPanes === true;
 let agentPaneRegex = configStore.config.agentPaneCommandRegex ?? "codex";
 let pinnedSessions = new Set<string>(configStore.config.pinnedSessions ?? []);
 let infoPanelWidth: number | null = configStore.config.infoPanelWidth ?? null;
@@ -1394,10 +1407,6 @@ agentStateTracker.onChange((sessionId) => {
     snapshotter?.onAgentState(sessionName, snapState);
   }
 
-  // Keep the Command Center live as agents change state — refresh both the
-  // breakdown (manual pins) and auto-detected agent panes.
-  if (pinnedTracker.size > 0 || autoPinAgentPanes) refreshPinnedPanes();
-
   scheduleRender();
 });
 // --- Pane-of-glass wiring ---
@@ -1415,6 +1424,42 @@ let activeTabId: string = defaultTabId(commandCenterTabs);
 let lastActiveTabId: string = activeTabId;
 let currentStripChips: PlacedChip[] = [];
 let summaryByTab = new Map<string, AgentState | null>();
+
+// The Command Center's saved views and its live (possibly dirty) axes. The
+// axes are what `reconcileGrid` derives membership from; the registry is what
+// phase 7's keys select between.
+let commandCenterViews: CommandCenterView[] = normalizeViews(
+  configStore.config.commandCenterViews,
+);
+let activeViewId: string = resolveActiveViewId(
+  configStore.config.commandCenterActiveViewId,
+  commandCenterViews,
+);
+let gridAxes: CommandCenterAxes = normalizeAxes(
+  configStore.config.commandCenterAxes,
+  commandCenterViews.find((v) => v.id === activeViewId) ?? commandCenterViews[0],
+);
+
+/**
+ * The grid's reconcile scheduler. Declared here, above every caller, because
+ * `invalidateGrid` is reachable from listeners registered at module scope —
+ * the temporal-dead-zone hazard `boot-smoke.test.ts` exists to catch. The two
+ * halves it drives (`readGridState` / `applyGridSnapshot`) are hoisted function
+ * declarations further down and only run when a reconcile does.
+ */
+const gridReconciler = new ReconcileLoop({
+  run: async () => applyGridSnapshot(await readGridState()),
+  onError: (error) => logError("reconcileGrid", String(error)),
+});
+
+/**
+ * Something that can change the grid happened: membership, order, labels,
+ * faces or the exceptions. Coalesced onto the trailing edge of the tick — see
+ * `ReconcileLoop` for why this is a state machine and not a debounce.
+ */
+function invalidateGrid(): void {
+  gridReconciler.invalidate();
+}
 
 /**
  * Run one tmux command with argv rather than a command string.
@@ -1773,6 +1818,11 @@ function recomputeSessionBands(): void {
   sidebar.setParkedSessions(parked);
   sidebar.setSessionWorkflow(sessionWorkflow);
   recomputeGhosts();
+  // Parking is membership (`includeParked: false`) and the stage is a band on
+  // the `groupBy: "stage"` axis, so every signal that lands here can move the
+  // grid. This is also the funnel every session-list change already routes
+  // through, which is why `fetchSessions` needs no invalidation of its own.
+  invalidateGrid();
 }
 
 /** The stored ghost-row cap. Conversions all live in ghosts.ts. */
@@ -4502,7 +4552,7 @@ const inputRouter = new InputRouter(
         return;
       }
       const sel = sidebar.getSelectionByRow(row);
-      if (sel?.type === "overview" || sel?.type === "pinnedPane") {
+      if (sel?.type === "overview") {
         void enterGlass();
         return;
       }
@@ -5585,10 +5635,12 @@ function buildPaletteCommands(): PaletteCommand[] {
 
   // Command Center commands (context-aware: in-glass vs session).
   {
+    // Tabs no longer partition the grid: membership is derived from the active
+    // view's axes, so every tile is on whatever tab is showing and a pin's old
+    // tab id has no referent (`parsePinValue`). These three fields are fed the
+    // only honest answers left until phase 9 retires the commands themselves.
     const focusedPaneId = inGlass ? (glassView?.focusedPaneId() ?? null) : null;
-    const focusedTabId = focusedPaneId
-      ? resolveTabId(pinnedTracker.getValue(focusedPaneId) ?? null, commandCenterTabs)
-      : null;
+    const focusedTabId = focusedPaneId ? activeTabId : null;
     const focusedIsAuto = focusedPaneId ? !pinnedTracker.has(focusedPaneId) : false;
     let sessionActivePinned = false;
     if (!inGlass && currentSessionId) {
@@ -5597,10 +5649,6 @@ function buildPaletteCommands(): PaletteCommand[] {
     }
     const tabCounts = new Map<string, number>();
     for (const tab of commandCenterTabs) tabCounts.set(tab.id, 0);
-    for (const paneId of pinnedTracker.all()) {
-      const tid = resolveTabId(pinnedTracker.getValue(paneId) ?? null, commandCenterTabs);
-      tabCounts.set(tid, (tabCounts.get(tid) ?? 0) + 1);
-    }
     commands.push(...buildCcCommands({
       inGlass, tabs: commandCenterTabs, activeTabId, tabCounts,
       focusedPaneId, focusedTabId, focusedIsAuto, sessionActivePinned,
@@ -6011,25 +6059,19 @@ function buildSettingsCategories(): SettingsCategory[] {
           },
         },
         {
-          id: "auto-pin-agents",
-          label: "Auto-pin agent panes to Command Center",
-          type: "boolean" as const,
-          getValue: () => autoPinAgentPanes ? "on" : "off",
-          onToggle: () => {
-            autoPinAgentPanes = !autoPinAgentPanes;
-            configStore.set("autoPinAgentPanes", autoPinAgentPanes);
-            refreshPinnedPanes();
-          },
-        },
-        {
+          // Not an auto-pin switch any more: derived membership IS the
+          // baseline, so there is nothing to turn on. This pattern decides
+          // which panes are worth *electing* as a session's face when no agent
+          // integration has declared a kind.
           id: "agent-pane-regex",
-          label: "Auto-pin command match (regex)",
+          label: "Agent command match (regex)",
           type: "text" as const,
           getValue: () => agentPaneRegex,
           onTextCommit: (v) => {
             agentPaneRegex = v;
             configStore.set("agentPaneCommandRegex", v);
-            refreshPinnedPanes();
+            glassView?.setAgentPaneRegex(v);
+            invalidateGrid();
           },
         },
         {
@@ -7841,7 +7883,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
     const applyTab = (tabId: string) => {
       for (const cmd of buildPinCommands("pin", paneId, tabId)) glassRunner.run(cmd.args);
       if (commandId === "move-tile") switchCommandCenterTab(tabId); // follow the moved tile
-      refreshPinnedPanes();
+      invalidateGrid();
     };
     if (sublistOptionId === NEW_TAB_OPTION_ID) {
       openInputModalForNewTab((newTabId) => applyTab(newTabId));
@@ -7857,7 +7899,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       : glassRunner.run(["display-message", "-p", "-t", currentSessionId!, "#{pane_id}"]).lines[0];
     if (!paneId) return;
     for (const cmd of buildPinCommands("unpin", paneId)) glassRunner.run(cmd.args);
-    refreshPinnedPanes();
+    invalidateGrid();
     return;
   }
 
@@ -8847,13 +8889,27 @@ try {
       const clamped = clampTabSelection(commandCenterTabs, activeTabId, lastActiveTabId);
       activeTabId = clamped.activeTabId;
       lastActiveTabId = clamped.lastActiveTabId;
-      if (inGlass) {
-        refreshPinnedPanes();         // re-fold vanished tab ids; rebuild specs + summary
-        glassView?.setActiveTab(activeTabId);
-      }
       const after = stripVisibleFor(commandCenterTabs);
       if (before !== after) { resizeGlass(); }  // strip appeared/disappeared → glass height changed
       scheduleRender();
+    }
+
+    // Reload the view registry. A hand-edit to the file is the one thing that
+    // can move the active view under a dirty set of axes, which is why this
+    // goes through `reloadViews` rather than re-reading the three fields: the
+    // in-flight narrowing survives if the view it belongs to did.
+    {
+      const next = reloadViews(updated.commandCenterViews, activeViewId, gridAxes);
+      commandCenterViews = next.views;
+      activeViewId = next.activeViewId;
+      gridAxes = next.axes;
+      // The election's command pattern is a grid input the file can change
+      // under us. `commandCenter.maxTiles` deliberately is not hot-applied:
+      // `GlassView` reads it once, and lowering it live would tear down
+      // clients mid-session.
+      agentPaneRegex = updated.agentPaneCommandRegex ?? "codex";
+      glassView?.setAgentPaneRegex(agentPaneRegex);
+      invalidateGrid();
     }
 
     const needsResize = newWidth !== sidebarWidth;
@@ -9061,17 +9117,30 @@ control.onEvent((event: ControlEvent) => {
     case "window-close":
       if (startupComplete) {
         fetchWindows();
-        // A closed window may have hosted a pinned or auto-detected pane (e.g. the
-        // user exited a Claude agent). Reconcile Command Center membership so the
-        // dead pane's tile is torn down rather than left drifting onto a surviving
-        // sibling window. When the last tile goes, the glass shows its empty state.
-        if (inGlass || pinnedTracker.size > 0 || autoPinAgentPanes) refreshPinnedPanes();
+        // A closed window took its panes with it: a session that had only that
+        // window loses its tile, and one that kept a sibling re-elects a face.
+        invalidateGrid();
       }
       break;
     case "window-add":
     case "window-renamed":
     case "session-window-changed":
       if (startupComplete) fetchWindows();
+      break;
+    // Pane inventory and active pane. Nothing else on this channel reports a
+    // split or a kill, so without these a new agent pane is invisible to the
+    // grid until an unrelated event happens to move.
+    //
+    // Both, because they cover different halves. Measured against tmux 3.7b:
+    // `%layout-change` fires only for windows in the *control client's own
+    // session*, so a split in any other session produces none — but a split or
+    // a kill always changes that window's active pane, and
+    // `%window-pane-changed` goes to every control client regardless of
+    // session. The first is the precise signal where it applies; the second is
+    // what makes the rest of the server visible at all.
+    case "layout-change":
+    case "window-pane-changed":
+      if (startupComplete) invalidateGrid();
       break;
     case "subscription-changed":
       if (!startupComplete) break;
@@ -9081,8 +9150,10 @@ control.onEvent((event: ControlEvent) => {
         fetchWindows();
       } else if (event.name === "session-titles") {
         fetchSessions();
-      } else if (event.name === "pinned-panes") {
-        refreshPinnedPanes();
+      } else if (event.name === "grid-exceptions" || event.name === "grid-hidden") {
+        // `@jmux-pinned` (pane) and `@jmux-grid-hidden` (session) — the two
+        // exceptions. Both are triggers only; the reconciler re-reads them.
+        invalidateGrid();
       }
       break;
   }
@@ -9142,6 +9213,10 @@ async function lookupSessionDetails(sessions: SessionInfo[]): Promise<void> {
     return cached ? { ...s, ...cached } : s;
   });
   sidebar.updateSessions(currentSessions);
+  // Project resolution is async and lands well after the session list did, so
+  // the grid has to be told: `groupBy: "project"` buckets on exactly the field
+  // this loop just filled in, and until now it only repainted the sidebar.
+  invalidateGrid();
   // Paths are known only now, so this is where sessions that existed at
   // startup first become resolvable.
   registerSessionsWithPoller(currentSessions);
@@ -9415,112 +9490,165 @@ async function ensureParkSession(): Promise<void> {
   await control.sendCommand(`new-session -d -s ${PARK_SESSION}`).catch(() => {});
 }
 
+// ─── The reconciler ──────────────────────────────────────────────────────────
+//
+// One entry point for "what is on the grid": `orderSessions` on the grid's own
+// axes, the two tmux-option exceptions on top, one tile per surviving session,
+// a face elected per tile. Nothing is hand-placed and nothing is written back —
+// panes are never moved, broken or joined; the grid mirrors them.
+//
+// It reads exactly two things: one `list-panes -a` pass (the pin flag, the
+// location, and everything the election needs — the old AGENT_DETECT_FORMAT
+// folded into it) and one `list-sessions -F` for the session-scoped hide.
+
 /**
- * Reflect the per-pane `@jmux-pinned` option into the tracker and the sidebar's
- * Overview list. Non-destructive: panes are never moved — the glass renders live
- * mirrors of them (see GlassView). Runs on the pinned-panes subscription, on
- * pin/unpin, and once at startup.
+ * `PANE_ROW_FORMAT` plus the location fields. `parsePaneRowLines` reads the
+ * leading eight and ignores the rest, so one format serves both parses and the
+ * election can never be fed a different pass from the placement.
  */
-const PIN_LABEL_FORMAT = [
-  "#{pane_id}",
-  "#{session_name}",
-  "#{pane_title}",
-  "#{pane_current_command}",
-  "#{pane_current_path}",
-  `#{${SESSION_TITLE_OPTION}}`,
-].join(US);
+const GRID_PANE_FORMAT = [PANE_ROW_FORMAT, "#{session_id}", "#{window_id}"].join(US);
 
-function refreshPinnedPanes(): void {
-  const state = parsePaneStateLines(
-    glassRunner.run(["list-panes", "-a", "-F", PANE_STATE_FORMAT]).lines,
-  );
-  // Reflect raw @jmux-pinned values into the tracker (value, not just presence).
-  for (const paneId of state.live.keys()) {
-    pinnedTracker.apply(paneId, state.pins.get(paneId) ?? null);
-  }
-  pinnedTracker.pruneExcept([...state.live.keys()]);
+const GRID_SESSION_FORMAT = `#{session_id}${US}#{@jmux-grid-hidden}`;
 
-  // Per-pane labels + home session names for building entries/specs.
-  const labelByPane = new Map<string, { label: string; sessionName: string }>();
-  for (const row of glassRunner.run(["list-panes", "-a", "-F", PIN_LABEL_FORMAT]).lines) {
-    const [paneId, sessionName, paneTitle, cmd, path, sessionTitle] = splitFields(row);
+/**
+ * The grid's one bucket. `GlassTileSpec.tabId` and `GlassView`'s active tab are
+ * a partition this design no longer has: membership is derived from a single
+ * set of axes, so every tile is in the same bucket and the field is a constant
+ * until phase 8 removes it.
+ */
+const GRID_TAB_ID = "grid";
+
+interface GridSnapshot {
+  /** Election input for every pane on the server, in tmux's order. */
+  paneRows: PaneRow[];
+  /** paneId → where it lives. Same keys as `paneRows`. */
+  locationByPane: Map<string, PaneLocation>;
+  /** paneId → raw non-empty `@jmux-pinned`. */
+  pinByPane: Map<string, string>;
+  /** Sessions carrying `@jmux-grid-hidden`. */
+  hiddenSessionIds: Set<string>;
+}
+
+async function readGridState(): Promise<GridSnapshot> {
+  // Sequential, not concurrent: control-mode replies are matched FIFO, and two
+  // in-flight commands would be two ways to read the same instant.
+  const paneLines = await control.sendCommand(`list-panes -a -F '${GRID_PANE_FORMAT}'`);
+  const sessionLines = await control.sendCommand(`list-sessions -F '${GRID_SESSION_FORMAT}'`);
+
+  const paneRows = parsePaneRowLines(paneLines);
+  const locationByPane = new Map<string, PaneLocation>();
+  const pinByPane = new Map<string, string>();
+  for (const line of paneLines) {
+    if (!line.trim()) continue;
+    const fields = splitFields(line);
+    const paneId = fields[0];
     if (!paneId) continue;
-    const shown = displaySessionName({ name: sessionName ?? "", title: sessionTitle });
-    labelByPane.set(paneId, {
-      // The real name — it addresses a tmux session and must not become a phrase.
-      sessionName: sessionName ?? "",
-      label: buildPaneLabel({
-        sessionName: shown,
-        paneTitle: paneTitle ?? "",
-        paneCurrentCommand: cmd ?? "",
-        paneCurrentPath: path ?? "",
-      }),
+    const pin = fields[3];
+    if (pin) pinByPane.set(paneId, pin);
+    locationByPane.set(paneId, {
+      sessionId: fields[8] ?? "",
+      windowId: fields[9] ?? "",
     });
   }
 
-  // Effective Command Center membership = manual pins ∪ auto-detected agent
-  // panes (when the setting is on). Auto panes are derived each refresh and are
-  // NOT written to @jmux-pinned.
-  const effective = new Set(pinnedTracker.all());
-  if (autoPinAgentPanes) {
-    const rows = parseAgentDetectLines(
-      glassRunner.run(["list-panes", "-a", "-F", AGENT_DETECT_FORMAT]).lines,
-    );
-    for (const id of detectAgentPanes(rows, agentPaneRegex)) effective.add(id);
+  const hiddenSessionIds = new Set<string>();
+  for (const line of sessionLines) {
+    if (!line.trim()) continue;
+    const [sessionId, hidden] = splitFields(line);
+    if (sessionId && hidden) hiddenSessionIds.add(sessionId);
   }
 
-  // Deterministic order (by session name, then pane id) so tiles/counts keep a
-  // stable arrangement across detach/reattach and restarts — set iteration
-  // order reflects tmux's arbitrary list-panes order otherwise.
-  const paneNum = (id: string): number => parseInt(id.replace(/^%/, ""), 10) || 0;
-  const orderedPaneIds = [...effective]
-    .filter((id) => state.live.has(id) && labelByPane.has(id))
-    .sort((a, b) => {
-      const sa = labelByPane.get(a)!.sessionName;
-      const sb = labelByPane.get(b)!.sessionName;
-      if (sa !== sb) return sa < sb ? -1 : 1;
-      return paneNum(a) - paneNum(b);
-    });
+  return { paneRows, locationByPane, pinByPane, hiddenSessionIds };
+}
 
-  const entries: PinnedPaneEntry[] = [];
+function applyGridSnapshot(snap: GridSnapshot): void {
+  const livePaneIds = [...snap.locationByPane.keys()];
+  // The pin mirror stays: `@jmux-pinned` is still what the palette and the CLI
+  // write, and pruning it here is what retires a pin whose pane has died.
+  for (const paneId of livePaneIds) {
+    pinnedTracker.apply(paneId, snap.pinByPane.get(paneId) ?? null);
+  }
+  pinnedTracker.pruneExcept(livePaneIds);
+
+  // Membership: the sidebar's own ordering on the grid's axes, then the two
+  // exceptions. Read back off the sidebar rather than re-derived, so the grid
+  // and the list can differ only in the axes the user chose.
+  const shared = sidebar.getOrderInputs();
+  const bands = orderSessions({
+    ...shared,
+    filterMode: gridAxes.filter,
+    groupMode: gridAxes.groupBy,
+    sortMode: gridAxes.sortBy,
+    includeParked: false,
+  });
+  const members = applyGridExceptions({
+    sessions: shared.sessions,
+    bands,
+    hiddenSessionIds: snap.hiddenSessionIds,
+    panes: livePaneIds.map((paneId) => ({
+      sessionId: snap.locationByPane.get(paneId)!.sessionId,
+      pinnedRaw: snap.pinByPane.get(paneId) ?? null,
+    })),
+  });
+
+  const panesBySession = new Map<string, PaneRow[]>();
+  for (const row of snap.paneRows) {
+    const sessionId = snap.locationByPane.get(row.paneId)?.sessionId;
+    if (!sessionId) continue;
+    const list = panesBySession.get(sessionId);
+    if (list) list.push(row);
+    else panesBySession.set(sessionId, [row]);
+  }
+
   const specs: GlassTileSpec[] = [];
-  const stateByTab = new Map<string, (AgentState | null)[]>();
-  for (const paneId of orderedPaneIds) {
-    const loc = state.live.get(paneId)!;
-    const meta = labelByPane.get(paneId)!;
-    // Per-pane, not the session rollup: each tile mirrors one agent, so a
-    // sibling agent blocked in another pane must not paint this tile WAITING.
-    // Falls back to the session value automatically for session-scoped writers,
-    // because the pane-context read inherits.
-    const agentState = agentStateTracker.getPaneState(paneId);
-    const tabId = resolveTabId(pinnedTracker.getValue(paneId) ?? null, commandCenterTabs);
-    entries.push({
-      paneId,
-      homeSessionName: meta.sessionName,
-      label: meta.label,
-      agentState,
-    });
-    // `forced` is the explicit pin: auto-detected members are derived, so they
-    // are the ones a client cap sheds first.
+  const tally: Record<AgentState, number> = { running: 0, waiting: 0, complete: 0 };
+  const states: (AgentState | null)[] = [];
+  for (const member of members) {
+    const session = shared.sessions[member.index]!;
+    const panes = panesBySession.get(session.id) ?? [];
+    if (panes.length === 0) continue; // a session with no pane has nothing to mirror
+    // The election is run again inside GlassView against the same rows — this
+    // one only supplies the spawn-time hint for which window to select, so the
+    // first frame lands on the pane the tile is about to settle on.
+    const elected = electRepresentative(panes, null, agentPaneRegex) ?? panes[0]!.paneId;
+    // The session rollup, not the elected pane's own state: a tile is a session
+    // now, so its border says what the sidebar's row for that session says.
+    // `outranks` picks the most urgent pane and so does the election, which is
+    // what keeps the two answers together in the ordinary case.
+    const agentState = agentStateTracker.getRecord(session.id)?.state ?? null;
+    if (agentState) tally[agentState]++;
+    states.push(agentState);
     specs.push({
-      paneId, sessionId: loc.sessionId, windowId: loc.windowId, label: meta.label,
-      agentState, tabId, forced: pinnedTracker.has(paneId),
+      sessionId: session.id,
+      paneId: elected,
+      windowId: snap.locationByPane.get(elected)?.windowId ?? "",
+      label: displaySessionName(session),
+      agentState,
+      // Tabs no longer partition the grid: membership is derived from one set
+      // of axes, so there is one bucket and every tile is in it. A real tab id
+      // here would blank the grid the moment the strip switched tabs, because
+      // `GlassView` filters its specs on this field. Phase 8 replaces the
+      // strip with the view chips and this field goes with it.
+      tabId: GRID_TAB_ID,
+      // Force-on survives the client cap ahead of a derived member. Same
+      // predicate `applyGridExceptions` used to put an `added` member here in
+      // the first place, so the two can't disagree about what is forced.
+      forced: panes.some((p) => p.forcedOn),
+      panes,
     });
-    const arr = stateByTab.get(tabId) ?? [];
-    arr.push(agentState);
-    stateByTab.set(tabId, arr);
   }
-  sidebar.setPinnedPanes(entries);
 
-  // Per-tab summary for the strip dots.
+  sidebar.setGridSummary({ count: specs.length, tally });
+
+  // Strip dots. One derived set, so every tab reports the same roll-up.
+  const summary = summarizeTabState(states);
   summaryByTab = new Map<string, AgentState | null>();
-  for (const tab of commandCenterTabs) {
-    summaryByTab.set(tab.id, summarizeTabState(stateByTab.get(tab.id) ?? []));
-  }
+  for (const tab of commandCenterTabs) summaryByTab.set(tab.id, summary);
 
-  if (inGlass) glassView?.setTiles(specs, activeTabId);
+  if (inGlass) glassView?.setTiles(specs, GRID_TAB_ID);
   scheduleRender();
 }
+
 
 function ensureGlassView(): GlassView {
   if (!glassView) {
@@ -9533,6 +9661,12 @@ function ensureGlassView(): GlassView {
       minTileHeight: 10,
       onFrame: scheduleRender,
       stateColors: resolveStateColors(configStore.config.stateColors),
+      // The grid's own cap, and the pattern that decides which panes are worth
+      // electing as a session's face. Both are read here rather than at each
+      // reconcile: the view owns the election now that it is handed whole pane
+      // sets, and `planTiles` floors the cap at 1 whatever is stored.
+      maxClients: configStore.config.commandCenter?.maxTiles,
+      agentPaneRegex,
     });
   }
   return glassView;
@@ -9575,7 +9709,9 @@ async function enterGlass(): Promise<void> {
       .catch(() => {});
   }
   resizeGlass();
-  refreshPinnedPanes(); // builds + applies tile specs (inGlass is true)
+  // Awaited, not merely queued: the first read is what spawns the tiles, and
+  // rendering ahead of it would flash the empty state on every open.
+  await gridReconciler.flush();
   scheduleRender();
 }
 
@@ -9583,7 +9719,8 @@ function switchCommandCenterTab(tabId: string): void {
   if (!commandCenterTabs.some((t) => t.id === tabId)) return;
   activeTabId = tabId;
   lastActiveTabId = tabId;
-  glassView?.setActiveTab(tabId);
+  // No `setActiveTab`: the grid is one derived set and a tab no longer selects
+  // between them, so switching moves the strip's highlight and nothing else.
   scheduleRender();
 }
 
@@ -9612,7 +9749,7 @@ function persistTabs(next: TabEntry[]): void {
   // Clamp active/last-active if they vanished.
   if (!next.some((t) => t.id === activeTabId)) activeTabId = defaultTabId(next);
   if (!next.some((t) => t.id === lastActiveTabId)) lastActiveTabId = defaultTabId(next);
-  if (inGlass) refreshPinnedPanes();
+  if (inGlass) invalidateGrid();
 }
 
 function openInputModalForNewTab(then: (tabId: string) => void): void {
@@ -9640,10 +9777,10 @@ function openInputModalForRenameTab(): void {
 }
 
 function tryDeleteActiveTab(): void {
-  const memberCount = pinnedTracker.all().filter(
-    (p) => resolveTabId(pinnedTracker.getValue(p) ?? null, commandCenterTabs) === activeTabId,
-  ).length;
-  const result = deleteTab(commandCenterTabs, activeTabId, memberCount);
+  // Zero, always: a tab holds no members now that membership is derived from
+  // the active view's axes, so `deleteTab`'s non-empty refusal can no longer
+  // fire and only its protected-default one can.
+  const result = deleteTab(commandCenterTabs, activeTabId, 0);
   if (!result.ok) { showCcError(result.error); return; }
   persistTabs(result.tabs);
   switchCommandCenterTab(defaultTabId(commandCenterTabs));
@@ -9834,7 +9971,7 @@ async function start(): Promise<void> {
   await fetchWindows();
   await fetchAgentState();
   await ensureParkSession();
-  refreshPinnedPanes();
+  invalidateGrid();
 
   // One-time legacy migration: previous jmux versions wrote @jmux-attention=1
   // via a Stop hook. That option is now an orchestrator/human-gate signal owned
@@ -10074,11 +10211,22 @@ async function start(): Promise<void> {
     "#{session_windows} #{window_index} #{window_name} #{window_zoomed_flag}",
   );
 
-  // Subscribe to per-pane pin flag — fires whenever any pane's @jmux-pinned changes.
+  // The grid's two exceptions. Nested for the same reason as agent-state
+  // above: `#{P:}` alone walks only the *current window's* panes, so the flat
+  // form this replaces never fired for a `ctl pane pin` issued from an
+  // unfocused window — the pin sat in tmux unread until something unrelated
+  // triggered a refresh. `#{S:#{W:#{P:}}}` enumerates the whole server.
   await control.registerSubscription(
-    "pinned-panes",
+    "grid-exceptions",
     1,
-    "#{P:#{pane_id}=#{@jmux-pinned} }",
+    "#{S:#{W:#{P:#{pane_id}=#{@jmux-pinned} }}}",
+  );
+  // Force-off is session-scoped — its subject is a whole session tile — so it
+  // needs no nesting, only its own session loop.
+  await control.registerSubscription(
+    "grid-hidden",
+    1,
+    "#{S:#{session_id}=#{@jmux-grid-hidden} }",
   );
 }
 

@@ -405,12 +405,12 @@ describe("disabled palette rows", () => {
     const p = new CommandPalette();
     p.open([{
       id: "noop", label: "Unpin tile", category: "pane",
-      disabled: true, hint: "auto-pinned; disable auto-pin",
+      disabled: true, hint: "on the grid because it matches this view",
     }]);
     const grid = p.getGrid(80);
     // The first result row now sits below the chrome (title/input/hairline).
     const row = grid.cells[RESULTS_TOP_ROW].map((c) => c.char).join("");
-    expect(row).toContain("Unpin tile — auto-pinned; disable auto-pin");
+    expect(row).toContain("Unpin tile — on the grid because it matches this view");
   });
 });
 
