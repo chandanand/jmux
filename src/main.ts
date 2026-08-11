@@ -4,7 +4,7 @@ import { clipboardCopyCommand } from "./platform";
 import { MIN_TMUX_VERSION, tmuxVersionOk } from "./tmux-version";
 import { configFileIn, materializeAssets, skillIn } from "./assets";
 import { currentChannel, upgradeCommand } from "./channel";
-import { compareGeneration, GENERATION_OPTION, stampCommand, staleGenerationNotice } from "./config-generation";
+import { compareGeneration, DETACH_ON_DESTROY_COMMAND, GENERATION_OPTION, stampCommand, staleGenerationNotice } from "./config-generation";
 import { detectSkill, installSkill, uninstallIntegrations } from "./agent-hooks/skill";
 import { ScreenBridge } from "./screen-bridge";
 import { Renderer, getToolbarButtonRanges, getToolbarTabRanges, getModalPosition, buildToolbarButtons, type ToolbarConfig } from "./renderer";
@@ -10110,6 +10110,14 @@ async function start(): Promise<void> {
   // many %begin/%end blocks asynchronously, which scrambles the FIFO
   // pending-queue matching and corrupts subsequent command responses.
   await control.sendCommand("set-environment -g JMUX 1");
+
+  // A server jmux did not start never ran `core.conf`, and one of its settings
+  // is what keeps closing a pane from quitting jmux outright — so that one is
+  // written again here instead of being reported as stale below. See
+  // DETACH_ON_DESTROY_COMMAND for why it alone gets that treatment.
+  await control.sendCommand(DETACH_ON_DESTROY_COMMAND).catch((err) => {
+    logError("core-options", `detach-on-destroy: ${(err as Error).message}`);
+  });
 
   // Config generation. `-f` is honored only when tmux *starts* a server, so
   // attaching to a server left running by an older jmux silently keeps that
