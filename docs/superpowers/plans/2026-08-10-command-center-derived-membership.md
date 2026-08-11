@@ -99,9 +99,13 @@ active side, or a cap of 1 over two active tiles cannot tell which is pinned.
 tile leaves membership. `live` is the set of clients that exist — the job today's
 `warm` does (`glass/view.ts:122`) — and is what separates a spawn from a survivor;
 `retained` cannot stand in for it, since it holds only tiles that have left
-membership. Cap counts active plus retained; active evicts retained immediately;
-under overflow force-on is kept first; `nextExpiryAt` is armed by the caller so a
-grace expires with no tmux traffic.
+membership. Implement the spec's seven-step order literally — **admit, then
+spawn**: a `spawn` computed before the cap attaches clients for tiles that are
+never rendered, since `glass/view.ts:138` executes every `plan.spawn` and
+`ensureTile` attaches a real client (`glass/view.ts:389`). `teardown` subtracts
+`admitted`, not `active`, so a live tile the cap stops admitting is released
+rather than leaking. `nextExpiryAt` is armed by the caller so a grace expires with
+no tmux traffic.
 
 `GlassView` gains a third transition, **retarget**, for a face moving to a pane in
 another window of the same session: unzoom the window the tile currently owns,

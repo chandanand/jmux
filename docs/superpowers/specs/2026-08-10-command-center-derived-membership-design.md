@@ -327,30 +327,52 @@ export interface TilePlan {
 }
 ```
 
-Rules, all decided rather than left to the implementation:
+The planner runs in this order, and the order is the contract — admission
+precedes spawning, because a `spawn` computed before the cap is applied would
+attach clients for tiles that are never rendered (`glass/view.ts:138` executes
+every `plan.spawn`, and `ensureTile` attaches a real client at
+`glass/view.ts:389`):
 
-- **`live` is what separates a spawn from a survivor**, and it is not derivable
-  from the other fields. `retained` holds only tiles that have *left* membership,
-  so an active tile whose client already exists appears in neither `active`-minus-
+```
+1. admitted   = cap(active, maxClients)        # forced first, then render order
+2. render     = admitted
+3. droppedActive = active.length - admitted.length
+4. spawn      = admitted.filter(k => !live.has(k))
+5. budget     = maxClients - admitted.length
+   keptRetained = retained
+                    .filter(r => now - r.lastSeenAt < graceMs)
+                    .sortBy(lastSeenAt, descending)
+                    .slice(0, max(0, budget))
+6. teardown   = live \ (admitted ∪ keptRetained)
+7. nextExpiryAt = min(lastSeenAt + graceMs over keptRetained) ?? null
+```
+
+Every rule falls out of that sequence:
+
+- **`live` separates a spawn from a survivor**, and is not derivable from the
+  other fields. `retained` holds only tiles that have *left* membership, so an
+  active tile whose client already exists appears in neither `active`-minus-
   `retained` nor `retained`: without `live`, two consecutive reconciles with
-  identical membership are identical input, and the planner would have to answer
-  "spawn A" the first time and "don't" the second. `spawn = active.filter(a =>
-  !live.has(a.key))`, and `retained ⊆ live` by construction. This is the same job
-  today's `warm` set does (`glass/view.ts:122`, `glass/tile-plan.ts:20`) and it
-  survives the redesign unchanged in purpose.
-- **The cap counts clients, active and grace-retained together** — it is a
-  resource cap or it is nothing.
-- **Active always outranks retained.** A newly active tile evicts the
-  least-recently-seen retained client immediately rather than waiting out its
-  grace.
+  identical membership are identical input, and step 4 would have to answer
+  "spawn A" the first time and "don't" the second. `retained ⊆ live` by
+  construction. This is the job today's `warm` set does (`glass/view.ts:122`,
+  `glass/tile-plan.ts:20`), unchanged in purpose.
+- **The cap counts clients, active and grace-retained together** — step 5's
+  `budget` is what enforces that — because it is a resource cap or it is nothing.
+- **Active always outranks retained.** Step 1 takes its share first, so a newly
+  active tile evicts the least-recently-seen retained client through step 6
+  rather than waiting out its grace.
 - **Under active overflow, force-on sessions are kept first**, then render order.
-  The remainder is `droppedActive`, stated in the strip (`+3 not shown`).
-  `forced` therefore has to travel on the **active** entries, which is why they
-  are `{ key, forced }` and not bare keys: with `active = [A, B]`, no retained
-  clients and `maxClients: 1`, a planner given only keys receives identical input
-  whether A or B is pinned. Putting new actives into `retained` to carry the flag
-  is not the workaround it looks like — `retained` is also what distinguishes a
-  survivor from a spawn.
+  The remainder is `droppedActive`, stated in the strip (`+3 not shown`). `forced`
+  therefore has to travel on the **active** entries, which is why they are
+  `{ key, forced }` and not bare keys: with `active = [A, B]`, no retained clients
+  and `maxClients: 1`, a planner given only keys receives identical input whether
+  A or B is pinned. Putting new actives into `retained` to carry the flag is not
+  the workaround it looks like — `retained` is also what distinguishes a survivor
+  from a spawn.
+- **An active tile the cap refuses is torn down**, not left attached: step 6
+  subtracts `admitted`, not `active`, so a client that was live and is no longer
+  admitted releases its resources rather than becoming an invisible leak.
 - **`retained` carries only `lastSeenAt`, and the reconciler stamps it** at the
   moment a tile moves from active to retained, with the same `now` it passes in.
   The planner never invents a timestamp.
@@ -681,8 +703,10 @@ Unit, all pure modules:
   elect the more urgent, ties to the earliest `since`.
 - `glass/tile-plan.test.ts` — rewritten for the new contract: two consecutive
   calls with identical `active` spawn on the first and nothing on the second, once
-  `live` reflects the first; running → complete → running inside the grace spawns
-  and tears down **once**; outside it, tears down;
+  `live` reflects the first; an active tile the cap refuses is never spawned, and
+  one that was live and stops being admitted appears in `teardown`; running →
+  complete → running inside the grace spawns and tears down **once**; outside it,
+  tears down;
   `nextExpiryAt` is returned and is null when nothing is retained; an active tile
   evicts a retained one immediately; active overflow keeps force-on first and
   reports `droppedActive`.
