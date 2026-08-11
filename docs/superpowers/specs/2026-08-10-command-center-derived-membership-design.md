@@ -312,7 +312,8 @@ export interface ActiveTile { key: TileKey; forced: boolean }
 
 export interface TilePlanInput {
   active: ActiveTile[];                                // rendered, in order
-  retained: ReadonlyMap<TileKey, { lastSeenAt: number }>;
+  live: ReadonlySet<TileKey>;                          // clients that exist right now
+  retained: ReadonlyMap<TileKey, { lastSeenAt: number }>;  // ⊆ live, left membership
   now: number;
   graceMs: number;      // 30_000
   maxClients: number;   // commandCenter.maxTiles, default 12
@@ -328,6 +329,15 @@ export interface TilePlan {
 
 Rules, all decided rather than left to the implementation:
 
+- **`live` is what separates a spawn from a survivor**, and it is not derivable
+  from the other fields. `retained` holds only tiles that have *left* membership,
+  so an active tile whose client already exists appears in neither `active`-minus-
+  `retained` nor `retained`: without `live`, two consecutive reconciles with
+  identical membership are identical input, and the planner would have to answer
+  "spawn A" the first time and "don't" the second. `spawn = active.filter(a =>
+  !live.has(a.key))`, and `retained ⊆ live` by construction. This is the same job
+  today's `warm` set does (`glass/view.ts:122`, `glass/tile-plan.ts:20`) and it
+  survives the redesign unchanged in purpose.
 - **The cap counts clients, active and grace-retained together** — it is a
   resource cap or it is nothing.
 - **Active always outranks retained.** A newly active tile evicts the
@@ -669,8 +679,10 @@ Unit, all pure modules:
   not one per window; `eligiblePanes` unions kind, regex and force-on and orders
   by pane id; an explicit pane absent from `panes` is rejected; two kinded panes
   elect the more urgent, ties to the earliest `since`.
-- `glass/tile-plan.test.ts` — rewritten for the new contract: running → complete →
-  running inside the grace spawns and tears down **once**; outside it, tears down;
+- `glass/tile-plan.test.ts` — rewritten for the new contract: two consecutive
+  calls with identical `active` spawn on the first and nothing on the second, once
+  `live` reflects the first; running → complete → running inside the grace spawns
+  and tears down **once**; outside it, tears down;
   `nextExpiryAt` is returned and is null when nothing is retained; an active tile
   evicts a retained one immediately; active overflow keeps force-on first and
   reports `droppedActive`.

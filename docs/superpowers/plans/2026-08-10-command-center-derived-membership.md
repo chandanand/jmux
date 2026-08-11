@@ -96,9 +96,12 @@ pin changes.
 `TilePlan`. `active` entries are `{ key, forced }` — the flag has to travel on the
 active side, or a cap of 1 over two active tiles cannot tell which is pinned.
 `retained` carries only `lastSeenAt`, stamped by the reconciler at the moment a
-tile leaves membership. Cap counts active plus retained; active evicts retained
-immediately; under overflow force-on is kept first; `nextExpiryAt` is armed by the
-caller so a grace expires with no tmux traffic.
+tile leaves membership. `live` is the set of clients that exist — the job today's
+`warm` does (`glass/view.ts:122`) — and is what separates a spawn from a survivor;
+`retained` cannot stand in for it, since it holds only tiles that have left
+membership. Cap counts active plus retained; active evicts retained immediately;
+under overflow force-on is kept first; `nextExpiryAt` is armed by the caller so a
+grace expires with no tmux traffic.
 
 `GlassView` gains a third transition, **retarget**, for a face moving to a pane in
 another window of the same session: unzoom the window the tile currently owns,
