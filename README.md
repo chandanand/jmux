@@ -253,7 +253,7 @@ See [Browser panes](docs/browser-panes.md).
 
 ### Configuration
 
-jmux layers tmux config in three tiers — jmux defaults, then your `~/.tmux.conf`, then the small set of settings jmux requires. jmux's own settings live in `~/.config/jmux/config.json`. Full guide: **[docs/configuration.md](docs/configuration.md)**.
+jmux layers tmux config in three tiers — jmux defaults, then your own tmux config (`~/.tmux.conf` or `~/.config/tmux/tmux.conf`), then the small set of settings jmux requires. Set `userTmuxConfig` to `false` if you'd rather jmux didn't source yours at all. jmux's own settings live in `~/.config/jmux/config.json`. Full guide: **[docs/configuration.md](docs/configuration.md)**.
 
 ### Architecture
 

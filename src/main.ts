@@ -6175,13 +6175,15 @@ function buildSettingsCategories(): SettingsCategory[] {
           getValue: () => formatUserTmuxConfig(liveUserTmuxConfig(), homedir()),
           getEditValue: () => editableUserTmuxConfig(configStore.config.userTmuxConfig),
           getNote: userTmuxConfigRestartNote,
+          // No `describe` — the settings screen has no explain line and never
+          // reads it (only the workflow screen does), so a string here would be
+          // a field that reads as configured and can never be displayed. What
+          // the row accepts is documented in docs/configuration.md.
           onTextCommit: (v) => {
             const parsed = parseUserTmuxConfig(v);
             if (parsed === undefined) configStore.delete("userTmuxConfig");
             else configStore.set("userTmuxConfig", parsed);
           },
-          describe: () =>
-            "Which tmux config jmux sources between its own defaults and its requirements. auto, off, or a path.",
         },
       ],
     },

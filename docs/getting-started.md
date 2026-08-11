@@ -349,7 +349,7 @@ the row reads `restart to apply` until you relaunch.
 - **Scroll the sidebar** with your mouse wheel when you have many sessions
 - **Click the version** at the bottom of the sidebar to see release notes
 - **Mouse selection** works — click and drag to select text, it copies to your clipboard
-- **Your tmux config** still works. If you have `~/.tmux.conf`, jmux loads it. Your plugins, themes, and custom bindings carry over
+- **Your tmux config** still works. If you have `~/.tmux.conf` (or `~/.config/tmux/tmux.conf`), jmux loads it. Your plugins, themes, and custom bindings carry over — and `userTmuxConfig: false` turns that off if its chrome collides with jmux's
 - **Resize panes** with `Ctrl-a` then arrow keys (hold for continuous resize)
 - **Zoom a pane** with `Ctrl-a` then `z` — the tab shows ⤢ when zoomed, press again to unzoom
 - **Pane borders** auto-show when a window has multiple panes and hide for single-pane windows
