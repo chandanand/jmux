@@ -2,7 +2,13 @@
 
 ## Status
 
-accepted
+superseded by [0005](0005-derived-command-center-membership.md)
+
+Tabs, and the pane-scoped tab id inside `@jmux-pinned`, are deleted. Membership
+is now derived from the sidebar's own session ordering, with pins surviving as
+an explicit exception; "views" (named filter/group/sort presets) replace tabs as
+the saved-preset concept. Left below as the record of what was decided at the
+time.
 
 ## Context & decision
 

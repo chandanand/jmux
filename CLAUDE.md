@@ -63,7 +63,7 @@ tmux PTY bytes → ScreenBridge (@xterm/headless) → CellGrid → Renderer → 
 
   **Collapsed is coarse, expanded is precise.** The field shows the *stage* label — a word the user chose — not the raw status, which is workspace-defined and unabbreviatable (the same reason the disclosure sub-rows fall back to a `stateType` glyph). Two statuses in one stage read identically here and are spelled out a keystroke away. A status no stage claims prints raw: that is the fallback filling a hole, not a second rule.
 
-  **The issue badge is protected against the right-hand cluster — row 2 no longer carries a branch at all.** It claims its columns first, since it is the row's identity, and nothing to its right may encroach on what it needs. Everything else claims next, each taking what it needs if it fits: MR id, timer, context figure, pinned count. The workflow field is computed last, from whatever is left once those four have staked their columns, which makes it the *first* thing on the row to degrade as the sidebar narrows — the full stage label gives way to a glyph, then nothing, while the timer and MR id beside it are still intact. Under `group=stage` the band header already names the stage, so the word is suppressed and those columns go back to the row's other fields — drift survives it, shortened to `→Done`, because the header supplies where the ticket *is* and nothing supplies where it should be. The predicate is `stageInHeader`, **stamped on the `RenderItem` where the row is placed rather than re-derived at paint time**: a session under `group=stage` can still land in Pinned or Parked, whose headers name neither, and a rule evaluated twice is a rule that can disagree with itself.
+  **The issue badge is protected against the right-hand cluster — row 2 no longer carries a branch at all.** It claims its columns first, since it is the row's identity, and nothing to its right may encroach on what it needs. Everything else claims next, each taking what it needs if it fits: MR id, timer, context figure. The workflow field is computed last, from whatever is left once those three have staked their columns, which makes it the *first* thing on the row to degrade as the sidebar narrows — the full stage label gives way to a glyph, then nothing, while the timer and MR id beside it are still intact. Under `group=stage` the band header already names the stage, so the word is suppressed and those columns go back to the row's other fields — drift survives it, shortened to `→Done`, because the header supplies where the ticket *is* and nothing supplies where it should be. The predicate is `stageInHeader`, **stamped on the `RenderItem` where the row is placed rather than re-derived at paint time**: a session under `group=stage` can still land in Pinned or Parked, whose headers name neither, and a rule evaluated twice is a rule that can disagree with itself.
 
   **Drift is the level `transitions.ts` refuses to act on.** Transitions fire on edges only — a condition already true at startup must not replay history into a shared tracker — so every missed edge (a restart, a session adopted after its MR merged, a failed write, an unconfigured event) leaves a permanent silent divergence. jmux writes on edges and reads on levels. An issue drifts when its stage *rank* is behind the configured target's, which is why a ticket moved past the target isn't flagged; where either side can't be ranked, the answer is an honest blank rather than a guess. The strongest event that actually produces a move wins — falling through `mr-merged` when it has no target configured, rather than letting it mask a correctly-configured `session-start` underneath.
 
@@ -143,6 +143,7 @@ Rendering is coalesced via `scheduleRender()`, at `RENDER_INTERVAL_ACTIVE` while
 - Parses SGR mouse sequences (`\x1b[<...M`) and dispatches clicks/hovers to sidebar / toolbar / main area based on x-coordinate relative to `sidebarCols`. Mouse events in the main area have their x translated and forwarded to tmux so tmux's own mouse support keeps working.
 - Implements a **soft prefix intercept**: `Ctrl-a` is forwarded to tmux as normal, *but* if the next byte is `p` / `n` / `i` within a short window, jmux intercepts it to open the palette / new-session modal / settings instead of letting tmux handle it. This is why the prefix key is still customizable via `~/.tmux.conf` — we piggyback on whatever tmux's prefix is by listening for the literal `\x01` byte that `Ctrl-a` produces. If a user rebinds their tmux prefix, the intercept needs to be thought about.
 - Handles `Ctrl-Shift-Up/Down` (`\x1b[1;6A` / `\x1b[1;6B`) directly for session switching — these never reach tmux.
+- **Row 0 has two owners, and the column decides between them.** The info panel's tab strip is painted into the *toolbar row* over the panel's columns (`renderer.ts` blits it at `destY 0`), so it must be hit-tested *before* the toolbar branch — that branch claims the whole row whatever the column, and for a long time swallowed every tab click while hover still worked, because it ignores motion. The strip only owns those columns while it is drawn: in full mode `panel.x === main.x`, so claiming them unconditionally would make the toolbar unclickable whenever the strip hides itself for a lone Diff tab. `panelTabBarShown()` reads `InfoPanel.tabBarShown` — the same predicate the renderer paints from, rather than a second copy that could route clicks to an owner it isn't painting.
 - Owns **drag** on three resize handles via `src/drag.ts`: the sidebar border column, the split panel divider, and the info panel's list/detail separator. The first two are vertical lines that move horizontally; the third is horizontal and moves vertically (`handleAxis`), which is why the controller tracks a single scalar `pos` rather than a column. Three invariants hold this together and are easy to break by accident:
   1. **Press decides ownership, and commits nothing.** A press on a handle is genuinely ambiguous between a click and a drag until the next event arrives, so a handle's click behaviour fires on release-without-motion — that's why the divider's focus toggle lives in `dispatchDrag`'s `click` case and *not* at the press site it used to occupy.
   2. **A live drag bypasses all column routing.** One drag routinely crosses the sidebar, main, and panel; every mouse event goes to the drag until release, checked before row classification. Without this a drag reads as a sidebar click or leaks into the pty.
@@ -211,6 +212,98 @@ The `session-start` tracker transition fires from both. In the CLI the `transiti
 
 The skill file `skills/jmux-control.md` documents usage patterns for agents — it's loaded as a Claude Code skill so agents inside jmux can discover and use the CLI.
 
+### Command Center (`src/glass/`)
+
+The grid of live, drivable session tiles (`Ctrl-a C`), rewritten from
+hand-placed pins to derived membership — full record in
+`docs/adr/0005-derived-command-center-membership.md`. The rules that are easy to
+undo:
+
+**One tile per session, because tmux ties the current window and zoom to the
+session, not the client.** Two clients attached to one session share its
+current window, and `resize-pane -Z` zooms the whole window — two tiles cannot
+show two panes of one session full-bleed at once, by any arrangement of pins.
+`TileKey` (`glass/tile-plan.ts`) is `session:$id` and only that; there is no
+second kind of key. A session with several agent panes still shows one at a
+time, elected by `glass/representative.ts`, with `Ctrl-a x` cycling within the
+one tile rather than adding a second.
+
+**`orderSessions` (`src/session-order.ts`) is the shared membership-and-order
+primitive, extracted one level below `buildRenderPlan`'s `displayOrder` on
+purpose.** `displayOrder` means *rows currently visible in the sidebar* — it's
+populated by emission, which skips a collapsed group, and Parked is collapsed
+by default — so reusing it directly for the grid would mean a sidebar
+disclosure gesture silently changed which agents the grid mirrors. Collapse
+state, ghosts, issue rows and expansion stay in `buildRenderPlan`; the grid's
+`glass/exceptions.ts` is a second consumer of the same primitive, not a
+reimplementation of its rules, on the discipline `cli/workflow.ts` keeps with
+`transformIssues` / `buildViewNodes`.
+
+**Two tmux options, two scopes, because the two exceptions have different
+subjects.** `@jmux-pinned` (pane-scoped) keeps a session on the grid and
+prefers that pane as its face; `@jmux-grid-hidden` (session-scoped) keeps a
+session off it entirely. Hidden always beats a force-on pin in the same
+session — not "more specific wins", because the two options aren't about the
+same subject: hide's subject is the whole session, a pin's is one pane in it.
+A rule where pinning any pane could silently un-hide a session would make the
+hide untrustworthy. `parsePinValue` (`glass/pinned-pane-tracker.ts`) reads any
+non-empty `@jmux-pinned` value — including every legacy tab id from the tab-era
+design — as plain force-on; there is no migration, because every one of those
+values was written by someone saying "put this on the grid", and the tab-id
+half of that sentence no longer has a referent.
+
+**The election is stateless; the display is sticky, and conflating the two was
+a bug in an earlier draft.** `electRepresentative` (`glass/representative.ts`)
+answers "who represents this session *right now*" from live urgency alone, with
+no memory of what was shown last frame — re-electing on every reconcile would
+mean a sibling agent going from complete to running yanks the picture out from
+under someone typing into the tile. Stickiness — a tile keeps its pane until
+that pane dies, the user cycles it (`Ctrl-a x`), or the force-on set changes —
+lives in `GlassView.resolveDisplayedRepresentative`, layered *over* the
+stateless election, never folded inside it. `resolveAgentPane` (`main.ts`)
+calls the stateless election directly: "which pane wrote this diff, so I can
+paste the review at it" wants the live answer and has nothing to do with what
+the grid happens to be showing.
+
+**The inheritance trap: `@jmux-agent-state` inherits into a pane-context read,
+so a state with no `kind` beside it is the session's, not the pane's.** The
+hooks write `@jmux-agent-state` at pane scope, but a pane-context format read
+(`list-panes -F`) inherits the session-scoped value onto any pane that carries
+none of its own — so every shell and editor in a session running one agent
+reports that agent's state and `since`, indistinguishably from the agent pane
+itself. `@jmux-agent-kind` is the only pane-level identity with no inheritance
+source (nothing writes it at session scope), which is why `parsePaneRowLines`
+(`glass/representative.ts`) nulls out `state` and `since` on any pane that
+doesn't declare a `kind` — taking the inherited value at face value made every
+shell in an agent's session look equally urgent *and* equally old, so ties fell
+through to the lowest pane id and a shell could outrank the agent sharing its
+session.
+
+**Reconciliation is a state machine, not a debounce, and `dirty` clears before
+the snapshot, never after.** `ReconcileLoop` (`glass/reconcile-loop.ts`) runs an
+async tmux read, so "one run per tick" is a lost-update problem: an
+invalidation arriving after the snapshot but before apply describes a world the
+run in flight can't see. Clearing `dirty` after the snapshot would discard
+exactly that window; clearing it before means a burst of invalidations during
+the read still forces one more run once the current one finishes. The
+reschedule lives in `finally`, so a throwing read reschedules rather than
+leaving the grid frozen with `inFlight` stuck true.
+
+**The client cap counts active and grace-retained tiles together, and every
+tile parses whether or not it is drawn.** `planTiles` (`glass/tile-plan.ts`)
+admits forced (pinned) tiles first, then render order, *before* anything
+spawns — a client is never attached for a tile the cap is about to refuse. A
+tile that leaves membership is *retained*, not torn down immediately: its
+client, pty and `ScreenBridge` stay alive, unrendered, for `graceMs` (30s
+default), so an agent finishing and restarting on a poll cadence doesn't
+attach, detach and toggle the user's real window zoom every cycle. But every
+attached client — active or retained — costs a live tmux attach and a live
+xterm.js parser regardless of whether it is currently on screen; there is no
+"off-screen tiles pause" optimization (see the correction note on ADR 0001).
+`commandCenter.maxTiles` is the only thing bounding that cost, and it is
+deliberately not silent about what it drops: an active tile the cap refuses is
+reported through the strip's `+N not shown`, never dropped quietly.
+
 ### Diff panel
 
 **`src/diff-panel.ts`** provides an integrated hunk diff viewer that docks to the right side of the terminal or zooms to full width. It spawns an external `hunk` process and captures its output. The panel has focus toggling (keyboard input routes to hunk when focused) and survives session switches by re-spawning.
@@ -260,7 +353,8 @@ Three things about this are easy to break:
 - **`@jmux-agent-kind` is the only trustworthy pane-level identity.** Because
   `@jmux-agent-state` inherits, "session has state" is true of every pane in
   that session including editors and shells. Nothing writes `kind` at session
-  scope, so it has no inheritance source. `glass/auto-detect.ts` depends on this.
+  scope, so it has no inheritance source. The Command Center's representative-pane
+election (`glass/representative.ts`) depends on this.
 
 Emitters live in `src/agent-hooks/`. Claude Code and Codex share
 `json-hooks.ts` outright — Codex 0.145 accepts the same PascalCase event names

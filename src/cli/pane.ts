@@ -2,8 +2,7 @@ import { readFileSync } from "fs";
 import { runTmuxDirect } from "./tmux";
 import { requireSession, tmuxOrThrow, CliError, type CliContext } from "./context";
 import type { ParsedCtlArgs } from "../cli";
-import { loadTabRegistry } from "./cc";
-import { resolveTabId } from "../glass/tabs";
+import { parsePinValue } from "../glass/pinned-pane-tracker";
 
 const PANE_FORMAT =
   "#{pane_id}:#{window_id}:#{pane_active}:#{pane_width}:#{pane_height}:#{pane_current_command}:#{pane_current_path}";
@@ -17,18 +16,19 @@ export interface PaneOptionCommand {
 
 /**
  * Build the tmux command(s) to set/unset the per-pane `@jmux-pinned` option.
- * Pin/unpin only write this option (to a tab id, or unset); the running TUI
- * observes the change and updates the Command Center live-mirror tiles. No
- * pane is ever moved, broken, or joined.
+ * Pin no longer adds a tile to a tab — there are no tabs. It keeps this
+ * pane's *session* on the Command Center grid and preselects this pane as the
+ * session's face (`electRepresentative` prefers a force-on pane over the
+ * ordinary election). The running TUI observes the option and reflects it
+ * into the live-mirror tiles; no pane is ever moved, broken, or joined.
  */
 export function buildPinCommands(
   verb: "pin" | "unpin",
   target: string,
-  tabId?: string,
 ): PaneOptionCommand[] {
   if (verb === "pin") {
     return [
-      { args: ["set-option", "-p", "-t", target, "@jmux-pinned", tabId ?? "1"], required: true },
+      { args: ["set-option", "-p", "-t", target, "@jmux-pinned", "1"], required: true },
     ];
   }
   return [
@@ -36,14 +36,10 @@ export function buildPinCommands(
   ];
 }
 
-/** Parse `list-panes -a -F '#{pane_id}:#{@jmux-pinned}'` into pinned pane ids (any non-empty value). */
-export function parsePinnedListOutput(lines: string[]): string[] {
-  return parsePinnedListWithTab(lines).map((e) => e.id);
-}
-
-/** Like parsePinnedListOutput but keeps each pane's raw tab value. */
-export function parsePinnedListWithTab(lines: string[]): { id: string; tab: string }[] {
-  const out: { id: string; tab: string }[] = [];
+/** Parse `list-panes -a -F '#{pane_id}:#{@jmux-pinned}'` into the panes reading
+ *  as force-on under `parsePinValue` — "on", and every legacy value alike. */
+export function parsePinnedList(lines: string[]): { id: string }[] {
+  const out: { id: string }[] = [];
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -51,20 +47,9 @@ export function parsePinnedListWithTab(lines: string[]): { id: string; tab: stri
     if (idx < 0) continue;
     const id = trimmed.slice(0, idx);
     const val = trimmed.slice(idx + 1);
-    if (val !== "") out.push({ id, tab: val });
+    if (parsePinValue(val) === "on") out.push({ id });
   }
   return out;
-}
-
-/** Resolve a --tab argument (id or display name) to a tab id. Unknown values
- *  pass through verbatim — they resolve to the default tab at read time. */
-function resolveTabFlagToId(tabFlag: string | undefined): string | undefined {
-  if (!tabFlag) return undefined;
-  const tabs = loadTabRegistry();
-  if (tabs.some((t) => t.id === tabFlag)) return tabFlag;
-  const lower = tabFlag.toLowerCase();
-  const byName = tabs.find((t) => t.name.toLowerCase() === lower);
-  return byName ? byName.id : tabFlag;
 }
 
 function resolvePaneTarget(ctx: CliContext, flags: ParsedCtlArgs["flags"]): string {
@@ -223,26 +208,18 @@ export function handlePane(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
     case "pin":
     case "unpin": {
       const target = resolvePaneTarget(ctx, flags);
-      const tabId = action === "pin"
-        ? resolveTabFlagToId(typeof flags.tab === "string" ? flags.tab : undefined)
-        : undefined;
-      for (const cmd of buildPinCommands(action as "pin" | "unpin", target, tabId)) {
+      for (const cmd of buildPinCommands(action as "pin" | "unpin", target)) {
         const result = runTmuxDirect(cmd.args, ctx.socket);
         if (cmd.required) tmuxOrThrow(result);
       }
-      return { target, pinned: action === "pin", tab: tabId ?? null };
+      return { target, pinned: action === "pin" };
     }
 
     case "pinned": {
       const lines = tmuxOrThrow(
         runTmuxDirect(["list-panes", "-a", "-F", PINNED_LIST_FORMAT], ctx.socket),
       );
-      const tabs = loadTabRegistry();
-      const pinned = parsePinnedListWithTab(lines).map((e) => ({
-        id: e.id,
-        tab: resolveTabId(e.tab, tabs),
-      }));
-      return { pinned };
+      return { pinned: parsePinnedList(lines) };
     }
 
     default:

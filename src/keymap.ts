@@ -33,6 +33,16 @@
  */
 export type KeySource = "jmux" | "tmux" | "tmux-default";
 
+/**
+ * Which post-prefix arm(s) of input-router.ts a chord is reachable from — the
+ * ordinary arm, the Command Center's, or the full-screen-surface arm. Only
+ * meaningful alongside `prefixKey`; keymap.test.ts asserts each declared set
+ * against the arms that actually intercept the byte, which is what makes a
+ * chord added to only one arm (or removed from one without updating this) a
+ * build failure instead of a silent gap.
+ */
+export type Arm = "ordinary" | "glass" | "surface";
+
 export interface Binding {
   /**
    * Stable identifier. Where an action also exists in the command palette this
@@ -59,10 +69,14 @@ export interface Binding {
    * reads out of input-router.ts, so a chord added to the router without a row
    * here (or vice versa) fails the build. Absent on jmux bindings that are
    * *not* single-byte prefix chords — the Ctrl-Shift-Up/Down session walk is
-   * matched as a whole escape sequence, and the Command Center's tab digits
-   * are matched as a range rather than byte by byte.
+   * matched as a whole escape sequence, and the Command Center's view-switch
+   * digits are matched as a range rather than byte by byte.
    */
   prefixKey?: string;
+  /**
+   * Required alongside `prefixKey`. See `Arm`'s doc comment.
+   */
+  arms?: readonly Arm[];
   /**
    * For a tmux binding: the key exactly as written in config/defaults.conf.
    * Compared against a parse of that file in both directions.
@@ -109,6 +123,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Getting around",
     source: "jmux",
     prefixKey: "?",
+    arms: ["ordinary", "glass"],
   },
   {
     id: "palette",
@@ -117,6 +132,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Getting around",
     source: "jmux",
     prefixKey: "p",
+    arms: ["ordinary", "glass"],
   },
   {
     id: "session-prev",
@@ -141,6 +157,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Sessions",
     source: "jmux",
     prefixKey: "n",
+    arms: ["ordinary", "glass"],
   },
   {
     id: "group-cycle",
@@ -149,6 +166,9 @@ export const KEYMAP: readonly Binding[] = [
     section: "Sessions",
     source: "jmux",
     prefixKey: "G",
+    // Glass reads this same byte too, but as `group-cycle-grid` — the Command
+    // Center's own axis, not the sidebar's. See that binding's comment.
+    arms: ["ordinary"],
   },
   {
     id: "sort-cycle",
@@ -157,6 +177,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Sessions",
     source: "jmux",
     prefixKey: "s",
+    arms: ["ordinary"],
   },
   {
     id: "session-picker",
@@ -172,6 +193,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Sessions",
     source: "jmux",
     prefixKey: "f",
+    arms: ["ordinary"],
   },
   {
     id: "sidebar-toggle",
@@ -180,6 +202,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Sessions",
     source: "jmux",
     prefixKey: "\\",
+    arms: ["ordinary", "glass", "surface"],
   },
 
   // --- Windows ---
@@ -273,6 +296,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Panes",
     source: "jmux",
     prefixKey: "b",
+    arms: ["ordinary", "glass"],
   },
   {
     id: "pane-up",
@@ -354,6 +378,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Info panel",
     source: "jmux",
     prefixKey: "g",
+    arms: ["ordinary", "surface"],
   },
   {
     id: "diff-zoom",
@@ -363,6 +388,7 @@ export const KEYMAP: readonly Binding[] = [
     source: "jmux",
     prefixKey: "z",
     context: IN_PANEL,
+    arms: ["ordinary"],
   },
   {
     id: "panel-focus-toggle",
@@ -371,6 +397,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Info panel",
     source: "jmux",
     prefixKey: "\t",
+    arms: ["ordinary"],
   },
   {
     id: "diff-send-review",
@@ -379,6 +406,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Info panel",
     source: "jmux",
     prefixKey: "r",
+    arms: ["ordinary"],
   },
   {
     id: "diff-view-picker",
@@ -387,6 +415,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Info panel",
     source: "jmux",
     prefixKey: "v",
+    arms: ["ordinary"],
   },
   {
     id: "panel-prev-tab",
@@ -541,6 +570,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Work pipeline",
     source: "jmux",
     prefixKey: "W",
+    arms: ["ordinary", "glass"],
   },
   {
     id: "capture-issue",
@@ -549,6 +579,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Work pipeline",
     source: "jmux",
     prefixKey: "a",
+    arms: ["ordinary", "glass"],
   },
   {
     id: "start-up-next",
@@ -557,6 +588,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Work pipeline",
     source: "jmux",
     prefixKey: "u",
+    arms: ["ordinary", "glass"],
   },
   {
     id: "undo-transition",
@@ -565,6 +597,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Work pipeline",
     source: "jmux",
     prefixKey: "Z",
+    arms: ["ordinary", "glass"],
   },
   {
     id: "fix-workflow-drift",
@@ -573,6 +606,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Work pipeline",
     source: "jmux",
     prefixKey: "m",
+    arms: ["ordinary"],
   },
   {
     id: "toggle-session-issues",
@@ -581,34 +615,88 @@ export const KEYMAP: readonly Binding[] = [
     section: "Work pipeline",
     source: "jmux",
     prefixKey: "e",
+    arms: ["ordinary"],
   },
 
   // --- Command Center ---
   {
-    id: "cc-tab-n",
+    id: "cc-toggle",
+    keys: "Ctrl-a C",
+    label: "Toggle the Command Center",
+    section: "Command Center",
+    source: "jmux",
+    prefixKey: "C",
+    arms: ["ordinary", "glass"],
+    // Shadows tmux's stock `bind-key -T prefix C customize-mode -Z` — accepted,
+    // on the precedent `?` already set against list-keys and `s` against
+    // choose-session: jmux ships Ctrl-a I / Ctrl-a i in customize-mode's place.
+  },
+  {
+    id: "cc-view-n",
     keys: "Ctrl-a 1…9",
-    label: "Switch to tab N",
+    label: "Switch to view N",
     section: "Command Center",
     source: "jmux",
     context: IN_GLASS,
   },
   {
-    id: "cc-tab-prev",
+    id: "cc-view-prev",
     keys: "Ctrl-a [",
-    label: "Previous tab",
+    label: "Previous view",
     section: "Command Center",
     source: "jmux",
     prefixKey: "[",
     context: IN_GLASS,
+    arms: ["glass"],
   },
   {
-    id: "cc-tab-next",
+    id: "cc-view-next",
     keys: "Ctrl-a ]",
-    label: "Next tab",
+    label: "Next view",
     section: "Command Center",
     source: "jmux",
     prefixKey: "]",
     context: IN_GLASS,
+    arms: ["glass"],
+  },
+  {
+    id: "cc-open-focused",
+    keys: "Ctrl-a Enter",
+    label: "Open the focused tile's session full-size, on its displayed pane",
+    section: "Command Center",
+    source: "jmux",
+    prefixKey: "\r",
+    context: IN_GLASS,
+    arms: ["glass"],
+  },
+  {
+    id: "cc-cycle-face",
+    keys: "Ctrl-a x",
+    label: "Cycle the focused tile's face",
+    section: "Command Center",
+    source: "jmux",
+    prefixKey: "x",
+    context: IN_GLASS,
+    arms: ["glass"],
+  },
+  {
+    id: "cc-zoom-tile",
+    keys: "Ctrl-a z",
+    label: "Zoom the focused tile to full size (press again to restore)",
+    section: "Command Center",
+    source: "jmux",
+    prefixKey: "z",
+    context: IN_GLASS,
+    arms: ["glass"],
+  },
+  {
+    id: "cc-toggle-pin",
+    keys: "Ctrl-a P",
+    label: "Remove the focused session from the grid, or add the current pane to it",
+    section: "Command Center",
+    source: "jmux",
+    prefixKey: "P",
+    arms: ["ordinary", "glass"],
   },
   {
     id: "cc-detach",
@@ -618,6 +706,50 @@ export const KEYMAP: readonly Binding[] = [
     source: "jmux",
     prefixKey: "d",
     context: IN_GLASS,
+    arms: ["glass"],
+  },
+  {
+    id: "group-cycle-grid",
+    keys: "Ctrl-a G",
+    label: "Cycle Command Center grouping",
+    section: "Command Center",
+    source: "jmux",
+    prefixKey: "G",
+    context: IN_GLASS,
+    arms: ["glass"],
+  },
+  {
+    id: "sort-cycle-grid",
+    keys: "Ctrl-a s",
+    label: "Cycle Command Center sort",
+    section: "Command Center",
+    source: "jmux",
+    prefixKey: "s",
+    context: IN_GLASS,
+    arms: ["glass"],
+  },
+  {
+    id: "filter-cycle-grid",
+    keys: "Ctrl-a f",
+    label: "Cycle Command Center filter",
+    section: "Command Center",
+    source: "jmux",
+    prefixKey: "f",
+    context: IN_GLASS,
+    arms: ["glass"],
+  },
+  {
+    id: "density-cycle-grid",
+    keys: "Ctrl-a D",
+    label: "Toggle Command Center tile density (Fit / Focus)",
+    section: "Command Center",
+    source: "jmux",
+    prefixKey: "D",
+    // Capital D, not lowercase d (glass detach): shadows tmux's stock
+    // choose-client, accepted on the same precedent as Ctrl-a z shadowing
+    // resize-pane -Z — there is no client to choose from inside the grid.
+    context: IN_GLASS,
+    arms: ["glass"],
   },
 
   // --- Settings ---
@@ -628,6 +760,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Settings",
     source: "jmux",
     prefixKey: "i",
+    arms: ["ordinary", "glass"],
   },
   {
     id: "settings-screen",
@@ -636,6 +769,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Settings",
     source: "jmux",
     prefixKey: "I",
+    arms: ["ordinary", "glass"],
   },
 ];
 

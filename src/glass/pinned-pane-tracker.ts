@@ -1,10 +1,24 @@
 type ChangeListener = (paneId: string) => void;
 
 /**
+ * Interpret a raw `@jmux-pinned` value under the current grammar: any
+ * non-empty value — `"on"`, and every legacy value ("1", "default", an old
+ * tab id) — means force-on. Unset or empty means not pinned. This is the one
+ * interpretation shared by the TUI and `cli/pane.ts`; legacy values are read
+ * as `"on"` rather than migrated, because every one was written by someone
+ * saying "put this on the grid" — the tab-id half of that sentence no longer
+ * has a referent.
+ */
+export function parsePinValue(raw: string | null | undefined): "on" | null {
+  return raw && raw.length > 0 ? "on" : null;
+}
+
+/**
  * Tracks each pane's desired Command Center membership via the per-pane tmux
- * option `@jmux-pinned`. The stored value is the raw option string — a tab id
- * (or legacy "1") — not just a boolean. tmux is the source of truth; this mirrors
- * what the control channel reports. It never breaks or joins panes.
+ * option `@jmux-pinned`. The stored value is the raw option string, not just a
+ * boolean — `parsePinValue` is the one place that interprets it as force-on or
+ * not. tmux is the source of truth; this mirrors what the control channel
+ * reports. It never breaks or joins panes.
  */
 export class PinnedPaneTracker {
   private values = new Map<string, string>(); // paneId → raw non-empty value
@@ -18,7 +32,8 @@ export class PinnedPaneTracker {
     return this.values.has(paneId);
   }
 
-  /** Raw `@jmux-pinned` value (tab id / legacy "1"), or undefined when unpinned. */
+  /** Raw `@jmux-pinned` value (`"on"`, or a legacy value — see `parsePinValue`),
+   *  or undefined when unpinned. */
   getValue(paneId: string): string | undefined {
     return this.values.get(paneId);
   }

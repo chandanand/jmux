@@ -351,11 +351,6 @@ export function setupDemo(opts: DemoOptions = {}): DemoContext {
       defaultBaseBranch: "main",
       autoLaunchAgent: true,
     },
-    // Off in the shipped default, on here for the same reason as
-    // `showUnstartedInSidebar`: demo mode exists to show the feature. Under
-    // `--live` this is what fills the Command Center — the agent panes surface
-    // themselves off `@jmux-agent-kind`, with nothing to pin by hand.
-    autoPinAgentPanes: true,
   };
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
 

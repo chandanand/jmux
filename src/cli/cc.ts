@@ -1,49 +1,33 @@
-import { runTmuxDirect } from "./tmux";
-import { tmuxOrThrow, CliError, type CliContext } from "./context";
+import { CliError, type CliContext } from "./context";
 import type { ParsedCtlArgs } from "../cli";
-import { loadUserConfig } from "../config";
-import { normalizeTabs, resolveTabId, type TabEntry } from "../glass/tabs";
-import { parsePinnedListWithTab, PINNED_LIST_FORMAT } from "./pane";
+import { loadUserConfig, type JmuxConfig } from "../config";
+import { normalizeViews, type CommandCenterView } from "../glass/views";
 
-export interface TabSummary {
-  id: string;
-  name: string;
-  order: number;
-  count: number;
-}
-
-/** Pure reducer: tab registry + raw pin pairs → per-tab summaries with counts. */
-export function buildTabSummaries(
-  tabs: TabEntry[],
-  pins: ReadonlyArray<{ id: string; tab: string }>,
-): TabSummary[] {
-  const counts = new Map<string, number>();
-  for (const t of tabs) counts.set(t.id, 0);
-  for (const p of pins) {
-    const resolved = resolveTabId(p.tab, tabs);
-    counts.set(resolved, (counts.get(resolved) ?? 0) + 1);
-  }
-  return tabs.map((t, order) => ({ id: t.id, name: t.name, order, count: counts.get(t.id) ?? 0 }));
-}
-
-/** Load the normalized tab registry from the user config on disk. */
-export function loadTabRegistry(): TabEntry[] {
-  return normalizeTabs(loadUserConfig().commandCenterTabs);
+/**
+ * Pure reducer: the on-disk config → the normalized view registry. Split out
+ * from `handleCc` so the transformation is testable without touching disk —
+ * the same shape `cli/workflow.ts` uses for its config-derived pure functions
+ * (`parkingConfig`, `capValue`).
+ *
+ * Deliberately returns view *definitions* only, never member counts. A count
+ * would have to be re-derived from tmux's own pane/session state, and a
+ * second derivation of the same membership is exactly the class of
+ * disagreement this whole design exists to remove — the TUI is the only
+ * place that reads live pane/session state, and it always disagrees with a
+ * second reader eventually.
+ */
+export function resolveCcViews(config: JmuxConfig): CommandCenterView[] {
+  return normalizeViews(config.commandCenterViews);
 }
 
 export function handleCc(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
   switch (parsed.action) {
-    case "tabs": {
-      const tabs = loadTabRegistry();
-      const lines = tmuxOrThrow(
-        runTmuxDirect(["list-panes", "-a", "-F", PINNED_LIST_FORMAT], ctx.socket),
-      );
-      const pins = parsePinnedListWithTab(lines);
-      return { tabs: buildTabSummaries(tabs, pins) };
+    case "views": {
+      return { views: resolveCcViews(loadUserConfig()) };
     }
     default:
       throw new CliError(
-        `Unknown cc action "${parsed.action}". Known actions: tabs`,
+        `Unknown cc action "${parsed.action}". Known actions: views`,
       );
   }
 }

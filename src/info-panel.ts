@@ -89,6 +89,21 @@ export class InfoPanel {
     return this._diffBadge !== null;
   }
 
+  /**
+   * Whether the strip is drawn at all. A lone unlabelled tab is pure chrome,
+   * which is why the strip hides for it; a lone tab *carrying live diff stats*
+   * is not — it's the panel's header, and without it the badge is invisible to
+   * every user with no tracker configured.
+   *
+   * Read by the render path *and* by the router's hit-test: the strip shares
+   * row 0 with the toolbar, so "is it drawn?" decides who owns those columns,
+   * and a second copy of this predicate could paint one owner while routing
+   * clicks to the other.
+   */
+  get tabBarShown(): boolean {
+    return this.hasMultipleTabs || this.hasDiffBadge;
+  }
+
   updateConfig(config: InfoPanelConfig): void {
     const prevActive = this._activeTab;
     this.rebuildTabs(config);

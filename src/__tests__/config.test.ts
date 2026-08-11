@@ -1,8 +1,14 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { sanitizeTmuxSessionName, buildOtelResourceAttrs, loadUserConfig, ConfigStore, defaultConfig } from "../config";
+import {
+  sanitizeTmuxSessionName, buildOtelResourceAttrs, loadUserConfig, ConfigStore, defaultConfig,
+  migrateCommandCenterConfig,
+} from "../config";
 import { writeFileSync, unlinkSync, existsSync, mkdirSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { DEFAULT_MAX_CLIENTS } from "../glass/view";
+import { DEFAULT_VIEW_SEED_ID, DEFAULT_VIEW_SEED_NAME } from "../glass/views";
+import { DEFAULT_DENSITY } from "../glass/density";
 
 describe("sanitizeTmuxSessionName", () => {
   test("replaces dots with underscores", () => {
@@ -76,6 +82,111 @@ describe("loadUserConfig adapter config", () => {
     const result = loadUserConfig(tmpPath);
     expect(result.adapters).toBeUndefined();
     unlinkSync(tmpPath);
+  });
+});
+
+describe("migrateCommandCenterConfig", () => {
+  test("seeds the view registry alongside unrelated keys, leaving them untouched", () => {
+    const { config, changed } = migrateCommandCenterConfig({
+      sidebarWidth: 30,
+    });
+    expect(changed).toBe(false); // nothing present-but-wrong; seeding alone never dirties
+    expect(config.sidebarWidth).toBe(30); // untouched
+    expect(config.commandCenterViews).toEqual([
+      { id: DEFAULT_VIEW_SEED_ID, name: DEFAULT_VIEW_SEED_NAME, filter: "active", groupBy: "status", sortBy: "status" },
+    ]);
+    expect(config.commandCenterActiveViewId).toBe(DEFAULT_VIEW_SEED_ID);
+    expect(config.commandCenterAxes).toEqual({ filter: "active", groupBy: "status", sortBy: "status" });
+    expect(config.commandCenter).toEqual({ maxTiles: DEFAULT_MAX_CLIENTS, density: DEFAULT_DENSITY });
+  });
+
+  // Both keys' readers (`main.ts`'s tab registry, `cli/cc.ts`'s `cc tabs`) are
+  // gone as of phase 9, so the migration now deletes them outright instead of
+  // preserving them — the inverse of what this test asserted before.
+  test("deletes commandCenterTabs and autoPinAgentPanes from disk — nothing reads them any more", () => {
+    const raw = {
+      commandCenterTabs: [{ id: "default", name: "Main" }, { id: "backend", name: "Backend" }],
+      autoPinAgentPanes: true,
+    };
+    const { config, changed } = migrateCommandCenterConfig(raw);
+    expect(config.commandCenterTabs).toBeUndefined();
+    expect(config.autoPinAgentPanes).toBeUndefined();
+    // A present-but-dead key being dropped is a real disk mutation.
+    expect(changed).toBe(true);
+  });
+
+  test("populates every new field in-memory from nothing, but reports no change", () => {
+    // Absence alone must not flip `changed` — see the ConfigStore test below:
+    // a `changed:true` here would make the constructor persist immediately,
+    // before main.ts's ensureExists() ever runs, which would permanently hide
+    // the first-run setup checklist for every brand-new install.
+    const { config, changed } = migrateCommandCenterConfig({});
+    expect(changed).toBe(false);
+    expect(config.commandCenterViews).toHaveLength(1);
+    expect(config.commandCenterActiveViewId).toBe(DEFAULT_VIEW_SEED_ID);
+    expect(config.commandCenter?.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
+    expect(config.commandCenter?.density).toBe(DEFAULT_DENSITY);
+  });
+
+  test("clamps an illegal live axis to the active view's own value", () => {
+    const { config } = migrateCommandCenterConfig({
+      commandCenterViews: [
+        { id: "v1", name: "V1", filter: "all", groupBy: "project", sortBy: "name" },
+      ],
+      commandCenterActiveViewId: "v1",
+      commandCenterAxes: { filter: "bogus", groupBy: "project", sortBy: "name" },
+    });
+    expect(config.commandCenterAxes).toEqual({ filter: "all", groupBy: "project", sortBy: "name" });
+  });
+
+  test("clamps a vanished active view id to the first view", () => {
+    const { config } = migrateCommandCenterConfig({
+      commandCenterViews: [
+        { id: "v1", name: "V1", filter: "all", groupBy: "project", sortBy: "name" },
+      ],
+      commandCenterActiveViewId: "ghost",
+    });
+    expect(config.commandCenterActiveViewId).toBe("v1");
+  });
+
+  test("is idempotent — an already-migrated config reports no change", () => {
+    const migrated = {
+      commandCenterViews: [
+        { id: DEFAULT_VIEW_SEED_ID, name: DEFAULT_VIEW_SEED_NAME, filter: "active", groupBy: "status", sortBy: "status" },
+      ],
+      commandCenterActiveViewId: DEFAULT_VIEW_SEED_ID,
+      commandCenterAxes: { filter: "active", groupBy: "status", sortBy: "status" },
+      commandCenter: { maxTiles: DEFAULT_MAX_CLIENTS, density: DEFAULT_DENSITY },
+    };
+    const { changed } = migrateCommandCenterConfig(migrated);
+    expect(changed).toBe(false);
+  });
+
+  test("a mistyped/invalid maxTiles is replaced with the default", () => {
+    const { config, changed } = migrateCommandCenterConfig({ commandCenter: { maxTiles: 0 } });
+    expect(changed).toBe(true);
+    expect(config.commandCenter.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
+  });
+
+  test("a mistyped/invalid density is replaced with the default", () => {
+    const { config, changed } = migrateCommandCenterConfig({ commandCenter: { density: "cozy" } });
+    expect(changed).toBe(true);
+    expect(config.commandCenter.density).toBe(DEFAULT_DENSITY);
+  });
+
+  // A value written by an older jmux carrying the since-deleted third
+  // density ("compact") must fall back like any other unrecognized value,
+  // not be silently mapped onto a survivor.
+  test("a deleted density name is replaced with the default", () => {
+    const { config, changed } = migrateCommandCenterConfig({ commandCenter: { density: "compact" } });
+    expect(changed).toBe(true);
+    expect(config.commandCenter.density).toBe(DEFAULT_DENSITY);
+  });
+
+  test("a valid density round-trips untouched", () => {
+    const { config, changed } = migrateCommandCenterConfig({ commandCenter: { density: "focus" } });
+    expect(changed).toBe(false);
+    expect(config.commandCenter.density).toBe("focus");
   });
 });
 
@@ -164,6 +275,52 @@ describe("ConfigStore", () => {
     const onDisk = JSON.parse(require("fs").readFileSync(cfgPath, "utf-8"));
     expect(onDisk.claudeCommand).toBeUndefined();
     expect(onDisk.repoDefaults.claudeCommand).toBe("cc");
+  });
+
+  test("loadUserConfig deletes commandCenterTabs and autoPinAgentPanes from disk", () => {
+    writeFileSync(cfgPath, JSON.stringify({
+      commandCenterTabs: [{ id: "default", name: "Main" }, { id: "backend", name: "Backend" }],
+      autoPinAgentPanes: true,
+    }));
+    const store = new ConfigStore(cfgPath);
+    // Both fields are gone from the type entirely — cast through `any` for
+    // the same reason the on-disk check below parses raw JSON instead of
+    // reading a typed field that no longer exists.
+    expect((store.config as any).commandCenterTabs).toBeUndefined();
+    expect((store.config as any).autoPinAgentPanes).toBeUndefined();
+    expect(store.config.commandCenterViews).toHaveLength(1);
+    expect(store.config.commandCenterActiveViewId).toBe(DEFAULT_VIEW_SEED_ID);
+    expect(store.config.commandCenterAxes).toEqual({ filter: "active", groupBy: "status", sortBy: "status" });
+    expect(store.config.commandCenter?.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
+    expect(store.config.commandCenter?.density).toBe(DEFAULT_DENSITY);
+
+    // The migration persisted to disk — both keys are gone there too, not
+    // merely absent from the in-memory view.
+    const onDisk = JSON.parse(require("fs").readFileSync(cfgPath, "utf-8"));
+    expect(onDisk.commandCenterTabs).toBeUndefined();
+    expect(onDisk.autoPinAgentPanes).toBeUndefined();
+  });
+
+  test("loadUserConfig repairs a present-but-invalid Command Center config and persists once", () => {
+    writeFileSync(cfgPath, JSON.stringify({
+      commandCenterViews: [
+        { id: "v1", name: "V1", filter: "all", groupBy: "project", sortBy: "name" },
+      ],
+      commandCenterActiveViewId: "ghost", // vanished — must clamp to v1
+      commandCenterAxes: { filter: "bogus", groupBy: "project", sortBy: "name" },
+      commandCenter: { maxTiles: 0, density: "cozy" }, // both invalid — must fall back to defaults
+    }));
+    const store = new ConfigStore(cfgPath);
+    expect(store.config.commandCenterActiveViewId).toBe("v1");
+    expect(store.config.commandCenterAxes).toEqual({ filter: "all", groupBy: "project", sortBy: "name" });
+    expect(store.config.commandCenter?.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
+    expect(store.config.commandCenter?.density).toBe(DEFAULT_DENSITY);
+
+    const onDisk = JSON.parse(require("fs").readFileSync(cfgPath, "utf-8"));
+    expect(onDisk.commandCenterActiveViewId).toBe("v1");
+    expect(onDisk.commandCenterAxes).toEqual({ filter: "all", groupBy: "project", sortBy: "name" });
+    expect(onDisk.commandCenter.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
+    expect(onDisk.commandCenter.density).toBe(DEFAULT_DENSITY);
   });
 
   test("setRepoDefault writes under repoDefaults and persists", () => {
@@ -258,6 +415,22 @@ describe("ConfigStore", () => {
 
     const again = store.ensureExists();
     expect(again).toBe(false);
+  });
+
+  test("constructing against a config with no Command Center history writes nothing (first-run detection)", () => {
+    // main.ts builds ConfigStore at module scope and only checks
+    // ensureExists() much later, at first-run, to decide whether to open the
+    // setup checklist. If the Command Center migration wrote seeded defaults
+    // to disk eagerly, the file would already exist by the time that check
+    // runs and the checklist would never show for a new install.
+    const newPath = join(tmpDir, "sub", "config.json");
+    const store = new ConfigStore(newPath);
+    expect(existsSync(newPath)).toBe(false);
+    // The in-memory config is still fully populated.
+    expect(store.config.commandCenterViews).toHaveLength(1);
+    expect(store.config.commandCenterActiveViewId).toBe(DEFAULT_VIEW_SEED_ID);
+    expect(store.config.commandCenter?.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
+    expect(store.config.commandCenter?.density).toBe(DEFAULT_DENSITY);
   });
 
   test("configPath returns the path", () => {

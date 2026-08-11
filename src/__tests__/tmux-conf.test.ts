@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { DETACH_ON_DESTROY_COMMAND } from "../config-generation";
 
 // The .conf files are the one part of jmux tmux executes directly, so nothing
 // in the type system or the render pipeline can catch a reference to a file
@@ -125,5 +126,24 @@ describe("tmux config files", () => {
     ];
     const unexpected = settings.filter((line) => !allowed.some((s) => line.includes(s)));
     expect(unexpected).toEqual([]);
+  });
+
+  // One of those settings is also written from TypeScript, because a server
+  // jmux did not start never ran core.conf and losing this one quits the
+  // process (see DETACH_ON_DESTROY_COMMAND). Two sources for one setting drift,
+  // and the way it drifts is silent: core.conf changes, the second copy is left
+  // behind, and the bug returns on inherited servers alone — the one case the
+  // fresh-server tests never see.
+  test("the option written twice says the same thing in both places", () => {
+    const value = confText("core.conf")
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => l.includes("detach-on-destroy"));
+
+    expect(value).toBeDefined();
+    // `set -g detach-on-destroy off` in the conf, `set-option -g …` on the
+    // control channel: same command, and only the operand has to agree.
+    expect(DETACH_ON_DESTROY_COMMAND.endsWith(value!.replace(/^set(-option)? -g /, "")))
+      .toBe(true);
   });
 });

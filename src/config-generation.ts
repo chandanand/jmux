@@ -25,6 +25,33 @@ import { createHash } from "node:crypto";
 
 export const GENERATION_OPTION = "@jmux-config-generation";
 
+/**
+ * The one `core.conf` setting jmux writes again on attach rather than reporting
+ * as stale.
+ *
+ * Reporting is right for the rest of `core.conf`: a server running yesterday's
+ * keybindings is wrong but usable, and the notice says how to fix it. This
+ * setting differs in kind, because without it jmux does not live long enough to
+ * show the notice twice.
+ *
+ * A jmux session is one window holding one pane, so anything that closes that
+ * pane — `Ctrl-a x`, `Ctrl-d`, typing `exit` — destroys the session. At tmux's
+ * default (`on`) the client on it then *detaches*, which closes jmux's pty and
+ * drops the whole TUI while every other session keeps running. At `off` tmux
+ * moves the client to another session, which is what the sidebar is built
+ * around. So on a server jmux did not start, closing a pane quits jmux.
+ *
+ * One `set-option`, never a `source-file`: sourcing over the control channel
+ * emits nested %begin/%end blocks that scramble the FIFO pending-queue matching
+ * (see the module comment above).
+ *
+ * Note the asymmetry with `userTmuxConfig`, which is *not* re-applied this way:
+ * that one decides whether a whole config file is sourced, and only tmux itself
+ * can do that, at server start. There is no single `set-option` that stands in
+ * for it, which is why it is reported instead.
+ */
+export const DETACH_ON_DESTROY_COMMAND = "set-option -g detach-on-destroy off";
+
 /** The tmux command that stamps this jmux's generation onto the server. */
 export function stampCommand(jmuxDir: string, userConfPath: string): string {
   return `set-option -g ${GENERATION_OPTION} ${generationOf(jmuxDir, userConfPath)}`;
