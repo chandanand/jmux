@@ -308,9 +308,11 @@ poll cadence.
 than extended:
 
 ```ts
+export interface ActiveTile { key: TileKey; forced: boolean }
+
 export interface TilePlanInput {
-  active: TileKey[];                                   // rendered, in order
-  retained: ReadonlyMap<TileKey, { lastSeenAt: number; forced: boolean }>;
+  active: ActiveTile[];                                // rendered, in order
+  retained: ReadonlyMap<TileKey, { lastSeenAt: number }>;
   now: number;
   graceMs: number;      // 30_000
   maxClients: number;   // commandCenter.maxTiles, default 12
@@ -333,12 +335,48 @@ Rules, all decided rather than left to the implementation:
   grace.
 - **Under active overflow, force-on sessions are kept first**, then render order.
   The remainder is `droppedActive`, stated in the strip (`+3 not shown`).
+  `forced` therefore has to travel on the **active** entries, which is why they
+  are `{ key, forced }` and not bare keys: with `active = [A, B]`, no retained
+  clients and `maxClients: 1`, a planner given only keys receives identical input
+  whether A or B is pinned. Putting new actives into `retained` to carry the flag
+  is not the workaround it looks like — `retained` is also what distinguishes a
+  survivor from a spawn.
+- **`retained` carries only `lastSeenAt`, and the reconciler stamps it** at the
+  moment a tile moves from active to retained, with the same `now` it passes in.
+  The planner never invents a timestamp.
 - **`nextExpiryAt` is a returned deadline**, because a tile that leaves membership
   during a quiet period would otherwise never be collected — there is no
   subsequent tmux event to trigger the sweep.
 
-Zoom is applied on spawn and undone on teardown only, so churn inside the grace
-window cannot toggle a user's window layout.
+Zoom is applied on spawn, moved on **retarget** (below), and undone on teardown.
+Churn inside the grace window touches none of the three, so it cannot toggle a
+user's window layout.
+
+### Retarget: the face moves without the tile moving
+
+`Ctrl-a x`, the death of the displayed pane, or a new force-on pin can move a
+tile's face to a pane in a **different window** of the same session. Its `TileKey`
+is unchanged, so `planTiles` correctly neither spawns nor tears down — and today a
+survivor only receives new metadata (`glass/view.ts:142`), while `select-window`
+and zoom happen solely at spawn (`glass/view.ts:357–383`) and unzoom solely at
+teardown (`glass/view.ts:427`). Left there, the tile would keep showing the old
+window.
+
+So `GlassView` gains a third transition beside spawn and teardown:
+
+```
+retarget(key, nextPaneId):
+  if tile.didZoom: resize-pane -Z -t <tile.zoomedPaneId>   # give the old window back
+  select-window -t <session>:<window of nextPaneId>
+  didZoom = (that window has siblings and is not already zoomed)
+  if didZoom: resize-pane -Z -t nextPaneId
+  tile.paneId = nextPaneId; tile.zoomedPaneId = didZoom ? nextPaneId : null
+```
+
+The client, its pty and its `ScreenBridge` are all retained — only what the
+session is looking at changes. `didZoom` and the zoomed pane are tracked together
+because teardown must undo exactly the zoom it applied, and after a retarget that
+is no longer the pane the tile started on.
 
 The cap is not optional. ADR 0001 claims off-screen tiles pause parsing; that is
 **stale** — `planTiles` takes no viewport (`glass/tile-plan.ts:20`) and every
@@ -493,19 +531,44 @@ No sessions match "Active"
 one `list-panes -a` pass plus `list-sessions -F`, elects faces, applies
 exceptions to `orderSessions(gridAxes)`, and hands the result to `GlassView`.
 
-**Scheduling is a three-state loop, not a debounce.** Reconciliation runs async
-tmux queries, so an invalidation arriving after a snapshot but before the run
-finishes would be swallowed by "one run per tick":
+**Scheduling is a state machine, not a debounce.** Reconciliation runs async tmux
+queries, so an invalidation arriving after a snapshot but before the run finishes
+would be swallowed by "one run per tick". Written out, because every ambiguity
+below is a lost update:
 
-```
-scheduled: boolean   // a run is queued for the next tick
-inFlight:  boolean   // a run is between snapshot and apply
-dirty:     boolean   // an invalidation arrived during inFlight
+```ts
+let scheduled = false;   // a run is queued on the next tick
+let inFlight  = false;   // a run is between snapshot and apply
+let dirty     = false;   // an invalidation arrived while inFlight
+
+function invalidateGrid(): void {
+  if (inFlight) { dirty = true; return; }   // queue for after the current run
+  if (scheduled) return;                    // already coalescing
+  scheduled = true;
+  queueMicrotask(runReconcile);             // trailing edge of this tick's burst
+}
+
+async function runReconcile(): Promise<void> {
+  scheduled = false;
+  inFlight = true;
+  dirty = false;                            // cleared BEFORE the snapshot
+  try {
+    const snapshot = await readTmuxState();  // list-panes -a + list-sessions -F
+    applyGrid(snapshot);
+  } catch (e) {
+    logError("reconcileGrid", String(e));    // a failed read must not wedge the loop
+  } finally {
+    inFlight = false;
+    if (dirty) { dirty = false; scheduled = true; queueMicrotask(runReconcile); }
+  }
+}
 ```
 
-An invalidation sets `dirty` and schedules; a run completing with `dirty` set
-immediately schedules another. Trailing-edge, so a coalesced burst runs *after*
-its last member. Plus the `nextExpiryAt` timer from the tile plan, which is the
+`dirty` is cleared **before** the snapshot, never after: clearing it afterwards
+discards every event that arrived while the query was in flight, which is the
+exact window this machine exists to cover. The rescheduling lives in `finally`, so
+a thrown read reschedules rather than leaving `inFlight` stuck true and the grid
+permanently frozen. Plus the `nextExpiryAt` timer from the tile plan, which is the
 only thing that collects a grace-expired client when tmux has gone quiet.
 
 Every invalidation source, enumerated because a missed one is an invisible stale
@@ -522,7 +585,6 @@ tile:
 | `@jmux-pinned` / `@jmux-grid-hidden` change | exceptions |
 | View switch, axis cycle, view CRUD | axes |
 | Config file reload | views, cap, axes |
-| The poll tick | the guaranteed floor — see below |
 
 Two of these need plumbing that does not exist. `ControlParser` discards
 notifications it does not know (`tmux-control.ts:84`), so `%layout-change` and
@@ -531,14 +593,22 @@ async and currently only repaints the sidebar** (`main.ts:9143`); it must
 reconcile too, or a session's `groupBy: "project"` band is wrong until something
 else moves.
 
-The pin subscription stays a **partial** trigger and this is deliberate:
-`#{P:…}` loops only the panes of the *current window* (verified), so no per-pane
-subscription can see a pin written in another window. Rather than invent a
-session-wide pane subscription, the poll tick is the guaranteed floor —
-`reconcileGrid` runs there, so a `ctl pane pin` from an agent lands within one
-poll. The hide option gets a session-scoped sibling to the existing pane
-subscription (`main.ts:10076`), `#{S:#{session_id}=#{@jmux-grid-hidden} }`,
-verified to expand correctly.
+**The pin subscription is nested, and today's is a bug.** `#{P:…}` loops only the
+panes of the *current window*, so `"#{P:#{pane_id}=#{@jmux-pinned} }"`
+(`main.ts:10080`) has never fired for a pin written in an unfocused window — a
+`ctl pane pin` from an agent working in another window is invisible until
+something unrelated triggers a refresh. jmux already solved this for the
+agent-state options and says so in the comment above them: `#{S:#{W:#{P:…}}}`
+enumerates the whole server (`main.ts:10043–10050`). The pin subscription is
+nested the same way as part of this work.
+
+There is deliberately **no periodic reconcile**. jmux runs no general tmux poll —
+`PollCoordinator` is the *tracker* poll, and the intervals in `main.ts` belong to
+hunk, the cache timer, the theme requery and the agent screen scan. Adding one to
+paper over a subscription gap would be inventing a second, slower answer to a
+question the control channel already answers exactly. The hide option gets a
+session-scoped sibling, `"#{S:#{session_id}=#{@jmux-grid-hidden} }"`, verified to
+expand correctly.
 
 The sidebar's Overview row stops counting `pinnedPanes` (`sidebar.ts:669`) — a
 derived grid can be full while zero panes are pinned. `reconcileGrid` computes the
@@ -606,7 +676,14 @@ Unit, all pure modules:
   reports `droppedActive`.
 - `glass/tile-identity.test.ts` — focus survives a reorder; moves to the successor
   when its tile vanishes; scroll reclamps; zoom clears when its tile leaves; the
-  face override clears when its pane dies.
+  face override clears when its pane dies. Plus the retarget command sequence
+  against a recording runner: unzoom the old window before selecting the new one,
+  and teardown after a retarget unzooms the pane the tile *ended* on, not the one
+  it started on.
+- `reconcile-loop.test.ts` — the state machine against a fake async read: an
+  invalidation during `inFlight` causes exactly one follow-up run; a throwing read
+  clears `inFlight` and still reschedules a pending `dirty`; a burst of ten
+  invalidations in one tick produces one run.
 - `glass/exceptions.test.ts` — the truth table row by row, hidden-plus-pinned
   included.
 - `glass/views.test.ts` — normalize drops malformed entries and clamps illegal

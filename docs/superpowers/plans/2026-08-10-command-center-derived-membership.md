@@ -93,17 +93,26 @@ stateless election: keep the current pane until it dies, the user cycles, or a
 pin changes.
 
 `planTiles` is rewritten, not extended, to the spec's `TilePlanInput` /
-`TilePlan` — `active` / `retained` / `now` / `graceMs` / `maxClients` in, `spawn`
-/ `render` / `teardown` / `droppedActive` / `nextExpiryAt` out. Cap counts active
-plus retained; active evicts retained immediately; under active overflow force-on
-sessions are kept first; `nextExpiryAt` is armed by the caller so a grace expires
-with no tmux traffic.
+`TilePlan`. `active` entries are `{ key, forced }` — the flag has to travel on the
+active side, or a cap of 1 over two active tiles cannot tell which is pinned.
+`retained` carries only `lastSeenAt`, stamped by the reconciler at the moment a
+tile leaves membership. Cap counts active plus retained; active evicts retained
+immediately; under overflow force-on is kept first; `nextExpiryAt` is armed by the
+caller so a grace expires with no tmux traffic.
+
+`GlassView` gains a third transition, **retarget**, for a face moving to a pane in
+another window of the same session: unzoom the window the tile currently owns,
+`select-window` the new one, re-zoom, and track the pane the zoom landed on — so
+teardown undoes the zoom it ended with, not the one it started with. Today window
+selection and zoom happen only at spawn (`glass/view.ts:357-383`) and unzoom only
+at teardown (`glass/view.ts:427`), so without this a cycled tile keeps showing the
+old window.
 
 `computeTileLayout` is untouched — `glass/view.ts:184–344` maps `rect.index`
 through `tileOrder` to a key, then to its client.
 
-**Verify:** `tile-plan.test.ts` rewritten and `tile-identity.test.ts` new, per the
-spec.
+**Verify:** `tile-plan.test.ts` rewritten, `tile-identity.test.ts` new (including
+the retarget command sequence against a recording runner), per the spec.
 
 ---
 
@@ -133,10 +142,11 @@ Comment that the grid's filter persists where the sidebar's deliberately does no
 
 **Files:** `src/main.ts`; `src/tmux-control.ts`.
 
-`refreshPinnedPanes` → `reconcileGrid()`, with `scheduled` / `inFlight` / `dirty`
-rather than a debounce — a run finishing with `dirty` set schedules another, so an
-invalidation arriving mid-run cannot be swallowed. One `list-panes -a` pass (the
-old `AGENT_DETECT_FORMAT` folds into it) plus `list-sessions -F`.
+`refreshPinnedPanes` → `reconcileGrid()`, implemented as the spec's
+`scheduled` / `inFlight` / `dirty` machine verbatim — `dirty` cleared *before* the
+snapshot and rescheduling in `finally`, or a read that throws wedges the grid.
+One `list-panes -a` pass (the old `AGENT_DETECT_FORMAT` folds into it) plus
+`list-sessions -F`.
 
 Drop the `pinnedTracker.size > 0 || autoPinAgentPanes` guard (`main.ts:1398`) and
 wire every source in the spec's table. Two need new plumbing:
@@ -146,18 +156,23 @@ wire every source in the spec's table. Two need new plumbing:
 - Async project resolution currently only repaints the sidebar (`main.ts:9143`)
   and must reconcile, or a `groupBy: "project"` band stays wrong.
 
-Add the session-scoped subscription beside the pane one (`main.ts:10076`):
-`"#{S:#{session_id}=#{@jmux-grid-hidden} }"` — verified. The pin subscription
-stays partial by design (`#{P:…}` loops only the current window's panes), so
-`reconcileGrid` on the poll tick is the guaranteed floor.
+**Fix the pin subscription while here.** `"#{P:#{pane_id}=#{@jmux-pinned} }"`
+(`main.ts:10080`) loops only the current window's panes, so it has never fired for
+a pin written in an unfocused window. Nest it as `#{S:#{W:#{P:…}}}`, the pattern
+the agent-state subscriptions already use and document (`main.ts:10043-10050`).
+Add `"#{S:#{session_id}=#{@jmux-grid-hidden} }"` beside it — verified. No periodic
+reconcile: jmux runs no general tmux poll, and inventing one to cover a
+subscription gap would be a second, slower answer to a question the control
+channel answers exactly.
 
 `sidebar.setPinnedPanes` → `setGridSummary({ count, tally })`; the Overview row
 counts derived members (`sidebar.ts:669`).
 
 Delete `src/glass/auto-detect.ts` and its test — `main.ts` is its only importer.
 
-**Verify:** `tmux-control.test.ts` for the two notifications; boot-smoke green;
-manual — `ctl pane pin` from another window lands within one poll.
+**Verify:** `tmux-control.test.ts` for the two notifications; new
+`reconcile-loop.test.ts` for the state machine; boot-smoke green; manual —
+`ctl pane pin` from an unfocused window lands immediately.
 
 ---
 
