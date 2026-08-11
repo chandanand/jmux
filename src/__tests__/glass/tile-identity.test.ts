@@ -374,6 +374,27 @@ describe("rendered set ≠ client set", () => {
   });
 });
 
+/**
+ * Wait for a condition the ScreenBridge's async write is about to satisfy.
+ *
+ * A fixed sleep would be the obvious thing and is the wrong one: the assertion
+ * that matters here is a *negative* ("no frame was asked for"), and a sleep too
+ * short passes it for the wrong reason. Polling for the positive control and
+ * failing loudly on timeout keeps the negative honest under load.
+ */
+async function until(predicate: () => boolean, timeoutMs = 500): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error("condition never became true");
+    await new Promise((r) => setTimeout(r, 1));
+  }
+}
+
+/** Let any pending bridge writes settle, without asserting anything about them. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 1));
+}
+
 describe("only a rendered tile asks for a frame", () => {
   // The event that retires a tile into its grace is an agent finishing a turn,
   // which is exactly when it prints — so an unguarded onFrame turns the grace
@@ -384,12 +405,11 @@ describe("only a rendered tile asks for a frame", () => {
     view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], "default");
     const two = ptys.find((p) => p.session === "$2")!.pty;
 
-    // While rendered, its output is worth a frame.
+    // While rendered, its output is worth a frame. This is also the control:
+    // it proves the wait below is long enough for a frame to have arrived.
     frames = 0;
     two.emit("hello");
-    await Promise.resolve();
-    await new Promise((r) => setTimeout(r, 5));
-    expect(frames).toBeGreaterThan(0);
+    await until(() => frames > 0);
 
     // $2 leaves membership. Its client survives the grace, unrendered.
     view.setTiles([spec({ sessionId: "$1" })], "default");
@@ -397,8 +417,7 @@ describe("only a rendered tile asks for a frame", () => {
 
     frames = 0;
     two.emit("still chattering");
-    await Promise.resolve();
-    await new Promise((r) => setTimeout(r, 5));
+    await settle();
     expect(frames).toBe(0);
   });
 
@@ -409,7 +428,7 @@ describe("only a rendered tile asks for a frame", () => {
 
     view.setTiles([spec({ sessionId: "$1" })], "default");
     two.emit("output while retained");
-    await new Promise((r) => setTimeout(r, 5));
+    await settle();
 
     // Coming back reuses the same client rather than spawning a second one.
     view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], "default");
