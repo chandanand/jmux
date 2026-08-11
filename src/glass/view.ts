@@ -96,22 +96,27 @@ export interface GlassTileSpec {
  * filter, so it cannot compute `excludedCount` itself.
  *
  * Deliberately named `excludedCount`, not `hiddenCount`, and deliberately
- * **disjoint** from it: this is what a wider view would recover — filtered,
- * parked or paneless — and nothing else. Sessions carrying
- * `@jmux-grid-hidden` are subtracted out by the caller and reported under
- * `hiddenCount`, because no filter reaches them; they need the palette's
- * "Show hidden sessions (N)…". Counting a session in both told a user to
- * press `⌃a f` for something that key cannot bring back.
+ * **disjoint** from it: sessions that exist but are not tiled for any reason
+ * *other* than an explicit hide — filtered out, parked, or with no pane to
+ * mirror. Sessions carrying `@jmux-grid-hidden` are subtracted out by the
+ * caller and reported under `hiddenCount` instead.
+ *
+ * Note what this count does not promise. `⌃a f` recovers only the filtered
+ * part of it: parking is undone by unparking and a paneless session has
+ * nothing to show at any filter. The empty state lists `⌃a f` as a key worth
+ * trying, not as a remedy for every session in this figure — an earlier
+ * wording claimed otherwise and would have sent a user to press it for
+ * sessions it cannot reach.
  */
 export interface EmptyGridContext {
   viewName: string;
   excludedCount: number;
   /**
-   * Sessions carrying `@jmux-grid-hidden` alone — a strict subset of
-   * `excludedCount`. Separate because widening the view recovers everything in
-   * `excludedCount` *except* these: a hide is an explicit exception and only
-   * the palette's "Show hidden sessions" undoes it. Saying "3 not shown" when
-   * one of them is hidden points at the wrong remedy.
+   * Sessions carrying `@jmux-grid-hidden` alone. **Disjoint from**
+   * `excludedCount`, not a subset of it — the caller subtracts these out, so
+   * each session is reported exactly once. A hide is an explicit exception
+   * that no axis change reaches; only the palette's "Show hidden sessions"
+   * undoes it, which is why it gets its own clause and its own key.
    */
   hiddenCount: number;
 }

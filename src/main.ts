@@ -9722,8 +9722,11 @@ function applyGridSnapshot(snap: GridSnapshot): void {
     glassView?.setTiles(specs, {
       viewName: activeView.name,
       // Two numbers, disjoint, because they have two remedies. `excludedCount`
-      // is what a wider view would bring back — filtered, parked or paneless —
-      // which is what `⌃a f` reaches. `hiddenCount` is the `@jmux-grid-hidden`
+      // is every session that exists but is not tiled for a reason other than
+      // an explicit hide — filtered, parked or paneless. (`⌃a f` reaches only
+      // the filtered part of that: parking is undone by unparking, and a
+      // paneless session has nothing to mirror at any filter.)
+      // `hiddenCount` is the `@jmux-grid-hidden`
       // exception, which no filter recovers; only the palette's "Show hidden
       // sessions" undoes it. Hidden sessions are subtracted out of the first so
       // each session is reported once, under the clause whose key actually

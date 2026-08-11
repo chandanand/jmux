@@ -605,9 +605,13 @@ No sessions match "Active"
 ```
 
 **Amended after implementation:** two counts, not one, and **disjoint**. "not
-shown" is what the active axes excluded *and a wider view would recover* —
-filtered, parked or paneless — which `⌃a f` reaches. Hidden sessions are
-subtracted out of it and reported only under "hidden". "hidden" is the `@jmux-grid-hidden` exception alone, which no
+shown" is every session that exists but is not tiled for a reason other than an
+explicit hide — filtered, parked or paneless. Hidden sessions are subtracted out
+of it and reported only under "hidden".
+
+The keys on that line are things worth trying, not a remedy for every session in
+either figure: `⌃a f` reaches only the filtered part, since parking is undone by
+unparking and a paneless session has nothing to mirror at any filter. "hidden" is the `@jmux-grid-hidden` exception alone, which no
 filter reaches; it needs the palette. Reporting one figure under the word
 "hidden" sent a user whose view was merely narrow looking for an exception that
 did not exist, and reporting it under "not shown" left the real exception
