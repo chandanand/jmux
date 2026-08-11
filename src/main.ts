@@ -3054,6 +3054,16 @@ function relayout(): void {
     diffBridge.resize(layout.panel.w, layout.ptyRows);
   }
 
+  // The grid's tiles are real attached clients, so they have to be resized like
+  // the main pty above rather than merely re-composited. Here rather than at
+  // each caller because this is where `fullScreenLayout` — the layout
+  // `resizeGlass` reads — is recomputed, so every geometry change reaches it by
+  // construction: hiding the sidebar, opening or zooming the panel, dragging
+  // the sidebar border, SIGWINCH. Hooking the callers instead is how the
+  // sidebar toggle came to relayout the frame around tiles that stayed the old
+  // width.
+  if (inGlass) resizeGlass();
+
   applyChromeLayout();
 
   scheduleRender();
@@ -8865,8 +8875,7 @@ process.on("SIGWINCH", () => {
   // and any live resize it had queued.
   clearPendingDragResize();
   inputRouter.cancelDrag();
-  relayout();
-  if (inGlass) resizeGlass();
+  relayout(); // resizes the grid's tiles too — see the note in relayout()
   maybeReprobeCellSize();
 });
 
