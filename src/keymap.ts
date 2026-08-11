@@ -741,7 +741,7 @@ export const KEYMAP: readonly Binding[] = [
   {
     id: "density-cycle-grid",
     keys: "Ctrl-a D",
-    label: "Cycle Command Center tile density (comfortable / compact / overview)",
+    label: "Toggle Command Center tile density (Fit / Focus)",
     section: "Command Center",
     source: "jmux",
     prefixKey: "D",

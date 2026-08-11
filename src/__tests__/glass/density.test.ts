@@ -2,57 +2,50 @@ import { describe, test, expect } from "bun:test";
 import { DENSITIES, DEFAULT_DENSITY, cycleDensity, normalizeDensity, type Density } from "../../glass/density";
 
 describe("DENSITIES", () => {
-  // The module doc computes these against a 214x50 content area; pin the
-  // floors themselves here so a future "tuning" edit that quietly makes a
-  // mode unreadable fails a test, not just a screenshot.
-  test("comfortable is the default and the most spacious floor", () => {
-    expect(DEFAULT_DENSITY).toBe("comfortable");
-    expect(DENSITIES.comfortable).toEqual({ minTileWidth: 90, minTileHeight: 22, label: "Comfortable" });
+  // The module doc derives these against a 214x49 content area, measured at
+  // real agent counts — pin the floors themselves here so a future "tuning"
+  // edit that quietly makes a mode unreadable (or reintroduces the dominated
+  // third mode the doc's table argues against) fails a test, not just a
+  // screenshot.
+  test("fit is the default — everything visible, sized to whatever fits", () => {
+    expect(DEFAULT_DENSITY).toBe("fit");
+    expect(DENSITIES.fit).toEqual({ minTileWidth: 60, minTileHeight: 6, label: "Fit" });
   });
 
-  test("compact matches the grid's pre-density floor, loosened slightly", () => {
-    expect(DENSITIES.compact).toEqual({ minTileWidth: 80, minTileHeight: 12, label: "Compact" });
+  test("focus is the four-big-tiles floor for reading/typing into one agent", () => {
+    expect(DENSITIES.focus).toEqual({ minTileWidth: 100, minTileHeight: 22, label: "Focus" });
   });
 
-  test("overview is the smallest floor — a bird's-eye of many tiles", () => {
-    expect(DENSITIES.overview).toEqual({ minTileWidth: 60, minTileHeight: 6, label: "Overview" });
+  test("focus's floor is strictly larger than fit's on both axes", () => {
+    expect(DENSITIES.focus.minTileWidth).toBeGreaterThan(DENSITIES.fit.minTileWidth);
+    expect(DENSITIES.focus.minTileHeight).toBeGreaterThan(DENSITIES.fit.minTileHeight);
   });
 
-  test("floors strictly shrink from comfortable to compact to overview", () => {
-    expect(DENSITIES.comfortable.minTileWidth).toBeGreaterThan(DENSITIES.compact.minTileWidth);
-    expect(DENSITIES.compact.minTileWidth).toBeGreaterThan(DENSITIES.overview.minTileWidth);
-    expect(DENSITIES.comfortable.minTileHeight).toBeGreaterThan(DENSITIES.compact.minTileHeight);
-    expect(DENSITIES.compact.minTileHeight).toBeGreaterThan(DENSITIES.overview.minTileHeight);
+  test("there are exactly two densities — the whole point of the collapse from three", () => {
+    expect(Object.keys(DENSITIES).sort()).toEqual(["fit", "focus"]);
   });
 });
 
 describe("cycleDensity", () => {
-  test("steps comfortable -> compact -> overview -> comfortable", () => {
-    expect(cycleDensity("comfortable")).toBe("compact");
-    expect(cycleDensity("compact")).toBe("overview");
-    expect(cycleDensity("overview")).toBe("comfortable");
+  // Two values makes this a toggle, not a ring: applying it twice is the
+  // identity, unlike the three-mode cycle it replaced.
+  test("toggles fit <-> focus", () => {
+    expect(cycleDensity("fit")).toBe("focus");
+    expect(cycleDensity("focus")).toBe("fit");
   });
 
-  test("is a closed cycle over every density with no dead end", () => {
-    const all: Density[] = ["comfortable", "compact", "overview"];
+  test("is its own inverse — two presses return to the start, for both densities", () => {
+    const all: Density[] = ["fit", "focus"];
     for (const d of all) {
-      let cur = d;
-      const seen = new Set<Density>();
-      for (let i = 0; i < all.length; i++) {
-        seen.add(cur);
-        cur = cycleDensity(cur);
-      }
-      expect(seen.size).toBe(all.length); // visited every density exactly once
-      expect(cur).toBe(d); // and landed back where it started
+      expect(cycleDensity(cycleDensity(d))).toBe(d);
     }
   });
 });
 
 describe("normalizeDensity", () => {
   test("passes through each known density", () => {
-    expect(normalizeDensity("comfortable")).toBe("comfortable");
-    expect(normalizeDensity("compact")).toBe("compact");
-    expect(normalizeDensity("overview")).toBe("overview");
+    expect(normalizeDensity("fit")).toBe("fit");
+    expect(normalizeDensity("focus")).toBe("focus");
   });
 
   test("rejects rubbish and falls back to the default", () => {
@@ -62,6 +55,15 @@ describe("normalizeDensity", () => {
     expect(normalizeDensity("cozy")).toBe(DEFAULT_DENSITY);
     expect(normalizeDensity(42)).toBe(DEFAULT_DENSITY);
     expect(normalizeDensity({ minTileWidth: 90 })).toBe(DEFAULT_DENSITY);
-    expect(normalizeDensity(["comfortable"])).toBe(DEFAULT_DENSITY);
+    expect(normalizeDensity(["fit"])).toBe(DEFAULT_DENSITY);
+  });
+
+  // The value a config written by the three-mode version of this feature
+  // could still carry on disk — must land on the default, not throw or
+  // silently pick an arbitrary survivor.
+  test("rejects the deleted third density (\"compact\") and the old names", () => {
+    expect(normalizeDensity("compact")).toBe(DEFAULT_DENSITY);
+    expect(normalizeDensity("comfortable")).toBe(DEFAULT_DENSITY);
+    expect(normalizeDensity("overview")).toBe(DEFAULT_DENSITY);
   });
 });

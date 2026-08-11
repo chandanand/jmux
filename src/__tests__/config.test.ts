@@ -174,10 +174,19 @@ describe("migrateCommandCenterConfig", () => {
     expect(config.commandCenter.density).toBe(DEFAULT_DENSITY);
   });
 
+  // A value written by an older jmux carrying the since-deleted third
+  // density ("compact") must fall back like any other unrecognized value,
+  // not be silently mapped onto a survivor.
+  test("a deleted density name is replaced with the default", () => {
+    const { config, changed } = migrateCommandCenterConfig({ commandCenter: { density: "compact" } });
+    expect(changed).toBe(true);
+    expect(config.commandCenter.density).toBe(DEFAULT_DENSITY);
+  });
+
   test("a valid density round-trips untouched", () => {
-    const { config, changed } = migrateCommandCenterConfig({ commandCenter: { density: "overview" } });
+    const { config, changed } = migrateCommandCenterConfig({ commandCenter: { density: "focus" } });
     expect(changed).toBe(false);
-    expect(config.commandCenter.density).toBe("overview");
+    expect(config.commandCenter.density).toBe("focus");
   });
 });
 

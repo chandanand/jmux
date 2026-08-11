@@ -2,6 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { layoutStrip, renderStrip, STRIP_ROWS, type StripInput } from "../../glass/strip";
 import { chipAtCol } from "../../band-layout";
 import type { CommandCenterView } from "../../glass/views";
+import { DENSITIES } from "../../glass/density";
 
 const views: CommandCenterView[] = [
   { id: "active", name: "Active", filter: "active", groupBy: "status", sortBy: "status" },
@@ -127,29 +128,28 @@ describe("strip overflow", () => {
 describe("density label", () => {
   test("empty label (base fixture) reserves no width and renders nothing", () => {
     const row = renderStrip(base).cells[0].map((c) => c.char).join("");
-    expect(row).not.toContain("Comfortable");
-    expect(row).not.toContain("Compact");
-    expect(row).not.toContain("Overview");
+    expect(row).not.toContain(DENSITIES.fit.label);
+    expect(row).not.toContain(DENSITIES.focus.label);
   });
 
   test("renders flush against the right edge when nothing was dropped", () => {
-    const grid = renderStrip({ ...base, densityLabel: "Comfortable" });
+    const grid = renderStrip({ ...base, densityLabel: DENSITIES.focus.label });
     const row = grid.cells[0].map((c) => c.char).join("");
-    expect(row).toContain("Comfortable");
-    expect(row.trimEnd().endsWith("Comfortable")).toBe(true);
+    expect(row).toContain("Focus");
+    expect(row.trimEnd().endsWith("Focus")).toBe(true);
   });
 
   test("sits immediately left of the dropped-tile count when both are present, which stays rightmost", () => {
-    const grid = renderStrip({ ...base, densityLabel: "Overview", droppedActive: 2 });
+    const grid = renderStrip({ ...base, densityLabel: DENSITIES.fit.label, droppedActive: 2 });
     const row = grid.cells[0].map((c) => c.char).join("");
-    expect(row).toContain("Overview");
+    expect(row).toContain("Fit");
     expect(row).toContain("+2 not shown");
-    expect(row.indexOf("Overview")).toBeLessThan(row.indexOf("+2 not shown"));
+    expect(row.indexOf("Fit")).toBeLessThan(row.indexOf("+2 not shown"));
     expect(row.trimEnd().endsWith("+2 not shown")).toBe(true);
   });
 
   test("reserves its own width ahead of chip packing, distinct from the hidden-chip reserve", () => {
-    const withLabel = layoutStrip({ ...base, views: many, activeViewId: "a", width: 40, densityLabel: "Comfortable" });
+    const withLabel = layoutStrip({ ...base, views: many, activeViewId: "a", width: 40, densityLabel: DENSITIES.focus.label });
     const withoutLabel = layoutStrip({ ...base, views: many, activeViewId: "a", width: 40, densityLabel: "" });
     // The same width packs no more chips once room is reserved for the label.
     expect(withLabel.length).toBeLessThanOrEqual(withoutLabel.length);
@@ -161,11 +161,11 @@ describe("density label", () => {
     // alongside the reserved density label. Regression guard for the label
     // eating into the chip budget aggressively enough to drop the active
     // chip too.
-    const input = { ...base, width: 24, densityLabel: "Overview" };
+    const input = { ...base, width: 24, densityLabel: DENSITIES.focus.label };
     const grid = renderStrip(input);
     const row = grid.cells[0].map((c) => c.char).join("");
     expect(row).toContain("Active");
-    expect(row).toContain("Overview");
+    expect(row).toContain("Focus");
     expect(row).not.toContain("Backend");
     const chips = layoutStrip(input);
     expect(chips.map((c) => c.id)).toEqual(["active"]);

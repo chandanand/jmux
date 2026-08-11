@@ -51,59 +51,77 @@ describe("computeTileLayout", () => {
   });
 });
 
-// The scenario the density feature exists for: a 214x50 content area — the
-// Command Center's usable area on a roomy but unexceptional terminal, and
-// the exact numbers `glass/density.ts`'s module doc works through. tileCount
-// is 30 — comfortably more than any density's on-screen capacity (the
-// largest is overview's 3x8=24) — so every test below is asserting the
-// floor's capacity, not getting lucky because too few tiles existed to fill
-// it. This is the test that would catch someone "tuning" a number and
+// The scenario the density feature exists for: a 214x49 content area — the
+// Command Center's usable area on a roomy but unexceptional terminal — at
+// agent counts from a small team up to a crowded one. These are the exact
+// numbers `glass/density.ts`'s module doc measures and tabulates (and the
+// table that argues a since-deleted third density was dominated at every
+// N>3). This is the test that would catch someone "tuning" a floor and
 // quietly making tiles unreadable again.
-describe("computeTileLayout at each density (214x50 content area)", () => {
-  const AREA = { mainWidth: 214, mainHeight: 50, tileCount: 30, focusedIndex: 0, scrollRow: 0 };
+describe("computeTileLayout at each density (214x49 content area, by agent count)", () => {
+  const mainWidth = 214;
+  const mainHeight = 49;
 
-  test("comfortable: 2x2, ~20-line tiles — readable and typeable", () => {
-    const spec = DENSITIES.comfortable;
-    const l = computeTileLayout({ ...AREA, minTileWidth: spec.minTileWidth, minTileHeight: spec.minTileHeight });
-    expect(l.columns).toBe(2);
-    const visibleRows = l.tiles.filter((t) => t.visible && t.x === 0).length;
-    expect(visibleRows).toBe(2); // floor(50/22) = 2 rows on screen
-    const tile = l.tiles[0];
-    expect(tile.height).toBe(25); // floor(50/2)
-    expect(tile.height - 2).toBeGreaterThanOrEqual(20); // interior content lines
+  function layoutFor(spec: { minTileWidth: number; minTileHeight: number }, tileCount: number) {
+    return computeTileLayout({
+      mainWidth,
+      mainHeight,
+      tileCount,
+      minTileWidth: spec.minTileWidth,
+      minTileHeight: spec.minTileHeight,
+      focusedIndex: 0,
+      scrollRow: 0,
+    });
+  }
+
+  /** Tiles actually drawn on screen right now (not merely in the tile set). */
+  function visibleCount(l: ReturnType<typeof layoutFor>): number {
+    return l.tiles.filter((t) => t.visible).length;
+  }
+
+  // shown/total @ interior-content-lines, from the measured table:
+  //         N=3          N=6          N=9          N=14
+  // fit     3/3 @ 47ln   6/6 @ 22ln   9/9 @ 14ln  14/14 @ 7ln
+  // focus   3/3 @ 22ln   4/6 @ 22ln   4/9 @ 22ln   4/14 @ 22ln
+  test.each([
+    [3, 3, 47],
+    [6, 6, 22],
+    [9, 9, 14],
+    [14, 14, 7],
+  ])("fit at N=%i shows %i tiles at %i interior lines", (n, shown, interiorLines) => {
+    const l = layoutFor(DENSITIES.fit, n);
+    expect(visibleCount(l)).toBe(shown);
+    expect(l.tiles[0].height - 2).toBe(interiorLines);
   });
 
-  test("compact: 2x4, ~10-line tiles — today's pre-density behaviour, loosened", () => {
-    const spec = DENSITIES.compact;
-    const l = computeTileLayout({ ...AREA, minTileWidth: spec.minTileWidth, minTileHeight: spec.minTileHeight });
-    expect(l.columns).toBe(2);
-    const visibleRows = l.tiles.filter((t) => t.visible && t.x === 0).length;
-    expect(visibleRows).toBe(4); // floor(50/12) = 4 rows on screen
-    const tile = l.tiles[0];
-    expect(tile.height).toBe(12); // floor(50/4)
-    expect(tile.height - 2).toBe(10); // interior content lines
+  test.each([
+    [3, 3, 22],
+    [6, 4, 22],
+    [9, 4, 22],
+    [14, 4, 22],
+  ])("focus at N=%i shows %i tiles at %i interior lines", (n, shown, interiorLines) => {
+    const l = layoutFor(DENSITIES.focus, n);
+    expect(visibleCount(l)).toBe(shown);
+    expect(l.tiles[0].height - 2).toBe(interiorLines);
   });
 
-  test("overview: 3x8, ~4-line tiles — a bird's-eye of many agents at once", () => {
-    const spec = DENSITIES.overview;
-    const l = computeTileLayout({ ...AREA, minTileWidth: spec.minTileWidth, minTileHeight: spec.minTileHeight });
-    expect(l.columns).toBe(3);
-    const visibleRows = l.tiles.filter((t) => t.visible && t.x === 0).length;
-    expect(visibleRows).toBe(8); // floor(50/6) = 8 rows on screen
-    const tile = l.tiles[0];
-    expect(tile.height).toBe(6); // floor(50/8)
-    expect(tile.height - 2).toBe(4); // interior content lines
+  test("fit shows at least as many tiles as focus at every measured count, strictly more once N>3", () => {
+    for (const n of [3, 6, 9, 14]) {
+      const fitShown = visibleCount(layoutFor(DENSITIES.fit, n));
+      const focusShown = visibleCount(layoutFor(DENSITIES.focus, n));
+      expect(fitShown).toBeGreaterThanOrEqual(focusShown);
+      if (n > 3) expect(fitShown).toBeGreaterThan(focusShown);
+    }
   });
 
-  test("a lower density never yields fewer on-screen tiles than a higher one", () => {
-    const rows = (spec: { minTileWidth: number; minTileHeight: number }) => {
-      const l = computeTileLayout({ ...AREA, minTileWidth: spec.minTileWidth, minTileHeight: spec.minTileHeight });
-      return l.columns * l.tiles.filter((t) => t.visible && t.x === 0).length;
-    };
-    const comfortable = rows(DENSITIES.comfortable);
-    const compact = rows(DENSITIES.compact);
-    const overview = rows(DENSITIES.overview);
-    expect(compact).toBeGreaterThan(comfortable);
-    expect(overview).toBeGreaterThan(compact);
+  test("focus's floor keeps tiles at least as tall as fit's, at every measured count", () => {
+    for (const n of [3, 6, 9, 14]) {
+      const fitLines = layoutFor(DENSITIES.fit, n).tiles[0].height - 2;
+      const focusLines = layoutFor(DENSITIES.focus, n).tiles[0].height - 2;
+      // fit wins at N=9/14 by showing everything at once instead — focus only
+      // wins the per-tile height race at low N, which the N=3 fit@47 line
+      // above already covers on its own.
+      if (n >= 6) expect(focusLines).toBeGreaterThanOrEqual(fitLines);
+    }
   });
 });

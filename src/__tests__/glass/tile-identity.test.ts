@@ -3,6 +3,7 @@ import { GlassView, type GlassTileSpec, type GlassViewOptions, type TilePty } fr
 import { resolveDisplayedRepresentative } from "../../glass/view";
 import type { PaneRow } from "../../glass/representative";
 import type { AgentState } from "../../types";
+import { DENSITIES } from "../../glass/density";
 
 // ── Harness ──────────────────────────────────────────────────────────────────
 // GlassView needs a live tmux server for exactly one thing — attaching a mirror
@@ -387,50 +388,64 @@ describe("zoom", () => {
 });
 
 describe("setDensity", () => {
-  // 9 tiles on a 214x50 area, starting at the "comfortable" floor (90x22) —
-  // the scenario density.ts's module doc works through. Switching to
-  // "overview" (60x6) packs more columns and more visible rows, so an
+  // 9 tiles on a 214x49 area — the scenario density.ts's module doc measures
+  // — starting at the "focus" floor (100x22). Switching to "fit" (60x6)
+  // reaches a third column and packs more visible rows, so an
   // already-spawned, still-visible tile's pty must be resized to the new,
   // smaller rect — the live grid re-laying out, not a fresh spawn.
   const nineSpecs = Array.from({ length: 9 }, (_, i) => spec({ sessionId: `$${i + 1}` }));
 
   test("resizes an already-visible tile's pty and bridge to the new floor's rect", () => {
-    const { view, ptys } = makeView({ opts: { minTileWidth: 90, minTileHeight: 22 } });
-    view.resize(214, 50);
+    const { view, ptys } = makeView({ opts: DENSITIES.focus });
+    view.resize(214, 49);
     view.setTiles(nineSpecs, EMPTY_CTX);
     const one = ptys.find((p) => p.session === "$1")!.pty;
     one.sizes.length = 0;
 
-    view.setDensity("overview");
+    view.setDensity("fit");
 
     expect(one.sizes.length).toBeGreaterThan(0);
     const [cols, rows] = one.sizes[one.sizes.length - 1]!;
-    // comfortable: 2 cols -> 107-wide tiles (105 interior); overview: 3 cols
-    // -> 71-wide tiles (69 interior). Same shrink direction on height.
+    // focus at N=9: 2 cols -> 107-wide tiles (105 interior), 24-tall (22
+    // interior). fit at N=9: 3 cols -> 71-wide tiles (69 interior), 16-tall
+    // (14 interior) — the exact numbers in the module doc's measured table.
     expect(cols).toBeLessThan(105);
-    expect(rows).toBeLessThan(23);
+    expect(rows).toBeLessThan(22);
   });
 
   test("requests a frame after re-laying out", () => {
     let frames = 0;
-    const { view } = makeView({ opts: { minTileWidth: 90, minTileHeight: 22, onFrame: () => frames++ } });
-    view.resize(214, 50);
+    const { view } = makeView({ opts: { ...DENSITIES.focus, onFrame: () => frames++ } });
+    view.resize(214, 49);
     view.setTiles(nineSpecs, EMPTY_CTX);
     frames = 0;
 
-    view.setDensity("compact");
+    view.setDensity("fit");
 
     expect(frames).toBeGreaterThan(0);
   });
 
+  test("toggling twice returns to the original layout — a swap, not a ring", () => {
+    const { view, ptys } = makeView({ opts: DENSITIES.focus });
+    view.resize(214, 49);
+    view.setTiles(nineSpecs, EMPTY_CTX);
+    const one = ptys.find((p) => p.session === "$1")!.pty;
+    const original = one.sizes[one.sizes.length - 1]!;
+
+    view.setDensity("fit");
+    view.setDensity("focus");
+
+    expect(one.sizes[one.sizes.length - 1]!).toEqual(original);
+  });
+
   test("spawns no new client and tears none down — a re-layout, not a reconcile", () => {
-    const { view, ptys } = makeView({ opts: { minTileWidth: 90, minTileHeight: 22 } });
-    view.resize(214, 50);
+    const { view, ptys } = makeView({ opts: DENSITIES.focus });
+    view.resize(214, 49);
     view.setTiles(nineSpecs, EMPTY_CTX);
     const before = ptys.length;
     const killedBefore = ptys.filter((p) => p.pty.killed).length;
 
-    view.setDensity("overview");
+    view.setDensity("fit");
 
     expect(ptys.length).toBe(before);
     expect(ptys.filter((p) => p.pty.killed).length).toBe(killedBefore);

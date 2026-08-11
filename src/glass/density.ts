@@ -3,36 +3,46 @@
  * against (`GlassViewOptions.minTileWidth` / `minTileHeight`), named so the
  * mode the user is in is never a guess.
  *
- * One tile size cannot serve both jobs the grid is asked to do. Triage
- * ("who needs me?") wants many small tiles; driving ("read what an agent
- * said and type back") wants few large ones. A single floor — the grid's
- * pre-density behaviour — split the difference and served neither: on a
- * ~50-row terminal with 9 running agents it rendered 2x5 tiles at 8 content
- * lines each, too small to read or type into and too large to be a useful
- * list. So the floor is now a named mode the user picks, not a "will it
- * fit" constant.
+ * There are only two intents a tile size can serve: read one properly, or
+ * watch them all. A single fixed floor — the grid's pre-density behaviour —
+ * split the difference and served neither: on a ~50-row terminal with 9
+ * running agents it rendered 2x5 tiles at 8 content lines each, too small to
+ * read or type into and too large to be a useful list.
  *
- * The three floors below are chosen against a 214-col x 50-row content area
- * — the Command Center's usable area on a roomy but unexceptional terminal
- * (`computeTileLayout`'s `columns = floor(mainWidth / minTileWidth)`, rows
- * likewise off height):
+ * This shipped once as three modes (comfortable/compact/overview) and was
+ * cut back to two after measuring actual tile counts and interior line
+ * counts against a real 214-col x 49-row content area — the Command
+ * Center's usable area on a roomy but unexceptional terminal — at agent
+ * counts from a small team up to a crowded one:
  *
- *   comfortable  90 x 22 -> floor(214/90)=2 cols, floor(50/22)=2 rows -> 2x2 = 4 tiles,
- *                ~20 interior lines each (tileHeight 25, minus the 2-row
- *                border). Readable and typeable — this is "driving".
- *   compact      80 x 12 -> floor(214/80)=2 cols, floor(50/12)=4 rows -> 2x4 = 8 tiles,
- *                ~10 interior lines. The grid's old fixed floor
- *                (minTileHeight: 10), kept as a middle option rather than
- *                the only one.
- *   overview     60 x 6  -> floor(214/60)=3 cols, floor(50/6)=8 rows -> 3x8 = 24 tiles,
- *                ~4 interior lines. A bird's-eye: enough to see what each
- *                agent is doing right now, nothing more — this is "triage".
+ * ```
+ *         N=3          N=6          N=9          N=14
+ * Focus   3/3 @ 22ln   4/6 @ 22ln   4/9 @ 22ln   4/14 @ 22ln
+ * (was    3/3 @ 22ln   6/6 @ 14ln   8/9 @ 10ln   8/14 @ 10ln)  <- compact, deleted
+ * Fit     3/3 @ 47ln   6/6 @ 22ln   9/9 @ 14ln  14/14 @ 7ln
+ * ```
  *
- * Default is `comfortable`, deliberately not `compact`: the density this
- * feature exists to move users off of is not inherently useful as a
- * default, only as one option among three.
+ * The deleted middle row ("compact", 80x12) was *dominated* at every N>3: at
+ * N=9 it showed 8 of 9 tiles at 10 lines while `fit` showed 9 of 9 at 14 —
+ * strictly worse on both axes simultaneously, not merely a worse tradeoff.
+ * The cause was structural rather than a bad constant: at 80 columns wide it
+ * can never reach a third column on a 214-col area (`floor(214/80) = 2`, same
+ * as `focus`'s 100), so it pays `focus`'s extra-row-scrolling penalty
+ * without `fit`'s width benefit. Retuning it to close that gap (70x14) makes
+ * it *identical* to `fit` at N=3, 6 and 9 — there turned out to be no floor
+ * that gives a third mode a job distinct from the two below. If a future
+ * change reintroduces a middle density, re-run this table first: the numbers
+ * are the argument, not the width/height constants themselves.
+ *
+ *   fit    60 x 6  -> everything visible, sized to whatever fits. This is
+ *          the default: it's what "Command Center" means, and at a crowded
+ *          9 agents it's 14 readable lines against the 8 the old fixed floor
+ *          gave.
+ *   focus  100 x 22 -> four big, legible, typeable tiles; the rest scroll,
+ *          and focus keeps the current tile in view. For reading or typing
+ *          into one agent at a time.
  */
-export type Density = "comfortable" | "compact" | "overview";
+export type Density = "focus" | "fit";
 
 export interface DensitySpec {
   minTileWidth: number;
@@ -41,28 +51,27 @@ export interface DensitySpec {
 }
 
 export const DENSITIES: Record<Density, DensitySpec> = {
-  comfortable: { minTileWidth: 90, minTileHeight: 22, label: "Comfortable" },
-  compact: { minTileWidth: 80, minTileHeight: 12, label: "Compact" },
-  overview: { minTileWidth: 60, minTileHeight: 6, label: "Overview" },
+  fit: { minTileWidth: 60, minTileHeight: 6, label: "Fit" },
+  focus: { minTileWidth: 100, minTileHeight: 22, label: "Focus" },
 };
 
-export const DEFAULT_DENSITY: Density = "comfortable";
+export const DEFAULT_DENSITY: Density = "fit";
 
-/** Cycle order: most detail first, least detail last, then back around. */
-const CYCLE: readonly Density[] = ["comfortable", "compact", "overview"];
-
-/** Step to the next density, wrapping. `Ctrl-a D` in the glass arm. */
+/**
+ * Toggle between the two densities. Two values makes this a swap, not a
+ * ring — `cycleDensity(cycleDensity(d)) === d` for both, unlike the old
+ * three-mode cycle this replaced.
+ */
 export function cycleDensity(d: Density): Density {
-  const index = CYCLE.indexOf(d);
-  return CYCLE[(index + 1) % CYCLE.length]!;
+  return d === "fit" ? "focus" : "fit";
 }
 
 /**
- * Defensive: config is hand-editable JSON. Anything other than the three
- * known values — missing, mistyped, a value from a future jmux — falls back
- * to the default rather than reaching `computeTileLayout` with an undefined
- * spec.
+ * Defensive: config is hand-editable JSON, and also the landing spot for a
+ * value written by an older jmux with a third density that no longer
+ * exists. Anything other than the two known values falls back to the
+ * default rather than reaching `computeTileLayout` with an undefined spec.
  */
 export function normalizeDensity(raw: unknown): Density {
-  return raw === "comfortable" || raw === "compact" || raw === "overview" ? raw : DEFAULT_DENSITY;
+  return raw === "fit" || raw === "focus" ? raw : DEFAULT_DENSITY;
 }
