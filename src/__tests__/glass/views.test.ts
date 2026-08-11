@@ -83,7 +83,12 @@ describe("normalizeViews", () => {
     ]);
   });
 
-  test("drops a name that is blank after trimming or over 24 characters", () => {
+  test("trims and truncates a name, dropping only one that is blank", () => {
+    // Rewritten when the drop-vs-repair rule changed: an over-length name is
+    // out of bounds, not malformed, and this function already clamps a bad axis
+    // rather than discarding its view. Dropping for length silently deleted a
+    // configured view along with axes that were valid. A name that is blank
+    // after trimming is still dropped — there is nothing left to call it.
     const raw = [
       seed,
       { id: "blank", name: "   ", filter: "all", groupBy: "none", sortBy: "name" },
@@ -92,6 +97,8 @@ describe("normalizeViews", () => {
     ];
     expect(normalizeViews(raw)).toEqual([
       seed,
+      // Truncated to the 24-char limit, keeping its axes.
+      { id: "toolong", name: "This name is far too lon", filter: "all", groupBy: "none", sortBy: "name" },
       // Stored trimmed — the same normalization validateViewName applies on
       // the interactive path.
       { id: "trimmed", name: "Trimmed", filter: "all", groupBy: "none", sortBy: "name" },
@@ -327,5 +334,34 @@ describe("reloadViews (transition 3: hot reload)", () => {
     expect(result.views).toEqual([seed]);
     expect(result.activeViewId).toBe(DEFAULT_VIEW_SEED_ID);
     expect(result.axes).toEqual(axesOf(seed));
+  });
+});
+
+describe("normalizeViews repairs rather than discards", () => {
+  // A bad axis is clamped to the default a few lines away in the same function,
+  // so dropping a whole view for an over-length name was the inconsistent
+  // branch — and it silently deleted a view the user had configured, taking
+  // axes that were perfectly valid with it.
+  test("an over-length name is truncated, keeping the view and its axes", () => {
+    const views = normalizeViews([
+      { id: "wide", name: "z".repeat(60), filter: "all", groupBy: "none", sortBy: "name" },
+    ]);
+    expect(views).toHaveLength(1);
+    expect(views[0]!.id).toBe("wide");
+    expect(views[0]!.name.length).toBeLessThanOrEqual(24);
+    expect(views[0]!.filter).toBe("all");
+    expect(views[0]!.groupBy).toBe("none");
+  });
+
+  test("surrounding whitespace is trimmed, not treated as malformed", () => {
+    const views = normalizeViews([
+      { id: "pad", name: "   Backend   ", filter: "active", groupBy: "status", sortBy: "status" },
+    ]);
+    expect(views[0]!.name).toBe("Backend");
+  });
+
+  test("an unusable id or an empty name is still dropped — nothing to address it by", () => {
+    expect(normalizeViews([{ id: "Not A Slug!!", name: "X" }])[0]!.id).toBe("active");
+    expect(normalizeViews([{ id: "ok", name: "   " }])[0]!.id).toBe("active");
   });
 });

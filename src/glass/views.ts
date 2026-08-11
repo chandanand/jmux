@@ -102,10 +102,17 @@ export function normalizeViews(raw: unknown): CommandCenterView[] {
     if (!entry || typeof entry !== "object") continue;
     const id = (entry as { id?: unknown }).id;
     const rawName = (entry as { name?: unknown }).name;
+    // Repair what can be repaired; drop only what cannot be identified at all.
+    // Axes are clamped a few lines below rather than dropped, and a name that
+    // is merely untrimmed or over-length is the same kind of out-of-bounds — so
+    // dropping the whole view for it silently deleted a view the user had
+    // configured, along with axes that were perfectly valid. Only a missing or
+    // unusable id/name is unrecoverable, because there is then nothing to
+    // address the view by or call it.
     if (typeof id !== "string" || !SLUG_ID_RE.test(id)) continue;
     if (typeof rawName !== "string") continue;
-    const name = rawName.trim();
-    if (name.length === 0 || name.length > MAX_VIEW_NAME) continue;
+    const name = rawName.trim().slice(0, MAX_VIEW_NAME);
+    if (name.length === 0) continue;
     if (seenIds.has(id)) continue;
     const nameKey = name.toLowerCase();
     if (seenNames.has(nameKey)) continue;
