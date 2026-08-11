@@ -240,7 +240,7 @@ export class GlassView {
   private focusedKey: TileKey | null = null;
   /** Live tiles that have left membership, with the moment they left. */
   private retained: Map<TileKey, RetainedTile> = new Map();
-  /** Face cycles, keyed by session id — cleared when the pane they name dies. */
+  /** Face cycles, keyed by tile — cleared when the pane they name dies. */
   private faceOverrides: Map<TileKey, string> = new Map();
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
   private droppedActive = 0;
@@ -515,6 +515,11 @@ export class GlassView {
     for (const key of plan.teardown) {
       this.teardownTile(key);
       this.retained.delete(key);
+      // The override outlives its tile otherwise: the prune above only reaches
+      // keys still in membership, so a session that ends leaves its entry here
+      // until teardown() clears the lot. "Every session ever seen" is not a
+      // bound for a process that runs for days.
+      this.faceOverrides.delete(key);
     }
 
     // Focus follows the key; when its tile is gone, the nearest survivor by the
@@ -631,7 +636,13 @@ export class GlassView {
       state.writesPending++;
       bridge.write(data).then(() => {
         state.writesPending--;
-        if (state.writesPending === 0) {
+        // Only a *rendered* tile can change the picture. A retained tile is
+        // alive but absent from `tileOrder`, so asking for a frame on its
+        // behalf recomposites the whole grid to produce an identical one — and
+        // the event that retires a tile into its grace is an agent finishing a
+        // turn, which is precisely when it prints. Feeding the bridge still
+        // matters: the tile must be current the moment it comes back.
+        if (state.writesPending === 0 && this.tileOrder.includes(key)) {
           onFrame();
         }
       });
@@ -654,7 +665,12 @@ export class GlassView {
       this.opts.runner(["resize-pane", "-Z", "-t", tile.zoomedPaneId]);
       tile.zoomedPaneId = null;
     }
-    tile.zoomedPaneId = this.showPane(tile.spec.sessionId, face.paneId);
+    // The old window is the hint: `tile.panes` is a snapshot, so the new face
+    // can be dead by the time we act on it. Without a hint that failure issues
+    // no `select-window` at all and the tile sits on a window it has already
+    // given the zoom back to. It self-corrects on the next reconcile; the hint
+    // keeps the frames in between showing something the session is on.
+    tile.zoomedPaneId = this.showPane(tile.spec.sessionId, face.paneId, tile.spec.windowId);
     tile.face = face;
   }
 

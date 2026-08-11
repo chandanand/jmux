@@ -30,6 +30,23 @@ const plan = (input: Partial<TilePlanInput>) =>
     ...input,
   });
 
+describe("the cap has a floor", () => {
+  // A zero cap admits nothing, tears every client down and renders the empty
+  // state while agents are running — indistinguishable from having no sessions.
+  // A mistyped commandCenter.maxTiles must not be able to blank the grid.
+  test("maxClients 0 still admits one tile", () => {
+    const p = plan({ active: active("$1", "$2"), maxClients: 0 });
+    expect(p.render).toEqual([k("$1")]);
+    expect(p.droppedActive).toBe(1);
+  });
+
+  test("a negative cap is treated the same", () => {
+    const p = plan({ active: active("$1"), maxClients: -5 });
+    expect(p.render).toEqual([k("$1")]);
+    expect(p.droppedActive).toBe(0);
+  });
+});
+
 describe("tile keys", () => {
   test("a tile is a session and nothing else", () => {
     expect(k("$2")).toBe("session:$2");

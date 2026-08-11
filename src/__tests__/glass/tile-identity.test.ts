@@ -12,10 +12,13 @@ class FakePty implements TilePty {
   killed = false;
   writes: string[] = [];
   sizes: [number, number][] = [];
+  private listener: ((data: string) => void) | null = null;
   write(data: string): void { this.writes.push(data); }
   resize(cols: number, rows: number): void { this.sizes.push([cols, rows]); }
   kill(): void { this.killed = true; }
-  onData(): void { /* nothing ever arrives in a unit test */ }
+  onData(listener: (data: string) => void): void { this.listener = listener; }
+  /** Push output as the real pty would. The bridge write is async. */
+  emit(data: string): void { this.listener?.(data); }
 }
 
 interface WindowFacts { windowId: string; paneCount: number; zoomed: boolean }
@@ -368,5 +371,49 @@ describe("rendered set ≠ client set", () => {
     expect(view.focusedSessionId()).toBeNull();
     expect(view.focusedPaneId()).toBeNull();
     expect(view.getDroppedActive()).toBe(0);
+  });
+});
+
+describe("only a rendered tile asks for a frame", () => {
+  // The event that retires a tile into its grace is an agent finishing a turn,
+  // which is exactly when it prints — so an unguarded onFrame turns the grace
+  // window into a repaint storm producing an identical picture.
+  test("a retained tile's output does not schedule a render", async () => {
+    let frames = 0;
+    const { view, ptys } = makeView({ opts: { onFrame: () => { frames++; } } });
+    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], "default");
+    const two = ptys.find((p) => p.session === "$2")!.pty;
+
+    // While rendered, its output is worth a frame.
+    frames = 0;
+    two.emit("hello");
+    await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(frames).toBeGreaterThan(0);
+
+    // $2 leaves membership. Its client survives the grace, unrendered.
+    view.setTiles([spec({ sessionId: "$1" })], "default");
+    expect(two.killed).toBe(false);
+
+    frames = 0;
+    two.emit("still chattering");
+    await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(frames).toBe(0);
+  });
+
+  test("a retained tile is still fed, so it is current when it returns", async () => {
+    const { view, ptys } = makeView();
+    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], "default");
+    const two = ptys.find((p) => p.session === "$2")!.pty;
+
+    view.setTiles([spec({ sessionId: "$1" })], "default");
+    two.emit("output while retained");
+    await new Promise((r) => setTimeout(r, 5));
+
+    // Coming back reuses the same client rather than spawning a second one.
+    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], "default");
+    expect(ptys.filter((p) => p.session === "$2")).toHaveLength(1);
+    expect(two.killed).toBe(false);
   });
 });

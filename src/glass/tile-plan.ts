@@ -98,7 +98,11 @@ export interface TilePlan {
  */
 export function planTiles(input: TilePlanInput): TilePlan {
   const { active, live, retained, now, graceMs } = input;
-  const maxClients = Math.max(0, input.maxClients);
+  // Floor of 1, not 0: a zero cap admits nothing, tears every client down and
+  // renders the empty state while agents are running — indistinguishable from
+  // having no sessions at all. A mistyped `commandCenter.maxTiles` must not be
+  // able to silently blank the grid.
+  const maxClients = Math.max(1, input.maxClients);
 
   // 1 — admission. Forced wins the scarce slots; render order breaks the rest.
   // Admitted keeps *render* order: the grid must not rearrange itself the
