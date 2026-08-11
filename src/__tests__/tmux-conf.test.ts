@@ -79,6 +79,31 @@ describe("tmux config files", () => {
     });
   });
 
+  // Sourcing the user's tmux config is opt-out (`userTmuxConfig` in
+  // config.json), and the entire mechanism is one line of tmux.conf: jmux
+  // resolves the path in TypeScript — where the XDG fallback and the `false`
+  // case are testable — and exports it as $JMUX_USER_CONF, empty meaning
+  // "source nothing". An edit that reinstated an unconditional `source-file
+  // ~/.tmux.conf` would silently restore the old behaviour for every user who
+  // had turned it off, and nothing in the type system can see a .conf file.
+  describe("the user's tmux config is gated", () => {
+    test("tmux.conf reaches it only through $JMUX_USER_CONF", () => {
+      const text = confText("tmux.conf");
+      expect(text).toContain("$JMUX_USER_CONF");
+      expect(text).not.toMatch(/source-file\s+(?:-\S+\s+)*["']?~\/\.tmux\.conf/);
+    });
+
+    // `if-shell` without -b stops the command queue until its shell exits
+    // (man tmux), so step 2 cannot outlive step 3. If the gate ever moves to a
+    // backgrounded form, the user's config would land *after* core.conf and
+    // win on the six settings jmux is not willing to negotiate.
+    test("core.conf is still sourced last", () => {
+      const text = confText("tmux.conf");
+      expect(text).not.toMatch(/if-shell\s+-\S*b/);
+      expect(text.indexOf("core.conf")).toBeGreaterThan(text.indexOf("JMUX_USER_CONF"));
+    });
+  });
+
   // core.conf is sourced last and overrides ~/.tmux.conf, so anything in it is
   // a setting the user is not allowed to have an opinion about. That is only
   // defensible for things jmux genuinely cannot run without — it held an

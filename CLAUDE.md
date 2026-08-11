@@ -504,11 +504,20 @@ jmux's config layering for tmux is **three-tier** and order matters:
 
 ```
 config/defaults.conf   ← jmux opinionated baseline
-~/.tmux.conf           ← user overrides
+the user's tmux config ← user overrides, and opt-out-able
 config/core.conf       ← jmux requirements, sourced LAST, always wins
 ```
 
 See `config/tmux.conf` for the loader. `core.conf` enforces the small set of settings jmux depends on: `mouse on`, `detach-on-destroy off`, `status off` (we render our own toolbar), pane border titles, and auto window naming. Do not add new settings to `core.conf` unless they're genuinely required for jmux to function.
+
+**Step 2 is a setting, and the decision is made in TypeScript.** `core.conf` only protects what jmux *requires*; everything else jmux ships is presentation the user may override, which is how an elaborate `~/.tmux.conf` lands its own chrome on top of jmux's UI. `userTmuxConfig` (`string | false`, unset = auto-detect) is the opt-out, and four things hold it together:
+
+- **`tmux-user-config.ts` decides; `tmux.conf` only obeys.** The loader gets one unambiguous path through `$JMUX_USER_CONF`, or empty for "source nothing" — the same env mechanism as `$JMUX_DIR` and `$JMUX_COPY`. Deciding in tmux would put the fallback order and the off switch in the one part of jmux nothing can type-check; deciding in TypeScript makes both testable and leaves the conf a single gated line. `if-shell` **without `-b`** blocks the command queue, so step 3 still lands last — backgrounding it would let the user's config win over `core.conf`.
+- **Auto-detect resolves what tmux itself resolves** — `~/.tmux.conf`, then `$XDG_CONFIG_HOME/tmux/tmux.conf`. jmux checked only the first for its whole life, so a user living at the second had their config silently ignored *and* would have been handed an off switch for something that was never on. A switch named "source the user's tmux config" that consults one of two documented locations encodes a second, invisible rule its own name denies.
+- **A configured path that is absent sources nothing, never the auto-detected file.** Falling through would source a different file than the one named, confidently and silently; `missing` is warned about on both channels and is an honest nothing.
+- **The toggle is inert on a running server, so it is disclosed twice.** `-f` is read only when tmux *starts* a server, and a settings change moves no asset hash — so `@jmux-config-generation` carries a second half (`<assetHash>.<confTag>`) and `staleGenerationNotice` names *which* half diverged, because "jmux was upgraded" is not something a user who just edited `userTmuxConfig` can act on. The settings row adds `getNote` → `restart to apply`, compared against what this process resolved at boot rather than a stamp it has already overwritten. Demo mode forces the setting off in `setupDemo`, because it starts its own server before `main.ts` has resolved anything.
+
+`user-tmux-config-integration.test.ts` boots jmux under a pty against a scratch HOME and reads a probe option back off the server — the unit tests either side of the glue cannot see `main.ts` reading config and exporting the variable, which is where "every test passed and the feature did nothing" lives. It asserts the server actually came up, or an empty probe would equally mean the server never started.
 
 jmux's own settings live in `~/.config/jmux/config.json` (sidebar width, claude command, project dirs, wtm integration). The file is watched; sidebar-width changes hot-apply without restart.
 

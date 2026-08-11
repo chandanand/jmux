@@ -4,7 +4,21 @@ import { clipboardCopyCommand } from "./platform";
 import { MIN_TMUX_VERSION, tmuxVersionOk } from "./tmux-version";
 import { configFileIn, materializeAssets, skillIn } from "./assets";
 import { currentChannel, upgradeCommand } from "./channel";
-import { compareGeneration, GENERATION_OPTION, stampCommand, staleGenerationNotice } from "./config-generation";
+import {
+  compareGeneration,
+  GENERATION_OPTION,
+  stampCommand,
+  staleGenerationNotice,
+  staleGenerationTitle,
+} from "./config-generation";
+import {
+  editableUserTmuxConfig,
+  formatUserTmuxConfig,
+  parseUserTmuxConfig,
+  resolveUserTmuxConfig,
+  userTmuxConfigPath,
+  userTmuxConfigWarning,
+} from "./tmux-user-config";
 import { detectSkill, installSkill, uninstallIntegrations } from "./agent-hooks/skill";
 import { ScreenBridge } from "./screen-bridge";
 import { Renderer, getToolbarButtonRanges, getToolbarTabRanges, getModalPosition, buildToolbarButtons, type ToolbarConfig } from "./renderer";
@@ -449,7 +463,52 @@ if (demoMode) {
   }
 }
 
+/**
+ * Config complaints already said, so a hot reload of an unrelated key doesn't
+ * repeat them. Keyed on the message itself: the same bad value stays quiet,
+ * a *newly* bad one still speaks up.
+ */
+const configWarnings = new Set<string>();
+
+function warnConfig(message: string): void {
+  if (configWarnings.has(message)) return;
+  configWarnings.add(message);
+  // Both channels on purpose. stderr is what a user watching their first run
+  // sees; jmux.log is what they can still read after the alt screen has taken
+  // the terminal, which is where a hot-reload complaint lands.
+  process.stderr.write(`${message}\n`);
+  logError("jmux", message);
+}
+
 const configStore = new ConfigStore(demoCtx?.configPath);
+
+// --- Which tmux config jmux sources on the user's behalf ---
+//
+// Resolved once, here, and never again: tmux reads `-f` only when it *starts* a
+// server, so this process gets exactly one chance to decide. Everything
+// downstream — the `$JMUX_USER_CONF` export the loader reads, the generation
+// stamp, the settings row's "restart to apply" — has to agree about what that
+// decision was, which is why they all read this binding rather than re-deriving
+// it from config.
+//
+// Demo mode is forced off rather than left to config: it *started* its server
+// above, before this line existed, with no user config in its environment. A
+// resolution that disagreed would stamp the server with a config it never
+// loaded.
+const userTmuxConfig = resolveUserTmuxConfig(
+  demoCtx ? false : configStore.config.userTmuxConfig,
+  { home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME },
+  existsSync,
+);
+const userTmuxConfPath = userTmuxConfigPath(userTmuxConfig);
+const userTmuxConfigNotice = userTmuxConfigWarning(userTmuxConfig);
+if (userTmuxConfigNotice) warnConfig(userTmuxConfigNotice);
+// Empty is meaningful and is the whole off switch — config/tmux.conf gates its
+// step 2 on this being non-empty. Same mechanism as JMUX_DIR and JMUX_COPY: the
+// tmux server inherits this process's environment, and expands the variable
+// when it loads the config.
+process.env.JMUX_USER_CONF = userTmuxConfPath;
+
 let sidebarWidth = configStore.config.sidebarWidth || 26;
 // `Ctrl-a \` — the sidebar hidden by the user, as opposed to by the terminal
 // being too narrow for it. Deliberately not persisted: this is "give the panes
@@ -522,23 +581,6 @@ let diffPanelSplitRatio = configStore.config.diffPanel?.splitRatio ?? 0.4;
 let hunkCommand = configStore.config.diffPanel?.hunkCommand ?? "hunk";
 
 /**
- * Config complaints already said, so a hot reload of an unrelated key doesn't
- * repeat them. Keyed on the message itself: the same bad value stays quiet,
- * a *newly* bad one still speaks up.
- */
-const titleConfigWarnings = new Set<string>();
-
-function warnTitleConfig(message: string): void {
-  if (titleConfigWarnings.has(message)) return;
-  titleConfigWarnings.add(message);
-  // Both channels on purpose. stderr is what a user watching their first run
-  // sees; jmux.log is what they can still read after the alt screen has taken
-  // the terminal, which is where a hot-reload complaint lands.
-  process.stderr.write(`${message}\n`);
-  logError("jmux", message);
-}
-
-/**
  * The session-title generator, or null when titling is off.
  *
  * `sessionTitle.command` unset is the entire off switch — no second boolean —
@@ -548,13 +590,13 @@ function warnTitleConfig(message: string): void {
  * is indistinguishable from the off state and therefore unusable.
  *
  * Everything this touches *at call time* is declared above it (`configStore`,
- * `warnTitleConfig`). `currentSessions`, `control` and `showToast` are only
+ * `warnConfig`). `currentSessions`, `control` and `showToast` are only
  * reached from inside the callbacks, which cannot run before the first title
  * comes back — see boot-smoke.test.ts for why that distinction is load-bearing
  * at module scope in this file.
  */
 function makeTitleGenerator(): TitleGenerator | null {
-  const cfg = resolveTitleConfig(configStore.config.sessionTitle ?? null, warnTitleConfig);
+  const cfg = resolveTitleConfig(configStore.config.sessionTitle ?? null, warnConfig);
   if (!cfg) return null;
   return new TitleGenerator(
     cfg,
@@ -5957,6 +5999,30 @@ function currentRepoCategory(): SettingsCategory[] {
   }];
 }
 
+/** What `userTmuxConfig` says right now — re-read per render, so an edit shows. */
+function liveUserTmuxConfig() {
+  return resolveUserTmuxConfig(
+    demoCtx ? false : configStore.config.userTmuxConfig,
+    { home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME },
+    existsSync,
+  );
+}
+
+/**
+ * The disclosure that keeps that row from being a control that visibly does
+ * nothing: tmux reads `-f` only when it *starts* a server, so a change here
+ * cannot reach the one already running.
+ *
+ * Compared against what *this process* resolved at boot rather than against the
+ * server's stamp, which this process has already overwritten. The gap that
+ * leaves — attaching to a server some other jmux started — is covered by the
+ * startup modal, and returns null here rather than being guessed at.
+ */
+function userTmuxConfigRestartNote(): string | null {
+  if (demoCtx) return null;
+  return userTmuxConfigPath(liveUserTmuxConfig()) === userTmuxConfPath ? null : "restart to apply";
+}
+
 /**
  * "restart to apply" for an adapter row whose config no longer matches the
  * adapter this process is running.
@@ -6084,6 +6150,38 @@ function buildSettingsCategories(): SettingsCategory[] {
           getValue: () => currentStateColorName("complete"),
           options: [...STATE_COLOR_NAMES],
           onOptionSelect: (v) => persistStateColor("complete", v),
+        },
+      ],
+    },
+    // Its own category rather than a row in Display, because discoverability is
+    // the only reason this row exists at all — the setting is a once-per-machine
+    // decision that could have lived in config.json alone. A user whose tmux
+    // config is bleeding chrome into the jmux UI scans for "tmux"; they do not
+    // scan the gap between "Max image height" and "Auto-pin agent panes".
+    {
+      label: "tmux",
+      collapsed: false,
+      settings: [
+        {
+          id: "user-tmux-config",
+          label: "Source tmux config",
+          type: "text" as const,
+          // Modelled on the `panel-width` row's `auto`, not on a boolean: a
+          // boolean cannot express a path, and toggling off then on would
+          // silently destroy a configured one. The value discloses *why* it
+          // reads as it does — the construction the `inline-images` row uses —
+          // so the row can never claim a config is in force on a machine that
+          // has none.
+          getValue: () => formatUserTmuxConfig(liveUserTmuxConfig(), homedir()),
+          getEditValue: () => editableUserTmuxConfig(configStore.config.userTmuxConfig),
+          getNote: userTmuxConfigRestartNote,
+          onTextCommit: (v) => {
+            const parsed = parseUserTmuxConfig(v);
+            if (parsed === undefined) configStore.delete("userTmuxConfig");
+            else configStore.set("userTmuxConfig", parsed);
+          },
+          describe: () =>
+            "Which tmux config jmux sources between its own defaults and its requirements. auto, off, or a path.",
         },
       ],
     },
@@ -9761,26 +9859,31 @@ async function start(): Promise<void> {
 
   // Config generation. `-f` is honored only when tmux *starts* a server, so
   // attaching to a server left running by an older jmux silently keeps that
-  // version's bindings. Read the stamp before writing ours, or every server
-  // looks current.
+  // version's bindings — and one started under a different `userTmuxConfig`
+  // silently keeps sourcing what it sourced then. Read the stamp before writing
+  // ours, or every server looks current.
   try {
     const running = await control.sendCommand(`show-option -gqv ${GENERATION_OPTION}`);
-    const verdict = compareGeneration(Array.isArray(running) ? running.join("") : String(running ?? ""), jmuxDir);
+    const verdict = compareGeneration(
+      Array.isArray(running) ? running.join("") : String(running ?? ""),
+      jmuxDir,
+      userTmuxConfPath,
+    );
     if (verdict.kind === "stale") {
       const notice = staleGenerationNotice(verdict);
-      logError("config-generation", `server ${verdict.running} != assets ${verdict.expected}`);
+      logError("config-generation", `server ${verdict.running} != ${verdict.expected} (${verdict.cause})`);
       // Shown once, on the surface the user is already looking at. Silently
       // logging it would reproduce the original bug: the upgrade appears to
       // have worked and none of the new bindings do anything.
       const lines: StyledLine[] = notice.map((text) => [
         { text, attrs: { bg: theme.surface, bgMode: 2 } },
       ]);
-      const modal = new ContentModal({ lines, title: "tmux is running an older config" });
+      const modal = new ContentModal({ lines, title: staleGenerationTitle(verdict) });
       modal.setTermRows(process.stdout.rows || 24);
       modal.open();
       openModal(modal, () => {});
     }
-    await control.sendCommand(stampCommand(jmuxDir));
+    await control.sendCommand(stampCommand(jmuxDir, userTmuxConfPath));
   } catch (err) {
     // A server that won't answer about its generation is not a reason to fail
     // startup — the check is a courtesy, not a dependency. But swallowing the

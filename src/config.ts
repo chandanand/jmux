@@ -98,6 +98,24 @@ export interface SessionTitleConfig {
 }
 
 export interface JmuxConfig {
+  /**
+   * Which tmux config jmux sources on the user's behalf, between its own
+   * `defaults.conf` and the `core.conf` it will not negotiate.
+   *
+   * Unset auto-detects the two locations tmux itself documents (`~/.tmux.conf`,
+   * then `$XDG_CONFIG_HOME/tmux/tmux.conf`); `false` sources nothing; a string
+   * sources that file instead. **The value is the switch** — there is no
+   * companion boolean that could disagree with it.
+   *
+   * A path exists because the interesting middle case does: a user who wants
+   * their own tmux setup everywhere except inside jmux points jmux at a second
+   * file, rather than choosing between their whole config and none of it.
+   *
+   * Resolution lives in tmux-user-config.ts, and takes effect only when tmux
+   * *starts* a server — see config-generation.ts for how a change against a
+   * running one is reported instead of silently doing nothing.
+   */
+  userTmuxConfig?: string | false;
   sidebarWidth?: number;
   infoPanelWidth?: number;
   /** Info panel list/detail split, as a fraction of the splittable rows. */

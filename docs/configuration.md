@@ -4,15 +4,45 @@ jmux loads tmux config in three layers:
 
 ```
 config/defaults.conf      ← jmux defaults (baseline)
-~/.tmux.conf              ← your config (overrides defaults)
+your tmux config          ← overrides defaults (optional — see below)
 config/core.conf          ← jmux requirements (sourced last, always wins)
 ```
 
-jmux defaults are applied first as a baseline. Your `~/.tmux.conf` is sourced next — anything you set there overrides jmux's defaults. Core settings are applied last and cannot be overridden.
+jmux defaults are applied first as a baseline. Your own tmux config is sourced next — anything you set there overrides jmux's defaults. Core settings are applied last and cannot be overridden.
 
 Restart jmux to pick up changes. There's no hot-reload.
 
-## Customizing in ~/.tmux.conf
+## Which tmux config jmux sources (`userTmuxConfig`)
+
+By default jmux looks for the two locations tmux itself documents, in order, and sources the first that exists:
+
+1. `~/.tmux.conf`
+2. `$XDG_CONFIG_HOME/tmux/tmux.conf` (default `~/.config/tmux/tmux.conf`)
+
+Layer 3 protects the handful of settings jmux cannot run without, but everything else jmux ships is presentation you're invited to override — so an elaborate tmux config can put its own chrome (border title rows, plugin status lines) on top of jmux's UI. Set `userTmuxConfig` in `~/.config/jmux/config.json` to change that:
+
+```jsonc
+{
+  // Source nothing — jmux defaults plus jmux core, and nothing else.
+  "userTmuxConfig": false,
+
+  // Or source a different file: keep your tmux setup everywhere
+  // except inside jmux.
+  "userTmuxConfig": "~/.jmux.tmux.conf"
+}
+```
+
+Leave it unset for the auto-detection above.
+
+Also reachable from the settings screen (`Ctrl-a i` → **tmux** → *Source tmux config*), where the value is `auto`, `off`, or a path.
+
+**This only takes effect when the tmux server starts.** tmux reads its config file once, at server start, and ignores it on every later attach — so changing this setting while a server is running does nothing at all. jmux notices and says so, both in the settings row (`restart to apply`) and with a notice on the next attach. To apply it, exit every jmux session and run:
+
+```bash
+tmux kill-server
+```
+
+## Customizing in your tmux config
 
 jmux's defaults are sourced first, then your `~/.tmux.conf` overrides them. Anything you set in `~/.tmux.conf` wins over jmux's defaults. Only core settings (listed below) cannot be overridden.
 
