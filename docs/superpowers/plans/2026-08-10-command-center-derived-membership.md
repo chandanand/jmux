@@ -12,6 +12,32 @@ session**. Two clients attached to one session share the session's current
 window, and zoom is window-global, so no arrangement of pins can put two panes of
 one session on the grid at once.
 
+## Global constraints
+
+1. **Green at every phase boundary.** `bun run typecheck` and `bun test` must
+   pass when each phase ends. Nothing may be left half-wired.
+2. **Phases 1–5 are strictly additive.** They introduce new modules and new
+   exports; they delete nothing that another file still imports. `resolveTabId`,
+   `glass/tabs.ts`, `detectAgentPanes` and `commandCenterTabs` stay in place and
+   keep working until their consumers move — `main.ts` in phase 6, the CLI in
+   phase 9. Deleting a shared symbol before its importers move breaks constraint
+   1, and "I'll fix the other file later" is exactly what that constraint forbids.
+   Phase 4 is the one phase that must touch a consumer: it changes `GlassView`'s
+   internals, so it updates `main.ts`'s single `setTiles` call site enough to keep
+   compiling, and no further.
+3. **Never weaken, skip or delete an existing test to make the suite pass.** If a
+   test genuinely encodes old behaviour this design replaces, say so in the report
+   and rewrite it against the new behaviour — do not delete it silently.
+4. **Target Bun, not Node** — `Bun.spawn`, `Bun.$`, `bun-pty`. No Node
+   equivalents, no Node-targeted build.
+5. **Tests never spawn tmux.** Everything new here is a pure module and is unit
+   tested as one; anything needing a real server is a manual regression note.
+6. **Width-2 cells need a width-0 continuation cell.** Any new `CellGrid` writing
+   goes through `cellWidth` and follows the existing patterns in `renderer.ts` and
+   `sidebar.ts`.
+7. **No Claude attribution in commits** — no `Co-Authored-By`, no generated-with
+   footer, no mention in the message.
+
 ---
 
 ## Phase 1 — Extract `orderSessions`
@@ -69,7 +95,8 @@ the three-window `sessionActive` case.
 **Files:** `src/glass/pinned-pane-tracker.ts`; new `src/glass/exceptions.ts`;
 `src/cli/pane.ts`.
 
-`parsePinValue(raw): "on" | null`; `resolveTabId` deleted. `GridExceptions`
+`parsePinValue(raw): "on" | null`, added beside `resolveTabId` — which stays until
+phase 6/9 move its importers (global constraint 2). `GridExceptions`
 applies the spec's truth table to `SessionBand[]` + pane inventory, producing the
 final ordered session list with the `Added` band leading (not "Pinned" —
 `PINNED_GROUP_LABEL` already means pinned *sessions*, `sidebar.ts:454`).
@@ -125,7 +152,8 @@ the retarget command sequence against a recording runner), per the spec.
 
 ## Phase 5 — Views
 
-**Files:** `src/glass/tabs.ts` → `src/glass/views.ts`; `src/config.ts`.
+**Files:** new `src/glass/views.ts`; `src/config.ts`. `glass/tabs.ts` stays until
+phase 9 moves `cli/cc.ts` off it (global constraint 2).
 
 `CommandCenterView`, `normalizeViews` (clamping each axis to its enum),
 `addView` / `renameView` / `deleteView`, `slugifyViewName`, `validateViewName`,
@@ -175,7 +203,9 @@ channel answers exactly.
 `sidebar.setPinnedPanes` → `setGridSummary({ count, tally })`; the Overview row
 counts derived members (`sidebar.ts:669`).
 
-Delete `src/glass/auto-detect.ts` and its test — `main.ts` is its only importer.
+Now that `main.ts` is the consumer being moved, this phase performs its share of
+the deletions: `src/glass/auto-detect.ts` and its test (`main.ts` is its only
+production importer), `autoPinAgentPanes`, and `main.ts`'s uses of `resolveTabId`.
 
 **Verify:** `tmux-control.test.ts` for the two notifications; new
 `reconcile-loop.test.ts` for the state machine; boot-smoke green; manual —
