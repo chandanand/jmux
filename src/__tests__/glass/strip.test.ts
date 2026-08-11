@@ -207,3 +207,31 @@ describe("density label", () => {
     expect(chips.map((c) => c.id)).toEqual(["active"]);
   });
 });
+
+describe("the active chip is never dropped", () => {
+  const long = { id: "a", name: "A Very Long View Name Indeed", filter: "active", groupBy: "status", sortBy: "status" } as any;
+  const second = { id: "b", name: "Second", filter: "all", groupBy: "none", sortBy: "name" } as any;
+  const base = { views: [long, second], activeViewId: "a", dirty: false, droppedActive: 0, densityLabel: "Fit" } as any;
+
+  // Windowing selects the active chip correctly, but packChips then placed
+  // nothing when it alone exceeded the budget — so the strip rendered empty and
+  // the one thing it exists to say went missing. A truncated name beats none.
+  test("a chip wider than the budget is clamped, not dropped", () => {
+    for (const width of [40, 24, 16]) {
+      const chips = layoutStrip({ ...base, width });
+      expect(chips.length).toBeGreaterThan(0);
+      expect(chips[0]!.id).toBe("a");
+      expect(chips[0]!.width).toBeLessThanOrEqual(width);
+    }
+  });
+
+  test("a clamped chip renders as truncated text that fits its cells", () => {
+    const input = { ...base, width: 24 };
+    const chips = layoutStrip(input);
+    const grid = renderStrip(input, chips);
+    const row = grid.cells[0]!.map((c) => c.char).join("").trimEnd();
+    expect(row.length).toBeGreaterThan(0);
+    expect(row).toContain("\u2026");
+    expect(grid.cells[0]!.length).toBe(24);
+  });
+});

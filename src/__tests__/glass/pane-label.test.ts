@@ -1,49 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { buildPaneLabel, buildTileLabel, paneIdentity } from "../../glass/pane-label";
-
-describe("buildPaneLabel", () => {
-  test("prefers a non-empty pane title", () => {
-    expect(
-      buildPaneLabel({
-        sessionName: "api",
-        paneTitle: "claude",
-        paneCurrentCommand: "node",
-        paneCurrentPath: "/repo/api",
-      }),
-    ).toBe("api › claude");
-  });
-
-  test("falls back to command · cwd-basename when title is empty", () => {
-    expect(
-      buildPaneLabel({
-        sessionName: "api",
-        paneTitle: "",
-        paneCurrentCommand: "node",
-        paneCurrentPath: "/repo/api/server",
-      }),
-    ).toBe("api › node · server");
-  });
-
-  test("handles a missing path basename gracefully", () => {
-    expect(
-      buildPaneLabel({
-        sessionName: "web",
-        paneTitle: "",
-        paneCurrentCommand: "bun",
-        paneCurrentPath: "/",
-      }),
-    ).toBe("web › bun");
-  });
-
-  test("uses whatever display name it is handed", () => {
-    expect(buildPaneLabel({
-      sessionName: "Fix stale cache headers",
-      paneTitle: "claude",
-      paneCurrentCommand: "claude",
-      paneCurrentPath: "/tmp",
-    })).toBe("Fix stale cache headers › claude");
-  });
-});
+import { buildTileLabel, paneIdentity } from "../../glass/pane-label";
 
 describe("paneIdentity", () => {
   test("prefers a non-empty pane title", () => {
@@ -60,9 +16,11 @@ describe("paneIdentity", () => {
     expect(paneIdentity({ paneTitle: "", paneCurrentCommand: "bun", paneCurrentPath: "/" })).toBe("bun");
   });
 
-  test("is the same string buildPaneLabel puts after the › separator", () => {
+  test("is exactly the suffix buildTileLabel appends", () => {
+    // The two must not drift: the suffix is the only thing on screen naming
+    // which of a session's panes a cycled tile is showing.
     const input = { paneTitle: "", paneCurrentCommand: "node", paneCurrentPath: "/repo/api/server" };
-    expect(buildPaneLabel({ sessionName: "api", ...input })).toBe(`api › ${paneIdentity(input)}`);
+    expect(buildTileLabel("api", input, true)).toBe(`api · ${paneIdentity(input)}`);
   });
 });
 

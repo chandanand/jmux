@@ -61,6 +61,19 @@ function rightClusterCols(densityLabel: string, dropped: string): number {
   return itemCols + gaps + DROPPED_GAP;
 }
 
+/** Trim a chip's text to the columns it was actually given, ellipsising when
+ *  it has to cut. Width-1 "…" so the column model and the terminal agree. */
+function fitChip(text: string, cols: number): string {
+  if (cols <= 0) return "";
+  if (textCols(text) <= cols) return text;
+  let out = "";
+  for (const ch of text) {
+    if (textCols(out + ch) > cols - 1) break;
+    out += ch;
+  }
+  return out + "\u2026";
+}
+
 export function layoutStrip(input: StripInput): PlacedChip[] {
   const dropped = droppedText(input.droppedActive);
   const rightReserve = rightClusterCols(input.densityLabel, dropped);
@@ -95,6 +108,16 @@ export function layoutStrip(input: StripInput): PlacedChip[] {
   // — the same "the active item is the one thing a scrollable strip must
   // never truncate away" rule this codebase already has prior art for.
   const activeIndex = Math.max(0, input.views.findIndex((v) => v.id === input.activeViewId));
+
+  // The active chip alone can exceed the budget — a long view name on a narrow
+  // strip. Windowing selects it correctly but `packChips` then places nothing,
+  // so the strip renders empty and the one thing it exists to say (which view
+  // you are in) is the thing missing. Clamp it to the budget and let
+  // `renderStrip` truncate the text; a shortened name beats no name.
+  if ((widths[activeIndex] ?? 0) > budget) {
+    return budget > 0 ? [{ id: input.views[activeIndex]!.id, x: 0, width: budget }] : [];
+  }
+
   let start = activeIndex;
   let end = activeIndex;
   let used = widths[activeIndex] ?? 0;
@@ -126,7 +149,10 @@ export function renderStrip(
   for (const chip of chips) {
     const view = input.views.find((v) => v.id === chip.id)!;
     const isActive = chip.id === input.activeViewId;
-    const text = chipText(view, isActive, input.dirty);
+    // Honour the width the layout placed, not the chip's natural width: the
+    // active chip is clamped rather than dropped when it cannot fit, so this is
+    // where that clamp becomes a readable string.
+    const text = fitChip(chipText(view, isActive, input.dirty), chip.width);
     writeString(grid, 0, chip.x, text, {
       fgMode: ColorMode.Palette,
       fg: isActive ? 15 : 8,

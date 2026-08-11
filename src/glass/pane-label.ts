@@ -6,10 +6,6 @@ export interface PaneIdentityInput {
   paneCurrentPath: string;
 }
 
-export interface PaneLabelInput extends PaneIdentityInput {
-  sessionName: string;
-}
-
 /**
  * A pane's own identity, with no session name attached: the pane title if the
  * program set one (Claude does), otherwise "command · cwd-basename" to
@@ -23,16 +19,6 @@ export function paneIdentity(input: PaneIdentityInput): string {
   if (title) return title;
   const base = basename(paneCurrentPath);
   return base && base !== "/" ? `${paneCurrentCommand} · ${base}` : paneCurrentCommand;
-}
-
-/**
- * Human label for a pane: "session name › pane identity". Predates the
- * Command Center's derived-membership design, where it was the whole tile
- * label; kept for the sidebar's Overview children, and as the building block
- * `buildTileLabel` reuses for the tile label's pane suffix.
- */
-export function buildPaneLabel(input: PaneLabelInput): string {
-  return `${input.sessionName} › ${paneIdentity(input)}`;
 }
 
 /**
