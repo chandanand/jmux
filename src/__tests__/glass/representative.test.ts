@@ -16,6 +16,7 @@ function row(over: Partial<PaneRow> & { paneId: string }): PaneRow {
     sessionActive: false,
     state: null,
     since: null,
+    agentPane: null,
     ...over,
   };
 }
@@ -29,6 +30,31 @@ function row(over: Partial<PaneRow> & { paneId: string }): PaneRow {
 // reports that state, and `since` inherits with them — leaving them
 // indistinguishable even by age. `kind` has no session-scoped writer, so it is
 // the only usable gate.
+// `@jmux-agent-pane` is the hooks' own answer to "which pane is the agent", and
+// it is the election's first tier. The grid was calling the election with null
+// for it, so a session whose agent had declared itself was still resolved by
+// heuristics — which is how a plain shell became a session's face.
+describe("the hooks' declared agent pane wins outright", () => {
+  test("an explicit agent pane beats a kinded pane with a more urgent state", () => {
+    const panes = [
+      row({ paneId: "%1", kind: "", agentPane: "%2" }),          // the shell
+      row({ paneId: "%2", kind: "claude", agentPane: "%2" }),    // the declared agent
+      row({ paneId: "%3", kind: "claude", state: "waiting", since: 1, agentPane: "%2" }),
+    ];
+    const explicit = panes.find((p) => p.agentPane)?.agentPane ?? null;
+    expect(electRepresentative(panes, explicit, null)).toBe("%2");
+  });
+
+  test("a declared pane that has since died falls through to the tiers below", () => {
+    const panes = [
+      row({ paneId: "%1", kind: "", agentPane: "%9" }),          // %9 is gone
+      row({ paneId: "%2", kind: "claude", agentPane: "%9" }),
+    ];
+    const explicit = panes.find((p) => p.agentPane)?.agentPane ?? null;
+    expect(electRepresentative(panes, explicit, null)).toBe("%2");
+  });
+});
+
 describe("inherited agent state is not the pane's own", () => {
   const row = (paneId: string, kind: string, state: string, since: string) =>
     [paneId, kind, "zsh", "", "1", paneId === "%1" ? "1" : "0", state, since].join("\x1f");
@@ -72,12 +98,12 @@ describe("inherited agent state is not the pane's own", () => {
 describe("parsePaneRowLines", () => {
   test("PANE_ROW_FORMAT requests the eight fields, US-separated", () => {
     expect(PANE_ROW_FORMAT).toBe(
-      "#{pane_id}\x1f#{@jmux-agent-kind}\x1f#{pane_current_command}\x1f#{@jmux-pinned}\x1f#{window_active}\x1f#{pane_active}\x1f#{@jmux-agent-state}\x1f#{@jmux-agent-state-since}",
+      "#{pane_id}\x1f#{@jmux-agent-kind}\x1f#{pane_current_command}\x1f#{@jmux-pinned}\x1f#{window_active}\x1f#{pane_active}\x1f#{@jmux-agent-state}\x1f#{@jmux-agent-state-since}\x1f#{@jmux-agent-pane}",
     );
   });
 
   test("splits all eight fields", () => {
-    const rows = parsePaneRowLines(["%1\x1fclaude\x1fnode\x1fbackend\x1f1\x1f1\x1fwaiting\x1f100"]);
+    const rows = parsePaneRowLines(["%1\x1fclaude\x1fnode\x1fbackend\x1f1\x1f1\x1fwaiting\x1f100\x1f%1"]);
     expect(rows).toEqual([
       {
         paneId: "%1",
@@ -87,6 +113,7 @@ describe("parsePaneRowLines", () => {
         sessionActive: true,
         state: "waiting",
         since: 100,
+        agentPane: "%1",
       },
     ]);
   });
@@ -114,6 +141,7 @@ describe("parsePaneRowLines", () => {
         sessionActive: true,
         state: "running",
         since: 50,
+        agentPane: null,
       },
     ]);
   });

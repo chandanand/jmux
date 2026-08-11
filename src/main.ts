@@ -9646,7 +9646,13 @@ function applyGridSnapshot(snap: GridSnapshot): void {
     // The election is run again inside GlassView against the same rows — this
     // one only supplies the spawn-time hint for which window to select, so the
     // first frame lands on the pane the tile is about to settle on.
-    const elected = electRepresentative(panes, null, agentPaneRegex) ?? panes[0]!.paneId;
+    // `@jmux-agent-pane` is the hooks' own answer to "which pane is the agent",
+    // and it is the election's first tier. Passing null here made that tier
+    // unreachable from the grid, so a session whose agent had declared itself
+    // was still resolved by heuristics — which is how a plain shell came to be
+    // a session's face. Every row carries the same value (it is session-scoped).
+    const explicitPane = panes.find((row) => row.agentPane)?.agentPane ?? null;
+    const elected = electRepresentative(panes, explicitPane, agentPaneRegex) ?? panes[0]!.paneId;
     // The session rollup, not the elected pane's own state: a tile is a session
     // now, so its border says what the sidebar's row for that session says.
     // `outranks` picks the most urgent pane and so does the election, which is

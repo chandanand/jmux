@@ -20,6 +20,11 @@ export const PANE_ROW_FORMAT = [
   "#{pane_active}",
   "#{@jmux-agent-state}",
   "#{@jmux-agent-state-since}",
+  // Session-scoped, so a pane-context read returns the session's value for
+  // every pane — which is exactly what is wanted: it names the agent's pane,
+  // and that is a fact about the session. This is the election's first tier,
+  // the hooks' own answer, and it outranks every heuristic below it.
+  "#{@jmux-agent-pane}",
 ].join(US);
 
 export interface PaneRow {
@@ -46,6 +51,8 @@ export interface PaneRow {
    */
   state: AgentState | null;
   since: number | null;
+  /** `@jmux-agent-pane` — the hooks' own answer, identical on every pane. */
+  agentPane: string | null;
 }
 
 const VALID_AGENT_STATES: ReadonlySet<string> = new Set(["running", "waiting", "complete"]);
@@ -61,7 +68,7 @@ export function parsePaneRowLines(lines: string[]): PaneRow[] {
   const out: PaneRow[] = [];
   for (const line of lines) {
     if (!line.trim()) continue;
-    const [paneId, kind, command, pinned, windowActive, paneActive, state, since] =
+    const [paneId, kind, command, pinned, windowActive, paneActive, state, since, agentPane] =
       splitFields(line);
     if (!paneId) continue;
     // A state without a kind beside it is the session's, inherited — see the
@@ -78,6 +85,7 @@ export function parsePaneRowLines(lines: string[]): PaneRow[] {
       sessionActive: windowActive === "1" && paneActive === "1",
       state: declaresKind && VALID_AGENT_STATES.has(state ?? "") ? (state as AgentState) : null,
       since: declaresKind ? parseSince(since ?? "") : null,
+      agentPane: agentPane ? agentPane : null,
     });
   }
   return out;

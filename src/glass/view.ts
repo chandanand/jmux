@@ -191,7 +191,11 @@ export function resolveDisplayedRepresentative(input: {
     return current;
   }
 
-  const elected = electRepresentative(panes, override, commandRegex);
+  // The override is the user's cycle choice and is handled above; the explicit
+  // pane is the hooks' answer and belongs in the election's first tier, where
+  // `electRepresentative` expects it.
+  const explicitPane = panes.find((p) => p.agentPane)?.agentPane ?? null;
+  const elected = electRepresentative(panes, explicitPane, commandRegex);
   return elected ? { paneId: elected, forcedSignature: signature } : null;
 }
 
@@ -210,6 +214,7 @@ function synthesizedPanes(spec: GlassTileSpec): readonly PaneRow[] {
     sessionActive: false,
     state: spec.agentState ?? null,
     since: null,
+    agentPane: null,
   }];
 }
 

@@ -73,6 +73,7 @@ const pane = (paneId: string, over: Partial<PaneRow> = {}): PaneRow => ({
   sessionActive: false,
   state: null,
   since: null,
+  agentPane: null,
   ...over,
 });
 
