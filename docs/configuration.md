@@ -382,10 +382,14 @@ Center is open, switch views with `Ctrl-a <number>` (jump to view N) or
 the grid, so they don't affect tmux copy-mode/paste in normal panes. Deleting the
 active view falls back to the previous view by index (or re-seeds the default if
 it was the last one left); deleting a view that isn't active leaves the current
-selection untouched. The config file is hot-reloaded — an external edit takes
+selection untouched. The config file is hot-reloaded — an external edit to
+`commandCenterViews`/`commandCenterActiveViewId`/`commandCenterAxes` takes
 effect immediately, without restarting jmux; if the currently active view id
 disappears from a reloaded file, the grid falls back to the first view in the
-list.
+list. `commandCenter.maxTiles` is the one exception: it's read once when the
+grid's mirror-client manager is first constructed, because lowering it live
+would tear down real attached tmux clients as a side effect of an unrelated
+config edit — an edit to `maxTiles` takes effect on restart.
 
 Two independent per-session exceptions layer on top of a view's derived set —
 see the Command Center section of [cheat-sheet.md](cheat-sheet.md#command-center)

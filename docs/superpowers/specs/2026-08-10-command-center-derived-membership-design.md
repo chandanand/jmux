@@ -644,7 +644,25 @@ tile:
 | Parking change | membership |
 | `@jmux-pinned` / `@jmux-grid-hidden` change | exceptions |
 | View switch, axis cycle, view CRUD | axes |
-| Config file reload | views, cap, axes |
+| Config file reload | views, axes |
+
+**`commandCenter.maxTiles` is read once, at `GlassView` construction, and is
+deliberately not in the row above.** Every other hot-reloadable field here is
+a pure input to *what the grid computes* — `orderSessions`, the exceptions, the
+axes — so re-deriving it is side-effect-free. The cap is different: it is
+consumed by `planTiles`'s admission step, and lowering it live means real
+attached mirror clients — live tmux clients with a pty and a running
+`ScreenBridge` — cross from admitted to refused and get torn down
+(`GlassView.teardownTile`: unzoom, detach) as a side effect of an unrelated
+config edit landing on disk. A config reload silently closing tiles the user
+is looking at is a worse experience than the cap requiring a restart to take
+effect. Raising it live would be safe on its own, but a setting that sometimes
+hot-applies and sometimes doesn't — depending on the direction of the edit —
+is a worse contract than one that never does; `ensureGlassView()` constructs
+`GlassView` once and reuses it for the process's life (`teardown()` on
+`Ctrl-a C` out clears its clients, not the instance), so `maxTiles` takes
+effect on restart, consistently, the same as any other constructor-only
+option.
 
 Two of these need plumbing that does not exist. `ControlParser` discards
 notifications it does not know (`tmux-control.ts:84`), so `%layout-change` and
