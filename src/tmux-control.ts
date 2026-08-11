@@ -11,6 +11,17 @@ export type ControlEvent =
   | { type: "window-add"; args: string }
   | { type: "window-close"; args: string }
   | { type: "session-window-changed"; args: string }
+  /**
+   * `%layout-change @window-id <layout> <visible-layout> <flags>` — a pane was
+   * split, killed, resized or zoomed. Surfaced because the Command Center's
+   * membership is derived from the whole pane inventory: nothing else on this
+   * channel reports a split, so without it a new agent pane is invisible to the
+   * grid until an unrelated event happens to move.
+   */
+  | { type: "layout-change"; args: string }
+  /** `%window-pane-changed @window-id %pane-id` — the window's active pane
+   *  moved, which can change which pane a session's tile elects. */
+  | { type: "window-pane-changed"; args: string }
   | { type: "client-session-changed"; args: string }
   | {
       type: "subscription-changed";
@@ -114,6 +125,16 @@ export class ControlParser {
       this.emit({
         type: "session-window-changed",
         args: line.slice("%session-window-changed ".length),
+      });
+    } else if (line.startsWith("%layout-change ")) {
+      this.emit({
+        type: "layout-change",
+        args: line.slice("%layout-change ".length),
+      });
+    } else if (line.startsWith("%window-pane-changed ")) {
+      this.emit({
+        type: "window-pane-changed",
+        args: line.slice("%window-pane-changed ".length),
       });
     } else if (line.startsWith("%client-session-changed ")) {
       this.emit({

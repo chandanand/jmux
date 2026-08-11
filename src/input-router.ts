@@ -137,6 +137,25 @@ export interface InputRouterOptions {
   onGlassTabRelative?: (delta: number) => void;     // glass-only Ctrl-a [ / ] → prev/next tab
   glassStripRows?: () => number;                    // tab-strip row count (0 when hidden)
   onGlassTabClick?: (x: number) => void;            // content-relative click on the strip row
+  // Ctrl-a C — everywhere (ordinary + glass): toggle the Command Center.
+  onGlassToggle?: () => void;
+  // Ctrl-a P — everywhere: in the grid, remove the focused session; outside
+  // it, force-on the pane you're looking at. The callback decides which by
+  // reading glassActive() itself, the same shape as onGroupCycle/onSortCycle/
+  // onFilterCycle used to before they split.
+  onGlassPinToggle?: () => void;
+  // Ctrl-a Enter — glass only: open the focused tile's session full-size, on
+  // its displayed pane.
+  onGlassOpenFocused?: () => void;
+  // Ctrl-a x — glass only: cycle the focused tile's face.
+  onGlassCycleFace?: () => void;
+  // Ctrl-a z — glass only: zoom the focused tile to full size / restore.
+  onGlassZoom?: () => void;
+  // Ctrl-a G/s/f — glass only: the Command Center's own axes, split off the
+  // sidebar's onGroupCycle/onSortCycle/onFilterCycle (same bytes, ordinary arm).
+  onGlassGroupCycle?: () => void;
+  onGlassSortCycle?: () => void;
+  onGlassFilterCycle?: () => void;
   // Diff panel additions
   onDiffPanelData?: (data: string) => void;
   onDiffPanelFocusToggle?: () => void;
@@ -484,11 +503,20 @@ export class InputRouter {
           if (data === "Z") { this.opts.onUndoTransition?.(); return; }
           if (data === "I") { this.opts.onSettingsScreen?.(); return; }
           if (data === "W") { this.opts.onWorkflowScreen?.(); return; }
-          if (data === "G") { this.opts.onGroupCycle?.(); return; }
-          if (data === "s") { this.opts.onSortCycle?.(); return; }
-          if (data === "f") { this.opts.onFilterCycle?.(); return; }
+          // The grid's own axes — NOT onGroupCycle/onSortCycle/onFilterCycle,
+          // which are the sidebar's. Same bytes as the ordinary arm's
+          // group-cycle/sort-cycle/filter-cycle, deliberately: one physical
+          // chord, two different targets depending on which arm reads it.
+          if (data === "G") { this.opts.onGlassGroupCycle?.(); return; }
+          if (data === "s") { this.opts.onGlassSortCycle?.(); return; }
+          if (data === "f") { this.opts.onGlassFilterCycle?.(); return; }
           if (data === "b") { this.opts.onBrowserPane?.(); return; }
           if (data === "\\") { this.opts.onSidebarToggle?.(); return; }
+          if (data === "C") { this.opts.onGlassToggle?.(); return; }
+          if (data === "P") { this.opts.onGlassPinToggle?.(); return; }
+          if (data === "\r") { this.opts.onGlassOpenFocused?.(); return; }
+          if (data === "x") { this.opts.onGlassCycleFace?.(); return; }
+          if (data === "z") { this.opts.onGlassZoom?.(); return; }
           // --- keymap:glass-prefix end ---
           // Not a jmux chord — flush the buffered prefix, then the key, to the tile.
           if (deferred) this.opts.onPtyData("\x01");
@@ -610,6 +638,18 @@ export class InputRouter {
         // previous-window, and mark-pane is a far quieter loss than either.
         if (data === "m") {
           this.opts.onFixWorkflowDrift?.();
+          return;
+        }
+        // Command Center. Live in both arms — see the glass arm's copy of
+        // these two bytes below — because the action makes sense from
+        // wherever you press it: open the grid from a session, or hide/pin a
+        // session from either side of it.
+        if (data === "C") {
+          this.opts.onGlassToggle?.();
+          return;
+        }
+        if (data === "P") {
+          this.opts.onGlassPinToggle?.();
           return;
         }
         // --- keymap:prefix end ---

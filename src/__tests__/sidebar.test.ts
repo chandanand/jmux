@@ -1,6 +1,5 @@
 import { describe, test, expect } from "bun:test";
 import { Sidebar } from "../sidebar";
-import type { PinnedPaneEntry } from "../sidebar";
 import type { SessionInfo } from "../types";
 import { makeSessionOtelState } from "../types";
 import type { SessionContext, PipelineStatus } from "../adapters/types";
@@ -1606,10 +1605,10 @@ describe("Overview entry", () => {
     expect(row2).toContain("Command Center");
   });
 
-  test("empty state: zero pinned panes, row 2 still contains 'Command Center'", () => {
+  test("empty state: an empty grid, row 2 still contains 'Command Center'", () => {
     const sidebar = new Sidebar(SIDEBAR_WIDTH, 30);
     sidebar.updateSessions(makeSessions([{ name: "api" }]));
-    // No setPinnedPanes call — default is empty
+    // No setGridSummary call — default is an empty grid
     const grid = sidebar.getGrid();
     const row2 = Array.from(
       { length: SIDEBAR_WIDTH },
@@ -1620,11 +1619,10 @@ describe("Overview entry", () => {
 
   test("command center shows a colored agent-state breakdown row", () => {
     const sidebar = new Sidebar(SIDEBAR_WIDTH, 30);
-    sidebar.setPinnedPanes([
-      { paneId: "%1", label: "api › claude", homeSessionName: "api", agentState: "running" },
-      { paneId: "%2", label: "web › claude", homeSessionName: "web", agentState: "running" },
-      { paneId: "%3", label: "db › claude", homeSessionName: "db", agentState: "waiting" },
-    ]);
+    sidebar.setGridSummary({
+      count: 3,
+      tally: { running: 2, waiting: 1, complete: 0 },
+    });
     sidebar.updateSessions(makeSessions([{ name: "api" }]));
     const grid = sidebar.getGrid();
     // Header at row 2, breakdown at row 3.
@@ -1637,12 +1635,12 @@ describe("Overview entry", () => {
     expect(row3).not.toContain("DONE"); // no complete panes → omitted
   });
 
-  test("pinned panes are NOT listed individually — only the count/breakdown", () => {
+  test("grid members are NOT listed individually — only the count/breakdown", () => {
     const sidebar = new Sidebar(SIDEBAR_WIDTH, 30);
-    sidebar.setPinnedPanes([
-      { paneId: "%1", label: "api › claude", homeSessionName: "api" },
-      { paneId: "%2", label: "api › npm test", homeSessionName: "api" },
-    ]);
+    sidebar.setGridSummary({
+      count: 2,
+      tally: { running: 0, waiting: 0, complete: 0 },
+    });
     sidebar.updateSessions(makeSessions([{ name: "api" }]));
     const grid = sidebar.getGrid();
 
@@ -1653,28 +1651,27 @@ describe("Overview entry", () => {
         (_, i) => grid.cells[r][i].char,
       ).join("") + "\n";
     }
-    // The individual pane labels must NOT appear in the sidebar anymore.
-    expect(allText).not.toContain("npm test");
-    // But the count is present in the Command Center header.
+    // The count is present in the Command Center header, and nothing else the
+    // grid holds is spelled out here.
     expect(allText).toContain("Command Center · 2");
   });
 
-  test("session that owns a pinned pane shows '(N pinned)' marker", () => {
+  // The count is the reconciler's, not a length the sidebar can derive: a
+  // derived grid is routinely full while no pane carries `@jmux-pinned` at all,
+  // and no session here has anything to do with the figure.
+  test("the overview count comes from the summary, not from the session list", () => {
     const sidebar = new Sidebar(SIDEBAR_WIDTH, 30);
-    sidebar.setPinnedPanes([
-      { paneId: "%1", label: "api › claude", homeSessionName: "api" },
-    ]);
     sidebar.updateSessions(makeSessions([{ name: "api" }]));
+    sidebar.setGridSummary({
+      count: 5,
+      tally: { running: 5, waiting: 0, complete: 0 },
+    });
     const grid = sidebar.getGrid();
-
-    let allText = "";
-    for (let r = 0; r < 30; r++) {
-      allText += Array.from(
-        { length: SIDEBAR_WIDTH },
-        (_, i) => grid.cells[r][i].char,
-      ).join("") + "\n";
-    }
-    expect(allText).toMatch(/1 pinned/);
+    const row2 = Array.from(
+      { length: SIDEBAR_WIDTH },
+      (_, i) => grid.cells[2][i].char,
+    ).join("");
+    expect(row2).toContain("Command Center · 5");
   });
 
   test("getSelectionByRow(2) returns {type:'overview'} after getGrid()", () => {
@@ -1686,12 +1683,12 @@ describe("Overview entry", () => {
     expect(sel?.type).toBe("overview");
   });
 
-  test("overview shows pane count when panes are present", () => {
+  test("overview shows the member count when the grid holds anything", () => {
     const sidebar = new Sidebar(SIDEBAR_WIDTH, 30);
-    sidebar.setPinnedPanes([
-      { paneId: "%1", label: "api › claude", homeSessionName: "api" },
-      { paneId: "%2", label: "api › npm test", homeSessionName: "api" },
-    ]);
+    sidebar.setGridSummary({
+      count: 2,
+      tally: { running: 0, waiting: 0, complete: 0 },
+    });
     sidebar.updateSessions(makeSessions([{ name: "api" }]));
     const grid = sidebar.getGrid();
     const row2 = Array.from(

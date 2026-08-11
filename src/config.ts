@@ -9,6 +9,9 @@ import type { UnparkTrigger } from "./parking";
 import type { ScreenSignature } from "./agent-screen";
 import { migrateLegacyConfig } from "./repo-settings";
 import { logError } from "./log";
+import type { CommandCenterAxes, CommandCenterView } from "./glass/views";
+import { normalizeViews, normalizeAxes, resolveActiveViewId } from "./glass/views";
+import { DEFAULT_MAX_CLIENTS } from "./glass/view";
 
 /**
  * Cross-repo routing only. Everything that is a property of a *repo* rather
@@ -105,9 +108,21 @@ export interface JmuxConfig {
   cacheTimers?: boolean;
   windowBranches?: boolean;
   pinnedSessions?: string[];
-  /** Auto-surface every detected Claude/Codex pane on the Command Center. */
+  /**
+   * @deprecated Pre-views auto-pin toggle, read by nothing since membership
+   * became derived: auto *is* the baseline now, so there is nothing left for
+   * this to switch on. The key survives on disk only because `persist()`
+   * writes the whole loaded object back, so removing the field alone would
+   * not remove the key — the migration that deletes it lands with phase 9's,
+   * beside `commandCenterTabs`.
+   */
   autoPinAgentPanes?: boolean;
-  /** Case-insensitive regex matched against pane_current_command for auto-pin (e.g. Codex). */
+  /**
+   * Case-insensitive regex matched against `pane_current_command` to decide
+   * which panes are worth *electing* as a session's Command Center face
+   * (`eligiblePanes`, `glass/representative.ts`) — the last-resort signal for
+   * an agent that declares no `@jmux-agent-kind`.
+   */
   agentPaneCommandRegex?: string;
   /**
    * Derive agent state by reading pane text, for agents with no hook or
@@ -180,8 +195,33 @@ export interface JmuxConfig {
   /** @deprecated Pre-split single sort axis; read once to migrate onto
    * sidebarGroupBy + sidebarSortBy, then never written again. */
   sidebarSort?: "project" | "status" | "activity" | "name";
-  /** Ordered Command Center tab registry; index 0 is the protected default. */
+  /**
+   * @deprecated Pre-views hand-assigned tab registry, superseded by
+   * `commandCenterViews`. `main.ts` still builds the tab registry from this
+   * (`normalizeTabs(configStore.config.commandCenterTabs)`) and `cli/cc.ts`
+   * still reads it too, so it stays live and on disk until both move off it
+   * (`main.ts` in phase 6, the CLI in phase 9) — deleting the key first would
+   * silently fold every named tab back to the default the moment a user
+   * restarted. Once nothing reads it, a migration should delete it from disk,
+   * because `persist()` writes the whole object back (`config.ts:551`) and a
+   * dropped TS field alone would never stop it re-appearing.
+   */
   commandCenterTabs?: TabEntry[];
+  /** Ordered Command Center view registry; never empty after normalize. */
+  commandCenterViews?: CommandCenterView[];
+  /** The active view id, clamped to an existing view. */
+  commandCenterActiveViewId?: string;
+  /**
+   * The live, possibly-dirty grid axes — filter, groupBy, sortBy. Unlike the
+   * sidebar's own filter, which is a transient narrowing of a list that is
+   * always on screen and deliberately does not persist (see `sidebarGroupBy`
+   * just above — "filter deliberately does not"), the grid's filter *is* its
+   * membership rule and half of what a saved view means, so the whole axes
+   * struct persists here.
+   */
+  commandCenterAxes?: CommandCenterAxes;
+  /** Command Center grid settings not part of a view. */
+  commandCenter?: CommandCenterConfig;
   /** Global defaults for per-repo workflow settings. */
   repoDefaults?: RepoSettings;
   /** Per-repo overrides, keyed by canonical repo root (git common dir). */
@@ -192,6 +232,17 @@ export interface JmuxConfig {
   images?: ImagesConfig;
   /** Browser panes (Ctrl-a b), powered by terminal-browser. */
   browser?: BrowserConfig;
+}
+
+/** Command Center grid settings that belong to the grid itself, not to any one view. */
+export interface CommandCenterConfig {
+  /**
+   * Cap on live tmux mirror clients the grid keeps attached at once
+   * (`GlassViewOptions.maxClients`, `glass/tile-plan.ts`). `planTiles` floors
+   * this at 1 regardless of what's stored here, so a mistyped 0 can't blank
+   * the grid.
+   */
+  maxTiles?: number;
 }
 
 export interface BrowserConfig {
@@ -360,6 +411,75 @@ function mergeConfigWithDefaults(userConfig: JmuxConfig, defaults: JmuxConfig): 
 }
 
 /**
+ * One-time, idempotent Command Center migration: seeds `commandCenterViews` /
+ * `commandCenterActiveViewId` / `commandCenterAxes` / `commandCenter.maxTiles`
+ * when the on-disk shape predates views. Pure: returns the new object plus
+ * whether anything changed (the caller persists only when changed), the same
+ * contract as `migrateLegacyConfig`.
+ *
+ * Deliberately does **not** touch `commandCenterTabs` or `autoPinAgentPanes`.
+ * `commandCenterTabs` is still read by live code — `main.ts` builds the strip's
+ * tab registry from it via `normalizeTabs`, and `cli/cc.ts` reads it too — and
+ * deleting the key before they move would silently fold every named tab back
+ * to the default. `autoPinAgentPanes` no longer gates anything (derived
+ * membership is the baseline), but a TS field alone is not a key: `persist()`
+ * writes the whole loaded object back, so the key needs an explicit delete.
+ * Both deletions (and this comment) belong in the migration that lands with
+ * phase 9's `main.ts`/`cli/cc.ts` change.
+ */
+export function migrateCommandCenterConfig(raw: any): { config: any; changed: boolean } {
+  const config = { ...(raw ?? {}) };
+  let changed = false;
+
+  // Absence alone is never a reason to flip `changed`: a config with no
+  // Command Center history at all (the common case — a brand-new install, or
+  // a long-time user who never touched the grid) must not force a disk write
+  // the instant `ConfigStore` is constructed. `main.ts` builds it at module
+  // scope and only checks `ensureExists()` much later, at first-run — an
+  // eager write here would create the file before that check ever runs and
+  // permanently hide the setup checklist. So the seeded value always lands in
+  // the *returned* config (every consumer sees it), but only a field that was
+  // PRESENT and wrong earns a rewrite, the same bar `migrateLegacyConfig`
+  // already holds for `{}`.
+  const hadViews = config.commandCenterViews !== undefined;
+  const rawViews = config.commandCenterViews;
+  const views = normalizeViews(rawViews);
+  config.commandCenterViews = views;
+  if (hadViews && JSON.stringify(rawViews) !== JSON.stringify(views)) changed = true;
+
+  const hadActiveId = config.commandCenterActiveViewId !== undefined;
+  const rawActiveId = config.commandCenterActiveViewId;
+  const activeViewId = resolveActiveViewId(rawActiveId, views);
+  config.commandCenterActiveViewId = activeViewId;
+  if (hadActiveId && rawActiveId !== activeViewId) changed = true;
+
+  const activeView = views.find((v) => v.id === activeViewId)!;
+  const hadAxes = config.commandCenterAxes !== undefined;
+  const rawAxes = config.commandCenterAxes;
+  const axes = normalizeAxes(rawAxes, activeView);
+  config.commandCenterAxes = axes;
+  if (hadAxes && JSON.stringify(rawAxes) !== JSON.stringify(axes)) changed = true;
+
+  const rawMaxTiles = config.commandCenter?.maxTiles;
+  const hadMaxTiles = rawMaxTiles !== undefined;
+  const maxTilesValid = typeof rawMaxTiles === "number" && Number.isFinite(rawMaxTiles) && rawMaxTiles >= 1;
+  config.commandCenter = {
+    ...(config.commandCenter ?? {}),
+    maxTiles: maxTilesValid ? rawMaxTiles : DEFAULT_MAX_CLIENTS,
+  };
+  if (hadMaxTiles && !maxTilesValid) changed = true;
+
+  return { config, changed };
+}
+
+/** Compose every one-time top-level config migration into a single pass. */
+function migrateAll(raw: JmuxConfig): { config: JmuxConfig; changed: boolean } {
+  const legacy = migrateLegacyConfig(raw);
+  const cc = migrateCommandCenterConfig(legacy.config);
+  return { config: cc.config, changed: legacy.changed || cc.changed };
+}
+
+/**
  * Load jmux user config from ~/.config/jmux/config.json.
  * Merges with defaults to ensure all required fields are present.
  * Returns merged config, or just defaults if the file is missing or unparseable.
@@ -374,7 +494,7 @@ export function loadUserConfig(configPath?: string): JmuxConfig {
   } catch {
     // Invalid config — use defaults
   }
-  const { config } = migrateLegacyConfig(raw);
+  const { config } = migrateAll(raw);
   return mergeConfigWithDefaults(config, defaultConfig);
 }
 
@@ -397,9 +517,10 @@ export class ConfigStore {
     } catch {
       // Invalid config — use defaults
     }
-    // Rewrite the file once when the on-disk shape predates repoDefaults/repos,
-    // so no consumption site ever has to check two locations for a field.
-    const { config, changed } = migrateLegacyConfig(raw);
+    // Rewrite the file once when the on-disk shape predates repoDefaults/repos
+    // or Command Center views, so no consumption site ever has to check two
+    // locations for a field.
+    const { config, changed } = migrateAll(raw);
     this.data = mergeConfigWithDefaults(config, defaultConfig);
     if (changed) this.persist();
   }

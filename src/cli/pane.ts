@@ -4,6 +4,7 @@ import { requireSession, tmuxOrThrow, CliError, type CliContext } from "./contex
 import type { ParsedCtlArgs } from "../cli";
 import { loadTabRegistry } from "./cc";
 import { resolveTabId } from "../glass/tabs";
+import { parsePinValue } from "../glass/pinned-pane-tracker";
 
 const PANE_FORMAT =
   "#{pane_id}:#{window_id}:#{pane_active}:#{pane_width}:#{pane_height}:#{pane_current_command}:#{pane_current_path}";
@@ -241,6 +242,11 @@ export function handlePane(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
       const pinned = parsePinnedListWithTab(lines).map((e) => ({
         id: e.id,
         tab: resolveTabId(e.tab, tabs),
+        // The grid's own reading of this pane's `@jmux-pinned` value — every
+        // non-empty value, including legacy tab ids, means force-on. `tab`
+        // above stays for callers still on the tab-scoped reading until the
+        // views/CLI rewire (phase 9) replaces it.
+        forcedOn: parsePinValue(e.tab) === "on",
       }));
       return { pinned };
     }
