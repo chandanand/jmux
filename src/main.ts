@@ -14,6 +14,7 @@ import { Sidebar, rebuildSidebarColors } from "./sidebar";
 import {
   GROUP_MODES, SORT_MODES, FILTER_MODES,
   groupModeLabel, sortModeLabel, filterModeLabel, migrateLegacySort,
+  cycleGroup, cycleSort, cycleFilter,
   type GroupMode, type SortMode, type FilterMode, type LegacySortMode,
 } from "./sidebar-sort";
 import {
@@ -4823,6 +4824,14 @@ const inputRouter = new InputRouter(
     onGlassTabSwitch: (n) => { const tab = commandCenterTabs[n - 1]; if (tab) switchCommandCenterTab(tab.id); },
     onGlassTabRelative: (delta) => switchCommandCenterTabRelative(delta),
     onGlassDetach: () => detachClient(),
+    onGlassToggle: () => { void toggleCommandCenter(); },
+    onGlassPinToggle: () => { void toggleGridMembership(); },
+    onGlassOpenFocused: () => { void openFocusedGlassTile(); },
+    onGlassCycleFace: () => glassView?.cycleFace(),
+    onGlassZoom: () => glassView?.toggleZoom(),
+    onGlassGroupCycle: () => cycleGridGroup(),
+    onGlassSortCycle: () => cycleGridSort(),
+    onGlassFilterCycle: () => cycleGridFilter(),
     onDiffToggle: () => requestDiffPanel(),
     onDiffZoom: () => zoomDiffPanel(),
     onDiffSendReview: () => void sendReviewToAgent(),
@@ -9807,6 +9816,113 @@ async function leaveGlass(sessionId: string): Promise<void> {
   }
   exitGlass();
   await switchSession(sessionId); // unparks the main client onto the session
+}
+
+/**
+ * Ctrl-a C. Enters the grid exactly like clicking the Overview row; leaving is
+ * the harder half, because `exitGlass` deliberately does not choose a session
+ * (see its doc comment) and `switchSession` silently swallows a dead target —
+ * stranding the client on the internal park session would render as an empty
+ * screen with no chrome, which is worse than staying put. So this picks a
+ * target itself: `preGlassSessionId` if it's still alive, else the first
+ * session in the sidebar's own current order, else the grid stays open and
+ * says so.
+ */
+async function toggleCommandCenter(): Promise<void> {
+  if (!inGlass) {
+    await enterGlass();
+    return;
+  }
+  const live = new Set(currentSessions.map((s) => s.id));
+  const target = preGlassSessionId && live.has(preGlassSessionId)
+    ? preGlassSessionId
+    : sidebar.getDisplayOrderIds()[0];
+  if (!target) {
+    showNotice({
+      title: "Command Center",
+      message: "No session to switch to — every session is gone.",
+      tone: "warn",
+    });
+    return;
+  }
+  await leaveGlass(target);
+}
+
+/**
+ * Ctrl-a Enter. Re-resolves the tile's pane at press time (via GlassView's own
+ * live face, not a cached one) so a face cycled a moment ago is honored.
+ *
+ * Session gone: notice, stay in the grid — `leaveGlass` must never run against
+ * a session tmux no longer has. Pane gone: still leave, landing on the
+ * session's own active pane, the closest honest answer to "its displayed
+ * pane" once that specific pane no longer exists.
+ */
+async function openFocusedGlassTile(): Promise<void> {
+  const sessionId = glassView?.focusedSessionId() ?? null;
+  if (!sessionId) return;
+  if (!currentSessions.some((s) => s.id === sessionId)) {
+    showNotice({ title: "Command Center", message: "That session is gone.", tone: "warn" });
+    return;
+  }
+  const paneId = glassView?.focusedPaneId() ?? null;
+  await leaveGlass(sessionId);
+  if (!paneId) return;
+  const info = glassRunner.run(["display-message", "-p", "-t", paneId, "#{window_id}"]);
+  const windowId = info.ok ? info.lines[0] : undefined;
+  if (!windowId) return; // the pane died between the press and now
+  await control.sendCommand(`select-window -t ${tq(`${sessionId}:${windowId}`)}`).catch(() => {});
+  await control.sendCommand(`select-pane -t ${tq(paneId)}`).catch(() => {});
+}
+
+/**
+ * Ctrl-a P. In the grid it removes the focused session — hide the session AND
+ * clear every one of its panes' force-on pins, as one action, so unhiding it
+ * later doesn't silently readmit it through a pin that was never cleared.
+ * Outside the grid it's the opposite: force-on the pane you're looking at and
+ * clear the session's own hide, so pinning a pane in a session you'd
+ * previously removed actually shows it.
+ */
+async function toggleGridMembership(): Promise<void> {
+  if (inGlass) {
+    const sessionId = glassView?.focusedSessionId();
+    if (!sessionId) return;
+    glassRunner.run(["set-option", "-t", sessionId, "@jmux-grid-hidden", "1"]);
+    // -s: every pane in the session, not just its current window's — a pin in
+    // a background window must not survive the hide.
+    const panes = glassRunner.run(["list-panes", "-s", "-t", sessionId, "-F", "#{pane_id}"]);
+    for (const paneId of panes.lines) {
+      if (!paneId.trim()) continue;
+      for (const cmd of buildPinCommands("unpin", paneId.trim())) glassRunner.run(cmd.args);
+    }
+    invalidateGrid();
+    return;
+  }
+  if (!currentSessionId) return;
+  const paneId = glassRunner.run(["display-message", "-p", "-t", currentSessionId, "#{pane_id}"]).lines[0];
+  if (paneId) {
+    for (const cmd of buildPinCommands("pin", paneId)) glassRunner.run(cmd.args);
+  }
+  glassRunner.run(["set-option", "-t", currentSessionId, "-u", "@jmux-grid-hidden"]);
+  invalidateGrid();
+}
+
+/** Cycle the Command Center's own grouping axis — independent of the sidebar's. */
+function cycleGridGroup(): void {
+  gridAxes = { ...gridAxes, groupBy: cycleGroup(gridAxes.groupBy) };
+  configStore.set("commandCenterAxes", gridAxes);
+  invalidateGrid();
+}
+/** Cycle the Command Center's own member-sort axis. */
+function cycleGridSort(): void {
+  gridAxes = { ...gridAxes, sortBy: cycleSort(gridAxes.sortBy) };
+  configStore.set("commandCenterAxes", gridAxes);
+  invalidateGrid();
+}
+/** Cycle the Command Center's own filter axis. */
+function cycleGridFilter(): void {
+  gridAxes = { ...gridAxes, filter: cycleFilter(gridAxes.filter) };
+  configStore.set("commandCenterAxes", gridAxes);
+  invalidateGrid();
 }
 
 /**

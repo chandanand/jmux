@@ -295,6 +295,93 @@ describe("the face inside a tile", () => {
   });
 });
 
+// ── Cycling the face ─────────────────────────────────────────────────────────
+
+describe("cycling the face", () => {
+  const windows: Record<string, WindowFacts> = {
+    "%1": { windowId: "@1", paneCount: 3, zoomed: false },
+    "%2": { windowId: "@2", paneCount: 3, zoomed: false },
+    "%3": { windowId: "@3", paneCount: 3, zoomed: false },
+  };
+
+  test("steps through eligible panes and wraps", () => {
+    const { view } = makeView({ windows });
+    view.setTiles([spec({
+      sessionId: "$1", paneId: "%1",
+      panes: [pane("%1"), pane("%2"), pane("%3")],
+    })], "default");
+    expect(view.focusedPaneId()).toBe("%1");
+
+    view.cycleFace();
+    expect(view.focusedPaneId()).toBe("%2");
+    view.cycleFace();
+    expect(view.focusedPaneId()).toBe("%3");
+    view.cycleFace();
+    expect(view.focusedPaneId()).toBe("%1"); // wraps back to the start
+  });
+
+  test("a single eligible pane refuses to cycle", () => {
+    const { view } = makeView();
+    view.setTiles([spec({ sessionId: "$1", paneId: "%1", panes: [pane("%1")] })], "default");
+    view.cycleFace();
+    expect(view.focusedPaneId()).toBe("%1");
+  });
+
+  test("no focused tile is a no-op", () => {
+    const { view } = makeView();
+    view.setTiles([], "default");
+    expect(() => view.cycleFace()).not.toThrow();
+  });
+});
+
+// ── Zoom ─────────────────────────────────────────────────────────────────────
+
+describe("zoom", () => {
+  test("zooms the focused tile and restores on a second press", () => {
+    const { view } = makeView();
+    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], "default");
+    expect(view.isZoomed()).toBe(false);
+
+    view.toggleZoom();
+    expect(view.isZoomed()).toBe(true);
+
+    view.toggleZoom();
+    expect(view.isZoomed()).toBe(false);
+  });
+
+  test("moveFocus refuses to move away from the zoomed tile", () => {
+    const { view } = makeView();
+    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], "default");
+    view.toggleZoom();
+    expect(view.focusedSessionId()).toBe("$1");
+
+    view.moveFocus("right");
+    expect(view.focusedSessionId()).toBe("$1"); // still pinned to the zoomed tile
+  });
+
+  test("clears when the zoomed tile leaves the rendered set", () => {
+    const { view } = makeView();
+    const a = spec({ sessionId: "$1" });
+    const b = spec({ sessionId: "$2" });
+    view.setTiles([a, b], "default");
+    view.toggleZoom();
+    expect(view.isZoomed()).toBe(true);
+
+    view.setTiles([b], "default");
+    expect(view.isZoomed()).toBe(false);
+  });
+
+  test("a background tile's pty is never resized to fit an invisible rect", () => {
+    const { view, ptys } = makeView();
+    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], "default");
+    const two = ptys.find((p) => p.session === "$2")!.pty;
+    two.sizes.length = 0;
+
+    view.toggleZoom(); // zooms $1; $2 leaves the drawn set
+    expect(two.sizes).toEqual([]); // never asked to shrink to a rect nobody draws
+  });
+});
+
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 
 describe("rendered set ≠ client set", () => {

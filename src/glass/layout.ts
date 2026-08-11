@@ -6,6 +6,16 @@ export interface TileLayoutInput {
   minTileHeight: number;
   focusedIndex: number;
   scrollRow: number;
+  /**
+   * When set to a valid tile index, that tile alone fills the whole area and
+   * every other tile is marked absent from the drawn set. Their rects keep the
+   * size the un-zoomed grid would have given them rather than collapsing to
+   * zero — `GlassView.resizeAllTiles` skips invisible rects, so a tile held
+   * off-screen this way is simply left at its last real size, never shrunk to
+   * fit a rect nobody draws (which would distort the real tmux window behind
+   * it in every other client attached to that session).
+   */
+  zoomedIndex?: number | null;
 }
 
 export interface TileRect {
@@ -65,6 +75,16 @@ export function computeTileLayout(input: TileLayoutInput): TileLayout {
       height: tileHeight,
       visible,
     });
+  }
+
+  const zoomedIndex = input.zoomedIndex;
+  if (zoomedIndex !== undefined && zoomedIndex !== null && zoomedIndex >= 0 && zoomedIndex < tileCount) {
+    const zoomed: TileRect[] = tiles.map((rect) =>
+      rect.index === zoomedIndex
+        ? { ...rect, x: 0, y: 0, width: mainWidth, height: mainHeight, visible: true }
+        : { ...rect, visible: false },
+    );
+    return { columns, rows: totalRows, scrollRow, tiles: zoomed };
   }
 
   return { columns, rows: totalRows, scrollRow, tiles };

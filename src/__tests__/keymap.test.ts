@@ -80,7 +80,15 @@ function routerPrefixKeys(arm: "prefix" | "glass-prefix" | "surface-prefix"): st
   const keys: string[] = [];
   for (const match of region.matchAll(/data === "((?:\\.|[^"\\])+)"/g)) {
     const raw = match[1];
-    const key = raw === "\\t" ? "\t" : raw.replace(/\\(.)/g, "$1");
+    // \t, \r and \n need their own cases: falling through to the general
+    // backslash-strip below turns `data === "\r"` into the printable key
+    // "r" — which collides with whatever chord already owns plain "r" and
+    // silently misreports both.
+    const key =
+      raw === "\\t" ? "\t" :
+      raw === "\\r" ? "\r" :
+      raw === "\\n" ? "\n" :
+      raw.replace(/\\(.)/g, "$1");
     if (key.length === 1) keys.push(key);
   }
   return keys;
@@ -91,7 +99,6 @@ const GLASS_CONTEXT = "Command Center open";
 const tmuxBindings = KEYMAP.filter((b) => b.source === "tmux");
 const prefixBindings = KEYMAP.filter((b) => b.prefixKey !== undefined);
 const glassPrefixBindings = prefixBindings.filter((b) => b.context === GLASS_CONTEXT);
-const plainPrefixBindings = prefixBindings.filter((b) => b.context !== GLASS_CONTEXT);
 
 const sorted = (xs: string[]): string[] => [...xs].sort();
 
@@ -125,19 +132,67 @@ describe("keymap ↔ defaults.conf", () => {
 });
 
 describe("keymap ↔ input-router", () => {
-  test("the non-glass prefix chain matches the table exactly", () => {
-    expect(sorted(routerPrefixKeys("prefix"))).toEqual(
-      sorted(plainPrefixBindings.map((b) => b.prefixKey!)),
-    );
+  // A chord declared for both arms could pass an equality check against the
+  // ordinary arm and a subset check against the glass arm while being absent
+  // from one of them outright — the two checks never actually agree with each
+  // other on any single binding. This is the arm matrix instead: each
+  // prefix-bearing row declares the arms it belongs to (`Binding.arms`), and
+  // this asserts that set, per binding, against which arms actually intercept
+  // its key.
+  //
+  // The complication is that a byte can mean two different things in two
+  // different arms — `G`/`s`/`f` dispatch to the sidebar's own cycle in the
+  // ordinary arm and to the Command Center's in the glass arm, one row each.
+  // A Command-Center-context row's key therefore only ever counts as reaching
+  // the glass arm; a same-key row without that context only counts as
+  // reaching the glass arm if no Command-Center-context row has already
+  // claimed the byte there.
+  type Arm = "prefix" | "glass-prefix" | "surface-prefix";
+  const armBytes: Record<Arm, ReadonlySet<string>> = {
+    prefix: new Set(routerPrefixKeys("prefix")),
+    "glass-prefix": new Set(routerPrefixKeys("glass-prefix")),
+    "surface-prefix": new Set(routerPrefixKeys("surface-prefix")),
+  };
+  const glassClaimedKeys = new Set(
+    prefixBindings.filter((b) => b.context === GLASS_CONTEXT).map((b) => b.prefixKey!),
+  );
+
+  function actualArms(b: Binding): Set<Arm> {
+    const out = new Set<Arm>();
+    if (b.context === GLASS_CONTEXT) {
+      if (armBytes["glass-prefix"].has(b.prefixKey!)) out.add("glass-prefix");
+      return out;
+    }
+    if (armBytes["prefix"].has(b.prefixKey!)) out.add("prefix");
+    if (armBytes["surface-prefix"].has(b.prefixKey!)) out.add("surface-prefix");
+    if (armBytes["glass-prefix"].has(b.prefixKey!) && !glassClaimedKeys.has(b.prefixKey!)) {
+      out.add("glass-prefix");
+    }
+    return out;
+  }
+
+  test("every prefix binding declares at least one arm", () => {
+    const undeclared = prefixBindings.filter((b) => !b.arms || b.arms.length === 0).map((b) => b.id);
+    expect(undeclared).toEqual([]);
   });
 
-  test("every key the glass prefix chain intercepts is in the table", () => {
-    // The glass arm handles its own chords *plus* most of the non-glass ones,
-    // so this direction is a subset check rather than an equality: a key it
-    // intercepts must be documented somewhere in the table.
-    const tabled = new Set(prefixBindings.map((b) => b.prefixKey));
-    const missing = routerPrefixKeys("glass-prefix").filter((k) => !tabled.has(k));
-    expect(missing).toEqual([]);
+  test("every prefix binding's declared arms match the arms that actually intercept it", () => {
+    const ARM_OF: Record<NonNullable<Binding["arms"]>[number], Arm> = {
+      ordinary: "prefix",
+      glass: "glass-prefix",
+      surface: "surface-prefix",
+    };
+    const mismatches: string[] = [];
+    for (const b of prefixBindings) {
+      const declared = new Set((b.arms ?? []).map((a) => ARM_OF[a]));
+      const actual = actualArms(b);
+      const declaredSorted = sorted([...declared]);
+      const actualSorted = sorted([...actual]);
+      if (JSON.stringify(declaredSorted) !== JSON.stringify(actualSorted)) {
+        mismatches.push(`${b.id}: declared [${declaredSorted}] actual [${actualSorted}]`);
+      }
+    }
+    expect(mismatches).toEqual([]);
   });
 
   test("every Command Center chord in the table is intercepted in the glass arm", () => {

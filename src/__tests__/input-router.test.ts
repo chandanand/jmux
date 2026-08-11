@@ -1492,6 +1492,137 @@ describe("glass-buffered prefix + Ctrl-a <n>", () => {
     expect(detached).toBe(1);
     expect(sent).toEqual([]); // buffered prefix dropped, not forwarded
   });
+
+  test("Ctrl-a C toggles the Command Center from inside the grid", () => {
+    const sent: string[] = [];
+    let toggled = 0;
+    const router = new InputRouter({
+      onPtyData: (d) => sent.push(d),
+      onSidebarClick: () => {},
+      glassActive: () => true,
+      onGlassToggle: () => toggled++,
+    }, baseLayout(26));
+    router.handleInput("\x01");
+    router.handleInput("C");
+    expect(toggled).toBe(1);
+    expect(sent).toEqual([]);
+  });
+
+  test("Ctrl-a P removes the focused session from the grid", () => {
+    const sent: string[] = [];
+    let pinned = 0;
+    const router = new InputRouter({
+      onPtyData: (d) => sent.push(d),
+      onSidebarClick: () => {},
+      glassActive: () => true,
+      onGlassPinToggle: () => pinned++,
+    }, baseLayout(26));
+    router.handleInput("\x01");
+    router.handleInput("P");
+    expect(pinned).toBe(1);
+    expect(sent).toEqual([]);
+  });
+
+  test("Ctrl-a Enter opens the focused tile full-size", () => {
+    const sent: string[] = [];
+    let opened = 0;
+    const router = new InputRouter({
+      onPtyData: (d) => sent.push(d),
+      onSidebarClick: () => {},
+      glassActive: () => true,
+      onGlassOpenFocused: () => opened++,
+    }, baseLayout(26));
+    router.handleInput("\x01");
+    router.handleInput("\r");
+    expect(opened).toBe(1);
+    expect(sent).toEqual([]);
+  });
+
+  test("Ctrl-a x cycles the focused tile's face", () => {
+    const sent: string[] = [];
+    let cycled = 0;
+    const router = new InputRouter({
+      onPtyData: (d) => sent.push(d),
+      onSidebarClick: () => {},
+      glassActive: () => true,
+      onGlassCycleFace: () => cycled++,
+    }, baseLayout(26));
+    router.handleInput("\x01");
+    router.handleInput("x");
+    expect(cycled).toBe(1);
+    expect(sent).toEqual([]);
+  });
+
+  test("Ctrl-a z zooms the focused tile", () => {
+    const sent: string[] = [];
+    let zoomed = 0;
+    const router = new InputRouter({
+      onPtyData: (d) => sent.push(d),
+      onSidebarClick: () => {},
+      glassActive: () => true,
+      onGlassZoom: () => zoomed++,
+    }, baseLayout(26));
+    router.handleInput("\x01");
+    router.handleInput("z");
+    expect(zoomed).toBe(1);
+    expect(sent).toEqual([]);
+  });
+
+  test("Ctrl-a G/s/f cycle the grid's own axes in glass, not the sidebar's", () => {
+    const sent: string[] = [];
+    let glassGroup = 0;
+    let glassSort = 0;
+    let glassFilter = 0;
+    let sidebarGroup = 0;
+    let sidebarSort = 0;
+    let sidebarFilter = 0;
+    const router = new InputRouter({
+      onPtyData: (d) => sent.push(d),
+      onSidebarClick: () => {},
+      glassActive: () => true,
+      onGlassGroupCycle: () => glassGroup++,
+      onGlassSortCycle: () => glassSort++,
+      onGlassFilterCycle: () => glassFilter++,
+      onGroupCycle: () => sidebarGroup++,
+      onSortCycle: () => sidebarSort++,
+      onFilterCycle: () => sidebarFilter++,
+    }, baseLayout(26));
+    router.handleInput("\x01");
+    router.handleInput("G");
+    router.handleInput("\x01");
+    router.handleInput("s");
+    router.handleInput("\x01");
+    router.handleInput("f");
+    expect([glassGroup, glassSort, glassFilter]).toEqual([1, 1, 1]);
+    expect([sidebarGroup, sidebarSort, sidebarFilter]).toEqual([0, 0, 0]);
+    expect(sent).toEqual([]);
+  });
+});
+
+describe("Ctrl-a C / Ctrl-a P outside the grid", () => {
+  test("Ctrl-a C toggles the Command Center from a normal session", () => {
+    let toggled = 0;
+    const router = new InputRouter({
+      onPtyData: () => {},
+      onSidebarClick: () => {},
+      onGlassToggle: () => toggled++,
+    }, baseLayout(26));
+    router.handleInput("\x01");
+    router.handleInput("C");
+    expect(toggled).toBe(1);
+  });
+
+  test("Ctrl-a P force-ons the current pane from a normal session", () => {
+    let pinned = 0;
+    const router = new InputRouter({
+      onPtyData: () => {},
+      onSidebarClick: () => {},
+      onGlassPinToggle: () => pinned++,
+    }, baseLayout(26));
+    router.handleInput("\x01");
+    router.handleInput("P");
+    expect(pinned).toBe(1);
+  });
 });
 
 describe("glass strip mouse routing", () => {

@@ -62,7 +62,7 @@ import {
   type RetainedTile,
   type TileKey,
 } from "./tile-plan";
-import { electRepresentative, type PaneRow } from "./representative";
+import { electRepresentative, eligiblePanes, type PaneRow } from "./representative";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -238,6 +238,13 @@ export class GlassView {
   private tileOrder: TileKey[] = [];
   /** Focus is a key, never an index: the set reorders as agents change state. */
   private focusedKey: TileKey | null = null;
+  /**
+   * The tile zoomed to the full area, or null. A key, on the same reasoning as
+   * `focusedKey` — cleared in `reconcile` when its tile leaves the rendered
+   * set, never re-derived from focus: `moveFocus` refuses to move away from it
+   * while set (see below), so the two only ever diverge by a tile vanishing.
+   */
+  private zoomedKey: TileKey | null = null;
   /** Live tiles that have left membership, with the moment they left. */
   private retained: Map<TileKey, RetainedTile> = new Map();
   /** Face cycles, keyed by tile — cleared when the pane they name dies. */
@@ -309,6 +316,38 @@ export class GlassView {
     this.opts.onFrame();
   }
 
+  /**
+   * Step the focused tile's face to the next eligible pane, wrapping. A no-op
+   * with fewer than two eligible panes — there is nothing to cycle to, which
+   * is also why the chord's own hint (phase 8) omits itself in that case.
+   */
+  cycleFace(): void {
+    const tile = this.focusedTile();
+    if (!tile) return;
+    const eligible = eligiblePanes(tile.panes, this.opts.agentPaneRegex ?? null);
+    if (eligible.length < 2) return;
+    const index = eligible.findIndex((p) => p.paneId === tile.face.paneId);
+    const next = eligible[(index + 1) % eligible.length]!;
+    this.setFace(tile.spec.sessionId, next.paneId);
+  }
+
+  /**
+   * Zoom the focused tile to fill the whole area, or restore the grid if a
+   * tile is already zoomed. Bound to whichever tile was focused at the moment
+   * of the press — not re-read from focus afterwards — so a zoom outlives
+   * `moveFocus` being asked to move (which it refuses, below, while zoomed).
+   */
+  toggleZoom(): void {
+    this.zoomedKey = this.zoomedKey !== null ? null : this.focusedKey;
+    this.resizeAllTiles();
+    this.opts.onFrame();
+  }
+
+  /** True while a tile is zoomed to the full area. */
+  isZoomed(): boolean {
+    return this.zoomedKey !== null;
+  }
+
   /** Active tiles the client cap refused. Reported in the strip, never silent. */
   getDroppedActive(): number {
     return this.droppedActive;
@@ -370,6 +409,11 @@ export class GlassView {
 
   moveFocus(dir: "left" | "right" | "up" | "down"): void {
     if (this.tileOrder.length === 0) return;
+    // While zoomed only one tile is drawn, so there is nowhere else to move
+    // focus into — and moving it silently would desync keystrokes (routed by
+    // focus) from the picture (pinned to zoomedKey) from the tile the user is
+    // actually looking at.
+    if (this.zoomedKey !== null) return;
     const layout = this.layout();
     const cols = layout.columns;
     const total = this.tileOrder.length;
@@ -463,6 +507,7 @@ export class GlassView {
     }
     this.tileOrder = [];
     this.focusedKey = null;
+    this.zoomedKey = null;
     this.retained.clear();
     this.faceOverrides.clear();
     this.droppedActive = 0;
@@ -541,6 +586,14 @@ export class GlassView {
     } else if (!this.focusedKey || !this.tileOrder.includes(this.focusedKey)) {
       const at = Math.min(Math.max(0, lastFocusIndex), this.tileOrder.length - 1);
       this.focusedKey = this.tileOrder[at] ?? null;
+    }
+
+    // A logical key, not a boolean: cleared the moment its tile leaves the
+    // rendered set, the same rule as focus above but with no successor to
+    // hand off to — restoring the grid is the only honest outcome for a zoom
+    // whose subject is gone.
+    if (this.zoomedKey !== null && !this.tileOrder.includes(this.zoomedKey)) {
+      this.zoomedKey = null;
     }
 
     for (const key of plan.spawn) {
@@ -746,6 +799,12 @@ export class GlassView {
     this.scrollRow = layout.scrollRow;
 
     for (const rect of layout.tiles) {
+      // Invisible while zoomed carries a deliberately stale rect (see
+      // computeTileLayout) — resizing to it would shrink a session's real
+      // tmux window to fit a rect nobody draws. Off-screen-by-scroll rects
+      // are unaffected: every rect in a given row/column already shares the
+      // same width/height there, zoomed or not.
+      if (!rect.visible) continue;
       const tile = this.tileAt(rect.index);
       if (!tile) continue;
 
@@ -769,6 +828,7 @@ export class GlassView {
       minTileHeight: this.opts.minTileHeight,
       focusedIndex: this.focusIndex(),
       scrollRow: this.scrollRow,
+      zoomedIndex: this.zoomedKey !== null ? this.tileOrder.indexOf(this.zoomedKey) : null,
     });
   }
 
