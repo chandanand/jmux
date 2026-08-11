@@ -9721,11 +9721,14 @@ function applyGridSnapshot(snap: GridSnapshot): void {
     const activeView = commandCenterViews.find((v) => v.id === activeViewId) ?? commandCenterViews[0];
     glassView?.setTiles(specs, {
       viewName: activeView.name,
-      // Everything the active axes excluded — filtered out, parked,
-      // `@jmux-grid-hidden`, or paneless. The empty state's "N not shown" is
-      // this figure, not a second count derived some other way — "hidden"
-      // is reserved for the `@jmux-grid-hidden` exception alone.
+      // Two different numbers, because they answer two different questions and
+      // conflating them sent the user looking for an exception that was not
+      // there. `excludedCount` is everything the active axes left out —
+      // filtered, parked, hidden or paneless — and widening the view recovers
+      // it. `hiddenCount` is the `@jmux-grid-hidden` exception alone, which no
+      // filter will bring back: it needs the palette's "Show hidden sessions".
       excludedCount: Math.max(0, shared.sessions.length - specs.length),
+      hiddenCount: gridHiddenSessionIds.size,
     });
   }
   scheduleRender();

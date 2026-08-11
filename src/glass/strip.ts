@@ -63,15 +63,20 @@ function rightClusterCols(densityLabel: string, dropped: string): number {
 
 /** Trim a chip's text to the columns it was actually given, ellipsising when
  *  it has to cut. Width-1 "…" so the column model and the terminal agree. */
-function fitChip(text: string, cols: number): string {
+function fitChip(text: string, cols: number, keepTail = ""): string {
   if (cols <= 0) return "";
   if (textCols(text) <= cols) return text;
+  // The dirty marker lives at the tail, so a naive truncation removes exactly
+  // the thing the strip is obliged to keep: "which view, and is it modified".
+  // Reserve the tail, cut the name, and put the tail back.
+  const tailCols = textCols(keepTail);
+  const budget = Math.max(0, cols - 1 - tailCols);
   let out = "";
   for (const ch of text) {
-    if (textCols(out + ch) > cols - 1) break;
+    if (textCols(out + ch) > budget) break;
     out += ch;
   }
-  return out + "\u2026";
+  return out + "\u2026" + keepTail;
 }
 
 export function layoutStrip(input: StripInput): PlacedChip[] {
@@ -152,7 +157,8 @@ export function renderStrip(
     // Honour the width the layout placed, not the chip's natural width: the
     // active chip is clamped rather than dropped when it cannot fit, so this is
     // where that clamp becomes a readable string.
-    const text = fitChip(chipText(view, isActive, input.dirty), chip.width);
+    const dirtyTail = isActive && input.dirty ? DIRTY_SUFFIX : "";
+    const text = fitChip(chipText(view, isActive, input.dirty), chip.width, dirtyTail);
     writeString(grid, 0, chip.x, text, {
       fgMode: ColorMode.Palette,
       fg: isActive ? 15 : 8,

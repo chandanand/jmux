@@ -105,6 +105,14 @@ export interface GlassTileSpec {
 export interface EmptyGridContext {
   viewName: string;
   excludedCount: number;
+  /**
+   * Sessions carrying `@jmux-grid-hidden` alone — a strict subset of
+   * `excludedCount`. Separate because widening the view recovers everything in
+   * `excludedCount` *except* these: a hide is an explicit exception and only
+   * the palette's "Show hidden sessions" undoes it. Saying "3 not shown" when
+   * one of them is hidden points at the wrong remedy.
+   */
+  hiddenCount: number;
 }
 
 export interface GlassViewOptions {
@@ -288,7 +296,7 @@ export class GlassView {
   private droppedActive = 0;
   private allSpecs: GlassTileSpec[] = []; // the grid's one derived membership set
   /** What the empty state names — the active view and how many sessions it excludes. */
-  private emptyContext: EmptyGridContext = { viewName: "", excludedCount: 0 };
+  private emptyContext: EmptyGridContext = { viewName: "", excludedCount: 0, hiddenCount: 0 };
   private width: number = 80;
   private height: number = 24;
   private scrollRow: number = 0;
@@ -846,12 +854,18 @@ export class GlassView {
     this.scrollRow = layout.scrollRow;
 
     for (const rect of layout.tiles) {
-      // Invisible while zoomed carries a deliberately stale rect (see
-      // computeTileLayout) — resizing to it would shrink a session's real
-      // tmux window to fit a rect nobody draws. Off-screen-by-scroll rects
-      // are unaffected: every rect in a given row/column already shares the
-      // same width/height there, zoomed or not.
-      if (!rect.visible) continue;
+      // Skip on *zoom*, not on visibility. A zoomed layout gives every other
+      // tile a deliberately stale rect (see computeTileLayout) and resizing to
+      // it would shrink a session's real tmux window to fit a rect nobody
+      // draws. A tile merely scrolled out of view has a real rect — the size
+      // it will have the moment it scrolls back in — and must take it.
+      //
+      // This used to skip on `!rect.visible`, justified by every rect in a
+      // row/column sharing a size. That held only while the size floors were
+      // fixed: density changes them, so after Fit → Focus every tile below the
+      // scroll window kept its Fit dimensions and `moveFocus` revealed it at
+      // the wrong size.
+      if (!rect.visible && this.zoomedKey !== null) continue;
       const tile = this.tileAt(rect.index);
       if (!tile) continue;
 
@@ -1038,13 +1052,18 @@ export class GlassView {
    * the ones that survived the caller's own filter.
    */
   private drawEmptyState(grid: CellGrid): void {
-    const { viewName, excludedCount } = this.emptyContext;
+    const { viewName, excludedCount, hiddenCount } = this.emptyContext;
     const line1 = viewName ? `No sessions match "${viewName}"` : "No sessions to show";
     // "not shown", not "hidden" — the strip's own word for the same idea
     // (`+N not shown`), because "hidden" already names the `@jmux-grid-hidden`
     // exception and this figure is everything the view's axes excluded.
+    // Two clauses because they have two remedies. "not shown" is everything the
+    // axes excluded and `⌃a f` recovers it; "hidden" is the explicit exception,
+    // which no filter reaches — it names the palette entry instead. Reported
+    // separately so the number never points at the wrong key.
     const excludedClause = excludedCount > 0 ? `      ${excludedCount} not shown` : "";
-    const line2 = `⌃a f  all sessions      ⌃a 1…9  switch view${excludedClause}`;
+    const hiddenClause = hiddenCount > 0 ? `      ${hiddenCount} hidden (⌃a p)` : "";
+    const line2 = `⌃a f  all sessions      ⌃a 1…9  switch view${excludedClause}${hiddenClause}`;
 
     // Left-align both lines against the wider of the two, then center that
     // block — independently centering each line would zig-zag the left edge

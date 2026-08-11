@@ -64,7 +64,7 @@ const spec = (over: Partial<GlassTileSpec> & { sessionId: string }): GlassTileSp
 
 /** `setTiles`' empty-state context — irrelevant to every test here except the
  * ones that actually empty the grid, which don't assert on it. */
-const EMPTY_CTX = { viewName: "Active", excludedCount: 0 };
+const EMPTY_CTX = { viewName: "Active", excludedCount: 0, hiddenCount: 0 };
 
 const pane = (paneId: string, over: Partial<PaneRow> = {}): PaneRow => ({
   paneId,
@@ -706,7 +706,7 @@ describe("the empty state", () => {
     // filter is not "hidden" in that sense, and saying so sent users looking
     // for an exception that didn't exist.
     const { view } = makeView();
-    view.setTiles([], { viewName: "Active", excludedCount: 3 });
+    view.setTiles([], { viewName: "Active", excludedCount: 3, hiddenCount: 0 });
     const text = gridText(view);
     expect(text).toContain('No sessions match "Active"');
     expect(text).toContain("3 not shown");
@@ -717,7 +717,7 @@ describe("the empty state", () => {
 
   test("omits the excluded clause when nothing was excluded", () => {
     const { view } = makeView();
-    view.setTiles([], { viewName: "Active", excludedCount: 0 });
+    view.setTiles([], { viewName: "Active", excludedCount: 0, hiddenCount: 0 });
     expect(gridText(view)).not.toContain("not shown");
   });
 });
@@ -787,5 +787,27 @@ describe("the focused tile's bottom-border hint", () => {
     // $2 has one eligible pane, so its hint — now the one shown — omits the
     // face cycle, unlike $1's did.
     expect(afterMove).not.toContain("agent");
+  });
+});
+
+describe("density resizes tiles that are scrolled out of view", () => {
+  // resizeAllTiles used to skip every non-visible rect, justified by rects in a
+  // row/column sharing a size. Density breaks that: it changes the floors, so
+  // after Fit -> Focus every tile below the scroll window kept its Fit size and
+  // moveFocus revealed it wrong.
+  test("a tile below the scroll window takes the new density's size", () => {
+    const { view, ptys } = makeView({ opts: { minTileWidth: 60, minTileHeight: 6 } });
+    view.resize(214, 49);
+    view.setTiles(
+      Array.from({ length: 9 }, (_, i) => spec({ sessionId: `$${i + 1}` })),
+      { viewName: "Fit", excludedCount: 0, hiddenCount: 0 },
+    );
+    const last = ptys[ptys.length - 1]!.pty;
+    const beforeSizes = last.sizes.length;
+
+    view.setDensity("focus"); // 100x22 — only the first rows stay on screen
+
+    // The off-screen tile must have been resized too, not left at Fit's size.
+    expect(last.sizes.length).toBeGreaterThan(beforeSizes);
   });
 });

@@ -236,8 +236,15 @@ one keystroke between them. The border hint carries the position (`⌃a x agent
 A tile is labelled with the sidebar row's identity — `displaySessionName` plus the
 issue badge. When the displayed pane is *not* the session's natural first choice
 (a force-on pin or a live cycle override), `buildPaneLabel`'s pane half is
-appended so the tile says which pane it is showing. `buildPaneLabel` is therefore
-**kept**, not deleted; it stops being the whole label and becomes the suffix.
+appended so the tile says which pane it is showing. `buildPaneLabel` was therefore to be **kept**, becoming the suffix rather than
+the whole label.
+
+**Amended after implementation:** it was split instead. The suffix is only ever
+the *pane* half, because a tile is a session and the session half already comes
+from the tile's own identity — so `buildPaneLabel`'s job ("session › pane") had
+no caller left. `paneIdentity()` is the surviving half and `buildTileLabel()`
+composes it onto the identity; `buildPaneLabel` is deleted. Keeping it would
+have been a dead wrapper preserved by a spec sentence rather than by a consumer.
 
 ## Exceptions
 
@@ -594,8 +601,16 @@ the view, what did not match, and the key that widens it:
 
 ```
 No sessions match "Active"
-⌃a f  all sessions      ⌃a 1…9  switch view      3 hidden
+⌃a f  all sessions      ⌃a 1…9  switch view      7 not shown      3 hidden (⌃a p)
 ```
+
+**Amended after implementation:** two counts, not one. "not shown" is everything
+the active axes excluded — filtered, parked, hidden or paneless — and `⌃a f`
+recovers it. "hidden" is the `@jmux-grid-hidden` exception alone, which no
+filter reaches; it needs the palette. Reporting one figure under the word
+"hidden" sent a user whose view was merely narrow looking for an exception that
+did not exist, and reporting it under "not shown" left the real exception
+unnamed. They have different remedies, so they are different numbers.
 
 ## Reconciliation
 

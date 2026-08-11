@@ -235,3 +235,36 @@ describe("the active chip is never dropped", () => {
     expect(grid.cells[0]!.length).toBe(24);
   });
 });
+
+describe("truncation keeps the dirty marker", () => {
+  // The marker sits at the tail, so a naive truncation removed exactly the
+  // thing the always-visible strip is obliged to carry: which view, and
+  // whether the live axes have been narrowed away from it.
+  const long = { id: "a", name: "A Very Long View Name Indeed", filter: "active", groupBy: "status", sortBy: "status" } as any;
+  const base = { views: [long], activeViewId: "a", dirty: true, droppedActive: 0, densityLabel: "Fit" } as any;
+
+  test("the dirty marker survives at every width, truncated or not", () => {
+    for (const width of [80, 40, 24, 18]) {
+      const input = { ...base, width };
+      const row = renderStrip(input, layoutStrip(input)).cells[0]!.map((c) => c.char).join("");
+      expect(row).toContain("\u00b7");
+    }
+  });
+
+  test("the name is what gets cut, and only once it has to be", () => {
+    const wide = renderStrip({ ...base, width: 40 }, layoutStrip({ ...base, width: 40 }))
+      .cells[0]!.map((c) => c.char).join("");
+    expect(wide).not.toContain("\u2026"); // fits whole — nothing to cut
+
+    const narrow = renderStrip({ ...base, width: 24 }, layoutStrip({ ...base, width: 24 }))
+      .cells[0]!.map((c) => c.char).join("");
+    expect(narrow).toContain("\u2026");
+    expect(narrow).toContain("\u00b7"); // cut the name, kept the marker
+  });
+
+  test("a clean view is not given a marker it did not earn", () => {
+    const input = { ...base, dirty: false, width: 24 };
+    const row = renderStrip(input, layoutStrip(input)).cells[0]!.map((c) => c.char).join("");
+    expect(row).not.toContain("\u00b7");
+  });
+});
