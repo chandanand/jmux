@@ -119,8 +119,14 @@ describe("electRepresentative", () => {
     expect(electRepresentative(panes, "%9", null)).toBe("%1");
   });
 
-  test("no explicit pane, no eligible panes: null", () => {
-    expect(electRepresentative([row({ paneId: "%1" })], null, null)).toBeNull();
+  test("genuinely empty panes: null", () => {
+    expect(electRepresentative([], null, null)).toBeNull();
+  });
+
+  test("no eligible pane: tier 4 still elects one from the whole pane set", () => {
+    // A dev server or log-tail session has nothing kinded, regex-matched, or
+    // force-on — but it must still tile without anyone pinning it.
+    expect(electRepresentative([row({ paneId: "%1" })], null, null)).toBe("%1");
   });
 
   test("most urgent eligible pane wins: waiting beats running beats complete", () => {
@@ -196,10 +202,22 @@ describe("electRepresentative", () => {
     expect(electRepresentative(panes, null, null)).toBe("%1");
   });
 
-  test("an ineligible pane never wins even if it would rank highest", () => {
+  test("an ineligible pane never wins while an eligible one exists", () => {
     const panes = [
       row({ paneId: "%1", state: "waiting", since: 1 }), // no kind, no regex match, not forced
       row({ paneId: "%2", kind: "claude", state: "complete", since: 1 }),
+    ];
+    expect(electRepresentative(panes, null, null)).toBe("%2");
+  });
+
+  test("three panes, none eligible: tier 4 elects the session-active one", () => {
+    // No kind, no regex match, no force-on anywhere — same shape as the
+    // three-window eligible case, but proving the fallback over the *whole*
+    // pane set rather than over an eligible subset.
+    const panes = [
+      row({ paneId: "%1", sessionActive: false }),
+      row({ paneId: "%2", sessionActive: true }),
+      row({ paneId: "%3", sessionActive: false }),
     ];
     expect(electRepresentative(panes, null, null)).toBe("%2");
   });

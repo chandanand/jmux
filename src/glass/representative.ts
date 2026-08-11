@@ -129,24 +129,37 @@ function pickWinner(rows: readonly PaneRow[]): PaneRow | null {
  * The live answer to "which pane represents this session right now".
  * Stateless — recomputed from current urgency every call.
  *
- * Precedence: a live `explicitPane` (must appear in `panes`) → the most
- * urgent force-on pane → the most urgent eligible pane. "Most urgent" within
- * each of those two groups falls back to the session-active pane, then the
- * first pane by id, when nothing in the group carries an agent state.
+ * Walks four tiers, taking the first with members: a live `explicitPane`
+ * (must appear in `panes`) → the force-on panes → the eligible panes →
+ * failing all of those, every pane the session has. A session with no
+ * eligible pane at all — a dev server, a log tail — still elects one via the
+ * last tier, which is what lets it tile without anyone pinning it.
+ *
+ * Within whichever tier answers: most urgent by state, else that tier's
+ * session-active member, else its lowest pane id. `null` comes back only
+ * when `panes` itself is empty.
  */
 export function electRepresentative(
   panes: readonly PaneRow[],
   explicitPane: string | null,
   commandRegex: string | null,
 ): string | null {
+  if (panes.length === 0) return null;
+
   if (explicitPane !== null && panes.some((p) => p.paneId === explicitPane)) {
     return explicitPane;
   }
 
   const eligible = eligiblePanes(panes, commandRegex);
-  if (eligible.length === 0) return null;
-
   const forcedOn = eligible.filter((p) => p.forcedOn);
-  const winner = pickWinner(forcedOn.length > 0 ? forcedOn : eligible);
+
+  const tier =
+    forcedOn.length > 0
+      ? forcedOn
+      : eligible.length > 0
+        ? eligible
+        : [...panes].sort((a, b) => comparePaneIds(a.paneId, b.paneId));
+
+  const winner = pickWinner(tier);
   return winner ? winner.paneId : null;
 }
