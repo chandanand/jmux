@@ -86,6 +86,33 @@ describe("rollupAgentRecords", () => {
     });
   });
 
+  // `@jmux-agent-state` inherits into a pane-context format read, so every pane
+  // in an agent's session reports it — and `since` with it, leaving them tied on
+  // both. `outranks` declines a tie, so the state winner is whichever pane tmux
+  // listed first. Taking `kind` from that row reported null for a session with a
+  // Claude plainly running in it, which is what `ctl status` then showed.
+  test("kind comes from the pane that declares one, not from the state winner", () => {
+    const [rec] = rollupAgentRecords(
+      [
+        // The shell, listed first, carrying the session's inherited state.
+        row({ sessionId: "$1", state: "running", since: 1781480000, paneId: "%1", kind: null, active: true }),
+        // The agent, same inherited state and age, but the only pane with a kind.
+        row({ sessionId: "$1", state: "running", since: 1781480000, paneId: "%2", kind: "claude" }),
+      ],
+      1781480010,
+    );
+    expect(rec!.kind).toBe("claude");
+    expect(rec!.state).toBe("running");
+  });
+
+  test("no pane declaring a kind still reports null rather than guessing", () => {
+    const [rec] = rollupAgentRecords(
+      [row({ sessionId: "$1", state: "running", since: 1781480000, paneId: "%1", kind: null })],
+      1781480010,
+    );
+    expect(rec!.kind).toBeNull();
+  });
+
   test("the most urgent pane wins, and carries its own kind", () => {
     const [rec] = rollupAgentRecords(
       [

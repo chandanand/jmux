@@ -63,7 +63,8 @@ function clampAxis<T>(value: unknown, legal: readonly T[], fallback: T): T {
 /**
  * Parse/validate/synthesize the view registry. Always returns a non-empty
  * array. Malformed entries are dropped and duplicate ids are collapsed (first
- * occurrence wins) — the same defensive shape as `normalizeTabs`. Additionally
+ * occurrence wins) — the defensive shape the tab registry this replaced used
+ * to have. Additionally
  * clamps each axis to its legal enum, falling back to the seed's value: a
  * hand-edited or stale config axis must never propagate an illegal mode into
  * `orderSessions`.
@@ -186,7 +187,8 @@ export interface ViewSelection {
  * view's axes win and the dirty axes are discarded. Selecting a view means
  * adopting it; carrying unsaved axes across would make the marker mean two
  * different things. An unknown id is a no-op (folds back to whatever is
- * currently active), the same defensive posture as `resolveTabId`.
+ * currently active), the defensive posture the tab registry this replaced
+ * used to take.
  */
 export function switchView(
   views: CommandCenterView[],
