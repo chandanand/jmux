@@ -95,12 +95,13 @@ export interface GlassTileSpec {
  * "every session that exists", only the ones that survived the caller's own
  * filter, so it cannot compute `excludedCount` itself.
  *
- * Deliberately named `excludedCount`, not `hiddenCount`: this is everything
- * the active axes left out — filtered, parked, `@jmux-grid-hidden`, or
- * paneless — and "hidden" is already a term of art here, naming the one
- * exception (`@jmux-grid-hidden`) with its own palette entry ("Show hidden
- * sessions (N)…"). Calling this figure "hidden" told a user whose view was
- * simply narrow to go looking for an exception that didn't exist.
+ * Deliberately named `excludedCount`, not `hiddenCount`, and deliberately
+ * **disjoint** from it: this is what a wider view would recover — filtered,
+ * parked or paneless — and nothing else. Sessions carrying
+ * `@jmux-grid-hidden` are subtracted out by the caller and reported under
+ * `hiddenCount`, because no filter reaches them; they need the palette's
+ * "Show hidden sessions (N)…". Counting a session in both told a user to
+ * press `⌃a f` for something that key cannot bring back.
  */
 export interface EmptyGridContext {
   viewName: string;

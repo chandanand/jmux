@@ -9721,17 +9721,14 @@ function applyGridSnapshot(snap: GridSnapshot): void {
     const activeView = commandCenterViews.find((v) => v.id === activeViewId) ?? commandCenterViews[0];
     glassView?.setTiles(specs, {
       viewName: activeView.name,
-      // Two different numbers, because they answer two different questions and
-      // conflating them sent the user looking for an exception that was not
-      // there. `excludedCount` is everything the active axes left out —
-      // filtered, parked, hidden or paneless — and widening the view recovers
-      // it. `hiddenCount` is the `@jmux-grid-hidden` exception alone, which no
-      // filter will bring back: it needs the palette's "Show hidden sessions".
-      // Disjoint, deliberately: a hidden session is already subtracted out of
-      // `excludedCount` so it is reported once, under the clause whose remedy
-      // actually works on it. Counting it in both rendered "3 not shown  3
-      // hidden" for the same three sessions, sending the user to ⌃a f for
-      // something no filter can recover.
+      // Two numbers, disjoint, because they have two remedies. `excludedCount`
+      // is what a wider view would bring back — filtered, parked or paneless —
+      // which is what `⌃a f` reaches. `hiddenCount` is the `@jmux-grid-hidden`
+      // exception, which no filter recovers; only the palette's "Show hidden
+      // sessions" undoes it. Hidden sessions are subtracted out of the first so
+      // each session is reported once, under the clause whose key actually
+      // works on it: counting them in both rendered "3 not shown  3 hidden" for
+      // the same three sessions and sent the user to `⌃a f` for nothing.
       excludedCount: Math.max(
         0,
         shared.sessions.length - specs.length - gridHiddenSessionIds.size,
