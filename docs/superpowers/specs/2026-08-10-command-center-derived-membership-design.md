@@ -182,9 +182,17 @@ export function electRepresentative(
 ```
 
 Precedence for `electRepresentative`: live `explicitPane` (must appear in
-`panes`) → the most urgent force-on pane → the most urgent eligible pane by
-`outranks()` (`agent-state-rollup.ts:31`), waiting over running over complete,
-ties to the earliest `since` → the session-active pane → the first pane.
+`panes`) → a force-on pane → an eligible pane → the session-active pane → the
+first pane.
+
+**Within a tier**, the winner is the most urgent by `outranks()`
+(`agent-state-rollup.ts:31`) — waiting over running over complete, ties to the
+earliest `since` — and where no member of that tier has a state at all, the lowest
+pane id. A tier that has members always answers. A force-on pane with no state
+therefore still beats a kinded pane that has one, which is the point of pinning:
+the pin is an explicit "this is the pane I care about in this session", and an
+explicit choice outranking a derived signal is the same rule `explicitPane` above
+it and `@jmux-pinned` throughout this design already follow.
 
 **`sessionActive` means `window_active && pane_active`, not `pane_active` alone.**
 `pane_active` is true of one pane in *every* window, so a session with three
