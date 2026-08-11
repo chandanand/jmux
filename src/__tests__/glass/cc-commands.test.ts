@@ -1,86 +1,100 @@
 import { describe, test, expect } from "bun:test";
-import { buildCcCommands, NEW_TAB_OPTION_ID, type CcCommandInput } from "../../glass/cc-commands";
-import type { TabEntry } from "../../glass/tabs";
+import { buildCcCommands, type CcCommandInput } from "../../glass/cc-commands";
+import type { CommandCenterView } from "../../glass/views";
 
-const tabs: TabEntry[] = [
-  { id: "default", name: "Main" },
-  { id: "backend", name: "Backend" },
+const views: CommandCenterView[] = [
+  { id: "active", name: "Active", filter: "active", groupBy: "status", sortBy: "status" },
+  { id: "backend", name: "Backend", filter: "all", groupBy: "project", sortBy: "name" },
 ];
-const counts = new Map([["default", 1], ["backend", 2]]);
 
 const base: CcCommandInput = {
-  inGlass: false, tabs, activeTabId: "default", tabCounts: counts,
-  focusedPaneId: null, focusedTabId: null, focusedIsAuto: false,
-  sessionActivePinned: false,
+  inGlass: false,
+  views,
+  activeViewId: "active",
+  dirty: false,
+  hiddenSessions: [],
+  targetPaneId: null,
+  targetPinned: false,
 };
 
 const ids = (cmds: { id: string }[]) => cmds.map((c) => c.id);
 
-describe("buildCcCommands — session context", () => {
-  test("offers a fused pin picker (tabs + new) when the active pane is unpinned", () => {
-    const cmds = buildCcCommands(base);
+describe("buildCcCommands — pin/unpin", () => {
+  test("offers pin when the target pane isn't pinned, with the new meaning in the label", () => {
+    const cmds = buildCcCommands({ ...base, targetPaneId: "%5", targetPinned: false });
     const pin = cmds.find((c) => c.id === "pin-pane")!;
     expect(pin).toBeTruthy();
-    expect(pin.sublist!.map((o) => o.label)).toContain("Main (1)");
-    expect(pin.sublist!.map((o) => o.label)).toContain("Backend (2)");
-    expect(pin.sublist!.at(-1)).toEqual({ id: NEW_TAB_OPTION_ID, label: "+ New tab…" });
+    expect(pin.label).toMatch(/keep this session on the grid/i);
+    expect(pin.sublist).toBeUndefined();
     expect(ids(cmds)).not.toContain("unpin-pane");
   });
 
-  test("offers unpin when the active pane is already pinned", () => {
-    const cmds = buildCcCommands({ ...base, sessionActivePinned: true });
+  test("offers unpin when the target pane already carries a force-on pin", () => {
+    const cmds = buildCcCommands({ ...base, targetPaneId: "%5", targetPinned: true });
     expect(ids(cmds)).toContain("unpin-pane");
     expect(ids(cmds)).not.toContain("pin-pane");
   });
 
-  test("does not offer tile-targeted commands outside glass", () => {
-    expect(ids(buildCcCommands(base))).not.toContain("move-tile");
-    expect(ids(buildCcCommands(base))).not.toContain("unpin-tile");
+  test("offers neither when there is no target pane", () => {
+    const cmds = buildCcCommands({ ...base, targetPaneId: null });
+    expect(ids(cmds)).not.toContain("pin-pane");
+    expect(ids(cmds)).not.toContain("unpin-pane");
   });
 });
 
-describe("buildCcCommands — glass context", () => {
-  const glass: CcCommandInput = {
-    ...base, inGlass: true, activeTabId: "backend",
-    focusedPaneId: "%5", focusedTabId: "backend", focusedIsAuto: false,
-  };
-
-  test("move-tile excludes the current tab and ends with + New tab…", () => {
-    const cmds = buildCcCommands(glass);
-    const move = cmds.find((c) => c.id === "move-tile")!;
-    expect(move.sublist!.map((o) => o.id)).not.toContain("backend"); // current tab excluded
-    expect(move.sublist!.map((o) => o.id)).toContain("default");
-    expect(move.sublist!.at(-1)!.id).toBe(NEW_TAB_OPTION_ID);
+describe("buildCcCommands — view CRUD", () => {
+  test("save/rename/delete are offered only in glass", () => {
+    expect(ids(buildCcCommands({ ...base, inGlass: true }))).toEqual(
+      expect.arrayContaining(["save-cc-view", "rename-cc-view", "delete-cc-view"]),
+    );
+    const outsideGlass = ids(buildCcCommands(base));
+    expect(outsideGlass).not.toContain("save-cc-view");
+    expect(outsideGlass).not.toContain("rename-cc-view");
+    expect(outsideGlass).not.toContain("delete-cc-view");
   });
 
-  test("unpin-tile is enabled for a manual pin", () => {
-    const cmd = buildCcCommands(glass).find((c) => c.id === "unpin-tile")!;
-    expect(cmd.disabled).toBeFalsy();
+  test("switch-cc-view is offered everywhere and lists every view", () => {
+    for (const inGlass of [true, false]) {
+      const cmd = buildCcCommands({ ...base, inGlass }).find((c) => c.id === "switch-cc-view")!;
+      expect(cmd.sublist!.map((o) => o.id)).toEqual(["active", "backend"]);
+    }
   });
 
-  test("unpin-tile is a disabled hinted row for a tile nobody pinned", () => {
-    const cmd = buildCcCommands({ ...glass, focusedIsAuto: true }).find((c) => c.id === "unpin-tile")!;
-    expect(cmd.disabled).toBe(true);
-    // Derived membership: unpinning a tile that carries no pin would do
-    // nothing, so the row says why rather than failing silently.
-    expect(cmd.hint).toMatch(/matches this view/i);
+  test("marks the active view dirty in the switch sublist, and only the active one", () => {
+    const cmd = buildCcCommands({ ...base, dirty: true }).find((c) => c.id === "switch-cc-view")!;
+    const active = cmd.sublist!.find((o) => o.id === "active")!;
+    const backend = cmd.sublist!.find((o) => o.id === "backend")!;
+    expect(active.label).toBe("Active (unsaved changes)");
+    expect(backend.label).toBe("Backend");
   });
 
-  test("tile-targeted commands are hidden when there is no focused tile", () => {
-    const cmds = buildCcCommands({ ...glass, focusedPaneId: null });
-    expect(ids(cmds)).not.toContain("move-tile");
-    expect(ids(cmds)).not.toContain("unpin-tile");
+  test("no dirty marker anywhere when the live axes match the active view", () => {
+    const cmd = buildCcCommands({ ...base, dirty: false }).find((c) => c.id === "switch-cc-view")!;
+    expect(cmd.sublist!.every((o) => !o.label.includes("unsaved"))).toBe(true);
   });
 
-  test("move-tab-left is hidden for the first non-default tab; right offered when room", () => {
-    // active = backend (index 1, the only non-default) → left would cross default
-    const cmds = buildCcCommands(glass);
-    expect(ids(cmds)).not.toContain("move-tab-left");
-    expect(ids(cmds)).not.toContain("move-tab-right"); // no tab to the right
+  test("switch-cc-view flags the active view as current", () => {
+    const cmd = buildCcCommands(base).find((c) => c.id === "switch-cc-view")!;
+    expect(cmd.sublist!.find((o) => o.id === "active")!.current).toBe(true);
+    expect(cmd.sublist!.find((o) => o.id === "backend")!.current).toBeFalsy();
+  });
+});
+
+describe("buildCcCommands — hidden sessions", () => {
+  test("hidden is omitted when nothing is hidden", () => {
+    expect(ids(buildCcCommands(base))).not.toContain("show-hidden-sessions");
   });
 
-  test("switch-cc-tab lists all tabs", () => {
-    const cmd = buildCcCommands(glass).find((c) => c.id === "switch-cc-tab")!;
-    expect(cmd.sublist!.map((o) => o.id)).toEqual(["default", "backend"]);
+  test("hidden carries the count in its label and every hidden session in its sublist", () => {
+    const cmds = buildCcCommands({
+      ...base,
+      hiddenSessions: [{ id: "$1", name: "alpha" }, { id: "$2", name: "beta" }],
+    });
+    const hidden = cmds.find((c) => c.id === "show-hidden-sessions")!;
+    expect(hidden.label).toBe("Show hidden sessions (2)…");
+    expect(hidden.sublist).toEqual([
+      { id: "$1", label: "alpha" },
+      { id: "$2", label: "beta" },
+    ]);
   });
 });

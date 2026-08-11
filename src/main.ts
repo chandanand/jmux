@@ -43,6 +43,7 @@ import {
 } from "./new-session-modal";
 import { CaptureModal, type CaptureResult } from "./capture-modal";
 import { buildPinCommands } from "./cli/pane";
+import { buildGridHiddenCommands } from "./cli/session";
 import type { CellAttrs } from "./cell-grid";
 import { createGrid } from "./cell-grid";
 import type { Modal } from "./modal";
@@ -185,16 +186,17 @@ import {
   resolveActiveViewId,
   reloadViews,
   switchView,
+  deleteView,
+  addView,
+  renameView,
   axesDiffer,
   type CommandCenterAxes,
   type CommandCenterView,
 } from "./glass/views";
 import { GlassView, type GlassTileSpec } from "./glass/view";
-import { normalizeTabs, defaultTabId, addTab, renameTab, deleteTab, moveTab, type TabEntry } from "./glass/tabs";
-import { buildCcCommands, NEW_TAB_OPTION_ID } from "./glass/cc-commands";
+import { buildCcCommands } from "./glass/cc-commands";
 import { renderStrip, layoutStrip, STRIP_ROWS } from "./glass/strip";
 import { chipAtCol, type PlacedChip } from "./band-layout";
-import { clampTabSelection } from "./glass/reload";
 import { OtelReceiver } from "./otel-receiver";
 import { computeFrameLayout, sidebarBottomRow, SIDEBAR_MIN_TERM_COLS, type FrameLayout } from "./frame-layout";
 import { AgentStateTracker, coerceStaleAgentState } from "./agent-state";
@@ -1452,10 +1454,6 @@ let inGlass = false;
 /** The real session the interactive client was on before glass parked it. */
 let preGlassSessionId: string | null = null;
 let glassView: GlassView | null = null;
-
-let commandCenterTabs: TabEntry[] = normalizeTabs(configStore.config.commandCenterTabs);
-let activeTabId: string = defaultTabId(commandCenterTabs);
-let lastActiveTabId: string = activeTabId;
 let currentStripChips: PlacedChip[] = [];
 
 // The Command Center's saved views and its live (possibly dirty) axes. The
@@ -1472,6 +1470,12 @@ let gridAxes: CommandCenterAxes = normalizeAxes(
   configStore.config.commandCenterAxes,
   commandCenterViews.find((v) => v.id === activeViewId) ?? commandCenterViews[0],
 );
+
+/** Sessions currently kept off the grid by `@jmux-grid-hidden`, refreshed by
+ *  every `applyGridSnapshot` — the palette's "Show hidden sessions" needs this
+ *  synchronously, and the grid reconciler already re-reads it on every tick
+ *  regardless of whether the grid is on screen. */
+let gridHiddenSessionIds: Set<string> = new Set();
 
 /**
  * The grid's reconcile scheduler. Declared here, above every caller, because
@@ -4854,14 +4858,11 @@ const inputRouter = new InputRouter(
       glassView?.moveFocus(dir);
       scheduleRender();
     },
-    // The strip is always visible in the grid now — no tab count to gate on.
+    // The strip is always visible in the grid now — no view count to gate on.
     glassStripRows: () => (inGlass ? STRIP_ROWS : 0),
-    // These fire on the strip, which shows views now, not tabs — the router
-    // option names are the one thing phase 9 still owns the renaming of,
-    // alongside the rest of the tab vocabulary it retires.
-    onGlassTabClick: (x) => { const id = chipAtCol(currentStripChips, x); if (id) switchGlassView(id); },
-    onGlassTabSwitch: (n) => { const view = commandCenterViews[n - 1]; if (view) switchGlassView(view.id); },
-    onGlassTabRelative: (delta) => switchGlassViewRelative(delta),
+    onGlassViewClick: (x) => { const id = chipAtCol(currentStripChips, x); if (id) switchGlassView(id); },
+    onGlassViewSwitch: (n) => { const view = commandCenterViews[n - 1]; if (view) switchGlassView(view.id); },
+    onGlassViewRelative: (delta) => switchGlassViewRelative(delta),
     onGlassDetach: () => detachClient(),
     onGlassToggle: () => { void toggleCommandCenter(); },
     onGlassPinToggle: () => { void toggleGridMembership(); },
@@ -5683,23 +5684,19 @@ function buildPaletteCommands(): PaletteCommand[] {
 
   // Command Center commands (context-aware: in-glass vs session).
   {
-    // Tabs no longer partition the grid: membership is derived from the active
-    // view's axes, so every tile is on whatever tab is showing and a pin's old
-    // tab id has no referent (`parsePinValue`). These three fields are fed the
-    // only honest answers left until phase 9 retires the commands themselves.
-    const focusedPaneId = inGlass ? (glassView?.focusedPaneId() ?? null) : null;
-    const focusedTabId = focusedPaneId ? activeTabId : null;
-    const focusedIsAuto = focusedPaneId ? !pinnedTracker.has(focusedPaneId) : false;
-    let sessionActivePinned = false;
-    if (!inGlass && currentSessionId) {
-      const activePane = glassRunner.run(["display-message", "-p", "-t", currentSessionId, "#{pane_id}"]).lines[0];
-      sessionActivePinned = activePane ? pinnedTracker.has(activePane) : false;
-    }
-    const tabCounts = new Map<string, number>();
-    for (const tab of commandCenterTabs) tabCounts.set(tab.id, 0);
+    const targetPaneId = resolveCcTargetPaneId();
+    const activeView = commandCenterViews.find((v) => v.id === activeViewId) ?? commandCenterViews[0];
+    const hiddenSessions = currentSessions
+      .filter((s) => gridHiddenSessionIds.has(s.id))
+      .map((s) => ({ id: s.id, name: displaySessionName(s) }));
     commands.push(...buildCcCommands({
-      inGlass, tabs: commandCenterTabs, activeTabId, tabCounts,
-      focusedPaneId, focusedTabId, focusedIsAuto, sessionActivePinned,
+      inGlass,
+      views: commandCenterViews,
+      activeViewId,
+      dirty: axesDiffer(activeView, gridAxes),
+      hiddenSessions,
+      targetPaneId,
+      targetPinned: targetPaneId ? pinnedTracker.has(targetPaneId) : false,
     }));
   }
 
@@ -7920,31 +7917,22 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
     return;
   }
 
-  // Pin the current session's active pane (or move the focused tile) to a
-  // chosen/created tab. Writers only set/unset `@jmux-pinned`; the TUI reflects
-  // it into Command Center live-mirror tiles — no pane is ever moved or broken.
-  if (commandId === "pin-pane" || commandId === "move-tile") {
-    const paneId = commandId === "pin-pane"
-      ? glassRunner.run(["display-message", "-p", "-t", currentSessionId!, "#{pane_id}"]).lines[0]
-      : (glassView?.focusedPaneId() ?? null);
+  // Pin/unpin the pane a Command Center command acts on — the glass tile's
+  // displayed pane in the grid, the current session's active pane otherwise
+  // (`resolveCcTargetPaneId`, shared with buildPaletteCommands so the row
+  // offered and the pane acted on can't disagree). Pin no longer takes a tab:
+  // it keeps this pane's session on the grid and prefers this pane as its
+  // face; unpin drops that preference.
+  if (commandId === "pin-pane") {
+    const paneId = resolveCcTargetPaneId();
     if (!paneId) return;
-    const applyTab = (tabId: string) => {
-      for (const cmd of buildPinCommands("pin", paneId, tabId)) glassRunner.run(cmd.args);
-      if (commandId === "move-tile") switchCommandCenterTab(tabId); // follow the moved tile
-      invalidateGrid();
-    };
-    if (sublistOptionId === NEW_TAB_OPTION_ID) {
-      openInputModalForNewTab((newTabId) => applyTab(newTabId));
-    } else if (sublistOptionId) {
-      applyTab(sublistOptionId);
-    }
+    for (const cmd of buildPinCommands("pin", paneId)) glassRunner.run(cmd.args);
+    invalidateGrid();
     return;
   }
 
-  if (commandId === "unpin-pane" || commandId === "unpin-tile") {
-    const paneId = commandId === "unpin-tile"
-      ? (glassView?.focusedPaneId() ?? null)
-      : glassRunner.run(["display-message", "-p", "-t", currentSessionId!, "#{pane_id}"]).lines[0];
+  if (commandId === "unpin-pane") {
+    const paneId = resolveCcTargetPaneId();
     if (!paneId) return;
     for (const cmd of buildPinCommands("unpin", paneId)) glassRunner.run(cmd.args);
     invalidateGrid();
@@ -7967,18 +7955,19 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
     return;
   }
 
-  if (commandId === "switch-cc-tab" && sublistOptionId) {
+  if (commandId === "switch-cc-view" && sublistOptionId) {
     if (!inGlass) { await enterGlass(); }
-    switchCommandCenterTab(sublistOptionId);
+    switchGlassView(sublistOptionId);
     return;
   }
 
-  if (commandId === "new-cc-tab") { openInputModalForNewTab((id) => switchCommandCenterTab(id)); return; }
-  if (commandId === "rename-cc-tab") { openInputModalForRenameTab(); return; }
-  if (commandId === "delete-cc-tab") { tryDeleteActiveTab(); return; }
-  if (commandId === "move-tab-left" || commandId === "move-tab-right") {
-    persistTabs(moveTab(commandCenterTabs, activeTabId, commandId === "move-tab-left" ? "left" : "right"));
-    scheduleRender();
+  if (commandId === "save-cc-view") { openInputModalForSaveView(); return; }
+  if (commandId === "rename-cc-view") { openInputModalForRenameView(); return; }
+  if (commandId === "delete-cc-view") { deleteCcView(); return; }
+
+  if (commandId === "show-hidden-sessions" && sublistOptionId) {
+    for (const cmd of buildGridHiddenCommands("unhide", sublistOptionId)) glassRunner.run(cmd.args);
+    invalidateGrid();
     return;
   }
 
@@ -8930,15 +8919,6 @@ try {
     glassView?.setStateColors(newStateColors);
     scheduleRender();
 
-    // Reload the Command Center tab registry (palette CRUD + hand-edits land here).
-    {
-      commandCenterTabs = normalizeTabs(updated.commandCenterTabs);
-      const clamped = clampTabSelection(commandCenterTabs, activeTabId, lastActiveTabId);
-      activeTabId = clamped.activeTabId;
-      lastActiveTabId = clamped.lastActiveTabId;
-      scheduleRender();
-    }
-
     // Reload the view registry. A hand-edit to the file is the one thing that
     // can move the active view under a dirty set of axes, which is why this
     // goes through `reloadViews` rather than re-reading the three fields: the
@@ -9606,6 +9586,7 @@ function applyGridSnapshot(snap: GridSnapshot): void {
     pinnedTracker.apply(paneId, snap.pinByPane.get(paneId) ?? null);
   }
   pinnedTracker.pruneExcept(livePaneIds);
+  gridHiddenSessionIds = snap.hiddenSessionIds;
 
   // Membership: the sidebar's own ordering on the grid's axes, then the two
   // exceptions. Read back off the sidebar rather than re-derived, so the grid
@@ -9727,10 +9708,6 @@ async function enterGlass(): Promise<void> {
   ensureGlassView();
   inGlass = true;
   applyChromeLayout(); // frameless layout now governs the sidebar/input router
-  // Restore last-active tab; fall back to default if it no longer exists.
-  activeTabId = commandCenterTabs.some((t) => t.id === lastActiveTabId)
-    ? lastActiveTabId
-    : defaultTabId(commandCenterTabs);
   sidebar.setActiveSession(""); // clear the session highlight while in the glass
   sidebar.setOverviewActive(true);
   // Park the main client so it doesn't constrain the pinned sessions' sizes.
@@ -9744,15 +9721,6 @@ async function enterGlass(): Promise<void> {
   // Awaited, not merely queued: the first read is what spawns the tiles, and
   // rendering ahead of it would flash the empty state on every open.
   await gridReconciler.flush();
-  scheduleRender();
-}
-
-function switchCommandCenterTab(tabId: string): void {
-  if (!commandCenterTabs.some((t) => t.id === tabId)) return;
-  activeTabId = tabId;
-  lastActiveTabId = tabId;
-  // No `setActiveTab`: the grid is one derived set and a tab no longer selects
-  // between them, so switching moves the strip's highlight and nothing else.
   scheduleRender();
 }
 
@@ -9782,55 +9750,71 @@ function switchGlassViewRelative(delta: number): void {
 }
 
 /**
- * Surface a Command-Center validation error (empty/duplicate/too-long tab name,
- * non-empty/default tab delete) using the same short-lived ContentModal pattern
- * as session-creation failures — jmux has no toast system.
+ * Surface a Command-Center validation error (empty/duplicate/too-long view
+ * name) using the same short-lived ContentModal pattern as session-creation
+ * failures — jmux has no toast system.
  */
 function showCcError(message: string): void {
   showNotice({ title: "Command Center", message, tone: "error" });
 }
 
-function persistTabs(next: TabEntry[]): void {
-  commandCenterTabs = next;
-  configStore.set("commandCenterTabs", next);
-  // Clamp active/last-active if they vanished.
-  if (!next.some((t) => t.id === activeTabId)) activeTabId = defaultTabId(next);
-  if (!next.some((t) => t.id === lastActiveTabId)) lastActiveTabId = defaultTabId(next);
-  if (inGlass) invalidateGrid();
+/**
+ * The pane a Command Center pin/unpin command acts on: the glass tile's
+ * currently displayed pane while in the grid, the current session's active
+ * pane otherwise. Shared by `buildPaletteCommands` and its handler so the row
+ * offered and the pane it acts on can never disagree.
+ */
+function resolveCcTargetPaneId(): string | null {
+  if (inGlass) return glassView?.focusedPaneId() ?? null;
+  if (!currentSessionId) return null;
+  return glassRunner.run(["display-message", "-p", "-t", currentSessionId, "#{pane_id}"]).lines[0] ?? null;
 }
 
-function openInputModalForNewTab(then: (tabId: string) => void): void {
-  const modal = new InputModal({ header: "New tab name", placeholder: "e.g. Backend" });
+/** "Save current axes as view…" — clones the live (possibly dirty) axes into
+ *  a newly named view and adopts it as active. Adopting is what clears the
+ *  dirty marker: the new view's axes are the live axes by construction, so
+ *  leaving a different view active would still read as unsaved the moment
+ *  after saving. */
+function openInputModalForSaveView(): void {
+  const modal = new InputModal({ header: "Save view", placeholder: "e.g. Backend" });
   modal.open();
   openModal(modal, (value) => {
-    const result = addTab(commandCenterTabs, String(value));
+    const result = addView(commandCenterViews, String(value), gridAxes);
     if (!result.ok) { showCcError(result.error); return; }
-    const created = result.tabs[result.tabs.length - 1];
-    persistTabs(result.tabs);
-    then(created.id);
+    commandCenterViews = result.views;
+    activeViewId = result.views[result.views.length - 1]!.id;
+    configStore.set("commandCenterViews", commandCenterViews);
+    configStore.set("commandCenterActiveViewId", activeViewId);
+    scheduleRender();
   });
 }
 
-function openInputModalForRenameTab(): void {
-  const current = commandCenterTabs.find((t) => t.id === activeTabId);
+/** "Rename view…" — renames the active view in place. */
+function openInputModalForRenameView(): void {
+  const current = commandCenterViews.find((v) => v.id === activeViewId);
   if (!current) return;
-  const modal = new InputModal({ header: "Rename tab", value: current.name });
+  const modal = new InputModal({ header: "Rename view", value: current.name });
   modal.open();
   openModal(modal, (value) => {
-    const result = renameTab(commandCenterTabs, activeTabId, String(value));
+    const result = renameView(commandCenterViews, activeViewId, String(value));
     if (!result.ok) { showCcError(result.error); return; }
-    persistTabs(result.tabs);
+    commandCenterViews = result.views;
+    configStore.set("commandCenterViews", commandCenterViews);
+    scheduleRender();
   });
 }
 
-function tryDeleteActiveTab(): void {
-  // Zero, always: a tab holds no members now that membership is derived from
-  // the active view's axes, so `deleteTab`'s non-empty refusal can no longer
-  // fire and only its protected-default one can.
-  const result = deleteTab(commandCenterTabs, activeTabId, 0);
-  if (!result.ok) { showCcError(result.error); return; }
-  persistTabs(result.tabs);
-  switchCommandCenterTab(defaultTabId(commandCenterTabs));
+/** "Delete view" — never fails (no protected default, no member count to
+ *  strand); `deleteView` picks the next active view and its axes for us. */
+function deleteCcView(): void {
+  const result = deleteView(commandCenterViews, activeViewId, activeViewId);
+  commandCenterViews = result.views;
+  activeViewId = result.activeViewId;
+  gridAxes = result.axes;
+  configStore.set("commandCenterViews", commandCenterViews);
+  configStore.set("commandCenterActiveViewId", activeViewId);
+  configStore.set("commandCenterAxes", gridAxes);
+  invalidateGrid();
 }
 
 /**

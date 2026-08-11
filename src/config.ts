@@ -3,7 +3,6 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { homedir } from "os";
 import type { AdapterConfig } from "./adapters/types";
 import type { PanelView } from "./panel-view";
-import type { TabEntry } from "./glass/tabs";
 import type { RepoSettings } from "./repo-settings";
 import type { UnparkTrigger } from "./parking";
 import type { ScreenSignature } from "./agent-screen";
@@ -109,15 +108,6 @@ export interface JmuxConfig {
   windowBranches?: boolean;
   pinnedSessions?: string[];
   /**
-   * @deprecated Pre-views auto-pin toggle, read by nothing since membership
-   * became derived: auto *is* the baseline now, so there is nothing left for
-   * this to switch on. The key survives on disk only because `persist()`
-   * writes the whole loaded object back, so removing the field alone would
-   * not remove the key — the migration that deletes it lands with phase 9's,
-   * beside `commandCenterTabs`.
-   */
-  autoPinAgentPanes?: boolean;
-  /**
    * Case-insensitive regex matched against `pane_current_command` to decide
    * which panes are worth *electing* as a session's Command Center face
    * (`eligiblePanes`, `glass/representative.ts`) — the last-resort signal for
@@ -195,18 +185,6 @@ export interface JmuxConfig {
   /** @deprecated Pre-split single sort axis; read once to migrate onto
    * sidebarGroupBy + sidebarSortBy, then never written again. */
   sidebarSort?: "project" | "status" | "activity" | "name";
-  /**
-   * @deprecated Pre-views hand-assigned tab registry, superseded by
-   * `commandCenterViews`. `main.ts` still builds the tab registry from this
-   * (`normalizeTabs(configStore.config.commandCenterTabs)`) and `cli/cc.ts`
-   * still reads it too, so it stays live and on disk until both move off it
-   * (`main.ts` in phase 6, the CLI in phase 9) — deleting the key first would
-   * silently fold every named tab back to the default the moment a user
-   * restarted. Once nothing reads it, a migration should delete it from disk,
-   * because `persist()` writes the whole object back (`config.ts:551`) and a
-   * dropped TS field alone would never stop it re-appearing.
-   */
-  commandCenterTabs?: TabEntry[];
   /** Ordered Command Center view registry; never empty after normalize. */
   commandCenterViews?: CommandCenterView[];
   /** The active view id, clamped to an existing view. */
@@ -417,19 +395,26 @@ function mergeConfigWithDefaults(userConfig: JmuxConfig, defaults: JmuxConfig): 
  * whether anything changed (the caller persists only when changed), the same
  * contract as `migrateLegacyConfig`.
  *
- * Deliberately does **not** touch `commandCenterTabs` or `autoPinAgentPanes`.
- * `commandCenterTabs` is still read by live code — `main.ts` builds the strip's
- * tab registry from it via `normalizeTabs`, and `cli/cc.ts` reads it too — and
- * deleting the key before they move would silently fold every named tab back
- * to the default. `autoPinAgentPanes` no longer gates anything (derived
- * membership is the baseline), but a TS field alone is not a key: `persist()`
- * writes the whole loaded object back, so the key needs an explicit delete.
- * Both deletions (and this comment) belong in the migration that lands with
- * phase 9's `main.ts`/`cli/cc.ts` change.
+ * Also drops `commandCenterTabs` and `autoPinAgentPanes` from disk. Both were
+ * kept on a previous pass because `main.ts` and `cli/cc.ts` still read them —
+ * deleting the key before they moved off it would have silently folded every
+ * named tab back to the default. Now that neither reader exists, the key
+ * itself is dead weight: `persist()` writes the whole loaded object back
+ * (`config.ts:551`), so a dropped TS field alone would never stop either key
+ * from re-appearing on the next save.
  */
 export function migrateCommandCenterConfig(raw: any): { config: any; changed: boolean } {
   const config = { ...(raw ?? {}) };
   let changed = false;
+
+  if ("commandCenterTabs" in config) {
+    delete config.commandCenterTabs;
+    changed = true;
+  }
+  if ("autoPinAgentPanes" in config) {
+    delete config.autoPinAgentPanes;
+    changed = true;
+  }
 
   // Absence alone is never a reason to flip `changed`: a config with no
   // Command Center history at all (the common case — a brand-new install, or

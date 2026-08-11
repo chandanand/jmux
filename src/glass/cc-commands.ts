@@ -1,78 +1,94 @@
-import type { PaletteCommand, PaletteSublistOption } from "../types";
-import type { TabEntry } from "./tabs";
+import type { PaletteCommand } from "../types";
+import type { CommandCenterView } from "./views";
 
-export const NEW_TAB_OPTION_ID = "__new_tab__";
+/** A session currently kept off the grid by `@jmux-grid-hidden`. */
+export interface HiddenSessionOption {
+  id: string;
+  name: string;
+}
 
 export interface CcCommandInput {
   inGlass: boolean;
-  tabs: TabEntry[];
-  activeTabId: string;
-  tabCounts: Map<string, number>;
-  focusedPaneId: string | null;
-  focusedTabId: string | null;
-  focusedIsAuto: boolean;
-  sessionActivePinned: boolean;
+  views: CommandCenterView[];
+  activeViewId: string;
+  /** The live axes have moved on from the active view's own saved axes. */
+  dirty: boolean;
+  /** Sessions currently off the grid via `@jmux-grid-hidden` — the palette's
+   *  only way to discover and undo a hide that isn't the focused session. */
+  hiddenSessions: readonly HiddenSessionOption[];
+  /**
+   * The pane a pin/unpin command would act on: the glass tile's displayed
+   * pane while in the grid, the current session's active pane otherwise.
+   * Null when there is nothing to act on — an empty grid with no focused
+   * tile, or no current session.
+   */
+  targetPaneId: string | null;
+  /** Whether `targetPaneId` already carries a force-on `@jmux-pinned`. */
+  targetPinned: boolean;
 }
 
-function tabSublist(
-  tabs: TabEntry[],
-  counts: Map<string, number>,
-  opts?: { excludeId?: string },
-): PaletteSublistOption[] {
-  const out: PaletteSublistOption[] = [];
-  for (const t of tabs) {
-    if (opts?.excludeId && t.id === opts.excludeId) continue;
-    out.push({ id: t.id, label: `${t.name} (${counts.get(t.id) ?? 0})` });
-  }
-  out.push({ id: NEW_TAB_OPTION_ID, label: "+ New tab…" });
-  return out;
+/** "Active (unsaved changes)" for the active view while its saved axes and
+ *  the live axes disagree; the bare name otherwise. */
+function viewSublistLabel(view: CommandCenterView, input: CcCommandInput): string {
+  const isDirtyActive = view.id === input.activeViewId && input.dirty;
+  return isDirtyActive ? `${view.name} (unsaved changes)` : view.name;
 }
 
 export function buildCcCommands(input: CcCommandInput): PaletteCommand[] {
   const cmds: PaletteCommand[] = [];
-  const { tabs, activeTabId, tabCounts } = input;
 
-  if (input.inGlass) {
-    if (input.focusedPaneId) {
+  // Pin no longer targets a tab — there is no tab to choose. It keeps this
+  // pane's session on the grid and prefers this pane as the session's face;
+  // unpin drops that preference. Direct actions, no sublist.
+  if (input.targetPaneId) {
+    if (input.targetPinned) {
       cmds.push({
-        id: "move-tile", label: "Move tile to tab…", category: "command center",
-        sublist: tabSublist(tabs, tabCounts, { excludeId: input.focusedTabId ?? undefined }),
+        id: "unpin-pane",
+        label: "Unpin from Command Center",
+        category: "command center",
       });
-      if (input.focusedIsAuto) {
-        cmds.push({
-          id: "unpin-tile", label: "Unpin tile", category: "command center",
-          disabled: true, hint: "on the grid because it matches this view",
-        });
-      } else {
-        cmds.push({ id: "unpin-tile", label: "Unpin tile", category: "command center" });
-      }
-    }
-    // Tab management (active-tab subject).
-    cmds.push({ id: "new-cc-tab", label: "New Command Center tab…", category: "command center" });
-    cmds.push({ id: "rename-cc-tab", label: "Rename current tab…", category: "command center" });
-    cmds.push({ id: "delete-cc-tab", label: "Delete current tab", category: "command center" });
-
-    const activeIdx = tabs.findIndex((t) => t.id === activeTabId);
-    if (activeIdx > 1) cmds.push({ id: "move-tab-left", label: "Move tab left", category: "command center" });
-    if (activeIdx >= 1 && activeIdx < tabs.length - 1)
-      cmds.push({ id: "move-tab-right", label: "Move tab right", category: "command center" });
-  } else {
-    // Session context: pin (fused) or unpin the active pane.
-    if (input.sessionActivePinned) {
-      cmds.push({ id: "unpin-pane", label: "Unpin from Command Center", category: "command center" });
     } else {
       cmds.push({
-        id: "pin-pane", label: "Pin to Command Center", category: "command center",
-        sublist: tabSublist(tabs, tabCounts),
+        id: "pin-pane",
+        label: "Pin to Command Center — keep this session on the grid, showing this pane",
+        category: "command center",
       });
     }
   }
 
-  // Switch-to-tab is available everywhere.
+  // View CRUD acts on the active view, so it only makes sense while looking
+  // at the grid — the same reason Ctrl-a G/s/f (the axes these views name)
+  // are glass-only chords.
+  if (input.inGlass) {
+    cmds.push({ id: "save-cc-view", label: "Save current axes as view…", category: "command center" });
+    cmds.push({ id: "rename-cc-view", label: "Rename view…", category: "command center" });
+    cmds.push({ id: "delete-cc-view", label: "Delete view", category: "command center" });
+  }
+
+  // Switching views is available everywhere: picking one from outside the
+  // grid opens it, the same as the old switch-to-tab command did.
   cmds.push({
-    id: "switch-cc-tab", label: "Switch to Command Center tab…", category: "command center",
-    sublist: tabs.map((t) => ({ id: t.id, label: `${t.name} (${tabCounts.get(t.id) ?? 0})`, current: t.id === activeTabId })),
+    id: "switch-cc-view",
+    label: "Switch view…",
+    category: "command center",
+    sublist: input.views.map((v) => ({
+      id: v.id,
+      label: viewSublistLabel(v, input),
+      current: v.id === input.activeViewId,
+    })),
   });
+
+  // A hidden session is discoverable, not silent: this is the only way to
+  // undo a hide for a session that isn't the one currently focused (Ctrl-a P
+  // only acts on that one).
+  if (input.hiddenSessions.length > 0) {
+    cmds.push({
+      id: "show-hidden-sessions",
+      label: `Show hidden sessions (${input.hiddenSessions.length})…`,
+      category: "command center",
+      sublist: input.hiddenSessions.map((s) => ({ id: s.id, label: s.name })),
+    });
+  }
 
   return cmds;
 }
