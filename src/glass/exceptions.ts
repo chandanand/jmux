@@ -69,6 +69,14 @@ export interface GridExceptionsInput {
  * | Non-member session with a force-on pane        | tile, source "added"         |
  * | Two force-on panes in one session              | one tile either way          |
  *
+ * A **parked** session with a force-on pane is worth naming separately, because
+ * `includeParked: false` reads as absolute and is not: parked work never reaches
+ * `bands`, so it is never `seen`, so its pin puts it in the Added band. That is
+ * the sidebar's own rule — an explicit "keep this" beats a derived "this is
+ * handed off", which is why `buildRenderPlan` checks pinned before parked — and
+ * hidden still beats both, because hide is the exception the user aimed at this
+ * whole session rather than at one pane in it.
+ *
  * Returns the final order: the `Added` band leading, then every derived band
  * in the order `bands` gave it, each with any hidden member dropped.
  */

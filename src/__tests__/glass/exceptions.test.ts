@@ -183,6 +183,37 @@ describe("GridExceptions", () => {
     expect(result).toEqual([{ index: 0, source: "derived" }]);
   });
 
+  // The grid calls orderSessions with includeParked: false, so a parked session
+  // never reaches `bands`. That is not the same as being excluded: an explicit
+  // pin still puts it on the grid, which is the sidebar's own rule (pinned is
+  // checked before parked in buildRenderPlan). Hidden still beats the pin,
+  // because hide names the whole session and the pin names one pane in it.
+  test("parked session with a force-on pane -> tile in the Added band", () => {
+    const sessions = makeSessions([{ name: "live" }, { name: "parked" }]);
+    const result = GridExceptions({
+      sessions,
+      // $1 is parked, so includeParked: false left it out of every band.
+      bands: [band("ungrouped", "ungrouped", [0])],
+      hiddenSessionIds: new Set(),
+      panes: [pane("$1", "on")],
+    });
+    expect(result).toEqual([
+      { index: 1, source: "added" },
+      { index: 0, source: "derived" },
+    ]);
+  });
+
+  test("parked and hidden with a force-on pane -> still no tile", () => {
+    const sessions = makeSessions([{ name: "live" }, { name: "parked" }]);
+    const result = GridExceptions({
+      sessions,
+      bands: [band("ungrouped", "ungrouped", [0])],
+      hiddenSessionIds: new Set(["$1"]),
+      panes: [pane("$1", "on")],
+    });
+    expect(result).toEqual([{ index: 0, source: "derived" }]);
+  });
+
   test("empty input -> empty output", () => {
     const result = GridExceptions({
       sessions: [],
