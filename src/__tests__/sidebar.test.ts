@@ -1856,6 +1856,9 @@ describe("Sidebar — sort & filter", () => {
     expect(sb.getSortMode()).toBe("name");
     expect(sb.cycleSortMode()).toBe("activity");
     expect(sb.getSortMode()).toBe("activity");
+    // Filter axis: all → started → attention → active → all.
+    expect(sb.cycleFilterMode()).toBe("started");
+    expect(sb.getFilterMode()).toBe("started");
     expect(sb.cycleFilterMode()).toBe("attention");
     expect(sb.getFilterMode()).toBe("attention");
   });
@@ -2225,6 +2228,73 @@ describe("Sidebar — sort & filter", () => {
     sb.setFilterMode("attention");
     expect(linesWith(sb, "ENG-1")).toBe(-1);
     expect(linesWith(sb, "To do")).toBe(-1); // nothing left to head
+  });
+
+  // --- "started only": every session, no ghosts, on the stage axis alone ---
+
+  test("started only drops per-stage ghosts and keeps every session", () => {
+    const sb = seeded();
+    sb.setGroupMode("stage");
+    sb.setSessionWorkflow(new Map([
+      ["alpha", stage("todo", "To do", 0)],
+      ["charlie", stage("todo", "To do", 0)],
+    ]));
+    sb.setGhostSessions([stageGhost("i1", "ENG-1", "one", "todo", "To do", 0)]);
+    expect(linesWith(sb, "ENG-1")).toBeGreaterThan(-1);
+
+    sb.setFilterMode("started");
+    expect(linesWith(sb, "ENG-1")).toBe(-1);
+    // The band survives, because its sessions do — including charlie, which is
+    // idle and so exactly what "needs you" would have taken with the ghost.
+    expect(linesWith(sb, "To do")).toBeGreaterThan(-1);
+    for (const name of ["alpha", "bravo", "charlie", "delta"]) {
+      expect(linesWith(sb, name)).toBeGreaterThan(-1);
+    }
+  });
+
+  test("started only empties a stage that held nothing but ghosts", () => {
+    const sb = seeded();
+    sb.setGroupMode("stage");
+    sb.setSessionWorkflow(new Map([["alpha", stage("todo", "To do", 0)]]));
+    sb.setGhostSessions([stageGhost("i1", "ENG-9", "ship it", "review", "In review", 1)]);
+    sb.setFilterMode("started");
+    expect(linesWith(sb, "In review")).toBe(-1); // nothing left to head
+    expect(linesWith(sb, "To do")).toBeGreaterThan(-1);
+  });
+
+  test("started only leaves the flat Up next band alone off the stage axis", () => {
+    // The mode is a statement about the stage axis, where ghosts interleave
+    // into every band. Here they sit in one band at the bottom, so it is
+    // deliberately identical to "all" — which is what the toast discloses.
+    for (const mode of ["none", "project", "status"] as const) {
+      const sb = seeded();
+      sb.setGroupMode(mode);
+      sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
+      const bandUnderAll = linesWith(sb, "Up next");
+      expect(bandUnderAll).toBeGreaterThan(-1);
+      sb.setFilterMode("started");
+      expect(linesWith(sb, "Up next")).toBe(bandUnderAll);
+      expect(linesWith(sb, "ENG-142")).toBeGreaterThan(-1);
+    }
+  });
+
+  test("started only keeps ghosts as nav stops off the stage axis, drops them on it", () => {
+    const sb = seeded();
+    sb.setGhostSessions([ghost("i1", "ENG-142", "fix flaky auth test")]);
+    sb.setFilterMode("started");
+    expect(sb.getNavOrder().some((t) => t.type === "ghost")).toBe(true);
+
+    sb.setGroupMode("stage");
+    sb.setSessionWorkflow(new Map([["alpha", stage("todo", "To do", 0)]]));
+    sb.setGhostSessions([stageGhost("i1", "ENG-142", "fix it", "todo", "To do", 0)]);
+    expect(sb.getNavOrder().some((t) => t.type === "ghost")).toBe(false);
+  });
+
+  test("the header chip names the started-only filter", () => {
+    const sb = seeded();
+    sb.setFilterMode("started");
+    const header = Array.from({ length: WIDTH }, (_, i) => sb.getGrid().cells[0][i].char).join("");
+    expect(header).toContain("Started");
   });
 
   test("a filter hides the band — ghosts have no agent state to match on", () => {

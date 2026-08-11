@@ -1380,6 +1380,37 @@ function applySidebarSort(mode: SortMode): void {
   sidebar.setSortMode(mode);
   configStore.set("sidebarSortBy", mode);
 }
+
+/**
+ * Set the sidebar filter, and say so when the chosen one cannot bite here.
+ *
+ * Nothing is persisted — a filter that hides sessions must not survive a
+ * restart, which is the "where did my sessions go?" trap the original filter
+ * design named. The reason this has a home of its own is the disclosure:
+ *
+ * "started only" suppresses ghost rows on the stage axis, where they are
+ * interleaved into every band. On the other axes it is deliberately identical to
+ * "all" — so choosing it there draws an unchanged sidebar under a header chip
+ * reading "Started": a filter announcing it is filtering while filtering
+ * nothing. That is the failure `sectionedViewNotice` and the workflow screen's
+ * "off globally" row exist to prevent, and it is worse when the only evidence is
+ * a chip that says the opposite.
+ *
+ * Unlike `g` on a sectioned view this does *not* refuse the mode: it is not
+ * permanently inert, it starts acting the moment the user switches to
+ * group=stage, and refusing would mean the filter could not be armed first.
+ * Cycling the group axis afterwards is silent by contrast — there the ghost rows
+ * visibly appear or disappear, which is its own feedback.
+ *
+ * Both entry points (`Ctrl-a f` and the palette submenu) route through here so
+ * they cannot disagree about whether the disclosure appears.
+ */
+function applySidebarFilter(mode: FilterMode): void {
+  sidebar.setFilterMode(mode);
+  if (mode === "started" && sidebar.getGroupMode() !== "stage") {
+    showToast("started only: hides unstarted work when grouped by stage (Ctrl-a G)");
+  }
+}
 const agentStateTracker = new AgentStateTracker();
 
 /**
@@ -4691,7 +4722,7 @@ const inputRouter = new InputRouter(
     onWorkflowScreen: () => toggleWorkflowScreen(),
     onGroupCycle: () => { applySidebarGroup(sidebar.cycleGroupMode()); scheduleRender(); },
     onSortCycle: () => { applySidebarSort(sidebar.cycleSortMode()); scheduleRender(); },
-    onFilterCycle: () => { sidebar.cycleFilterMode(); scheduleRender(); },
+    onFilterCycle: () => { applySidebarFilter(sidebar.cycleFilterMode()); scheduleRender(); },
     onBrowserPane: () => { void openBrowserPane(); },
     onSidebarToggle: () => toggleSidebar(),
     // The three surfaces that take the whole main area but keep the sidebar
@@ -7931,7 +7962,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
     return;
   }
   if (commandId === "sidebar-filter" && sublistOptionId) {
-    sidebar.setFilterMode(sublistOptionId as FilterMode);
+    applySidebarFilter(sublistOptionId as FilterMode);
     scheduleRender();
     return;
   }

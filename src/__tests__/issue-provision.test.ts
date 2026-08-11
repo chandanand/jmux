@@ -101,6 +101,13 @@ describe("buildSetupCommand", () => {
     expect(reasonAt).toBeLessThan(execAt);
   });
 
+  test("the reason is written before the flag that announces it", () => {
+    const cmd = buildSetupCommand({ session: "tra-123", baseBranch: "main", wtm: true });
+    // Two separate tmux processes, and every reader watches the flag: written
+    // flag-first, a poller reliably catches the session flagged with no reason.
+    expect(cmd.indexOf(PROVISION_ATTENTION_REASON)).toBeLessThan(cmd.indexOf("@jmux-attention 1"));
+  });
+
   test("failure keeps the pane open so the tool's error stays readable", () => {
     expect(
       buildSetupCommand({ session: "s", baseBranch: "main", wtm: true }),

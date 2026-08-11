@@ -95,6 +95,14 @@ export function buildMainCommand(o: {
  * the tool's own error message on screen; without it the pane closes and the
  * main pane waits forever for a worktree that is never coming.
  *
+ * The two options are written payload first, flag second, because they are two
+ * separate `tmux` processes and everything downstream watches the *flag*. Set
+ * the other way round there is a window — a few milliseconds, but reliably
+ * caught by a poller that is already running — where the session reads as
+ * flagged with no reason, which is exactly the state `ctl status` and the
+ * workflow board report in one `list-sessions` format string. Writing the
+ * reason first makes "flagged" imply "there is a reason".
+ *
  * `tmux` is invoked bare rather than with a socket flag: the setup pane is
  * inside the server it needs to talk to, so `$TMUX` resolves it. Failures to
  * set the option are swallowed — a flag we could not write must not turn a
@@ -124,8 +132,8 @@ export function buildSetupCommand(o: {
 
   const target = tq(o.session);
   const flag =
-    `tmux set-option -t ${target} @jmux-attention 1 2>/dev/null; ` +
-    `tmux set-option -t ${target} @jmux-attention-reason ${tq(PROVISION_ATTENTION_REASON)} 2>/dev/null`;
+    `tmux set-option -t ${target} @jmux-attention-reason ${tq(PROVISION_ATTENTION_REASON)} 2>/dev/null; ` +
+    `tmux set-option -t ${target} @jmux-attention 1 2>/dev/null`;
 
   return `${create} || { ${flag}; exec $SHELL; }`;
 }

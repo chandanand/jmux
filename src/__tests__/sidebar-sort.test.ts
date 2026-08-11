@@ -7,14 +7,17 @@ import {
   cycleSort,
   cycleFilter,
   matchesFilter,
+  filterShowsGhosts,
   sortIndices,
   statusRank,
   statusGroupLabel,
   groupModeLabel,
   sortModeLabel,
   filterModeLabel,
+  filterModeShort,
   migrateLegacySort,
   type SessionSortInfo,
+  type SessionStatus,
 } from "../sidebar-sort";
 
 describe("cycle", () => {
@@ -34,7 +37,8 @@ describe("cycle", () => {
   });
 
   test("filter wraps around the filter list", () => {
-    expect(cycleFilter("all")).toBe("attention");
+    expect(cycleFilter("all")).toBe("started");
+    expect(cycleFilter("started")).toBe("attention");
     expect(cycleFilter("attention")).toBe("active");
     expect(cycleFilter("active")).toBe("all"); // wraps
     for (const f of FILTER_MODES) expect(FILTER_MODES).toContain(cycleFilter(f));
@@ -49,6 +53,46 @@ describe("cycle", () => {
     expect(groupModeLabel("stage")).toBe("by workflow stage");
     expect(sortModeLabel("name")).toBe("by name");
     expect(filterModeLabel("attention")).toBe("needs you");
+    expect(filterModeLabel("started")).toBe("started only");
+    expect(filterModeShort("started")).toBe("Started");
+    const filterLabels = FILTER_MODES.map(filterModeLabel);
+    expect(new Set(filterLabels).size).toBe(filterLabels.length);
+  });
+});
+
+describe("filter membership", () => {
+  const ALL_STATUSES: readonly SessionStatus[] = ["waiting", "running", "activity", "complete", "idle"];
+
+  test("'started only' is 'all' for sessions — the difference is ghosts alone", () => {
+    for (const s of ALL_STATUSES) {
+      expect(matchesFilter(s, "started")).toBe(true);
+      expect(matchesFilter(s, "started")).toBe(matchesFilter(s, "all"));
+    }
+  });
+
+  test("the state filters still select on agent state", () => {
+    expect(ALL_STATUSES.filter((s) => matchesFilter(s, "attention"))).toEqual(["waiting"]);
+    expect(ALL_STATUSES.filter((s) => matchesFilter(s, "active"))).toEqual(["waiting", "running"]);
+  });
+});
+
+describe("filterShowsGhosts", () => {
+  test("'all' shows ghosts on every axis", () => {
+    for (const g of GROUP_MODES) expect(filterShowsGhosts("all", g)).toBe(true);
+  });
+
+  test("'started only' hides ghosts on the stage axis and nowhere else", () => {
+    expect(filterShowsGhosts("started", "stage")).toBe(false);
+    for (const g of GROUP_MODES.filter((m) => m !== "stage")) {
+      expect(filterShowsGhosts("started", g)).toBe(true);
+    }
+  });
+
+  test("a filter selecting on agent state suppresses ghosts everywhere", () => {
+    for (const g of GROUP_MODES) {
+      expect(filterShowsGhosts("attention", g)).toBe(false);
+      expect(filterShowsGhosts("active", g)).toBe(false);
+    }
   });
 });
 

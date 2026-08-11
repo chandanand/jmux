@@ -13,6 +13,10 @@ import { theme } from "./theme";
 import { tokens, frame } from "./chrome-tokens";
 import { stateAttrs, type StateColor } from "./state-colors";
 import {
+  // `matchesFilter` and `sortIndices` moved to session-order.ts with the
+  // membership half of buildRenderPlan; `filterShowsGhosts` stays here because
+  // ghost placement is emission, which did not move.
+  filterShowsGhosts,
   cycleGroup,
   cycleSort,
   cycleFilter,
@@ -521,11 +525,8 @@ function buildRenderPlan(
   // agent status and no activity, so there is no honest bucket for it on any
   // other axis; those modes get the flat band emitted further down instead.
   //
-  // A filter suppresses ghosts everywhere. Both filters ("needs you", "active")
-  // select on agent state, which a ghost has none of — so it can neither match
-  // one nor be honestly excluded by it. Leaving them up would answer "show me
-  // only the sessions wanting my attention" with a list of work nobody has
-  // started.
+  // Whether ghosts appear at all is a two-axis question — see
+  // `filterShowsGhosts`, which owns the rule so it can be tested without a grid.
   const groupMap = new Map<string, EmissionBand>();
   for (const b of bands) {
     if (b.kind !== "group") continue;
@@ -540,8 +541,10 @@ function buildRenderPlan(
     return existing;
   };
 
+  // Whether ghosts appear at all is a two-axis question — see
+  // `filterShowsGhosts`, which owns the rule so it can be tested without a grid.
   const flatGhosts: number[] = [];
-  if (filterMode === "all") {
+  if (filterShowsGhosts(filterMode, groupMode)) {
     for (let g = 0; g < ghosts.length; g++) {
       const ghost = ghosts[g]!;
       if (groupMode === "stage" && ghost.stageId !== undefined) {
