@@ -9500,7 +9500,12 @@ function refreshPinnedPanes(): void {
       label: meta.label,
       agentState,
     });
-    specs.push({ paneId, sessionId: loc.sessionId, windowId: loc.windowId, label: meta.label, agentState, tabId });
+    // `forced` is the explicit pin: auto-detected members are derived, so they
+    // are the ones a client cap sheds first.
+    specs.push({
+      paneId, sessionId: loc.sessionId, windowId: loc.windowId, label: meta.label,
+      agentState, tabId, forced: pinnedTracker.has(paneId),
+    });
     const arr = stateByTab.get(tabId) ?? [];
     arr.push(agentState);
     stateByTab.set(tabId, arr);
