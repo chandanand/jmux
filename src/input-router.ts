@@ -179,6 +179,17 @@ export interface InputRouterOptions {
   onPanelNextPreview?: () => void;
   onPanelAction?: (key: string) => void;
   onPanelTabClick?: (col: number) => void; // col relative to panel start
+  /**
+   * Whether the panel's tab strip is currently painted. It shares row 0 with
+   * the toolbar (the renderer blits it there over the panel's columns), so the
+   * strip's columns are only the strip's while it is drawn — in full mode
+   * `panel.x === main.x`, and claiming that row unconditionally would make the
+   * toolbar unclickable whenever the strip hides itself for a lone Diff tab.
+   * Read at hit-test time from the same predicate the renderer paints from
+   * (`InfoPanel.tabBarShown`), alongside the `toolbarRows > 0` half of the
+   * renderer's condition, so the two cannot disagree about a frame.
+   */
+  panelTabBarShown?: () => boolean;
   /** Row and column relative to the panel's content origin (after the toolbar,
    * right of the panel's left edge). main.ts resolves both against the layout. */
   onPanelItemClick?: (row: number, col: number) => void;
@@ -843,6 +854,29 @@ export class InputRouter {
         return;
       }
 
+      // Panel tab strip — the panel's columns on the toolbar row. Tested
+      // before the toolbar because that branch claims the whole row whatever
+      // the column, which swallowed every tab click; hover reached the panel
+      // only because the toolbar branch ignores motion. The test mirrors both
+      // halves of the renderer's condition (`tabBar && toolbarRows > 0`): with
+      // the toolbar degraded away on a short terminal nothing is painted here
+      // and row 0 is the panel's first *content* row.
+      if (
+        layout.panel &&
+        gridY === 0 &&
+        layout.toolbarRows > 0 &&
+        gridX >= layout.panel.x &&
+        this.opts.panelTabBarShown?.()
+      ) {
+        const panelCol = gridX - layout.panel.x;
+        if (isMotion) {
+          this.opts.onPanelTabHover?.(panelCol);
+        } else if (!mouse.release && !isWheel) {
+          this.opts.onPanelTabClick?.(panelCol);
+        }
+        return;
+      }
+
       // Toolbar click — rows within layout.toolbarRows, anywhere in the main area
       if (gridY < layout.toolbarRows && !mouse.release && !isMotion && !isWheel) {
         const mainCol = gridX - layout.main.x; // 0-indexed in main area
@@ -863,17 +897,7 @@ export class InputRouter {
         // The press itself is consumed by the handle check above.
 
         if (gridX >= layout.panel.x) {
-          const panelCol = gridX - layout.panel.x; // 0-indexed in panel
-
-          // Panel tab bar — first row of the panel area (toolbar row)
-          if (gridY === 0) {
-            if (isMotion) {
-              this.opts.onPanelTabHover?.(panelCol);
-            } else if (!mouse.release && !isWheel) {
-              this.opts.onPanelTabClick?.(panelCol);
-            }
-            return;
-          }
+          // The tab strip's row is handled above, before the toolbar.
 
           // Click in panel acquires keyboard focus
           if (!mouse.release && !isMotion && !isWheel && !this.diffPanelFocused) {

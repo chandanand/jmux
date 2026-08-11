@@ -4219,12 +4219,7 @@ function renderFrame(): void {
       }
     }
 
-    // A lone unlabelled tab is pure chrome, which is why the strip hides for
-    // it. A lone tab *carrying live diff stats* is not — it's the panel's
-    // header. Without this the badge is invisible to exactly the users who
-    // have no tracker configured, which is every user on their first run.
-    const showTabBar = infoPanel.hasMultipleTabs || infoPanel.hasDiffBadge;
-    const tabBar = showTabBar ? infoPanel.getTabBarGrid(dpCols, hoveredPanelTabId) : undefined;
+    const tabBar = infoPanel.tabBarShown ? infoPanel.getTabBarGrid(dpCols, hoveredPanelTabId) : undefined;
     diffPanelArg = {
       grid: contentGrid,
       mode: diffPanel.state as "split" | "full",
@@ -5265,6 +5260,7 @@ const inputRouter = new InputRouter(
       }
       scheduleRender();
     },
+    panelTabBarShown: () => infoPanel.tabBarShown,
     onPanelTabHover: (col) => {
       const ranges = infoPanel.getTabRanges();
       let found: string | null = null;

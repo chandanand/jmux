@@ -2287,3 +2287,103 @@ describe("preview strip keys", () => {
     expect(calls).toEqual(["pty:}"]);
   });
 });
+
+// The panel's tab strip is painted into the toolbar *row* (renderer.ts blits it
+// at destY 0 over the panel's columns), so row 0 is shared between two owners
+// and the column decides which. The toolbar branch claims the whole row
+// regardless of column, which is why these tests exist: the strip must be
+// tested first, or every tab click is swallowed by a toolbar that isn't drawn
+// there.
+describe("panel tab bar clicks", () => {
+  function tabRouter(
+    layout: FrameLayout,
+    strip: boolean,
+    opts: Partial<InputRouterOptions> = {},
+  ) {
+    const calls = { tabs: [] as number[], hovers: [] as number[], toolbar: [] as number[] };
+    const router = new InputRouter(
+      {
+        onPtyData: () => {},
+        onSidebarClick: () => {},
+        panelTabBarShown: () => strip,
+        onPanelTabClick: (col) => { calls.tabs.push(col); },
+        onPanelTabHover: (col) => { calls.hovers.push(col); },
+        onToolbarClick: (col) => { calls.toolbar.push(col); },
+        ...opts,
+      },
+      layout,
+    );
+    return { router, calls };
+  }
+
+  const pressAt = (x: number, y: number) => `\x1b[<0;${x + 1};${y + 1}M`;
+  const hoverAt = (x: number, y: number) => `\x1b[<35;${x + 1};${y + 1}M`;
+
+  test("a click on the strip switches tabs instead of hitting the toolbar", () => {
+    const layout = diffPanelLayout(26, 40, 30);
+    const { router, calls } = tabRouter(layout, true);
+    router.handleInput(pressAt(layout.panel!.x + 3, 0));
+    expect(calls.tabs).toEqual([3]);
+    expect(calls.toolbar).toEqual([]);
+  });
+
+  test("hover over the strip reports the panel column", () => {
+    const layout = diffPanelLayout(26, 40, 30);
+    const { router, calls } = tabRouter(layout, true);
+    router.handleInput(hoverAt(layout.panel!.x + 7, 0));
+    expect(calls.hovers).toEqual([7]);
+  });
+
+  test("main-area toolbar columns still reach the toolbar in split mode", () => {
+    const layout = diffPanelLayout(26, 40, 30);
+    const { router, calls } = tabRouter(layout, true);
+    router.handleInput(pressAt(layout.main.x + 4, 0));
+    expect(calls.toolbar).toEqual([4]);
+    expect(calls.tabs).toEqual([]);
+  });
+
+  // Full mode puts panel.x at main.x, so the strip's columns are the toolbar's
+  // columns. When the strip isn't drawn (a lone Diff tab with no badge) the
+  // toolbar is what's on screen there, and it has to stay clickable.
+  test("with no strip drawn, row 0 belongs to the toolbar even in full mode", () => {
+    const layout = baseLayout(24, "full", 0);
+    const { router, calls } = tabRouter(layout, false);
+    router.handleInput(pressAt(layout.panel!.x + 5, 0));
+    expect(calls.toolbar).toEqual([5]);
+    expect(calls.tabs).toEqual([]);
+  });
+
+  // With the toolbar degraded away (resolveChrome's ladder on a short
+  // terminal) the strip has no row to be painted into, and row 0 is the
+  // panel's first *content* row — clicking it must select a list item.
+  test("with no toolbar row, row 0 is panel content", () => {
+    const layout = computeFrameLayout({
+      termCols: 120,
+      termRows: 5,
+      sidebarWidth: 24,
+      borderWidth: 1,
+      toolbarRows: 1,
+      diffState: "split",
+      requestedPanelCols: 40,
+      frameRulesEnabled: true,
+      footerEnabled: true,
+    });
+    expect(layout.toolbarRows).toBe(0);
+    const itemClicks: number[] = [];
+    const { router, calls } = tabRouter(layout, true, {
+      onPanelItemClick: (row) => { itemClicks.push(row); },
+    });
+    router.setPanelTabsActive(true);
+    router.handleInput(pressAt(layout.panel!.x + 5, 0));
+    expect(calls.tabs).toEqual([]);
+    expect(itemClicks).toEqual([0]);
+  });
+
+  test("with the strip drawn, it owns row 0 in full mode", () => {
+    const layout = baseLayout(24, "full", 0);
+    const { router, calls } = tabRouter(layout, true);
+    router.handleInput(pressAt(layout.panel!.x + 5, 0));
+    expect(calls.tabs).toEqual([5]);
+    expect(calls.toolbar).toEqual([]);
+  });
+});
