@@ -134,9 +134,14 @@ the settings row says `restart to apply` until you do. See
     "complete": "blue"
   },
   "pinnedSessions": [],
-  "commandCenterTabs": [
-    { "id": "default", "name": "Main" }
+  "commandCenterViews": [
+    { "id": "active", "name": "Active", "filter": "active", "groupBy": "status", "sortBy": "status" }
   ],
+  "commandCenterActiveViewId": "active",
+  "commandCenterAxes": { "filter": "active", "groupBy": "status", "sortBy": "status" },
+  "commandCenter": {
+    "maxTiles": 12
+  },
   "projectDirs": ["~/Code", "~/Projects"],
   "diffPanel": {
     "splitRatio": 0.4,
@@ -315,25 +320,78 @@ the defaults (`running` green, `waiting` yellow, `complete` blue). The bold/dim
 emphasis per state is fixed; only the hue is configurable. Set these from the
 settings screen (`Ctrl-a I` → Display) or the command palette (`Ctrl-a p`).
 
-### Command Center tabs
+### Command Center views (`commandCenterViews` / `commandCenterActiveViewId` / `commandCenterAxes` / `commandCenter.maxTiles`)
 
-`commandCenterTabs` is an ordered array of `{ "id": string, "name": string }`
-entries that define the named tab buckets inside the Command Center. The first
-entry (index 0) is the **default tab** — it is protected: non-deletable and always
-first. Its seeded id is `"default"` and its default name is `"Main"`.
+The Command Center's membership is **derived**, not hand-placed: it shows
+whatever sessions the active view's `filter` / `groupBy` / `sortBy` would put in
+the sidebar, computed by the same `orderSessions` primitive the sidebar itself
+uses (`src/session-order.ts`). A **view** is a named preset of those three axes —
+`filter` is one of the sidebar's own filter modes (`active`, `all`, …), `groupBy`
+one of its grouping modes (`none`, `project`, `status`, `stage`), `sortBy` one of
+its sort modes.
 
-Each pinned pane stores the **id** of its assigned tab in the per-pane tmux option
-`@jmux-pinned`. Renaming or reordering tabs only updates this config field — no
-pane options are rewritten. Any pane whose stored id is not found in the registry
-(including legacy `"1"` values from older versions) is silently routed to the
-default tab.
+```json
+{
+  "commandCenterViews": [
+    { "id": "active", "name": "Active", "filter": "active", "groupBy": "status", "sortBy": "status" },
+    { "id": "backend", "name": "Backend", "filter": "all", "groupBy": "project", "sortBy": "name" }
+  ],
+  "commandCenterActiveViewId": "active",
+  "commandCenterAxes": { "filter": "active", "groupBy": "status", "sortBy": "status" },
+  "commandCenter": { "maxTiles": 12 }
+}
+```
 
-Manage tabs from the command palette (`Ctrl-a p`): create, rename, delete, reorder,
-pin a pane to a tab, or move a pane between tabs. While the Command Center is open,
-switch tabs with `Ctrl-a <number>` (jump to tab N), or `Ctrl-a [` / `Ctrl-a ]`
-(previous / next, wrapping around) — these chords are scoped to the Command Center,
-so they don't affect tmux copy-mode/paste in normal panes. The config file is
-hot-reloaded — edits applied externally take effect immediately without restarting jmux.
+`commandCenterViews` is never empty after normalization — an empty or malformed
+array re-seeds the single default view, `{ id: "active", name: "Active", filter:
+"active", groupBy: "status", sortBy: "status" }`. This seed is deliberately
+**not** the sidebar's own default (`filter: "all"`): "all" on a machine with two
+dozen sessions would open the grid to two dozen mirrors on first run.
+`commandCenterActiveViewId` names which view is selected, clamped to an existing
+id (an unknown or missing id falls back to the first view — there is no
+protected default id, since a view has no members to strand if it's deleted).
+
+**`commandCenterAxes` is the live, possibly-*dirty* set of axes** — what
+`Ctrl-a G` / `s` / `f` actually edit while you're in the grid. Selecting a view
+adopts its axes outright and discards whatever was dirty; a view chip in the
+strip shows a `·` marker when the live axes have since drifted from what the
+active view has saved, and **Save current axes as view…** in the palette is how
+you keep a narrowing instead of losing it on the next view switch.
+
+**This is the one place the grid's config deliberately does *not* mirror the
+sidebar's.** The sidebar's own filter is intentionally *not* persisted (a
+transient narrowing of a list that's always on screen — see `sidebarGroupBy` /
+`sidebarSortBy` above), but `commandCenterAxes` persists in full, filter
+included. That's not an inconsistency: the grid's filter *is* its membership
+rule, not a view of an always-visible list, so half of what a saved view means
+would be lost on every restart if it reset like the sidebar's does.
+
+`commandCenter.maxTiles` (default 12) caps how many live tmux mirror clients the
+grid keeps attached at once — active tiles and any still finishing their
+30-second grace period after leaving membership, together. It is a resource cap:
+every attached tile costs a real tmux client and a live parser whether or not it
+is currently drawn on screen, so this is not a "visible tiles only" viewport
+optimization. `planTiles` floors it at 1 regardless of what's stored here, so a
+mistyped `0` can't blank the grid outright. Sessions the cap drops are reported,
+never silently: the strip shows `+N not shown`.
+
+Manage views from the command palette (`Ctrl-a p`): **Save current axes as
+view…**, **Rename view…**, **Delete view**, **Switch view…**. While the Command
+Center is open, switch views with `Ctrl-a <number>` (jump to view N) or
+`Ctrl-a [` / `Ctrl-a ]` (previous / next, wrapping) — these chords are scoped to
+the grid, so they don't affect tmux copy-mode/paste in normal panes. Deleting the
+active view falls back to the previous view by index (or re-seeds the default if
+it was the last one left); deleting a view that isn't active leaves the current
+selection untouched. The config file is hot-reloaded — an external edit takes
+effect immediately, without restarting jmux; if the currently active view id
+disappears from a reloaded file, the grid falls back to the first view in the
+list.
+
+Two independent per-session exceptions layer on top of a view's derived set —
+see the Command Center section of [cheat-sheet.md](cheat-sheet.md#command-center)
+for the keys and the pin/hide interaction, and
+[docs/adr/0005-derived-command-center-membership.md](adr/0005-derived-command-center-membership.md)
+for why hiding a session always beats a pin left on one of its panes.
 
 ### Session titles (`sessionTitle`)
 

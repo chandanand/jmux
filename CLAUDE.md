@@ -211,6 +211,98 @@ The `session-start` tracker transition fires from both. In the CLI the `transiti
 
 The skill file `skills/jmux-control.md` documents usage patterns for agents — it's loaded as a Claude Code skill so agents inside jmux can discover and use the CLI.
 
+### Command Center (`src/glass/`)
+
+The grid of live, drivable session tiles (`Ctrl-a C`), rewritten from
+hand-placed pins to derived membership — full record in
+`docs/adr/0005-derived-command-center-membership.md`. The rules that are easy to
+undo:
+
+**One tile per session, because tmux ties the current window and zoom to the
+session, not the client.** Two clients attached to one session share its
+current window, and `resize-pane -Z` zooms the whole window — two tiles cannot
+show two panes of one session full-bleed at once, by any arrangement of pins.
+`TileKey` (`glass/tile-plan.ts`) is `session:$id` and only that; there is no
+second kind of key. A session with several agent panes still shows one at a
+time, elected by `glass/representative.ts`, with `Ctrl-a x` cycling within the
+one tile rather than adding a second.
+
+**`orderSessions` (`src/session-order.ts`) is the shared membership-and-order
+primitive, extracted one level below `buildRenderPlan`'s `displayOrder` on
+purpose.** `displayOrder` means *rows currently visible in the sidebar* — it's
+populated by emission, which skips a collapsed group, and Parked is collapsed
+by default — so reusing it directly for the grid would mean a sidebar
+disclosure gesture silently changed which agents the grid mirrors. Collapse
+state, ghosts, issue rows and expansion stay in `buildRenderPlan`; the grid's
+`glass/exceptions.ts` is a second consumer of the same primitive, not a
+reimplementation of its rules, on the discipline `cli/workflow.ts` keeps with
+`transformIssues` / `buildViewNodes`.
+
+**Two tmux options, two scopes, because the two exceptions have different
+subjects.** `@jmux-pinned` (pane-scoped) keeps a session on the grid and
+prefers that pane as its face; `@jmux-grid-hidden` (session-scoped) keeps a
+session off it entirely. Hidden always beats a force-on pin in the same
+session — not "more specific wins", because the two options aren't about the
+same subject: hide's subject is the whole session, a pin's is one pane in it.
+A rule where pinning any pane could silently un-hide a session would make the
+hide untrustworthy. `parsePinValue` (`glass/pinned-pane-tracker.ts`) reads any
+non-empty `@jmux-pinned` value — including every legacy tab id from the tab-era
+design — as plain force-on; there is no migration, because every one of those
+values was written by someone saying "put this on the grid", and the tab-id
+half of that sentence no longer has a referent.
+
+**The election is stateless; the display is sticky, and conflating the two was
+a bug in an earlier draft.** `electRepresentative` (`glass/representative.ts`)
+answers "who represents this session *right now*" from live urgency alone, with
+no memory of what was shown last frame — re-electing on every reconcile would
+mean a sibling agent going from complete to running yanks the picture out from
+under someone typing into the tile. Stickiness — a tile keeps its pane until
+that pane dies, the user cycles it (`Ctrl-a x`), or the force-on set changes —
+lives in `GlassView.resolveDisplayedRepresentative`, layered *over* the
+stateless election, never folded inside it. `resolveAgentPane` (`main.ts`)
+calls the stateless election directly: "which pane wrote this diff, so I can
+paste the review at it" wants the live answer and has nothing to do with what
+the grid happens to be showing.
+
+**The inheritance trap: `@jmux-agent-state` inherits into a pane-context read,
+so a state with no `kind` beside it is the session's, not the pane's.** The
+hooks write `@jmux-agent-state` at pane scope, but a pane-context format read
+(`list-panes -F`) inherits the session-scoped value onto any pane that carries
+none of its own — so every shell and editor in a session running one agent
+reports that agent's state and `since`, indistinguishably from the agent pane
+itself. `@jmux-agent-kind` is the only pane-level identity with no inheritance
+source (nothing writes it at session scope), which is why `parsePaneRowLines`
+(`glass/representative.ts`) nulls out `state` and `since` on any pane that
+doesn't declare a `kind` — taking the inherited value at face value made every
+shell in an agent's session look equally urgent *and* equally old, so ties fell
+through to the lowest pane id and a shell could outrank the agent sharing its
+session.
+
+**Reconciliation is a state machine, not a debounce, and `dirty` clears before
+the snapshot, never after.** `ReconcileLoop` (`glass/reconcile-loop.ts`) runs an
+async tmux read, so "one run per tick" is a lost-update problem: an
+invalidation arriving after the snapshot but before apply describes a world the
+run in flight can't see. Clearing `dirty` after the snapshot would discard
+exactly that window; clearing it before means a burst of invalidations during
+the read still forces one more run once the current one finishes. The
+reschedule lives in `finally`, so a throwing read reschedules rather than
+leaving the grid frozen with `inFlight` stuck true.
+
+**The client cap counts active and grace-retained tiles together, and every
+tile parses whether or not it is drawn.** `planTiles` (`glass/tile-plan.ts`)
+admits forced (pinned) tiles first, then render order, *before* anything
+spawns — a client is never attached for a tile the cap is about to refuse. A
+tile that leaves membership is *retained*, not torn down immediately: its
+client, pty and `ScreenBridge` stay alive, unrendered, for `graceMs` (30s
+default), so an agent finishing and restarting on a poll cadence doesn't
+attach, detach and toggle the user's real window zoom every cycle. But every
+attached client — active or retained — costs a live tmux attach and a live
+xterm.js parser regardless of whether it is currently on screen; there is no
+"off-screen tiles pause" optimization (see the correction note on ADR 0001).
+`commandCenter.maxTiles` is the only thing bounding that cost, and it is
+deliberately not silent about what it drops: an active tile the cap refuses is
+reported through the strip's `+N not shown`, never dropped quietly.
+
 ### Diff panel
 
 **`src/diff-panel.ts`** provides an integrated hunk diff viewer that docks to the right side of the terminal or zooms to full width. It spawns an external `hunk` process and captures its output. The panel has focus toggling (keyboard input routes to hunk when focused) and survives session switches by re-spawning.
