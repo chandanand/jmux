@@ -1,7 +1,26 @@
 import { describe, test, expect } from "bun:test";
-import { applyGridExceptions, type GridPaneRow } from "../../glass/exceptions";
+import { applyGridExceptions, isGridHiddenValue, type GridPaneRow } from "../../glass/exceptions";
 import type { SessionBand } from "../../session-order";
 import type { SessionInfo } from "../../types";
+
+describe("isGridHiddenValue", () => {
+  test("exactly \"1\" is hidden", () => {
+    expect(isGridHiddenValue("1")).toBe(true);
+  });
+
+  test("unset, empty, \"0\" and \"off\" are all not hidden", () => {
+    // Unlike @jmux-pinned, this option has no legacy values to grandfather —
+    // it is new with this design — so there is no reason to be permissive,
+    // and every reason not to: a value written to mean false must not read
+    // as true.
+    expect(isGridHiddenValue(undefined)).toBe(false);
+    expect(isGridHiddenValue(null)).toBe(false);
+    expect(isGridHiddenValue("")).toBe(false);
+    expect(isGridHiddenValue("0")).toBe(false);
+    expect(isGridHiddenValue("off")).toBe(false);
+    expect(isGridHiddenValue("true")).toBe(false);
+  });
+});
 
 function makeSessions(entries: Array<Partial<SessionInfo> & { name: string }>): SessionInfo[] {
   return entries.map((e, i) => ({

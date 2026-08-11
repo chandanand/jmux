@@ -178,7 +178,7 @@ import {
   type PaneRow,
 } from "./glass/representative";
 import { orderSessions } from "./session-order";
-import { applyGridExceptions } from "./glass/exceptions";
+import { applyGridExceptions, isGridHiddenValue } from "./glass/exceptions";
 import { ReconcileLoop } from "./glass/reconcile-loop";
 import {
   normalizeViews,
@@ -9612,7 +9612,7 @@ async function readGridState(): Promise<GridSnapshot> {
   for (const line of sessionLines) {
     if (!line.trim()) continue;
     const [sessionId, hidden] = splitFields(line);
-    if (sessionId && hidden) hiddenSessionIds.add(sessionId);
+    if (sessionId && isGridHiddenValue(hidden)) hiddenSessionIds.add(sessionId);
   }
 
   return { paneRows, locationByPane, pinByPane, hiddenSessionIds };
@@ -9700,10 +9700,11 @@ function applyGridSnapshot(snap: GridSnapshot): void {
     const activeView = commandCenterViews.find((v) => v.id === activeViewId) ?? commandCenterViews[0];
     glassView?.setTiles(specs, {
       viewName: activeView.name,
-      // Everything the active axes excluded — filtered out, parked, hidden,
-      // or paneless. The empty state's "N hidden" is this figure, not a
-      // second count derived some other way.
-      hiddenCount: Math.max(0, shared.sessions.length - specs.length),
+      // Everything the active axes excluded — filtered out, parked,
+      // `@jmux-grid-hidden`, or paneless. The empty state's "N not shown" is
+      // this figure, not a second count derived some other way — "hidden"
+      // is reserved for the `@jmux-grid-hidden` exception alone.
+      excludedCount: Math.max(0, shared.sessions.length - specs.length),
     });
   }
   scheduleRender();

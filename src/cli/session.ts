@@ -5,7 +5,7 @@ import { resolveCurrentSession, tmuxOrThrow, CliError, type CliContext } from ".
 import type { ParsedCtlArgs } from "../cli";
 import { US, splitFields } from "../tmux-fields";
 import { SESSION_TITLE_OPTION, TITLE_SIGNATURE_OPTION, MANUAL_SIGNATURE } from "../session-title/display";
-import { parsePinValue } from "../glass/pinned-pane-tracker";
+import { isGridHiddenValue } from "../glass/exceptions";
 
 export interface SessionEntry {
   id: string;
@@ -147,7 +147,7 @@ export interface HiddenSessionEntry {
 }
 
 /** Parse `list-sessions -F HIDDEN_LIST_FORMAT` into the sessions reading as
- *  hidden under `parsePinValue`'s same permissive any-non-empty-value rule. */
+ *  hidden under `isGridHiddenValue`'s strict grammar — exactly `"1"`. */
 export function parseHiddenList(lines: string[]): HiddenSessionEntry[] {
   const out: HiddenSessionEntry[] = [];
   for (const line of lines) {
@@ -159,7 +159,7 @@ export function parseHiddenList(lines: string[]): HiddenSessionEntry[] {
     const id = trimmed.slice(0, first);
     const name = trimmed.slice(first + 1, second);
     const hidden = trimmed.slice(second + 1);
-    if (parsePinValue(hidden) === "on") out.push({ id, name });
+    if (isGridHiddenValue(hidden)) out.push({ id, name });
   }
   return out;
 }

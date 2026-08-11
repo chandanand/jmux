@@ -92,11 +92,18 @@ export interface GlassTileSpec {
  * user is looking through, and how many sessions exist but didn't match it.
  * Supplied by the caller alongside `setTiles` — `GlassView` has no notion of
  * "every session that exists", only the ones that survived the caller's own
- * filter, so it cannot compute `hiddenCount` itself.
+ * filter, so it cannot compute `excludedCount` itself.
+ *
+ * Deliberately named `excludedCount`, not `hiddenCount`: this is everything
+ * the active axes left out — filtered, parked, `@jmux-grid-hidden`, or
+ * paneless — and "hidden" is already a term of art here, naming the one
+ * exception (`@jmux-grid-hidden`) with its own palette entry ("Show hidden
+ * sessions (N)…"). Calling this figure "hidden" told a user whose view was
+ * simply narrow to go looking for an exception that didn't exist.
  */
 export interface EmptyGridContext {
   viewName: string;
-  hiddenCount: number;
+  excludedCount: number;
 }
 
 export interface GlassViewOptions {
@@ -278,7 +285,7 @@ export class GlassView {
   private droppedActive = 0;
   private allSpecs: GlassTileSpec[] = []; // the grid's one derived membership set
   /** What the empty state names — the active view and how many sessions it excludes. */
-  private emptyContext: EmptyGridContext = { viewName: "", hiddenCount: 0 };
+  private emptyContext: EmptyGridContext = { viewName: "", excludedCount: 0 };
   private width: number = 80;
   private height: number = 24;
   private scrollRow: number = 0;
@@ -1001,10 +1008,13 @@ export class GlassView {
    * the ones that survived the caller's own filter.
    */
   private drawEmptyState(grid: CellGrid): void {
-    const { viewName, hiddenCount } = this.emptyContext;
+    const { viewName, excludedCount } = this.emptyContext;
     const line1 = viewName ? `No sessions match "${viewName}"` : "No sessions to show";
-    const hiddenClause = hiddenCount > 0 ? `      ${hiddenCount} hidden` : "";
-    const line2 = `⌃a f  all sessions      ⌃a 1…9  switch view${hiddenClause}`;
+    // "not shown", not "hidden" — the strip's own word for the same idea
+    // (`+N not shown`), because "hidden" already names the `@jmux-grid-hidden`
+    // exception and this figure is everything the view's axes excluded.
+    const excludedClause = excludedCount > 0 ? `      ${excludedCount} not shown` : "";
+    const line2 = `⌃a f  all sessions      ⌃a 1…9  switch view${excludedClause}`;
 
     // Left-align both lines against the wider of the two, then center that
     // block — independently centering each line would zig-zag the left edge

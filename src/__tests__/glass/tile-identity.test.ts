@@ -64,7 +64,7 @@ const spec = (over: Partial<GlassTileSpec> & { sessionId: string }): GlassTileSp
 
 /** `setTiles`' empty-state context — irrelevant to every test here except the
  * ones that actually empty the grid, which don't assert on it. */
-const EMPTY_CTX = { viewName: "Active", hiddenCount: 0 };
+const EMPTY_CTX = { viewName: "Active", excludedCount: 0 };
 
 const pane = (paneId: string, over: Partial<PaneRow> = {}): PaneRow => ({
   paneId,
@@ -601,20 +601,26 @@ function gridText(view: GlassView): string {
 }
 
 describe("the empty state", () => {
-  test("names the view and states the hidden count", () => {
+  test("names the view and states the excluded count", () => {
+    // Worded "not shown", not "hidden": "hidden" is reserved for the
+    // @jmux-grid-hidden exception (its own palette entry), and this figure is
+    // everything the view's axes left out — a session excluded by a narrow
+    // filter is not "hidden" in that sense, and saying so sent users looking
+    // for an exception that didn't exist.
     const { view } = makeView();
-    view.setTiles([], { viewName: "Active", hiddenCount: 3 });
+    view.setTiles([], { viewName: "Active", excludedCount: 3 });
     const text = gridText(view);
     expect(text).toContain('No sessions match "Active"');
-    expect(text).toContain("3 hidden");
+    expect(text).toContain("3 not shown");
+    expect(text).not.toContain("hidden");
     expect(text).toContain("⌃a f");
     expect(text).toContain("switch view");
   });
 
-  test("omits the hidden clause when nothing is hidden", () => {
+  test("omits the excluded clause when nothing was excluded", () => {
     const { view } = makeView();
-    view.setTiles([], { viewName: "Active", hiddenCount: 0 });
-    expect(gridText(view)).not.toContain("hidden");
+    view.setTiles([], { viewName: "Active", excludedCount: 0 });
+    expect(gridText(view)).not.toContain("not shown");
   });
 });
 

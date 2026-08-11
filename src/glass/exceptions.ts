@@ -18,6 +18,21 @@ import type { SessionInfo } from "../types";
 import type { SessionBand } from "../session-order";
 import { parsePinValue } from "./pinned-pane-tracker";
 
+/**
+ * Interpret a raw `@jmux-grid-hidden` value under its grammar: exactly `"1"`
+ * means hidden, everything else — unset, empty, `"0"`, `"off"`, anything a
+ * hand-edit or a script might reach for to mean false — means not hidden.
+ *
+ * Unlike `@jmux-pinned`, this option has no legacy values to grandfather in:
+ * it is new with this design, so there is nothing to be permissive about.
+ * Reusing `parsePinValue`'s any-non-empty-value grammar here would make
+ * writing `"0"` to mean "not hidden" do the opposite — the one interpretation
+ * a session-visibility switch must never invert on its writer.
+ */
+export function isGridHiddenValue(raw: string | null | undefined): boolean {
+  return raw === "1";
+}
+
 export type GridMemberSource = "derived" | "added";
 
 export interface GridMember {
