@@ -632,9 +632,13 @@ export const KEYMAP: readonly Binding[] = [
     // choose-session: jmux ships Ctrl-a I / Ctrl-a i in customize-mode's place.
   },
   {
+    // id kept as "cc-tab-n": phase 9 renames the tab vocabulary wholesale
+    // (tabs.ts, cli/cc.ts) and this row's id goes with it. The label changes
+    // now because the strip these chords drive shows views, not tabs, as of
+    // this phase.
     id: "cc-tab-n",
     keys: "Ctrl-a 1…9",
-    label: "Switch to tab N",
+    label: "Switch to view N",
     section: "Command Center",
     source: "jmux",
     context: IN_GLASS,
@@ -642,7 +646,7 @@ export const KEYMAP: readonly Binding[] = [
   {
     id: "cc-tab-prev",
     keys: "Ctrl-a [",
-    label: "Previous tab",
+    label: "Previous view",
     section: "Command Center",
     source: "jmux",
     prefixKey: "[",
@@ -652,7 +656,7 @@ export const KEYMAP: readonly Binding[] = [
   {
     id: "cc-tab-next",
     keys: "Ctrl-a ]",
-    label: "Next tab",
+    label: "Next view",
     section: "Command Center",
     source: "jmux",
     prefixKey: "]",

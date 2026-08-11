@@ -1,5 +1,5 @@
 import type { CellGrid, AgentState } from "../types";
-import { createGrid, writeString, blit, drawBox, type CellAttrs } from "../cell-grid";
+import { createGrid, writeString, writeStyledLine, blit, drawBox, textCols, type CellAttrs } from "../cell-grid";
 import { ColorMode } from "../types";
 import { stateAttrs, type StateColor } from "../state-colors";
 import { tokens } from "../chrome-tokens";
@@ -63,6 +63,7 @@ import {
   type TileKey,
 } from "./tile-plan";
 import { electRepresentative, eligiblePanes, type PaneRow } from "./representative";
+import { buildTileHints } from "./tile-hints";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -74,7 +75,6 @@ export interface GlassTileSpec {
   windowId: string;
   label: string;       // pre-built display label
   agentState?: AgentState | null; // drives the border color (matches sidebar)
-  tabId: string;       // which Command Center tab this tile belongs to
   /** Force-on (an explicit pin) — survives the client cap ahead of derived members. */
   forced?: boolean;
   /**
@@ -84,6 +84,18 @@ export interface GlassTileSpec {
    * has a single candidate and answers with it.
    */
   panes?: readonly PaneRow[];
+}
+
+/**
+ * What the empty state needs to say when membership is empty: the view the
+ * user is looking through, and how many sessions exist but didn't match it.
+ * Supplied by the caller alongside `setTiles` — `GlassView` has no notion of
+ * "every session that exists", only the ones that survived the caller's own
+ * filter, so it cannot compute `hiddenCount` itself.
+ */
+export interface EmptyGridContext {
+  viewName: string;
+  hiddenCount: number;
 }
 
 export interface GlassViewOptions {
@@ -251,8 +263,9 @@ export class GlassView {
   private faceOverrides: Map<TileKey, string> = new Map();
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
   private droppedActive = 0;
-  private allSpecs: GlassTileSpec[] = []; // full membership across all tabs
-  private activeTabId = "";
+  private allSpecs: GlassTileSpec[] = []; // the grid's one derived membership set
+  /** What the empty state names — the active view and how many sessions it excludes. */
+  private emptyContext: EmptyGridContext = { viewName: "", hiddenCount: 0 };
   private width: number = 80;
   private height: number = 24;
   private scrollRow: number = 0;
@@ -281,16 +294,18 @@ export class GlassView {
 
   // ── Public API ──────────────────────────────────────────────────────────────
 
-  setTiles(specs: GlassTileSpec[], activeTabId: string): void {
+  /**
+   * `emptyContext` is what the empty state names when `specs` is empty (or
+   * becomes empty after this reconcile) — the active view's name and how many
+   * sessions it excludes. Stored unconditionally, not only when empty: the
+   * caller doesn't know in advance whether this call will empty the grid, and
+   * a stale context from the last non-empty call would misname the view the
+   * moment it did.
+   */
+  setTiles(specs: GlassTileSpec[], emptyContext: EmptyGridContext): void {
     this.allSpecs = specs;
-    this.activeTabId = activeTabId;
+    this.emptyContext = emptyContext;
     this.reconcile(Date.now());
-  }
-
-  /** Switch the active tab's render filter, spawning its tiles on first visit. */
-  setActiveTab(activeTabId: string): void {
-    this.focusedKey = null;
-    this.setTiles(this.allSpecs, activeTabId);
   }
 
   /**
@@ -363,14 +378,7 @@ export class GlassView {
     const grid = createGrid(this.width, this.height);
 
     if (this.tileOrder.length === 0) {
-      // Empty state: show a centered hint.
-      const msg = "No pinned panes";
-      const col = Math.max(0, Math.floor((this.width - msg.length) / 2));
-      const row = Math.max(0, Math.floor(this.height / 2));
-      writeString(grid, row, col, msg, {
-        fgMode: ColorMode.Palette,
-        fg: 8, // dark gray
-      });
+      this.drawEmptyState(grid);
       return grid;
     }
 
@@ -605,7 +613,7 @@ export class GlassView {
     for (const [key, tile] of this.tiles) {
       const spec = activeSpecs.get(key);
       if (!spec) continue;
-      tile.spec = spec; // refresh label/agentState/tabId
+      tile.spec = spec; // refresh label/agentState
       tile.panes = spec.panes ?? synthesizedPanes(spec);
       const face = faces.get(key);
       if (!face) continue;
@@ -626,7 +634,6 @@ export class GlassView {
   private activeSpecs(): Map<TileKey, GlassTileSpec> {
     const out = new Map<TileKey, GlassTileSpec>();
     for (const spec of this.allSpecs) {
-      if (spec.tabId !== this.activeTabId) continue;
       const key = tileKeyForSession(spec.sessionId);
       if (!out.has(key)) out.set(key, spec);
     }
@@ -904,5 +911,80 @@ export class GlassView {
     const iRows = height - 2;
 
     blit(grid, bridgeGrid, { destX: iStartX, destY: iStartY, w: iCols, h: iRows });
+
+    // The bottom border's mirror of the top's label chip: what the focused
+    // tile's keys do, not what it is. Only the focused tile draws one, so
+    // exactly one hint is ever on screen and it moves with attention.
+    if (isFocused) this.drawFocusedHints(grid, rect, tile);
+  }
+
+  /**
+   * Overwrite a prefix of the bottom border — already drawn as `─` by
+   * `drawBox` above — with the focused tile's hint text, left-aligned after
+   * the corner exactly like the top label chip (`innerStart + 1`). Unlike the
+   * label this carries no background fill: it's plain text in the frame-rule
+   * tone laid over the rule, not a chip, so only the glyphs it actually
+   * writes replace border cells — anything the hint doesn't reach stays `─`.
+   */
+  private drawFocusedHints(grid: CellGrid, rect: TileRect, tile: TileState): void {
+    const { x, y, width, height } = rect;
+    if (width < 2 || height < 2) return;
+
+    const bottom = y + height - 1;
+    const right = x + width - 1;
+    const innerStart = x + 1;
+    // Mirrors drawBox's label math exactly: the written text starts one
+    // column after the left "─" (innerStart + 1) and the raw text budget
+    // reserves a trailing column before the right corner.
+    const maxHintCols = right - (innerStart + 2) - 1;
+
+    const eligible = eligiblePanes(tile.panes, this.opts.agentPaneRegex ?? null);
+    const index = eligible.findIndex((p) => p.paneId === tile.face.paneId);
+    const hintText = buildTileHints(
+      {
+        // A sticky face can in principle sit outside the eligible set for a
+        // moment (see `resolveDisplayedRepresentative`'s doc comment on
+        // stickiness) — fall back to 1 rather than showing a negative index.
+        eligibleIndex: index >= 0 ? index + 1 : 1,
+        eligibleCount: eligible.length,
+      },
+      maxHintCols,
+    );
+    if (hintText.length === 0) return;
+
+    const padded = ` ${hintText} `;
+    writeStyledLine(
+      grid,
+      bottom,
+      innerStart + 1,
+      [{ text: padded, attrs: tokens.ruleFrame }],
+      textCols(padded),
+    );
+  }
+
+  /**
+   * Empty membership: name the view, say what didn't match, and give the key
+   * that widens it — replacing the flat "No pinned panes" that predates the
+   * grid having a filter at all (nothing is pinned any more; the sentence was
+   * simply false). `emptyContext` is supplied by the caller via `setTiles`,
+   * because this class has no notion of "every session that exists", only
+   * the ones that survived the caller's own filter.
+   */
+  private drawEmptyState(grid: CellGrid): void {
+    const { viewName, hiddenCount } = this.emptyContext;
+    const line1 = viewName ? `No sessions match "${viewName}"` : "No sessions to show";
+    const hiddenClause = hiddenCount > 0 ? `      ${hiddenCount} hidden` : "";
+    const line2 = `⌃a f  all sessions      ⌃a 1…9  switch view${hiddenClause}`;
+
+    // Left-align both lines against the wider of the two, then center that
+    // block — independently centering each line would zig-zag the left edge
+    // between them, which reads as two unrelated messages rather than one.
+    const blockCols = Math.max(textCols(line1), textCols(line2));
+    const col = Math.max(0, Math.floor((this.width - blockCols) / 2));
+    const row = Math.max(0, Math.floor(this.height / 2) - 1);
+
+    const attrs = { fgMode: ColorMode.Palette, fg: 8 } as const; // dark gray
+    writeString(grid, row, col, line1, attrs);
+    writeString(grid, row + 1, col, line2, attrs);
   }
 }

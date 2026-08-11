@@ -1,49 +1,65 @@
-import type { AgentState, CellGrid } from "../types";
+import type { CellGrid } from "../types";
 import { ColorMode } from "../types";
 import { createGrid, writeString, textCols } from "../cell-grid";
 import { packChips, type PlacedChip } from "../band-layout";
-import type { TabEntry } from "./tabs";
-import { stateAttrs, type StateColor } from "../state-colors";
+import type { CommandCenterView } from "./views";
+
+// The Command Center's strip — always visible now that it's the only chrome
+// that says a view exists, let alone that others are a keystroke away
+// (before this it hid below two tabs, which is why nobody discovered tabs
+// existed). It shows the view registry as chips, the active one carrying a
+// dirty marker when the live axes it drove have since been narrowed away from
+// it, and — separately from chip overflow — however many active tiles the
+// client cap refused (`GlassView.getDroppedActive()`), because a number that
+// bounds coverage and says nothing about it is silent about data loss.
 
 export const STRIP_ROWS = 1;
-const DOT = "●";
 const GAP = 1; // blank column between chips
-const INDICATOR_RESERVE = 5; // cols kept clear at the right for the "+N" overflow chip
+const HIDDEN_RESERVE = 5; // cols kept clear at the right for the "+N" hidden-chip indicator
+const DROPPED_GAP = 2; // blank columns before the dropped-tile count, when shown
 
 export interface StripInput {
-  tabs: TabEntry[];
-  activeTabId: string;
-  summaryByTab: Map<string, AgentState | null>;
+  views: CommandCenterView[];
+  activeViewId: string;
+  /** The live axes have moved on from the active view's own saved axes. */
+  dirty: boolean;
+  /** Active tiles the client cap refused this reconcile — never silent. */
+  droppedActive: number;
   width: number;
-  palette: Record<AgentState, StateColor>;
 }
 
-/** The strip is hidden until there is more than one tab. */
-export function stripVisibleFor(tabs: TabEntry[]): boolean {
-  return tabs.length >= 2;
+const DIRTY_SUFFIX = " ·";
+
+function chipText(view: CommandCenterView, isActive: boolean, dirty: boolean): string {
+  const suffix = isActive && dirty ? DIRTY_SUFFIX : "";
+  return ` ${view.name}${suffix} `;
 }
 
-function chipText(name: string, hasDot: boolean): string {
-  return hasDot ? ` ${name} ${DOT} ` : ` ${name} `;
+/** "+3 not shown" — empty when nothing was dropped, so no width is reserved. */
+function droppedText(droppedActive: number): string {
+  return droppedActive > 0 ? `+${droppedActive} not shown` : "";
 }
 
 export function layoutStrip(input: StripInput): PlacedChip[] {
+  const dropped = droppedText(input.droppedActive);
+  const droppedReserve = dropped ? textCols(dropped) + DROPPED_GAP : 0;
+  const available = Math.max(0, input.width - droppedReserve);
+
   // Natural display width of each chip.
-  const widths = input.tabs.map((tab) => {
-    const hasDot = (input.summaryByTab.get(tab.id) ?? null) !== null;
-    return textCols(chipText(tab.name, hasDot));
-  });
+  const widths = input.views.map((v) =>
+    textCols(chipText(v, v.id === input.activeViewId, input.dirty)),
+  );
 
   // Total width if every chip were laid out (GAP between adjacent chips).
   let total = 0;
   for (let i = 0; i < widths.length; i++) total += widths[i] + (i > 0 ? GAP : 0);
 
-  // When everything fits, use the full width; otherwise reserve room on the
-  // right for the "+N" overflow indicator and pack whole chips into the rest.
-  const fitsAll = total <= input.width;
-  const budget = fitsAll ? input.width : Math.max(0, input.width - INDICATOR_RESERVE);
+  // When everything fits, use all the available width; otherwise reserve room
+  // for the "+N" hidden-chip indicator and pack whole chips into the rest.
+  const fitsAll = total <= available;
+  const budget = fitsAll ? available : Math.max(0, available - HIDDEN_RESERVE);
 
-  const items = input.tabs.map((tab, i) => ({ id: tab.id, width: widths[i] }));
+  const items = input.views.map((v, i) => ({ id: v.id, width: widths[i] }));
   return packChips(items, { start: 0, budget, align: "left", gap: GAP });
 }
 
@@ -52,46 +68,43 @@ export function renderStrip(
   chips: PlacedChip[] = layoutStrip(input),
 ): CellGrid {
   const grid = createGrid(input.width, STRIP_ROWS);
-  for (const chip of chips) {
-    const tab = input.tabs.find((t) => t.id === chip.id)!;
-    const isActive = chip.id === input.activeTabId;
-    const summary = input.summaryByTab.get(chip.id) ?? null;
-    const hasDot = summary !== null;
-    const text = chipText(tab.name, hasDot);
 
-    // Base chip text: bold when active, dim otherwise.
+  for (const chip of chips) {
+    const view = input.views.find((v) => v.id === chip.id)!;
+    const isActive = chip.id === input.activeViewId;
+    const text = chipText(view, isActive, input.dirty);
     writeString(grid, 0, chip.x, text, {
       fgMode: ColorMode.Palette,
       fg: isActive ? 15 : 8,
       bold: isActive,
       dim: !isActive,
     });
+  }
 
-    // Recolor the dot cell by the summary state. Bold reflects the active
-    // tab, not the per-state emphasis (waiting bold / complete dim) the
-    // sidebar uses — this is a single tab-summary dot, not an agent-state row.
-    if (hasDot) {
-      const dotCol = chip.x + textCols(text.slice(0, text.indexOf(DOT)));
-      if (dotCol >= 0 && dotCol < input.width) {
-        const cell = grid.cells[0][dotCol];
-        cell.char = DOT;
-        cell.width = 1;
-        const attrs = stateAttrs(input.palette[summary as AgentState], { bold: isActive, dim: false });
-        cell.fg = attrs.fg ?? cell.fg;
-        cell.fgMode = attrs.fgMode ?? cell.fgMode;
-        cell.bold = attrs.bold ?? false;
-        cell.dim = attrs.dim ?? false;
-      }
+  const dropped = droppedText(input.droppedActive);
+  const droppedReserve = dropped ? textCols(dropped) + DROPPED_GAP : 0;
+  const available = Math.max(0, input.width - droppedReserve);
+
+  // Hidden-chip indicator: some views didn't fit in the chip band.
+  const hidden = input.views.length - chips.length;
+  if (hidden > 0) {
+    const label = `+${hidden}`;
+    const col = available - textCols(label);
+    if (col >= 0) {
+      writeString(grid, 0, col, label, {
+        fgMode: ColorMode.Palette,
+        fg: 8,
+        dim: true,
+      });
     }
   }
 
-  // Overflow indicator: when some tabs didn't fit, show "+N" at the right edge.
-  const hidden = input.tabs.length - chips.length;
-  if (hidden > 0) {
-    const label = `+${hidden}`;
-    const col = input.width - textCols(label);
+  // Dropped-tile count: flush right, distinct from the hidden-chip indicator
+  // above (which is about the strip running out of room, not the grid).
+  if (dropped) {
+    const col = input.width - textCols(dropped);
     if (col >= 0) {
-      writeString(grid, 0, col, label, {
+      writeString(grid, 0, col, dropped, {
         fgMode: ColorMode.Palette,
         fg: 8,
         dim: true,

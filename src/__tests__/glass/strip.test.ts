@@ -1,137 +1,103 @@
 import { describe, test, expect } from "bun:test";
-import {
-  stripVisibleFor, layoutStrip, renderStrip, STRIP_ROWS,
-} from "../../glass/strip";
+import { layoutStrip, renderStrip, STRIP_ROWS, type StripInput } from "../../glass/strip";
 import { chipAtCol } from "../../band-layout";
-import type { TabEntry, AgentState } from "../../glass/tabs";
-import { ColorMode } from "../../types";
-import type { StateColor } from "../../state-colors";
+import type { CommandCenterView } from "../../glass/views";
 
-const palette: Record<AgentState, StateColor> = {
-  running: { kind: "palette", index: 2 },
-  waiting: { kind: "palette", index: 3 },
-  complete: { kind: "palette", index: 4 },
-};
-const tabs: TabEntry[] = [
-  { id: "default", name: "Main" },
-  { id: "backend", name: "Backend" },
+const views: CommandCenterView[] = [
+  { id: "active", name: "Active", filter: "active", groupBy: "status", sortBy: "status" },
+  { id: "backend", name: "Backend", filter: "all", groupBy: "project", sortBy: "name" },
 ];
 
-describe("stripVisibleFor", () => {
-  test("hidden with one tab, shown with two+", () => {
-    expect(stripVisibleFor([{ id: "default", name: "Main" }])).toBe(false);
-    expect(stripVisibleFor(tabs)).toBe(true);
-  });
-});
+const base: StripInput = {
+  views,
+  activeViewId: "active",
+  dirty: false,
+  droppedActive: 0,
+  width: 80,
+};
 
 describe("layoutStrip / chipAtCol", () => {
   test("chips are laid out left to right and hit-test by x", () => {
-    const chips = layoutStrip({
-      tabs, activeTabId: "default",
-      summaryByTab: new Map([["backend", "waiting"]]),
-      width: 80, palette,
-    });
+    const chips = layoutStrip(base);
     expect(chips.length).toBe(2);
-    expect(chips[0].id).toBe("default");
+    expect(chips[0].id).toBe("active");
     expect(chips[0].x).toBe(0);
     // first chip covers its own columns, second starts after it
-    expect(chipAtCol(chips, chips[0].x)).toBe("default");
+    expect(chipAtCol(chips, chips[0].x)).toBe("active");
     expect(chipAtCol(chips, chips[1].x)).toBe("backend");
     expect(chipAtCol(chips, 9999)).toBeNull();
   });
 });
 
 describe("renderStrip", () => {
-  test("renders one row containing both tab names", () => {
-    const grid = renderStrip({
-      tabs, activeTabId: "default",
-      summaryByTab: new Map([["backend", "running"]]),
-      width: 80, palette,
-    });
+  test("renders one row containing both view names", () => {
+    const grid = renderStrip(base);
     expect(grid.rows).toBe(STRIP_ROWS);
     const row = grid.cells[0].map((c) => c.char).join("");
-    expect(row).toContain("Main");
+    expect(row).toContain("Active");
     expect(row).toContain("Backend");
   });
 
-  test("dot cell has fg=palette[summary] and fgMode=Palette", () => {
-    const grid = renderStrip({
-      tabs,
-      activeTabId: "default",
-      summaryByTab: new Map([["backend", "running"]]),
-      width: 80,
-      palette,
-    });
-    // Scan row 0 for the dot character and assert its color.
-    const row = grid.cells[0];
-    const dotCell = row.find((c) => c.char === "●");
-    expect(dotCell).toBeDefined();
-    expect(dotCell!.fg).toBe(2);
-    expect(dotCell!.fgMode).toBe(ColorMode.Palette);
+  test("the active view's chip carries the dirty marker when dirty, not otherwise", () => {
+    const clean = renderStrip(base);
+    const cleanRow = clean.cells[0].map((c) => c.char).join("");
+    expect(cleanRow).not.toContain("·");
+
+    const dirty = renderStrip({ ...base, dirty: true });
+    const dirtyRow = dirty.cells[0].map((c) => c.char).join("");
+    expect(dirtyRow).toContain("Active ·");
   });
 
-  test("dot lands on correct display column with a wide-character (CJK) name", () => {
-    // "汉字" — two CJK characters each with display width 2 (4 cols total).
-    const wideTabs: TabEntry[] = [
-      { id: "wide", name: "汉字" },
-      { id: "other", name: "X" },
-    ];
-    const grid = renderStrip({
-      tabs: wideTabs,
-      activeTabId: "wide",
-      summaryByTab: new Map([["wide", "running"]]),
-      width: 80,
-      palette,
-    });
-    // The dot cell must be "●", not a wide-char continuation or wrong character.
-    const row = grid.cells[0];
-    const dotCell = row.find((c) => c.char === "●");
-    expect(dotCell).toBeDefined();
-    expect(dotCell!.fg).toBe(2);
-    expect(dotCell!.fgMode).toBe(ColorMode.Palette);
-    // Verify there is no stray "●" appearing at the wrong offset:
-    // chip text is ` 汉字 ● ` → display cols: 1 + 4 + 1 + 1 + 1 + 1 = 9
-    // dot is at display col: chip.x(0) + textCols(" 汉字 ") = 0 + (1+4+1) = 6
-    const dotIdx = row.findIndex((c) => c.char === "●");
-    expect(dotIdx).toBe(6);
+  test("the dirty marker only decorates the active chip", () => {
+    // Backend is not active, so even with dirty:true its chip carries no marker.
+    const grid = renderStrip({ ...base, activeViewId: "backend", dirty: true });
+    const row = grid.cells[0].map((c) => c.char).join("");
+    expect(row).toContain("Backend ·");
+    expect(row).not.toContain("Active ·");
   });
 
   test("renderStrip uses precomputed chips when provided", () => {
-    const input = {
-      tabs, activeTabId: "default",
-      summaryByTab: new Map<string, AgentState | null>([["backend", "running"]]),
-      width: 80, palette,
-    };
-    const chips = layoutStrip(input);
-    const grid = renderStrip(input, chips);
+    const chips = layoutStrip(base);
+    const grid = renderStrip(base, chips);
     const row = grid.cells[0].map((c) => c.char).join("");
-    expect(row).toContain("Main");
+    expect(row).toContain("Active");
     expect(row).toContain("Backend");
   });
 });
 
+describe("dropped-tile overflow", () => {
+  test("reports the count the client cap refused, distinctly from chip overflow", () => {
+    const grid = renderStrip({ ...base, droppedActive: 3 });
+    const row = grid.cells[0].map((c) => c.char).join("");
+    expect(row).toContain("+3 not shown");
+  });
+
+  test("silent (no text at all) when nothing was dropped", () => {
+    const grid = renderStrip({ ...base, droppedActive: 0 });
+    const row = grid.cells[0].map((c) => c.char).join("");
+    expect(row).not.toContain("not shown");
+  });
+});
+
 describe("strip overflow", () => {
-  const many: TabEntry[] = [
-    { id: "a", name: "Alpha" }, { id: "b", name: "Bravo" },
-    { id: "c", name: "Charlie" }, { id: "d", name: "Delta" },
-    { id: "e", name: "Echo" }, { id: "f", name: "Foxtrot" },
+  const many: CommandCenterView[] = [
+    { id: "a", name: "Alpha", filter: "all", groupBy: "status", sortBy: "status" },
+    { id: "b", name: "Bravo", filter: "all", groupBy: "status", sortBy: "status" },
+    { id: "c", name: "Charlie", filter: "all", groupBy: "status", sortBy: "status" },
+    { id: "d", name: "Delta", filter: "all", groupBy: "status", sortBy: "status" },
+    { id: "e", name: "Echo", filter: "all", groupBy: "status", sortBy: "status" },
+    { id: "f", name: "Foxtrot", filter: "all", groupBy: "status", sortBy: "status" },
   ];
 
   test("drops chips that don't fit within the width budget", () => {
-    const chips = layoutStrip({
-      tabs: many, activeTabId: "a",
-      summaryByTab: new Map(), width: 24, palette,
-    });
+    const chips = layoutStrip({ ...base, views: many, activeViewId: "a", width: 24 });
     expect(chips.length).toBeLessThan(many.length);
     // Only chips that wholly fit are kept; the first one always fits at x=0.
     expect(chips[0].id).toBe("a");
   });
 
-  test("renders a +N indicator counting the hidden tabs", () => {
-    const input = {
-      tabs: many, activeTabId: "a",
-      summaryByTab: new Map<string, AgentState | null>(), width: 24, palette,
-    };
+  test("renders a +N indicator counting the hidden views", () => {
+    const input = { ...base, views: many, activeViewId: "a", width: 24 };
     const chips = layoutStrip(input);
     const hidden = many.length - chips.length;
     expect(hidden).toBeGreaterThan(0);
@@ -140,13 +106,19 @@ describe("strip overflow", () => {
     expect(row).toContain(`+${hidden}`);
   });
 
-  test("no indicator when all tabs fit", () => {
-    const input = {
-      tabs, activeTabId: "default",
-      summaryByTab: new Map<string, AgentState | null>(), width: 80, palette,
-    };
-    const grid = renderStrip(input);
+  test("no indicator when all views fit", () => {
+    const grid = renderStrip(base);
     const row = grid.cells[0].map((c) => c.char).join("");
     expect(row).not.toContain("+");
+  });
+
+  test("the hidden-chip indicator and the dropped-tile count can coexist", () => {
+    const input = { ...base, views: many, activeViewId: "a", width: 40, droppedActive: 2 };
+    const grid = renderStrip(input);
+    const row = grid.cells[0].map((c) => c.char).join("");
+    expect(row).toContain("+2 not shown");
+    // At least one view chip must have been dropped for this width.
+    const chips = layoutStrip(input);
+    expect(chips.length).toBeLessThan(many.length);
   });
 });

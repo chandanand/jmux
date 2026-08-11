@@ -184,13 +184,15 @@ import {
   normalizeAxes,
   resolveActiveViewId,
   reloadViews,
+  switchView,
+  axesDiffer,
   type CommandCenterAxes,
   type CommandCenterView,
 } from "./glass/views";
 import { GlassView, type GlassTileSpec } from "./glass/view";
-import { normalizeTabs, defaultTabId, summarizeTabState, addTab, renameTab, deleteTab, moveTab, type TabEntry } from "./glass/tabs";
+import { normalizeTabs, defaultTabId, addTab, renameTab, deleteTab, moveTab, type TabEntry } from "./glass/tabs";
 import { buildCcCommands, NEW_TAB_OPTION_ID } from "./glass/cc-commands";
-import { stripVisibleFor, renderStrip, layoutStrip, STRIP_ROWS } from "./glass/strip";
+import { renderStrip, layoutStrip, STRIP_ROWS } from "./glass/strip";
 import { chipAtCol, type PlacedChip } from "./band-layout";
 import { clampTabSelection } from "./glass/reload";
 import { OtelReceiver } from "./otel-receiver";
@@ -1424,7 +1426,6 @@ let commandCenterTabs: TabEntry[] = normalizeTabs(configStore.config.commandCent
 let activeTabId: string = defaultTabId(commandCenterTabs);
 let lastActiveTabId: string = activeTabId;
 let currentStripChips: PlacedChip[] = [];
-let summaryByTab = new Map<string, AgentState | null>();
 
 // The Command Center's saved views and its live (possibly dirty) axes. The
 // axes are what `reconcileGrid` derives membership from; the registry is what
@@ -4053,29 +4054,32 @@ function renderFrame(): void {
   if (inGlass && glassView) {
     const sidebarGrid = sidebarShown ? sidebar.getGrid() : null;
     const overlay = computeModalOverlay(fullScreenLayout);
-    const stripVisible = stripVisibleFor(commandCenterTabs);
     const totalCols = fullScreenLayout.termCols;
     const contentCols = sidebarShown ? totalCols - fullScreenLayout.main.x : totalCols;
 
     let content = glassView.getGrid();
     let cursor = glassView.getFocusedCursor() ?? { x: 0, y: 0 };
 
-    if (stripVisible) {
-      const palette = resolveStateColors(configStore.config.stateColors);
-      const stripInput = { tabs: commandCenterTabs, activeTabId, summaryByTab, width: contentCols, palette };
-      currentStripChips = layoutStrip(stripInput);
-      const strip = renderStrip(stripInput, currentStripChips);
-      const combined = createGrid(contentCols, fullScreenLayout.contentRows);
-      // Blit strip on top rows, glass content below.
-      for (let r = 0; r < STRIP_ROWS && r < combined.rows; r++)
-        for (let c = 0; c < contentCols; c++) combined.cells[r][c] = strip.cells[r][c];
-      for (let r = 0; r < content.rows && r + STRIP_ROWS < combined.rows; r++)
-        for (let c = 0; c < content.cols && c < contentCols; c++) combined.cells[r + STRIP_ROWS][c] = content.cells[r][c];
-      content = combined;
-      cursor = { x: cursor.x, y: cursor.y + STRIP_ROWS };
-    } else {
-      currentStripChips = [];
-    }
+    // The strip is always visible in the grid — it's the only chrome that
+    // says a view exists at all, let alone that others are a keystroke away.
+    const activeView = commandCenterViews.find((v) => v.id === activeViewId) ?? commandCenterViews[0];
+    const stripInput = {
+      views: commandCenterViews,
+      activeViewId,
+      dirty: axesDiffer(activeView, gridAxes),
+      droppedActive: glassView.getDroppedActive(),
+      width: contentCols,
+    };
+    currentStripChips = layoutStrip(stripInput);
+    const strip = renderStrip(stripInput, currentStripChips);
+    const combined = createGrid(contentCols, fullScreenLayout.contentRows);
+    // Blit strip on top rows, glass content below.
+    for (let r = 0; r < STRIP_ROWS && r < combined.rows; r++)
+      for (let c = 0; c < contentCols; c++) combined.cells[r][c] = strip.cells[r][c];
+    for (let r = 0; r < content.rows && r + STRIP_ROWS < combined.rows; r++)
+      for (let c = 0; c < content.cols && c < contentCols; c++) combined.cells[r + STRIP_ROWS][c] = content.cells[r][c];
+    content = combined;
+    cursor = { x: cursor.x, y: cursor.y + STRIP_ROWS };
 
     renderer.render(fullScreenLayout, content, cursor, sidebarGrid, null, overlay?.grid ?? null, overlay?.cursor ?? null, undefined, undefined, dragChrome());
     return;
@@ -4819,10 +4823,14 @@ const inputRouter = new InputRouter(
       glassView?.moveFocus(dir);
       scheduleRender();
     },
-    glassStripRows: () => (inGlass && stripVisibleFor(commandCenterTabs) ? STRIP_ROWS : 0),
-    onGlassTabClick: (x) => { const id = chipAtCol(currentStripChips, x); if (id) switchCommandCenterTab(id); },
-    onGlassTabSwitch: (n) => { const tab = commandCenterTabs[n - 1]; if (tab) switchCommandCenterTab(tab.id); },
-    onGlassTabRelative: (delta) => switchCommandCenterTabRelative(delta),
+    // The strip is always visible in the grid now — no tab count to gate on.
+    glassStripRows: () => (inGlass ? STRIP_ROWS : 0),
+    // These fire on the strip, which shows views now, not tabs — the router
+    // option names are the one thing phase 9 still owns the renaming of,
+    // alongside the rest of the tab vocabulary it retires.
+    onGlassTabClick: (x) => { const id = chipAtCol(currentStripChips, x); if (id) switchGlassView(id); },
+    onGlassTabSwitch: (n) => { const view = commandCenterViews[n - 1]; if (view) switchGlassView(view.id); },
+    onGlassTabRelative: (delta) => switchGlassViewRelative(delta),
     onGlassDetach: () => detachClient(),
     onGlassToggle: () => { void toggleCommandCenter(); },
     onGlassPinToggle: () => { void toggleGridMembership(); },
@@ -8893,13 +8901,10 @@ try {
 
     // Reload the Command Center tab registry (palette CRUD + hand-edits land here).
     {
-      const before = stripVisibleFor(commandCenterTabs);
       commandCenterTabs = normalizeTabs(updated.commandCenterTabs);
       const clamped = clampTabSelection(commandCenterTabs, activeTabId, lastActiveTabId);
       activeTabId = clamped.activeTabId;
       lastActiveTabId = clamped.lastActiveTabId;
-      const after = stripVisibleFor(commandCenterTabs);
-      if (before !== after) { resizeGlass(); }  // strip appeared/disappeared → glass height changed
       scheduleRender();
     }
 
@@ -9519,14 +9524,6 @@ const GRID_PANE_FORMAT = [PANE_ROW_FORMAT, "#{session_id}", "#{window_id}"].join
 
 const GRID_SESSION_FORMAT = `#{session_id}${US}#{@jmux-grid-hidden}`;
 
-/**
- * The grid's one bucket. `GlassTileSpec.tabId` and `GlassView`'s active tab are
- * a partition this design no longer has: membership is derived from a single
- * set of axes, so every tile is in the same bucket and the field is a constant
- * until phase 8 removes it.
- */
-const GRID_TAB_ID = "grid";
-
 interface GridSnapshot {
   /** Election input for every pane on the server, in tmux's order. */
   paneRows: PaneRow[];
@@ -9611,7 +9608,6 @@ function applyGridSnapshot(snap: GridSnapshot): void {
 
   const specs: GlassTileSpec[] = [];
   const tally: Record<AgentState, number> = { running: 0, waiting: 0, complete: 0 };
-  const states: (AgentState | null)[] = [];
   for (const member of members) {
     const session = shared.sessions[member.index]!;
     const panes = panesBySession.get(session.id) ?? [];
@@ -9626,19 +9622,12 @@ function applyGridSnapshot(snap: GridSnapshot): void {
     // what keeps the two answers together in the ordinary case.
     const agentState = agentStateTracker.getRecord(session.id)?.state ?? null;
     if (agentState) tally[agentState]++;
-    states.push(agentState);
     specs.push({
       sessionId: session.id,
       paneId: elected,
       windowId: snap.locationByPane.get(elected)?.windowId ?? "",
       label: displaySessionName(session),
       agentState,
-      // Tabs no longer partition the grid: membership is derived from one set
-      // of axes, so there is one bucket and every tile is in it. A real tab id
-      // here would blank the grid the moment the strip switched tabs, because
-      // `GlassView` filters its specs on this field. Phase 8 replaces the
-      // strip with the view chips and this field goes with it.
-      tabId: GRID_TAB_ID,
       // Force-on survives the client cap ahead of a derived member. Same
       // predicate `applyGridExceptions` used to put an `added` member here in
       // the first place, so the two can't disagree about what is forced.
@@ -9649,12 +9638,16 @@ function applyGridSnapshot(snap: GridSnapshot): void {
 
   sidebar.setGridSummary({ count: specs.length, tally });
 
-  // Strip dots. One derived set, so every tab reports the same roll-up.
-  const summary = summarizeTabState(states);
-  summaryByTab = new Map<string, AgentState | null>();
-  for (const tab of commandCenterTabs) summaryByTab.set(tab.id, summary);
-
-  if (inGlass) glassView?.setTiles(specs, GRID_TAB_ID);
+  if (inGlass) {
+    const activeView = commandCenterViews.find((v) => v.id === activeViewId) ?? commandCenterViews[0];
+    glassView?.setTiles(specs, {
+      viewName: activeView.name,
+      // Everything the active axes excluded — filtered out, parked, hidden,
+      // or paneless. The empty state's "N hidden" is this figure, not a
+      // second count derived some other way.
+      hiddenCount: Math.max(0, shared.sessions.length - specs.length),
+    });
+  }
   scheduleRender();
 }
 
@@ -9689,8 +9682,7 @@ function resizeGlass(): void {
   // tiles would leave a gap where the toolbar/footer chrome used to be.
   const totalCols = fullScreenLayout.termCols;
   const contentCols = sidebarShown ? totalCols - fullScreenLayout.main.x : totalCols;
-  const stripRows = stripVisibleFor(commandCenterTabs) ? STRIP_ROWS : 0;
-  const contentRows = Math.max(1, fullScreenLayout.contentRows - stripRows);
+  const contentRows = Math.max(1, fullScreenLayout.contentRows - STRIP_ROWS);
   glassView.resize(contentCols, contentRows);
 }
 
@@ -9733,14 +9725,29 @@ function switchCommandCenterTab(tabId: string): void {
   scheduleRender();
 }
 
-/** Switch to the prev/next tab relative to the active one, wrapping around. */
-function switchCommandCenterTabRelative(delta: number): void {
-  const n = commandCenterTabs.length;
+/**
+ * Switch the Command Center's active view — what the strip's chips, `Ctrl-a
+ * 1…9` and `Ctrl-a [ / ]` now drive. The incoming view's axes win over any
+ * dirty (unsaved) live axes: selecting a view means adopting it (transition 1
+ * of `views.ts`'s three), not carrying an in-flight narrowing across.
+ */
+function switchGlassView(id: string): void {
+  const result = switchView(commandCenterViews, activeViewId, id);
+  activeViewId = result.activeViewId;
+  gridAxes = result.axes;
+  configStore.set("commandCenterActiveViewId", activeViewId);
+  configStore.set("commandCenterAxes", gridAxes);
+  invalidateGrid();
+}
+
+/** Switch to the prev/next view relative to the active one, wrapping around. */
+function switchGlassViewRelative(delta: number): void {
+  const n = commandCenterViews.length;
   if (n === 0) return;
-  const cur = commandCenterTabs.findIndex((t) => t.id === activeTabId);
+  const cur = commandCenterViews.findIndex((v) => v.id === activeViewId);
   const base = cur < 0 ? 0 : cur;
   const next = ((base + delta) % n + n) % n; // wrap in both directions
-  switchCommandCenterTab(commandCenterTabs[next].id);
+  switchGlassView(commandCenterViews[next].id);
 }
 
 /**

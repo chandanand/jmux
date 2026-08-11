@@ -58,9 +58,12 @@ const spec = (over: Partial<GlassTileSpec> & { sessionId: string }): GlassTileSp
   paneId: `%${over.sessionId.replace("$", "")}`,
   windowId: "@1",
   label: over.sessionId,
-  tabId: "default",
   ...over,
 });
+
+/** `setTiles`' empty-state context — irrelevant to every test here except the
+ * ones that actually empty the grid, which don't assert on it. */
+const EMPTY_CTX = { viewName: "Active", hiddenCount: 0 };
 
 const pane = (paneId: string, over: Partial<PaneRow> = {}): PaneRow => ({
   paneId,
@@ -82,7 +85,7 @@ describe("a tile is a session", () => {
       spec({ sessionId: "$1", paneId: "%1" }),
       spec({ sessionId: "$1", paneId: "%2" }),
       spec({ sessionId: "$2", paneId: "%3" }),
-    ], "default");
+    ], EMPTY_CTX);
 
     expect(ptys.map((p) => p.session)).toEqual(["$1", "$2"]);
     // The first spec in membership order supplies the face.
@@ -95,12 +98,12 @@ describe("a tile is a session", () => {
     const a = spec({ sessionId: "$1" });
     const b = spec({ sessionId: "$2" });
     const c = spec({ sessionId: "$3" });
-    view.setTiles([a, b, c], "default");
+    view.setTiles([a, b, c], EMPTY_CTX);
     view.moveFocus("right");
     expect(view.focusedSessionId()).toBe("$2");
 
     // A waiting agent sorts to the front: the same tile must stay focused.
-    view.setTiles([b, c, a], "default");
+    view.setTiles([b, c, a], EMPTY_CTX);
     expect(view.focusedSessionId()).toBe("$2");
   });
 
@@ -109,17 +112,17 @@ describe("a tile is a session", () => {
     const a = spec({ sessionId: "$1" });
     const b = spec({ sessionId: "$2" });
     const c = spec({ sessionId: "$3" });
-    view.setTiles([a, b, c], "default");
+    view.setTiles([a, b, c], EMPTY_CTX);
     view.moveFocus("right");
     expect(view.focusedSessionId()).toBe("$2");
 
-    view.setTiles([a, c], "default");
+    view.setTiles([a, c], EMPTY_CTX);
     expect(view.focusedSessionId()).toBe("$3"); // the successor, at the same index
 
-    view.setTiles([a], "default");
+    view.setTiles([a], EMPTY_CTX);
     expect(view.focusedSessionId()).toBe("$1"); // nothing after it: the last survivor
 
-    view.setTiles([], "default");
+    view.setTiles([], EMPTY_CTX);
     expect(view.focusedSessionId()).toBeNull();
   });
 });
@@ -134,7 +137,7 @@ describe("retarget", () => {
 
   test("gives the old window back before selecting the new one", () => {
     const { view, commands, ptys, clear } = makeView({ windows });
-    view.setTiles([spec({ sessionId: "$1", paneId: "%1" })], "default");
+    view.setTiles([spec({ sessionId: "$1", paneId: "%1" })], EMPTY_CTX);
     expect(commands).toEqual([
       ["display-message", "-p", "-t", "%1", "#{window_id} #{window_panes} #{window_zoomed_flag}"],
       ["select-window", "-t", "$1:@1"],
@@ -143,7 +146,7 @@ describe("retarget", () => {
     clear();
 
     // The face moves to a pane in another window of the same session.
-    view.setTiles([spec({ sessionId: "$1", paneId: "%2" })], "default");
+    view.setTiles([spec({ sessionId: "$1", paneId: "%2" })], EMPTY_CTX);
 
     expect(commands).toEqual([
       // Unzoom first: after select-window this would give back a window the
@@ -158,8 +161,8 @@ describe("retarget", () => {
 
   test("keeps the client, the pty and the bridge", () => {
     const { view, ptys } = makeView({ windows });
-    view.setTiles([spec({ sessionId: "$1", paneId: "%1" })], "default");
-    view.setTiles([spec({ sessionId: "$1", paneId: "%2" })], "default");
+    view.setTiles([spec({ sessionId: "$1", paneId: "%1" })], EMPTY_CTX);
+    view.setTiles([spec({ sessionId: "$1", paneId: "%2" })], EMPTY_CTX);
 
     expect(ptys).toHaveLength(1);
     expect(ptys[0]!.pty.killed).toBe(false);
@@ -167,8 +170,8 @@ describe("retarget", () => {
 
   test("teardown undoes the zoom the tile ended with, not the one it started with", () => {
     const { view, commands, clear } = makeView({ windows });
-    view.setTiles([spec({ sessionId: "$1", paneId: "%1" })], "default");
-    view.setTiles([spec({ sessionId: "$1", paneId: "%2" })], "default");
+    view.setTiles([spec({ sessionId: "$1", paneId: "%1" })], EMPTY_CTX);
+    view.setTiles([spec({ sessionId: "$1", paneId: "%2" })], EMPTY_CTX);
     clear();
 
     view.teardown();
@@ -179,7 +182,7 @@ describe("retarget", () => {
     const { view, commands, clear } = makeView({
       windows: { "%1": { windowId: "@1", paneCount: 1, zoomed: false } },
     });
-    view.setTiles([spec({ sessionId: "$1", paneId: "%1" })], "default");
+    view.setTiles([spec({ sessionId: "$1", paneId: "%1" })], EMPTY_CTX);
     clear();
     view.teardown();
     expect(commands).toEqual([]);
@@ -189,7 +192,7 @@ describe("retarget", () => {
     const { view, commands, clear } = makeView({
       windows: { "%1": { windowId: "@1", paneCount: 2, zoomed: true } },
     });
-    view.setTiles([spec({ sessionId: "$1", paneId: "%1" })], "default");
+    view.setTiles([spec({ sessionId: "$1", paneId: "%1" })], EMPTY_CTX);
     expect(commands.filter((c) => c[0] === "resize-pane")).toEqual([]);
     clear();
     view.teardown();
@@ -256,10 +259,10 @@ describe("the face inside a tile", () => {
       panes: [pane("%1", over[0]), pane("%2", over[1])],
     });
 
-    view.setTiles([withPanes([{ state: "running", since: 10 }, {}])], "default");
+    view.setTiles([withPanes([{ state: "running", since: 10 }, {}])], EMPTY_CTX);
     expect(view.focusedPaneId()).toBe("%1");
 
-    view.setTiles([withPanes([{ state: "complete", since: 30 }, { state: "waiting", since: 20 }])], "default");
+    view.setTiles([withPanes([{ state: "complete", since: 30 }, { state: "waiting", since: 20 }])], EMPTY_CTX);
     expect(view.focusedPaneId()).toBe("%1");
   });
 
@@ -267,7 +270,7 @@ describe("the face inside a tile", () => {
     const { view, commands, clear } = makeView({ windows });
     view.setTiles([spec({
       sessionId: "$1", paneId: "%1", panes: [pane("%1"), pane("%2")],
-    })], "default");
+    })], EMPTY_CTX);
     clear();
 
     view.setFace("$1", "%2");
@@ -283,14 +286,14 @@ describe("the face inside a tile", () => {
   test("a cycled face survives reconciles, and outlives its pane by nothing", () => {
     const { view } = makeView({ windows });
     const both = spec({ sessionId: "$1", paneId: "%1", panes: [pane("%1"), pane("%2")] });
-    view.setTiles([both], "default");
+    view.setTiles([both], EMPTY_CTX);
     view.setFace("$1", "%2");
 
-    view.setTiles([both], "default");
+    view.setTiles([both], EMPTY_CTX);
     expect(view.focusedPaneId()).toBe("%2"); // the cycle is not undone by a poll
 
     // %2 dies: the override goes with it and the election answers again.
-    view.setTiles([spec({ sessionId: "$1", paneId: "%1", panes: [pane("%1")] })], "default");
+    view.setTiles([spec({ sessionId: "$1", paneId: "%1", panes: [pane("%1")] })], EMPTY_CTX);
     expect(view.focusedPaneId()).toBe("%1");
   });
 });
@@ -309,7 +312,7 @@ describe("cycling the face", () => {
     view.setTiles([spec({
       sessionId: "$1", paneId: "%1",
       panes: [pane("%1"), pane("%2"), pane("%3")],
-    })], "default");
+    })], EMPTY_CTX);
     expect(view.focusedPaneId()).toBe("%1");
 
     view.cycleFace();
@@ -322,14 +325,14 @@ describe("cycling the face", () => {
 
   test("a single eligible pane refuses to cycle", () => {
     const { view } = makeView();
-    view.setTiles([spec({ sessionId: "$1", paneId: "%1", panes: [pane("%1")] })], "default");
+    view.setTiles([spec({ sessionId: "$1", paneId: "%1", panes: [pane("%1")] })], EMPTY_CTX);
     view.cycleFace();
     expect(view.focusedPaneId()).toBe("%1");
   });
 
   test("no focused tile is a no-op", () => {
     const { view } = makeView();
-    view.setTiles([], "default");
+    view.setTiles([], EMPTY_CTX);
     expect(() => view.cycleFace()).not.toThrow();
   });
 });
@@ -339,7 +342,7 @@ describe("cycling the face", () => {
 describe("zoom", () => {
   test("zooms the focused tile and restores on a second press", () => {
     const { view } = makeView();
-    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], "default");
+    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], EMPTY_CTX);
     expect(view.isZoomed()).toBe(false);
 
     view.toggleZoom();
@@ -351,7 +354,7 @@ describe("zoom", () => {
 
   test("moveFocus refuses to move away from the zoomed tile", () => {
     const { view } = makeView();
-    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], "default");
+    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], EMPTY_CTX);
     view.toggleZoom();
     expect(view.focusedSessionId()).toBe("$1");
 
@@ -363,17 +366,17 @@ describe("zoom", () => {
     const { view } = makeView();
     const a = spec({ sessionId: "$1" });
     const b = spec({ sessionId: "$2" });
-    view.setTiles([a, b], "default");
+    view.setTiles([a, b], EMPTY_CTX);
     view.toggleZoom();
     expect(view.isZoomed()).toBe(true);
 
-    view.setTiles([b], "default");
+    view.setTiles([b], EMPTY_CTX);
     expect(view.isZoomed()).toBe(false);
   });
 
   test("a background tile's pty is never resized to fit an invisible rect", () => {
     const { view, ptys } = makeView();
-    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], "default");
+    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], EMPTY_CTX);
     const two = ptys.find((p) => p.session === "$2")!.pty;
     two.sizes.length = 0;
 
@@ -387,22 +390,22 @@ describe("zoom", () => {
 describe("rendered set ≠ client set", () => {
   test("a tile that leaves membership keeps its client through the grace", () => {
     const { view, ptys } = makeView();
-    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], "default");
+    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], EMPTY_CTX);
     expect(ptys).toHaveLength(2);
 
-    view.setTiles([spec({ sessionId: "$1" })], "default");
+    view.setTiles([spec({ sessionId: "$1" })], EMPTY_CTX);
     expect(ptys[1]!.pty.killed).toBe(false);   // retained, unrendered
     expect(view.focusedSessionId()).toBe("$1");
 
     // Coming back is a survivor, not a spawn: no second client, no re-zoom.
-    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], "default");
+    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], EMPTY_CTX);
     expect(ptys).toHaveLength(2);
   });
 
   test("the grace expires with no tmux traffic behind it", async () => {
     const { view, ptys } = makeView({ opts: { graceMs: 10 } });
-    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], "default");
-    view.setTiles([spec({ sessionId: "$1" })], "default");
+    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], EMPTY_CTX);
+    view.setTiles([spec({ sessionId: "$1" })], EMPTY_CTX);
     expect(ptys[1]!.pty.killed).toBe(false);
 
     await Bun.sleep(60); // nothing calls setTiles again — the armed timer must
@@ -413,7 +416,7 @@ describe("rendered set ≠ client set", () => {
 
   test("the cap refuses active tiles and says how many", () => {
     const { view, ptys } = makeView({ opts: { maxClients: 1 } });
-    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], "default");
+    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], EMPTY_CTX);
 
     expect(ptys).toHaveLength(1);           // no client for a tile never drawn
     expect(ptys[0]!.session).toBe("$1");
@@ -425,7 +428,7 @@ describe("rendered set ≠ client set", () => {
     view.setTiles([
       spec({ sessionId: "$1" }),
       spec({ sessionId: "$2", forced: true }),
-    ], "default");
+    ], EMPTY_CTX);
 
     expect(ptys.map((p) => p.session)).toEqual(["$2"]);
     expect(view.focusedSessionId()).toBe("$2");
@@ -434,7 +437,7 @@ describe("rendered set ≠ client set", () => {
 
   test("an active tile the cap stops admitting releases its client", () => {
     const { view, ptys } = makeView({ opts: { maxClients: 2 } });
-    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], "default");
+    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], EMPTY_CTX);
     expect(ptys).toHaveLength(2);
 
     // $3 is pinned, so it takes a slot from the derived members.
@@ -442,7 +445,7 @@ describe("rendered set ≠ client set", () => {
       spec({ sessionId: "$1" }),
       spec({ sessionId: "$2" }),
       spec({ sessionId: "$3", forced: true }),
-    ], "default");
+    ], EMPTY_CTX);
 
     expect(ptys.map((p) => p.session)).toEqual(["$1", "$2", "$3"]);
     expect(ptys[1]!.pty.killed).toBe(true); // refused, not left attached
@@ -451,7 +454,7 @@ describe("rendered set ≠ client set", () => {
 
   test("teardown releases everything and forgets every key", () => {
     const { view, ptys } = makeView();
-    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], "default");
+    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], EMPTY_CTX);
     view.teardown();
 
     expect(ptys.every((p) => p.pty.killed)).toBe(true);
@@ -489,7 +492,7 @@ describe("only a rendered tile asks for a frame", () => {
   test("a retained tile's output does not schedule a render", async () => {
     let frames = 0;
     const { view, ptys } = makeView({ opts: { onFrame: () => { frames++; } } });
-    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], "default");
+    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], EMPTY_CTX);
     const two = ptys.find((p) => p.session === "$2")!.pty;
 
     // While rendered, its output is worth a frame. This is also the control:
@@ -499,7 +502,7 @@ describe("only a rendered tile asks for a frame", () => {
     await until(() => frames > 0);
 
     // $2 leaves membership. Its client survives the grace, unrendered.
-    view.setTiles([spec({ sessionId: "$1" })], "default");
+    view.setTiles([spec({ sessionId: "$1" })], EMPTY_CTX);
     expect(two.killed).toBe(false);
 
     frames = 0;
@@ -510,16 +513,108 @@ describe("only a rendered tile asks for a frame", () => {
 
   test("a retained tile is still fed, so it is current when it returns", async () => {
     const { view, ptys } = makeView();
-    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], "default");
+    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], EMPTY_CTX);
     const two = ptys.find((p) => p.session === "$2")!.pty;
 
-    view.setTiles([spec({ sessionId: "$1" })], "default");
+    view.setTiles([spec({ sessionId: "$1" })], EMPTY_CTX);
     two.emit("output while retained");
     await settle();
 
     // Coming back reuses the same client rather than spawning a second one.
-    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], "default");
+    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], EMPTY_CTX);
     expect(ptys.filter((p) => p.session === "$2")).toHaveLength(1);
     expect(two.killed).toBe(false);
+  });
+});
+
+// ── Tile chrome (phase 8) ────────────────────────────────────────────────────
+
+function gridText(view: GlassView): string {
+  return view.getGrid().cells.map((row) => row.map((c) => c.char).join("")).join("\n");
+}
+
+describe("the empty state", () => {
+  test("names the view and states the hidden count", () => {
+    const { view } = makeView();
+    view.setTiles([], { viewName: "Active", hiddenCount: 3 });
+    const text = gridText(view);
+    expect(text).toContain('No sessions match "Active"');
+    expect(text).toContain("3 hidden");
+    expect(text).toContain("⌃a f");
+    expect(text).toContain("switch view");
+  });
+
+  test("omits the hidden clause when nothing is hidden", () => {
+    const { view } = makeView();
+    view.setTiles([], { viewName: "Active", hiddenCount: 0 });
+    expect(gridText(view)).not.toContain("hidden");
+  });
+});
+
+describe("the focused tile's bottom-border hint", () => {
+  test("a wide tile shows every hint, including the face cycle", () => {
+    const { view } = makeView();
+    view.resize(64, 10);
+    view.setTiles(
+      [spec({ sessionId: "$1", panes: [pane("%1"), pane("%2"), pane("%3")] })],
+      EMPTY_CTX,
+    );
+    const text = gridText(view);
+    expect(text).toContain("⇧↔ focus");
+    expect(text).toContain("⌃a↵ open");
+    expect(text).toContain("⌃a x agent 1/3");
+    expect(text).toContain("⌃a P hide");
+  });
+
+  test("⌃a x is omitted for a single-pane session — nothing to cycle to", () => {
+    const { view } = makeView();
+    view.resize(64, 10);
+    view.setTiles([spec({ sessionId: "$1", panes: [pane("%1")] })], EMPTY_CTX);
+    const text = gridText(view);
+    expect(text).toContain("⇧↔ focus");
+    expect(text).not.toContain("agent");
+    expect(text).toContain("⌃a P hide");
+  });
+
+  test("a medium tile drops from the tail rather than truncating", () => {
+    const { view } = makeView();
+    view.resize(20, 6);
+    view.setTiles(
+      [spec({ sessionId: "$1", panes: [pane("%1"), pane("%2")] })],
+      EMPTY_CTX,
+    );
+    const text = gridText(view);
+    expect(text).toContain("⇧↔ focus");
+    // Everything after it was dropped whole, not cut mid-word.
+    expect(text).not.toContain("open");
+    expect(text).not.toContain("agent");
+    expect(text).not.toContain("hide");
+  });
+
+  test("a narrow tile shows no hint at all rather than a truncated one", () => {
+    const { view } = makeView();
+    view.resize(12, 6);
+    view.setTiles([spec({ sessionId: "$1", panes: [pane("%1")] })], EMPTY_CTX);
+    expect(gridText(view)).not.toContain("focus");
+  });
+
+  test("only the focused tile carries a hint", () => {
+    const { view } = makeView();
+    view.resize(80, 10);
+    view.setTiles(
+      [spec({ sessionId: "$1", panes: [pane("%1"), pane("%2")] }), spec({ sessionId: "$2", panes: [pane("%3")] })],
+      EMPTY_CTX,
+    );
+    // $1 is focused (first spec wins the initial face/focus): its hint shows,
+    // once — never one per tile.
+    const text = gridText(view);
+    expect((text.match(/⇧↔ focus/g) ?? []).length).toBe(1);
+
+    view.moveFocus("right");
+    const afterMove = gridText(view);
+    expect((afterMove.match(/⇧↔ focus/g) ?? []).length).toBe(1);
+    // $2 has one eligible pane, so its hint — now the one shown — omits the
+    // face cycle, unlike $1's did.
+    expect(afterMove).not.toContain("agent");
   });
 });
