@@ -64,6 +64,7 @@ import {
 } from "./tile-plan";
 import { electRepresentative, eligiblePanes, type PaneRow } from "./representative";
 import { buildTileHints } from "./tile-hints";
+import { buildTileLabel } from "./pane-label";
 import { DENSITIES, type Density } from "./density";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -230,6 +231,8 @@ function synthesizedPanes(spec: GlassTileSpec): readonly PaneRow[] {
     state: spec.agentState ?? null,
     since: null,
     agentPane: null,
+    title: "",
+    currentPath: "",
   }];
 }
 
@@ -915,6 +918,33 @@ export class GlassView {
 
   // ── Rendering ───────────────────────────────────────────────────────────────
 
+  /**
+   * The tile's full label: `spec.label` (the session's own identity plus
+   * issue badge, built by the caller) with the displayed pane's own identity
+   * appended when it is not the session's natural first choice.
+   *
+   * "Not the natural choice" is computed fresh from current state, not
+   * cached, because the face can move (`Ctrl-a x`, a retarget) without a new
+   * `spec` arriving — `setTiles` only runs on the caller's own reconcile
+   * cadence. The two triggers are literal: a live cycle override
+   * (`faceOverrides` naming this tile) or the displayed pane itself carrying
+   * a force-on pin. Recomputed here rather than stored on `TileState` for the
+   * same reason spec.label isn't recomputed elsewhere — it's cheap and this
+   * is the only place that reads it.
+   */
+  private tileLabel(tile: TileState): string {
+    const showSuffix = this.faceOverrides.has(tile.key)
+      || (tile.panes.find((p) => p.paneId === tile.face.paneId)?.forcedOn ?? false);
+    if (!showSuffix) return tile.spec.label;
+    const pane = tile.panes.find((p) => p.paneId === tile.face.paneId);
+    if (!pane) return tile.spec.label;
+    return buildTileLabel(tile.spec.label, {
+      paneTitle: pane.title,
+      paneCurrentCommand: pane.command,
+      paneCurrentPath: pane.currentPath,
+    }, true);
+  }
+
   private drawTile(
     grid: CellGrid,
     rect: TileRect,
@@ -936,7 +966,7 @@ export class GlassView {
     // Border ring (┌─ label ─────┐ / │ … │ / └──────────┘).
     drawBox(grid, { x, y, w: width, h: height }, {
       border: borderAttrs,
-      label: tile.spec.label,
+      label: this.tileLabel(tile),
       labelAttrs,
     });
 

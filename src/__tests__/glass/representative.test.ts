@@ -17,6 +17,8 @@ function row(over: Partial<PaneRow> & { paneId: string }): PaneRow {
     state: null,
     since: null,
     agentPane: null,
+    title: "",
+    currentPath: "",
     ...over,
   };
 }
@@ -96,14 +98,14 @@ describe("inherited agent state is not the pane's own", () => {
 });
 
 describe("parsePaneRowLines", () => {
-  test("PANE_ROW_FORMAT requests the eight fields, US-separated", () => {
+  test("PANE_ROW_FORMAT requests the ten fields, US-separated", () => {
     expect(PANE_ROW_FORMAT).toBe(
-      "#{pane_id}\x1f#{@jmux-agent-kind}\x1f#{pane_current_command}\x1f#{@jmux-pinned}\x1f#{window_active}\x1f#{pane_active}\x1f#{@jmux-agent-state}\x1f#{@jmux-agent-state-since}\x1f#{@jmux-agent-pane}",
+      "#{pane_id}\x1f#{@jmux-agent-kind}\x1f#{pane_current_command}\x1f#{@jmux-pinned}\x1f#{window_active}\x1f#{pane_active}\x1f#{@jmux-agent-state}\x1f#{@jmux-agent-state-since}\x1f#{@jmux-agent-pane}\x1f#{pane_title}\x1f#{pane_current_path}",
     );
   });
 
-  test("splits all eight fields", () => {
-    const rows = parsePaneRowLines(["%1\x1fclaude\x1fnode\x1fbackend\x1f1\x1f1\x1fwaiting\x1f100\x1f%1"]);
+  test("splits all ten fields", () => {
+    const rows = parsePaneRowLines(["%1\x1fclaude\x1fnode\x1fbackend\x1f1\x1f1\x1fwaiting\x1f100\x1f%1\x1fclaude — chat\x1f/repo/api"]);
     expect(rows).toEqual([
       {
         paneId: "%1",
@@ -114,8 +116,16 @@ describe("parsePaneRowLines", () => {
         state: "waiting",
         since: 100,
         agentPane: "%1",
+        title: "claude — chat",
+        currentPath: "/repo/api",
       },
     ]);
+  });
+
+  test("missing trailing title/currentPath fields default to empty strings", () => {
+    const rows = parsePaneRowLines(["%1\x1fclaude\x1fnode\x1fbackend\x1f1\x1f1\x1fwaiting\x1f100\x1f%1"]);
+    expect(rows[0].title).toBe("");
+    expect(rows[0].currentPath).toBe("");
   });
 
   test("blank/invalid state parses to null rather than a garbage AgentState", () => {
@@ -142,6 +152,8 @@ describe("parsePaneRowLines", () => {
         state: "running",
         since: 50,
         agentPane: null,
+        title: "",
+        currentPath: "",
       },
     ]);
   });

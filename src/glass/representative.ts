@@ -25,6 +25,13 @@ export const PANE_ROW_FORMAT = [
   // and that is a fact about the session. This is the election's first tier,
   // the hooks' own answer, and it outranks every heuristic below it.
   "#{@jmux-agent-pane}",
+  // Appended, not inserted — every existing consumer destructures the eight
+  // fields above by position, and `GRID_PANE_FORMAT` (main.ts) appends its
+  // own location fields after this format wholesale. Neither the election nor
+  // the force-on/hide exceptions need these; they exist for the tile label's
+  // pane suffix (`glass/pane-label.ts`), which does.
+  "#{pane_title}",
+  "#{pane_current_path}",
 ].join(US);
 
 export interface PaneRow {
@@ -53,6 +60,10 @@ export interface PaneRow {
   since: number | null;
   /** `@jmux-agent-pane` — the hooks' own answer, identical on every pane. */
   agentPane: string | null;
+  /** `pane_title` — for the tile label's pane suffix, not the election. */
+  title: string;
+  /** `pane_current_path` — ditto. */
+  currentPath: string;
 }
 
 const VALID_AGENT_STATES: ReadonlySet<string> = new Set(["running", "waiting", "complete"]);
@@ -68,7 +79,7 @@ export function parsePaneRowLines(lines: string[]): PaneRow[] {
   const out: PaneRow[] = [];
   for (const line of lines) {
     if (!line.trim()) continue;
-    const [paneId, kind, command, pinned, windowActive, paneActive, state, since, agentPane] =
+    const [paneId, kind, command, pinned, windowActive, paneActive, state, since, agentPane, title, currentPath] =
       splitFields(line);
     if (!paneId) continue;
     // A state without a kind beside it is the session's, inherited — see the
@@ -86,6 +97,8 @@ export function parsePaneRowLines(lines: string[]): PaneRow[] {
       state: declaresKind && VALID_AGENT_STATES.has(state ?? "") ? (state as AgentState) : null,
       since: declaresKind ? parseSince(since ?? "") : null,
       agentPane: agentPane ? agentPane : null,
+      title: title ?? "",
+      currentPath: currentPath ?? "",
     });
   }
   return out;

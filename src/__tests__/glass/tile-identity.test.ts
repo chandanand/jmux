@@ -75,6 +75,8 @@ const pane = (paneId: string, over: Partial<PaneRow> = {}): PaneRow => ({
   state: null,
   since: null,
   agentPane: null,
+  title: "",
+  currentPath: "",
   ...over,
 });
 
@@ -599,6 +601,102 @@ describe("only a rendered tile asks for a frame", () => {
 function gridText(view: GlassView): string {
   return view.getGrid().cells.map((row) => row.map((c) => c.char).join("")).join("\n");
 }
+
+/** Just the top border row, where the label chip lives — the bottom border's
+ *  own hint text uses "·" as a separator too, so a bare `gridText` substring
+ *  check can't tell "the label carries a suffix" from "the hint is drawn". */
+function labelRow(view: GlassView): string {
+  return view.getGrid().cells[0].map((c) => c.char).join("");
+}
+
+describe("the tile label", () => {
+  test("shows the caller's identity alone when the displayed pane is the natural choice", () => {
+    const { view } = makeView();
+    view.resize(40, 10);
+    view.setTiles(
+      [spec({ sessionId: "$1", label: "api TRA-412", panes: [pane("%1")] })],
+      EMPTY_CTX,
+    );
+    expect(labelRow(view)).toContain("api TRA-412");
+    expect(labelRow(view)).not.toContain("·");
+  });
+
+  test("appends the pane's identity when the displayed pane is force-on", () => {
+    // A force-on pin is one of the two triggers the design names — the tile
+    // is showing this pane because a pin said so, not because the election
+    // picked it, so the label has to say which pane that is.
+    const { view } = makeView();
+    view.resize(40, 10);
+    view.setTiles(
+      [spec({
+        sessionId: "$1",
+        label: "api TRA-412",
+        panes: [pane("%1", { forcedOn: true, title: "dev server" })],
+      })],
+      EMPTY_CTX,
+    );
+    expect(labelRow(view)).toContain("api TRA-412 · dev server");
+  });
+
+  test("appends the pane's identity after a live Ctrl-a x cycle override", () => {
+    const { view } = makeView();
+    view.resize(40, 10);
+    view.setTiles(
+      [spec({
+        sessionId: "$1",
+        label: "api TRA-412",
+        panes: [
+          pane("%1", { title: "claude" }),
+          pane("%2", { title: "logs" }),
+        ],
+      })],
+      EMPTY_CTX,
+    );
+    // Before cycling: the natural (first-eligible) pane, no suffix.
+    expect(labelRow(view)).toContain("api TRA-412");
+    expect(labelRow(view)).not.toContain("·");
+
+    view.cycleFace();
+    expect(labelRow(view)).toContain("api TRA-412 · logs");
+  });
+
+  test("falls back to command · cwd-basename when the pane has no title", () => {
+    const { view } = makeView();
+    view.resize(40, 10);
+    view.setTiles(
+      [spec({
+        sessionId: "$1",
+        label: "api",
+        panes: [pane("%1", { forcedOn: true, title: "", command: "node", currentPath: "/repo/api/server" })],
+      })],
+      EMPTY_CTX,
+    );
+    expect(labelRow(view)).toContain("api · node · server");
+  });
+
+  test("the suffix survives a cycle that wraps back to the first pane", () => {
+    // Ctrl-a x has no "un-cycle": the override is sticky per session until
+    // that pane dies (design.md's "Logical tile identity" section). Landing
+    // back on %1 by wrapping is still a live override, not the election
+    // deciding on its own — so the suffix correctly still names the pane,
+    // even though it happens to be the same one the election would have
+    // picked unprompted.
+    const { view } = makeView();
+    view.resize(40, 10);
+    view.setTiles(
+      [spec({
+        sessionId: "$1",
+        label: "api",
+        panes: [pane("%1", { title: "claude" }), pane("%2", { title: "logs" })],
+      })],
+      EMPTY_CTX,
+    );
+    view.cycleFace();
+    expect(labelRow(view)).toContain("api · logs");
+    view.cycleFace(); // wraps back to %1
+    expect(labelRow(view)).toContain("api · claude");
+  });
+});
 
 describe("the empty state", () => {
   test("names the view and states the excluded count", () => {

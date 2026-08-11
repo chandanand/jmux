@@ -9577,9 +9577,9 @@ async function ensureParkSession(): Promise<void> {
 // folded into it) and one `list-sessions -F` for the session-scoped hide.
 
 /**
- * `PANE_ROW_FORMAT` plus the location fields. `parsePaneRowLines` reads the
- * leading eight and ignores the rest, so one format serves both parses and the
- * election can never be fed a different pass from the placement.
+ * `PANE_ROW_FORMAT` plus the location fields. `parsePaneRowLines` reads its
+ * own leading fields and ignores the rest, so one format serves both parses
+ * and the election can never be fed a different pass from the placement.
  */
 const GRID_PANE_FORMAT = [PANE_ROW_FORMAT, "#{session_id}", "#{window_id}"].join(US);
 
@@ -9612,9 +9612,12 @@ async function readGridState(): Promise<GridSnapshot> {
     if (!paneId) continue;
     const pin = fields[3];
     if (pin) pinByPane.set(paneId, pin);
+    // Indices 9 and 10 are PANE_ROW_FORMAT's own trailing pane_title /
+    // pane_current_path fields (the tile label's pane suffix); the location
+    // fields GRID_PANE_FORMAT appends come after those, at 11 and 12.
     locationByPane.set(paneId, {
-      sessionId: fields[8] ?? "",
-      windowId: fields[9] ?? "",
+      sessionId: fields[11] ?? "",
+      windowId: fields[12] ?? "",
     });
   }
 
@@ -9690,11 +9693,19 @@ function applyGridSnapshot(snap: GridSnapshot): void {
     // what keeps the two answers together in the ordinary case.
     const agentState = agentStateTracker.getRecord(session.id)?.state ?? null;
     if (agentState) tally[agentState]++;
+    // The sidebar row's own identity: displaySessionName plus the issue
+    // badge (`TRA-412 +2`), the same two facts row 1 and the badge column
+    // show, folded into one string because the tile label is a single chip.
+    // The pane suffix — which pane this is, when it isn't the session's
+    // natural choice — is appended at draw time (`tileLabel`), not here: it
+    // can change (a live `Ctrl-a x` cycle) without a new spec arriving.
+    const identity = displaySessionName(session);
+    const badge = formatIssueBadge(pollCoordinator.getContext(session.name)?.issues ?? []);
     specs.push({
       sessionId: session.id,
       paneId: elected,
       windowId: snap.locationByPane.get(elected)?.windowId ?? "",
-      label: displaySessionName(session),
+      label: badge ? `${identity} ${badge}` : identity,
       agentState,
       // Force-on survives the client cap ahead of a derived member. Same
       // predicate `applyGridExceptions` used to put an `added` member here in
