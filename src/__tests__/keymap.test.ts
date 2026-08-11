@@ -195,6 +195,29 @@ describe("keymap ↔ input-router", () => {
     expect(mismatches).toEqual([]);
   });
 
+  // The per-binding matrix above only walks bindings that already exist in
+  // the table — a chord added straight to a router arm with no Binding row at
+  // all has nothing to iterate over and is invisible to it. That is exactly
+  // the drift this file exists to prevent (`Ctrl-a j`, advertised for a bind
+  // that was never written), so the router→table direction needs its own
+  // check per arm: every byte an arm actually intercepts must be claimed by
+  // at least one row that declares *that* arm.
+  test("every key the ordinary prefix arm intercepts is declared by some binding for that arm", () => {
+    const declared = new Set(
+      prefixBindings.filter((b) => (b.arms ?? []).includes("ordinary")).map((b) => b.prefixKey),
+    );
+    const missing = routerPrefixKeys("prefix").filter((k) => !declared.has(k));
+    expect(missing).toEqual([]);
+  });
+
+  test("every key the glass prefix arm intercepts is declared by some binding for that arm", () => {
+    const declared = new Set(
+      prefixBindings.filter((b) => (b.arms ?? []).includes("glass")).map((b) => b.prefixKey),
+    );
+    const missing = routerPrefixKeys("glass-prefix").filter((k) => !declared.has(k));
+    expect(missing).toEqual([]);
+  });
+
   test("every Command Center chord in the table is intercepted in the glass arm", () => {
     const intercepted = new Set(routerPrefixKeys("glass-prefix"));
     const missing = glassPrefixBindings
@@ -204,10 +227,12 @@ describe("keymap ↔ input-router", () => {
   });
 
   test("every key the full-screen-surface arm intercepts is in the table", () => {
-    // Subset, like the glass arm: this arm is a deliberate handful of chords
-    // that stay live while settings/workflow/ghost-preview own input, not a
-    // second copy of the keymap. What it must never be is a chord nothing
-    // documents — the drift keymap.ts exists to prevent.
+    // Subset, unlike the ordinary/glass checks above: this arm is a
+    // deliberate handful of chords that stay live while
+    // settings/workflow/ghost-preview own input, not a second copy of the
+    // keymap, so this only checks that every byte it intercepts has *some*
+    // row in the table — not one that declares "surface" among its arms.
+    // What it must never be is a chord nothing documents at all.
     const tabled = new Set(prefixBindings.map((b) => b.prefixKey));
     const missing = routerPrefixKeys("surface-prefix").filter((k) => !tabled.has(k));
     expect(missing).toEqual([]);
