@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { GridExceptions, type GridPaneRow } from "../../glass/exceptions";
+import { applyGridExceptions, type GridPaneRow } from "../../glass/exceptions";
 import type { SessionBand } from "../../session-order";
 import type { SessionInfo } from "../../types";
 
@@ -21,10 +21,10 @@ function pane(sessionId: string, pinnedRaw: string | null): GridPaneRow {
   return { sessionId, pinnedRaw };
 }
 
-describe("GridExceptions", () => {
+describe("applyGridExceptions", () => {
   test("derived member, no exceptions -> tile, source derived", () => {
     const sessions = makeSessions([{ name: "a" }]);
-    const result = GridExceptions({
+    const result = applyGridExceptions({
       sessions,
       bands: [band("ungrouped", "ungrouped", [0])],
       hiddenSessionIds: new Set(),
@@ -35,7 +35,7 @@ describe("GridExceptions", () => {
 
   test("hidden, no force-on pane in it -> no tile", () => {
     const sessions = makeSessions([{ name: "a" }]);
-    const result = GridExceptions({
+    const result = applyGridExceptions({
       sessions,
       bands: [band("ungrouped", "ungrouped", [0])],
       hiddenSessionIds: new Set(["$0"]),
@@ -46,7 +46,7 @@ describe("GridExceptions", () => {
 
   test("hidden AND a pane in it force-on -> still no tile, hide wins", () => {
     const sessions = makeSessions([{ name: "a" }]);
-    const result = GridExceptions({
+    const result = applyGridExceptions({
       sessions,
       bands: [band("ungrouped", "ungrouped", [0])],
       hiddenSessionIds: new Set(["$0"]),
@@ -57,7 +57,7 @@ describe("GridExceptions", () => {
 
   test("derived member with a force-on pane -> one tile, still derived (not moved to Added)", () => {
     const sessions = makeSessions([{ name: "a" }]);
-    const result = GridExceptions({
+    const result = applyGridExceptions({
       sessions,
       bands: [band("ungrouped", "ungrouped", [0])],
       hiddenSessionIds: new Set(),
@@ -69,7 +69,7 @@ describe("GridExceptions", () => {
   test("non-member session with a force-on pane -> one tile, in the Added band, leading", () => {
     const sessions = makeSessions([{ name: "a" }, { name: "b" }]);
     // Only "a" (index 0) is a derived member; "b" (index 1) is not in any band.
-    const result = GridExceptions({
+    const result = applyGridExceptions({
       sessions,
       bands: [band("ungrouped", "ungrouped", [0])],
       hiddenSessionIds: new Set(),
@@ -83,7 +83,7 @@ describe("GridExceptions", () => {
 
   test("non-member, non-hidden, no force-on pane -> no tile", () => {
     const sessions = makeSessions([{ name: "a" }, { name: "b" }]);
-    const result = GridExceptions({
+    const result = applyGridExceptions({
       sessions,
       bands: [band("ungrouped", "ungrouped", [0])],
       hiddenSessionIds: new Set(),
@@ -94,7 +94,7 @@ describe("GridExceptions", () => {
 
   test("non-member session, hidden, with a force-on pane -> no tile, hide still wins", () => {
     const sessions = makeSessions([{ name: "a" }, { name: "b" }]);
-    const result = GridExceptions({
+    const result = applyGridExceptions({
       sessions,
       bands: [band("ungrouped", "ungrouped", [0])],
       hiddenSessionIds: new Set(["$1"]),
@@ -105,7 +105,7 @@ describe("GridExceptions", () => {
 
   test("two force-on panes in one session -> one tile, not two", () => {
     const sessions = makeSessions([{ name: "a" }]);
-    const result = GridExceptions({
+    const result = applyGridExceptions({
       sessions,
       bands: [],
       hiddenSessionIds: new Set(),
@@ -116,7 +116,7 @@ describe("GridExceptions", () => {
 
   test("legacy pin values (tab ids, '1', 'default') all read as force-on", () => {
     const sessions = makeSessions([{ name: "a" }, { name: "b" }, { name: "c" }]);
-    const result = GridExceptions({
+    const result = applyGridExceptions({
       sessions,
       bands: [],
       hiddenSessionIds: new Set(),
@@ -128,7 +128,7 @@ describe("GridExceptions", () => {
 
   test("empty/null pin values are not force-on", () => {
     const sessions = makeSessions([{ name: "a" }]);
-    const result = GridExceptions({
+    const result = applyGridExceptions({
       sessions,
       bands: [],
       hiddenSessionIds: new Set(),
@@ -144,7 +144,7 @@ describe("GridExceptions", () => {
       { name: "derived-c" },
       { name: "added-d" },
     ]);
-    const result = GridExceptions({
+    const result = applyGridExceptions({
       sessions,
       bands: [band("ungrouped", "ungrouped", [0, 2])],
       hiddenSessionIds: new Set(),
@@ -160,7 +160,7 @@ describe("GridExceptions", () => {
 
   test("preserves multi-band derived order (e.g. pinned band before group bands)", () => {
     const sessions = makeSessions([{ name: "p" }, { name: "g" }]);
-    const result = GridExceptions({
+    const result = applyGridExceptions({
       sessions,
       bands: [band("pinned", "pinned", [0]), band("group", "project:x", [1])],
       hiddenSessionIds: new Set(),
@@ -174,7 +174,7 @@ describe("GridExceptions", () => {
 
   test("session dying (absent from `sessions`) simply cannot appear — no crash on stale band index", () => {
     const sessions = makeSessions([{ name: "a" }]);
-    const result = GridExceptions({
+    const result = applyGridExceptions({
       sessions,
       bands: [band("ungrouped", "ungrouped", [0, 1])], // index 1 doesn't exist
       hiddenSessionIds: new Set(),
@@ -190,7 +190,7 @@ describe("GridExceptions", () => {
   // because hide names the whole session and the pin names one pane in it.
   test("parked session with a force-on pane -> tile in the Added band", () => {
     const sessions = makeSessions([{ name: "live" }, { name: "parked" }]);
-    const result = GridExceptions({
+    const result = applyGridExceptions({
       sessions,
       // $1 is parked, so includeParked: false left it out of every band.
       bands: [band("ungrouped", "ungrouped", [0])],
@@ -205,7 +205,7 @@ describe("GridExceptions", () => {
 
   test("parked and hidden with a force-on pane -> still no tile", () => {
     const sessions = makeSessions([{ name: "live" }, { name: "parked" }]);
-    const result = GridExceptions({
+    const result = applyGridExceptions({
       sessions,
       bands: [band("ungrouped", "ungrouped", [0])],
       hiddenSessionIds: new Set(["$1"]),
@@ -215,7 +215,7 @@ describe("GridExceptions", () => {
   });
 
   test("empty input -> empty output", () => {
-    const result = GridExceptions({
+    const result = applyGridExceptions({
       sessions: [],
       bands: [],
       hiddenSessionIds: new Set(),

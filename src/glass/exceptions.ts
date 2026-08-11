@@ -80,7 +80,7 @@ export interface GridExceptionsInput {
  * Returns the final order: the `Added` band leading, then every derived band
  * in the order `bands` gave it, each with any hidden member dropped.
  */
-export function GridExceptions(input: GridExceptionsInput): GridMember[] {
+export function applyGridExceptions(input: GridExceptionsInput): GridMember[] {
   const { sessions, bands, hiddenSessionIds, panes } = input;
 
   const forcedOnSessionIds = new Set<string>();
