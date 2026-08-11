@@ -180,6 +180,7 @@ import {
 import { orderSessions } from "./session-order";
 import { applyGridExceptions, isGridHiddenValue } from "./glass/exceptions";
 import { ReconcileLoop } from "./glass/reconcile-loop";
+import { commitLeaveGlass, leaveGlassWithFallback } from "./glass/leave-glass";
 import {
   normalizeViews,
   normalizeAxes,
@@ -3965,7 +3966,14 @@ async function syncControlClient(): Promise<void> {
   }
 }
 
-async function switchSession(sessionId: string): Promise<void> {
+/**
+ * Returns whether the pty client actually landed on `sessionId` — `false`
+ * covers both "couldn't even try" (no client name) and "tmux rejected the
+ * target" (the session died before `switch-client` reached it). `leaveGlass`
+ * depends on this being honest: it only tears the grid's chrome down once
+ * this reports `true`.
+ */
+async function switchSession(sessionId: string): Promise<boolean> {
   // Choosing a session is choosing to stop previewing. Central so sidebar
   // clicks, keyboard navigation and the palette all get it for free. Guarded
   // against the unpark in closeGhostPreview, which calls back into here.
@@ -3978,7 +3986,7 @@ async function switchSession(sessionId: string): Promise<void> {
   }
 
   if (!ptyClientName) await resolveClientName();
-  if (!ptyClientName) return;
+  if (!ptyClientName) return false;
 
   try {
     await control.sendCommand(
@@ -3996,8 +4004,10 @@ async function switchSession(sessionId: string): Promise<void> {
     }
     fetchWindows();
     renderFrame();
+    return true;
   } catch {
     // Session may have been killed
+    return false;
   }
 }
 
@@ -9878,24 +9888,35 @@ function exitGlass(): void {
   sidebar.setOverviewActive(false);
 }
 
-async function leaveGlass(sessionId: string): Promise<void> {
-  if (!inGlass) {
-    switchSession(sessionId);
-    return;
-  }
-  exitGlass();
-  await switchSession(sessionId); // unparks the main client onto the session
+/**
+ * Leave the grid for `sessionId`, or just switch if it wasn't up. Returns
+ * whether the client actually landed on a real session — `false` means
+ * nothing changed: the grid (if it was up) is still up, exactly as it was.
+ *
+ * Delegates the switch-then-teardown ordering to `commitLeaveGlass`
+ * (`glass/leave-glass.ts`) rather than doing it inline: `exitGlass` used to
+ * run unconditionally *before* the switch was attempted, so a target that
+ * died between the caller's liveness check and the `switch-client` command
+ * actually landing left `inGlass = false` with the client still parked on
+ * `__jmux_park` — the grid's chrome gone and nothing useful in its place.
+ * Switching first means a failed switch leaves the grid untouched.
+ */
+async function leaveGlass(sessionId: string): Promise<boolean> {
+  if (!inGlass) return switchSession(sessionId);
+  return commitLeaveGlass(sessionId, { switchTo: switchSession, teardown: exitGlass });
 }
 
 /**
  * Ctrl-a C. Enters the grid exactly like clicking the Overview row; leaving is
  * the harder half, because `exitGlass` deliberately does not choose a session
- * (see its doc comment) and `switchSession` silently swallows a dead target —
- * stranding the client on the internal park session would render as an empty
- * screen with no chrome, which is worse than staying put. So this picks a
- * target itself: `preGlassSessionId` if it's still alive, else the first
- * session in the sidebar's own current order, else the grid stays open and
- * says so.
+ * (see its doc comment) and a switch can fail. So this picks a target itself
+ * — `preGlassSessionId` if it's still alive, else the first session in the
+ * sidebar's own current order — and retries against the *live* outcome via
+ * `leaveGlassWithFallback`: a single liveness check picks a candidate off a
+ * cached list, but that list can already be stale, so if the preferred target
+ * has died since, the fallback candidate still gets a real attempt instead of
+ * the whole action just giving up. Only once every candidate has failed does
+ * the grid stay open and say so.
  */
 async function toggleCommandCenter(): Promise<void> {
   if (!inGlass) {
@@ -9903,18 +9924,21 @@ async function toggleCommandCenter(): Promise<void> {
     return;
   }
   const live = new Set(currentSessions.map((s) => s.id));
-  const target = preGlassSessionId && live.has(preGlassSessionId)
-    ? preGlassSessionId
-    : sidebar.getDisplayOrderIds()[0];
-  if (!target) {
+  const candidates = [
+    preGlassSessionId && live.has(preGlassSessionId) ? preGlassSessionId : null,
+    sidebar.getDisplayOrderIds()[0] ?? null,
+  ];
+  const landed = await leaveGlassWithFallback(candidates, {
+    switchTo: switchSession,
+    teardown: exitGlass,
+  });
+  if (!landed) {
     showNotice({
       title: "Command Center",
       message: "No session to switch to — every session is gone.",
       tone: "warn",
     });
-    return;
   }
-  await leaveGlass(target);
 }
 
 /**
@@ -9924,7 +9948,10 @@ async function toggleCommandCenter(): Promise<void> {
  * Session gone: notice, stay in the grid — `leaveGlass` must never run against
  * a session tmux no longer has. Pane gone: still leave, landing on the
  * session's own active pane, the closest honest answer to "its displayed
- * pane" once that specific pane no longer exists.
+ * pane" once that specific pane no longer exists. The pre-check is a liveness
+ * snapshot, not a guarantee: the session can still die in the window before
+ * `leaveGlass` actually lands, which is why its result is checked too rather
+ * than assumed — the same race `toggleCommandCenter` guards against.
  */
 async function openFocusedGlassTile(): Promise<void> {
   const sessionId = glassView?.focusedSessionId() ?? null;
@@ -9934,7 +9961,11 @@ async function openFocusedGlassTile(): Promise<void> {
     return;
   }
   const paneId = glassView?.focusedPaneId() ?? null;
-  await leaveGlass(sessionId);
+  const landed = await leaveGlass(sessionId);
+  if (!landed) {
+    showNotice({ title: "Command Center", message: "That session is gone.", tone: "warn" });
+    return;
+  }
   if (!paneId) return;
   const info = glassRunner.run(["display-message", "-p", "-t", paneId, "#{window_id}"]);
   const windowId = info.ok ? info.lines[0] : undefined;

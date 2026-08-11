@@ -552,12 +552,24 @@ where there is no tmux pane to act on. No `o` chord is added.
 
 - `Ctrl-a C` leaving the grid must move the client off the park session —
   `exitGlass` explicitly leaves that to its caller (`main.ts:9651`) and
-  `switchSession` swallows a dead target (`main.ts:3882`). It targets
-  `preGlassSessionId` if still live, else the first session in the current order,
-  else it stays in the grid and shows a notice. Stranding the client on
-  `__jmux_park` renders an empty screen with no chrome.
+  `switchSession` can fail against a dead target. It targets
+  `preGlassSessionId` if still live, else the first session in the current
+  order, else it stays in the grid and shows a notice. A target's liveness is
+  checked against a cached session list, though, and that list can already be
+  stale by the time the `switch-client` command actually lands — so a single
+  check-then-act is not enough to make the fallback path real. `glass/
+  leave-glass.ts`'s `commitLeaveGlass` closes that: it switches *before*
+  tearing the chrome down (`exitGlass` runs only once the switch is
+  confirmed), so a failed attempt leaves the grid exactly as it was rather
+  than stranding the client on `__jmux_park` with the chrome already gone.
+  `leaveGlassWithFallback` retries the next candidate against that same
+  confirmed outcome, rather than the whole action giving up on the first
+  candidate's cached-but-possibly-stale liveness.
 - `Ctrl-a ↵` re-resolves the tile's pane at press time. Pane gone → the session
-  and its active pane. Session gone → notice, stay in the grid.
+  and its active pane. Session gone → notice, stay in the grid. The same
+  liveness-check-can-be-stale race applies here, so `openFocusedGlassTile`
+  checks `leaveGlass`'s own result too, not just its pre-check, and shows the
+  same notice if the session died in between.
 
 ## The focused tile says what it does
 
