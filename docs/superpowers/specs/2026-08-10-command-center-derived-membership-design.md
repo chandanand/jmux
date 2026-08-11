@@ -181,18 +181,31 @@ export function electRepresentative(
 ): string | null;
 ```
 
-Precedence for `electRepresentative`: live `explicitPane` (must appear in
-`panes`) → a force-on pane → an eligible pane → the session-active pane → the
-first pane.
+`electRepresentative` walks three tiers, taking the first that has members:
 
-**Within a tier**, the winner is the most urgent by `outranks()`
+1. the live `explicitPane` (must appear in `panes`),
+2. the force-on panes,
+3. the eligible panes,
+4. failing all of those, **all** the session's panes.
+
+**Within whichever tier answers**, the winner is the most urgent by `outranks()`
 (`agent-state-rollup.ts:31`) — waiting over running over complete, ties to the
-earliest `since` — and where no member of that tier has a state at all, the lowest
-pane id. A tier that has members always answers. A force-on pane with no state
-therefore still beats a kinded pane that has one, which is the point of pinning:
-the pin is an explicit "this is the pane I care about in this session", and an
-explicit choice outranking a derived signal is the same rule `explicitPane` above
-it and `@jmux-pinned` throughout this design already follow.
+earliest `since`; else that tier's `sessionActive` member; else its lowest pane id.
+
+Two consequences, both deliberate. A force-on pane with no state beats a kinded
+pane that has one, because the pin is an explicit "this is the pane I care about
+in this session" and an explicit choice outranks a derived signal — the same rule
+`explicitPane` above it and `@jmux-pinned` throughout this design follow. And a
+session with *no* eligible pane at all still elects one, via tier 4: that is what
+lets a dev server or a log tail tile without anyone pinning it, and it is the
+whole reason the tier exists. `null` comes back only when the session has no
+panes, which means it no longer exists.
+
+`sessionActive` sits inside the tier rule rather than being a tier of its own
+because it is a tiebreak, not a claim: among three agent panes that have not
+reported state yet, the one in the window you were last looking at is a better
+face than the one with the lowest id, but neither outranks a pane that is actually
+waiting on you.
 
 **`sessionActive` means `window_active && pane_active`, not `pane_active` alone.**
 `pane_active` is true of one pane in *every* window, so a session with three
