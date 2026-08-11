@@ -109,11 +109,13 @@ export interface JmuxConfig {
   windowBranches?: boolean;
   pinnedSessions?: string[];
   /**
-   * @deprecated Pre-views auto-pin toggle. Membership is now derived from a
-   * view's axes rather than a set of pinned panes, so there is nothing left
-   * for this to switch on. Dropped from disk by `migrateCommandCenterConfig`
-   * alongside `commandCenterTabs`, for the same `persist()`-writes-the-whole-
-   * object reason.
+   * @deprecated Pre-views auto-pin toggle. Membership will be derived from a
+   * view's axes rather than a set of pinned panes, at which point there is
+   * nothing left for this to switch on — but `main.ts` still reads it today
+   * to gate whether agent panes are unioned into Command Center membership,
+   * so it stays live and on disk until that code moves (phase 9). Dropping
+   * the key before then would silently turn auto-pin off for anyone who has
+   * it set.
    */
   autoPinAgentPanes?: boolean;
   /** Case-insensitive regex matched against pane_current_command for auto-pin (e.g. Codex). */
@@ -191,11 +193,14 @@ export interface JmuxConfig {
   sidebarSort?: "project" | "status" | "activity" | "name";
   /**
    * @deprecated Pre-views hand-assigned tab registry, superseded by
-   * `commandCenterViews`. Read by main.ts/cli/cc.ts until they move off it;
-   * a one-time migration (`migrateCommandCenterConfig`) deletes this key from
-   * disk on load, because `persist()` writes the whole object back
-   * (`config.ts:551`) and a dropped TS field alone would never stop it
-   * re-appearing.
+   * `commandCenterViews`. `main.ts` still builds the tab registry from this
+   * (`normalizeTabs(configStore.config.commandCenterTabs)`) and `cli/cc.ts`
+   * still reads it too, so it stays live and on disk until both move off it
+   * (`main.ts` in phase 6, the CLI in phase 9) — deleting the key first would
+   * silently fold every named tab back to the default the moment a user
+   * restarted. Once nothing reads it, a migration should delete it from disk,
+   * because `persist()` writes the whole object back (`config.ts:551`) and a
+   * dropped TS field alone would never stop it re-appearing.
    */
   commandCenterTabs?: TabEntry[];
   /** Ordered Command Center view registry; never empty after normalize. */
@@ -402,28 +407,28 @@ function mergeConfigWithDefaults(userConfig: JmuxConfig, defaults: JmuxConfig): 
 }
 
 /**
- * One-time, idempotent Command Center migration: drops the two dead
- * tab-registry keys (`commandCenterTabs`, `autoPinAgentPanes`) and seeds
- * `commandCenterViews` / `commandCenterActiveViewId` / `commandCenterAxes` /
- * `commandCenter.maxTiles` when the on-disk shape predates views. Needed
- * because `persist()` writes the whole object back (`config.ts:551`), so
- * dropping a TypeScript field alone would never stop the dead keys
- * re-appearing on the next save. Pure: returns the new object plus whether
- * anything changed (the caller persists only when changed), the same
+ * One-time, idempotent Command Center migration: seeds `commandCenterViews` /
+ * `commandCenterActiveViewId` / `commandCenterAxes` / `commandCenter.maxTiles`
+ * when the on-disk shape predates views. Pure: returns the new object plus
+ * whether anything changed (the caller persists only when changed), the same
  * contract as `migrateLegacyConfig`.
+ *
+ * Deliberately does **not** touch `commandCenterTabs` or `autoPinAgentPanes`.
+ * Those are dead in the *target* design but still read by live code today —
+ * `main.ts` builds the tab registry from `commandCenterTabs` via
+ * `normalizeTabs`, and `autoPinAgentPanes` gates whether agent panes are
+ * unioned into Command Center membership. Deleting either key here would be
+ * additive in the type system but a real regression for a running user
+ * (named tabs vanishing, auto-pin silently turning off) — global constraint 2
+ * requires a key be deleted only alongside the code that reads it. `main.ts`
+ * moves off `commandCenterTabs` in phase 6 and off `autoPinAgentPanes` in
+ * phase 9; the deletion of both keys (and this comment) belongs in whichever
+ * migration accompanies that phase's `main.ts` change, once nothing reads
+ * them anymore.
  */
 export function migrateCommandCenterConfig(raw: any): { config: any; changed: boolean } {
   const config = { ...(raw ?? {}) };
   let changed = false;
-
-  if ("commandCenterTabs" in config) {
-    delete config.commandCenterTabs;
-    changed = true;
-  }
-  if ("autoPinAgentPanes" in config) {
-    delete config.autoPinAgentPanes;
-    changed = true;
-  }
 
   // Absence alone is never a reason to flip `changed`: a config with no
   // Command Center history at all (the common case — a brand-new install, or

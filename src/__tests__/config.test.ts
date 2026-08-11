@@ -85,15 +85,11 @@ describe("loadUserConfig adapter config", () => {
 });
 
 describe("migrateCommandCenterConfig", () => {
-  test("drops the dead tab-registry keys and seeds the view registry", () => {
+  test("seeds the view registry alongside unrelated keys, leaving them untouched", () => {
     const { config, changed } = migrateCommandCenterConfig({
-      commandCenterTabs: [{ id: "default", name: "Main" }],
-      autoPinAgentPanes: true,
       sidebarWidth: 30,
     });
-    expect(changed).toBe(true);
-    expect(config.commandCenterTabs).toBeUndefined();
-    expect(config.autoPinAgentPanes).toBeUndefined();
+    expect(changed).toBe(false); // nothing present-but-wrong; seeding alone never dirties
     expect(config.sidebarWidth).toBe(30); // untouched
     expect(config.commandCenterViews).toEqual([
       { id: DEFAULT_VIEW_SEED_ID, name: DEFAULT_VIEW_SEED_NAME, filter: "active", groupBy: "status", sortBy: "status" },
@@ -101,6 +97,28 @@ describe("migrateCommandCenterConfig", () => {
     expect(config.commandCenterActiveViewId).toBe(DEFAULT_VIEW_SEED_ID);
     expect(config.commandCenterAxes).toEqual({ filter: "active", groupBy: "status", sortBy: "status" });
     expect(config.commandCenter).toEqual({ maxTiles: DEFAULT_MAX_CLIENTS });
+  });
+
+  // Transitional invariant, not a permanent guarantee: `commandCenterTabs` and
+  // `autoPinAgentPanes` are dead in the target design but still read by live
+  // code — `main.ts` builds the tab registry from `commandCenterTabs` via
+  // `normalizeTabs`, and `autoPinAgentPanes` gates whether agent panes are
+  // unioned into Command Center membership. Deleting either here before that
+  // code moves would be a silent regression: named tabs collapsing to the
+  // default, auto-pin quietly turning off. This test is deleted in phase 9
+  // (`main.ts`/`cli/cc.ts` off `commandCenterTabs`; `autoPinAgentPanes`
+  // retired) — its deletion is the signal that the transition finished, not
+  // a loosening of coverage.
+  test("leaves commandCenterTabs and autoPinAgentPanes untouched — main.ts still reads both", () => {
+    const raw = {
+      commandCenterTabs: [{ id: "default", name: "Main" }, { id: "backend", name: "Backend" }],
+      autoPinAgentPanes: true,
+    };
+    const { config, changed } = migrateCommandCenterConfig(raw);
+    expect(config.commandCenterTabs).toEqual(raw.commandCenterTabs);
+    expect(config.autoPinAgentPanes).toBe(true);
+    // Seeding the new fields alone still shouldn't dirty an otherwise-fine config.
+    expect(changed).toBe(false);
   });
 
   test("populates every new field in-memory from nothing, but reports no change", () => {
@@ -243,23 +261,43 @@ describe("ConfigStore", () => {
     expect(onDisk.repoDefaults.claudeCommand).toBe("cc");
   });
 
-  test("loadUserConfig migrates the Command Center config on load and persists once", () => {
+  // Transitional — see the same-titled note on migrateCommandCenterConfig's
+  // own test above. Deleted in phase 9 once main.ts/cli/cc.ts no longer read
+  // either key.
+  test("loadUserConfig leaves commandCenterTabs and autoPinAgentPanes on disk untouched", () => {
     writeFileSync(cfgPath, JSON.stringify({
-      commandCenterTabs: [{ id: "default", name: "Main" }],
+      commandCenterTabs: [{ id: "default", name: "Main" }, { id: "backend", name: "Backend" }],
       autoPinAgentPanes: true,
     }));
     const store = new ConfigStore(cfgPath);
-    expect(store.config.commandCenterTabs).toBeUndefined();
-    expect(store.config.autoPinAgentPanes).toBeUndefined();
+    expect(store.config.commandCenterTabs).toEqual([
+      { id: "default", name: "Main" }, { id: "backend", name: "Backend" },
+    ]);
+    expect(store.config.autoPinAgentPanes).toBe(true);
     expect(store.config.commandCenterViews).toHaveLength(1);
     expect(store.config.commandCenterActiveViewId).toBe(DEFAULT_VIEW_SEED_ID);
     expect(store.config.commandCenterAxes).toEqual({ filter: "active", groupBy: "status", sortBy: "status" });
     expect(store.config.commandCenter?.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
+  });
+
+  test("loadUserConfig repairs a present-but-invalid Command Center config and persists once", () => {
+    writeFileSync(cfgPath, JSON.stringify({
+      commandCenterViews: [
+        { id: "v1", name: "V1", filter: "all", groupBy: "project", sortBy: "name" },
+      ],
+      commandCenterActiveViewId: "ghost", // vanished — must clamp to v1
+      commandCenterAxes: { filter: "bogus", groupBy: "project", sortBy: "name" },
+      commandCenter: { maxTiles: 0 }, // invalid — must fall back to the default
+    }));
+    const store = new ConfigStore(cfgPath);
+    expect(store.config.commandCenterActiveViewId).toBe("v1");
+    expect(store.config.commandCenterAxes).toEqual({ filter: "all", groupBy: "project", sortBy: "name" });
+    expect(store.config.commandCenter?.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
 
     const onDisk = JSON.parse(require("fs").readFileSync(cfgPath, "utf-8"));
-    expect(onDisk.commandCenterTabs).toBeUndefined();
-    expect(onDisk.autoPinAgentPanes).toBeUndefined();
-    expect(onDisk.commandCenterViews).toHaveLength(1);
+    expect(onDisk.commandCenterActiveViewId).toBe("v1");
+    expect(onDisk.commandCenterAxes).toEqual({ filter: "all", groupBy: "project", sortBy: "name" });
+    expect(onDisk.commandCenter.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
   });
 
   test("setRepoDefault writes under repoDefaults and persists", () => {
