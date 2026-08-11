@@ -355,7 +355,9 @@ every `plan.spawn`, and `ensureTile` attaches a real client at
 `glass/view.ts:389`):
 
 ```
-1. admitted   = cap(active, maxClients)        # forced first, then render order
+1. admitted   = cap(active, maxClients)        # SELECTION priority: forced first,
+                                               # then active order. The survivors
+                                               # keep their original active order.
 2. render     = admitted
 3. droppedActive = active.length - admitted.length
 4. spawn      = admitted.filter(k => !live.has(k))
@@ -383,8 +385,13 @@ Every rule falls out of that sequence:
 - **Active always outranks retained.** Step 1 takes its share first, so a newly
   active tile evicts the least-recently-seen retained client through step 6
   rather than waiting out its grace.
-- **Under active overflow, force-on sessions are kept first**, then render order.
-  The remainder is `droppedActive`, stated in the strip (`+3 not shown`). `forced`
+- **Under active overflow, force-on sessions are kept first** — but that is which
+  tiles survive the cap, *not* what order they draw in. `admitted` keeps the
+  active order of whatever it selected; a pinned tile does not jump to the front
+  of the grid. Hoisting on overflow would mean the grid silently rearranged itself
+  the moment a session count crossed `maxTiles`, fighting the `sortBy` the user
+  chose. The remainder is `droppedActive`, stated in the strip (`+3 not shown`).
+  `forced`
   therefore has to travel on the **active** entries, which is why they are
   `{ key, forced }` and not bare keys: with `active = [A, B]`, no retained clients
   and `maxClients: 1`, a planner given only keys receives identical input whether
