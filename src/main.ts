@@ -196,6 +196,7 @@ import {
 import { GlassView, type GlassTileSpec } from "./glass/view";
 import { buildCcCommands } from "./glass/cc-commands";
 import { renderStrip, layoutStrip, STRIP_ROWS } from "./glass/strip";
+import { DENSITIES, cycleDensity, normalizeDensity, type Density } from "./glass/density";
 import { chipAtCol, type PlacedChip } from "./band-layout";
 import { OtelReceiver } from "./otel-receiver";
 import { computeFrameLayout, sidebarBottomRow, SIDEBAR_MIN_TERM_COLS, type FrameLayout } from "./frame-layout";
@@ -1470,6 +1471,13 @@ let gridAxes: CommandCenterAxes = normalizeAxes(
   configStore.config.commandCenterAxes,
   commandCenterViews.find((v) => v.id === activeViewId) ?? commandCenterViews[0],
 );
+/**
+ * The grid's tile-size floor, named. Unlike `commandCenter.maxTiles` this is
+ * hot-applied (`GlassView.setDensity` only resizes existing clients, never
+ * spawns or tears one down) — both from `Ctrl-a D` and from a config-file
+ * edit, in the config watcher below.
+ */
+let commandCenterDensity: Density = normalizeDensity(configStore.config.commandCenter?.density);
 
 /** Sessions currently kept off the grid by `@jmux-grid-hidden`, refreshed by
  *  every `applyGridSnapshot` — the palette's "Show hidden sessions" needs this
@@ -4113,6 +4121,7 @@ function renderFrame(): void {
       activeViewId,
       dirty: axesDiffer(activeView, gridAxes),
       droppedActive: glassView.getDroppedActive(),
+      densityLabel: DENSITIES[commandCenterDensity].label,
       width: contentCols,
     };
     currentStripChips = layoutStrip(stripInput);
@@ -4882,6 +4891,7 @@ const inputRouter = new InputRouter(
     onGlassGroupCycle: () => cycleGridGroup(),
     onGlassSortCycle: () => cycleGridSort(),
     onGlassFilterCycle: () => cycleGridFilter(),
+    onGlassCycleDensity: () => cycleGridDensity(),
     onDiffToggle: () => requestDiffPanel(),
     onDiffZoom: () => zoomDiffPanel(),
     onDiffSendReview: () => void sendReviewToAgent(),
@@ -8956,6 +8966,17 @@ try {
       invalidateGrid();
     }
 
+    // Hot-apply the tile-size floor, unlike maxTiles above: setDensity only
+    // resizes existing clients, so a hand-edit takes effect immediately
+    // rather than on next restart.
+    {
+      const newDensity = normalizeDensity(updated.commandCenter?.density);
+      if (newDensity !== commandCenterDensity) {
+        commandCenterDensity = newDensity;
+        glassView?.setDensity(commandCenterDensity);
+      }
+    }
+
     const needsResize = newWidth !== sidebarWidth;
 
     if (needsResize) {
@@ -9696,8 +9717,8 @@ function ensureGlassView(): GlassView {
       configFile,
       jmuxDir,
       runner: (args) => glassRunner.run(args),
-      minTileWidth: 80,
-      minTileHeight: 10,
+      minTileWidth: DENSITIES[commandCenterDensity].minTileWidth,
+      minTileHeight: DENSITIES[commandCenterDensity].minTileHeight,
       onFrame: scheduleRender,
       stateColors: resolveStateColors(configStore.config.stateColors),
       // The grid's own cap, and the pattern that decides which panes are worth
@@ -9970,6 +9991,17 @@ function cycleGridFilter(): void {
   gridAxes = { ...gridAxes, filter: cycleFilter(gridAxes.filter) };
   configStore.set("commandCenterAxes", gridAxes);
   invalidateGrid();
+}
+
+/**
+ * Cycle the Command Center's tile-size floor. Unlike the axes above, this
+ * doesn't touch membership — it re-lays out the same tiles at a new size
+ * (`GlassView.setDensity`), so there's no `invalidateGrid()` here.
+ */
+function cycleGridDensity(): void {
+  commandCenterDensity = cycleDensity(commandCenterDensity);
+  configStore.set("commandCenter", { ...configStore.config.commandCenter, density: commandCenterDensity });
+  glassView?.setDensity(commandCenterDensity);
 }
 
 /**

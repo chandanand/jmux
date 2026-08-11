@@ -11,6 +11,7 @@ import { logError } from "./log";
 import type { CommandCenterAxes, CommandCenterView } from "./glass/views";
 import { normalizeViews, normalizeAxes, resolveActiveViewId } from "./glass/views";
 import { DEFAULT_MAX_CLIENTS } from "./glass/view";
+import { normalizeDensity, DEFAULT_DENSITY, type Density } from "./glass/density";
 
 /**
  * Cross-repo routing only. Everything that is a property of a *repo* rather
@@ -221,6 +222,13 @@ export interface CommandCenterConfig {
    * the grid.
    */
   maxTiles?: number;
+  /**
+   * The tile-size floor (`glass/density.ts`) — how many tiles the grid packs
+   * in versus how much of each one is legible. Unlike `maxTiles`, this is
+   * hot-applied: switching it only resizes existing clients, never spawns or
+   * tears one down (`GlassView.setDensity`).
+   */
+  density?: Density;
 }
 
 export interface BrowserConfig {
@@ -391,9 +399,9 @@ function mergeConfigWithDefaults(userConfig: JmuxConfig, defaults: JmuxConfig): 
 /**
  * One-time, idempotent Command Center migration: seeds `commandCenterViews` /
  * `commandCenterActiveViewId` / `commandCenterAxes` / `commandCenter.maxTiles`
- * when the on-disk shape predates views. Pure: returns the new object plus
- * whether anything changed (the caller persists only when changed), the same
- * contract as `migrateLegacyConfig`.
+ * / `commandCenter.density` when the on-disk shape predates views. Pure:
+ * returns the new object plus whether anything changed (the caller persists
+ * only when changed), the same contract as `migrateLegacyConfig`.
  *
  * Also drops `commandCenterTabs` and `autoPinAgentPanes` from disk. Both were
  * kept on a previous pass because `main.ts` and `cli/cc.ts` still read them —
@@ -448,11 +456,18 @@ export function migrateCommandCenterConfig(raw: any): { config: any; changed: bo
   const rawMaxTiles = config.commandCenter?.maxTiles;
   const hadMaxTiles = rawMaxTiles !== undefined;
   const maxTilesValid = typeof rawMaxTiles === "number" && Number.isFinite(rawMaxTiles) && rawMaxTiles >= 1;
+
+  const rawDensity = config.commandCenter?.density;
+  const hadDensity = rawDensity !== undefined;
+  const density = normalizeDensity(rawDensity);
+
   config.commandCenter = {
     ...(config.commandCenter ?? {}),
     maxTiles: maxTilesValid ? rawMaxTiles : DEFAULT_MAX_CLIENTS,
+    density,
   };
   if (hadMaxTiles && !maxTilesValid) changed = true;
+  if (hadDensity && rawDensity !== density) changed = true;
 
   return { config, changed };
 }

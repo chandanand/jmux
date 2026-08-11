@@ -64,6 +64,7 @@ import {
 } from "./tile-plan";
 import { electRepresentative, eligiblePanes, type PaneRow } from "./representative";
 import { buildTileHints } from "./tile-hints";
+import { DENSITIES, type Density } from "./density";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -103,6 +104,13 @@ export interface GlassViewOptions {
   configFile?: string;
   jmuxDir?: string;
   runner: (args: string[]) => { ok: boolean; lines: string[] }; // sync tmux
+  /**
+   * The grid's tile-size floor. Set from the active density
+   * (`DENSITIES[d].minTileWidth/minTileHeight`) — the caller resolves the
+   * density, `GlassView` only ever sees the two numbers it lays out against.
+   * Live-settable via `setDensity`, unlike `maxClients`: changing the floor
+   * only resizes existing clients, it never spawns or tears one down.
+   */
   minTileWidth: number;
   minTileHeight: number;
   onFrame: () => void; // call to request a re-render (debounced by caller)
@@ -295,6 +303,23 @@ export class GlassView {
    */
   setAgentPaneRegex(pattern: string | null): void {
     this.opts.agentPaneRegex = pattern;
+  }
+
+  /**
+   * Switch the grid's tile-size floor and re-lay out immediately. The tiles
+   * are real tmux clients, so "re-lay out" has to mean what `resize()` means:
+   * resize every visible tile's pty and `ScreenBridge` to its new rect, not
+   * just repaint one. Nothing is spawned or torn down — `layout()` reads
+   * `opts.minTileWidth/minTileHeight` fresh on every call, so mutating them
+   * here is enough for the next `resizeAllTiles()` (and the next `getGrid()`)
+   * to lay out against the new floor.
+   */
+  setDensity(d: Density): void {
+    const spec = DENSITIES[d];
+    this.opts.minTileWidth = spec.minTileWidth;
+    this.opts.minTileHeight = spec.minTileHeight;
+    this.resizeAllTiles();
+    this.opts.onFrame();
   }
 
   // ── Public API ──────────────────────────────────────────────────────────────

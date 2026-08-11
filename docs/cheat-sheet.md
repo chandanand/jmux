@@ -254,12 +254,21 @@ sidebar, or `Ctrl-a C` from anywhere.
 | `Ctrl-a x` | in the grid | Cycle the focused tile's face — which pane of a multi-agent session it shows |
 | `Ctrl-a z` | in the grid | Zoom the focused tile to full size, or restore |
 | `Ctrl-a G` / `s` / `f` | in the grid | Cycle the grid's own grouping / sort / filter — independent of the sidebar's |
+| `Ctrl-a D` | in the grid | Cycle tile density: comfortable / compact / overview |
 | `Ctrl-a 1…9` | in the grid | Switch to view N |
 | `Ctrl-a [` / `Ctrl-a ]` | in the grid | Previous / next view, wrapping |
 | `Ctrl-a d` | in the grid | Detach jmux (not the focused tile) |
 | Shift-arrows | in the grid | Move focus between tiles |
 | Click a view chip | in the grid | Switch to that view |
 | Mouse wheel | in the grid | Scroll the tile under the cursor |
+
+**Density** picks the tile-size floor the grid packs against — `Ctrl-a D`
+cycles **comfortable** (few large tiles, ~20 lines each — read and type into
+one agent), **compact** (a middle ground), and **overview** (many small
+tiles, a few lines each — a bird's-eye of what everyone's doing). The active
+mode's name sits at the right end of the strip. Comfortable is the default:
+one tile size can't serve both triage and driving, so the grid no longer
+guesses which job you're doing.
 
 **Why one tile per session:** tmux ties the current window and zoom to the
 *session*, not the client, so two tiles can't show two panes of one session at

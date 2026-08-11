@@ -12,11 +12,16 @@ import type { CommandCenterView } from "./views";
 // it, and — separately from chip overflow — however many active tiles the
 // client cap refused (`GlassView.getDroppedActive()`), because a number that
 // bounds coverage and says nothing about it is silent about data loss.
+//
+// The active density's label rides flush right beside that overflow count
+// (`densityLabel`): a mode is only tolerable if the surface it changes also
+// says which one is active, and the strip is the one piece of chrome always
+// on screen while the grid is.
 
 export const STRIP_ROWS = 1;
-const GAP = 1; // blank column between chips
+const GAP = 1; // blank column between chips, and between right-cluster items
 const HIDDEN_RESERVE = 5; // cols kept clear at the right for the "+N" hidden-chip indicator
-const DROPPED_GAP = 2; // blank columns before the dropped-tile count, when shown
+const DROPPED_GAP = 2; // blank columns before the right cluster (density + dropped count), when shown
 
 export interface StripInput {
   views: CommandCenterView[];
@@ -25,6 +30,8 @@ export interface StripInput {
   dirty: boolean;
   /** Active tiles the client cap refused this reconcile — never silent. */
   droppedActive: number;
+  /** The active density's display label (`DENSITIES[d].label`). */
+  densityLabel: string;
   width: number;
 }
 
@@ -40,10 +47,24 @@ function droppedText(droppedActive: number): string {
   return droppedActive > 0 ? `+${droppedActive} not shown` : "";
 }
 
+/**
+ * Columns the right cluster (density label, then dropped-tile count) claims
+ * out of the strip's width — reserved ahead of chip packing so a narrow strip
+ * drops chips before it drops the mode indicator, the same priority the
+ * dropped-tile count already had over chips.
+ */
+function rightClusterCols(densityLabel: string, dropped: string): number {
+  if (!densityLabel && !dropped) return 0;
+  const items = [densityLabel, dropped].filter((s) => s.length > 0);
+  const itemCols = items.reduce((sum, s) => sum + textCols(s), 0);
+  const gaps = (items.length - 1) * GAP;
+  return itemCols + gaps + DROPPED_GAP;
+}
+
 export function layoutStrip(input: StripInput): PlacedChip[] {
   const dropped = droppedText(input.droppedActive);
-  const droppedReserve = dropped ? textCols(dropped) + DROPPED_GAP : 0;
-  const available = Math.max(0, input.width - droppedReserve);
+  const rightReserve = rightClusterCols(input.densityLabel, dropped);
+  const available = Math.max(0, input.width - rightReserve);
 
   // Natural display width of each chip.
   const widths = input.views.map((v) =>
@@ -82,8 +103,8 @@ export function renderStrip(
   }
 
   const dropped = droppedText(input.droppedActive);
-  const droppedReserve = dropped ? textCols(dropped) + DROPPED_GAP : 0;
-  const available = Math.max(0, input.width - droppedReserve);
+  const rightReserve = rightClusterCols(input.densityLabel, dropped);
+  const available = Math.max(0, input.width - rightReserve);
 
   // Hidden-chip indicator: some views didn't fit in the chip band.
   const hidden = input.views.length - chips.length;
@@ -99,12 +120,26 @@ export function renderStrip(
     }
   }
 
-  // Dropped-tile count: flush right, distinct from the hidden-chip indicator
-  // above (which is about the strip running out of room, not the grid).
+  // The right cluster itself: dropped-tile count flush against the right
+  // edge, the density label immediately to its left — or flush right on its
+  // own when nothing was dropped. Distinct from the hidden-chip indicator
+  // above, which is about the strip running out of room, not the grid.
+  let rightCol = input.width;
   if (dropped) {
-    const col = input.width - textCols(dropped);
-    if (col >= 0) {
-      writeString(grid, 0, col, dropped, {
+    rightCol -= textCols(dropped);
+    if (rightCol >= 0) {
+      writeString(grid, 0, rightCol, dropped, {
+        fgMode: ColorMode.Palette,
+        fg: 8,
+        dim: true,
+      });
+    }
+    rightCol -= GAP;
+  }
+  if (input.densityLabel) {
+    rightCol -= textCols(input.densityLabel);
+    if (rightCol >= 0) {
+      writeString(grid, 0, rightCol, input.densityLabel, {
         fgMode: ColorMode.Palette,
         fg: 8,
         dim: true,

@@ -8,6 +8,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { DEFAULT_MAX_CLIENTS } from "../glass/view";
 import { DEFAULT_VIEW_SEED_ID, DEFAULT_VIEW_SEED_NAME } from "../glass/views";
+import { DEFAULT_DENSITY } from "../glass/density";
 
 describe("sanitizeTmuxSessionName", () => {
   test("replaces dots with underscores", () => {
@@ -96,7 +97,7 @@ describe("migrateCommandCenterConfig", () => {
     ]);
     expect(config.commandCenterActiveViewId).toBe(DEFAULT_VIEW_SEED_ID);
     expect(config.commandCenterAxes).toEqual({ filter: "active", groupBy: "status", sortBy: "status" });
-    expect(config.commandCenter).toEqual({ maxTiles: DEFAULT_MAX_CLIENTS });
+    expect(config.commandCenter).toEqual({ maxTiles: DEFAULT_MAX_CLIENTS, density: DEFAULT_DENSITY });
   });
 
   // Both keys' readers (`main.ts`'s tab registry, `cli/cc.ts`'s `cc tabs`) are
@@ -124,6 +125,7 @@ describe("migrateCommandCenterConfig", () => {
     expect(config.commandCenterViews).toHaveLength(1);
     expect(config.commandCenterActiveViewId).toBe(DEFAULT_VIEW_SEED_ID);
     expect(config.commandCenter?.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
+    expect(config.commandCenter?.density).toBe(DEFAULT_DENSITY);
   });
 
   test("clamps an illegal live axis to the active view's own value", () => {
@@ -154,7 +156,7 @@ describe("migrateCommandCenterConfig", () => {
       ],
       commandCenterActiveViewId: DEFAULT_VIEW_SEED_ID,
       commandCenterAxes: { filter: "active", groupBy: "status", sortBy: "status" },
-      commandCenter: { maxTiles: DEFAULT_MAX_CLIENTS },
+      commandCenter: { maxTiles: DEFAULT_MAX_CLIENTS, density: DEFAULT_DENSITY },
     };
     const { changed } = migrateCommandCenterConfig(migrated);
     expect(changed).toBe(false);
@@ -164,6 +166,18 @@ describe("migrateCommandCenterConfig", () => {
     const { config, changed } = migrateCommandCenterConfig({ commandCenter: { maxTiles: 0 } });
     expect(changed).toBe(true);
     expect(config.commandCenter.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
+  });
+
+  test("a mistyped/invalid density is replaced with the default", () => {
+    const { config, changed } = migrateCommandCenterConfig({ commandCenter: { density: "cozy" } });
+    expect(changed).toBe(true);
+    expect(config.commandCenter.density).toBe(DEFAULT_DENSITY);
+  });
+
+  test("a valid density round-trips untouched", () => {
+    const { config, changed } = migrateCommandCenterConfig({ commandCenter: { density: "overview" } });
+    expect(changed).toBe(false);
+    expect(config.commandCenter.density).toBe("overview");
   });
 });
 
@@ -269,6 +283,7 @@ describe("ConfigStore", () => {
     expect(store.config.commandCenterActiveViewId).toBe(DEFAULT_VIEW_SEED_ID);
     expect(store.config.commandCenterAxes).toEqual({ filter: "active", groupBy: "status", sortBy: "status" });
     expect(store.config.commandCenter?.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
+    expect(store.config.commandCenter?.density).toBe(DEFAULT_DENSITY);
 
     // The migration persisted to disk — both keys are gone there too, not
     // merely absent from the in-memory view.
@@ -284,17 +299,19 @@ describe("ConfigStore", () => {
       ],
       commandCenterActiveViewId: "ghost", // vanished — must clamp to v1
       commandCenterAxes: { filter: "bogus", groupBy: "project", sortBy: "name" },
-      commandCenter: { maxTiles: 0 }, // invalid — must fall back to the default
+      commandCenter: { maxTiles: 0, density: "cozy" }, // both invalid — must fall back to defaults
     }));
     const store = new ConfigStore(cfgPath);
     expect(store.config.commandCenterActiveViewId).toBe("v1");
     expect(store.config.commandCenterAxes).toEqual({ filter: "all", groupBy: "project", sortBy: "name" });
     expect(store.config.commandCenter?.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
+    expect(store.config.commandCenter?.density).toBe(DEFAULT_DENSITY);
 
     const onDisk = JSON.parse(require("fs").readFileSync(cfgPath, "utf-8"));
     expect(onDisk.commandCenterActiveViewId).toBe("v1");
     expect(onDisk.commandCenterAxes).toEqual({ filter: "all", groupBy: "project", sortBy: "name" });
     expect(onDisk.commandCenter.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
+    expect(onDisk.commandCenter.density).toBe(DEFAULT_DENSITY);
   });
 
   test("setRepoDefault writes under repoDefaults and persists", () => {
@@ -404,6 +421,7 @@ describe("ConfigStore", () => {
     expect(store.config.commandCenterViews).toHaveLength(1);
     expect(store.config.commandCenterActiveViewId).toBe(DEFAULT_VIEW_SEED_ID);
     expect(store.config.commandCenter?.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
+    expect(store.config.commandCenter?.density).toBe(DEFAULT_DENSITY);
   });
 
   test("configPath returns the path", () => {

@@ -738,6 +738,19 @@ export const KEYMAP: readonly Binding[] = [
     context: IN_GLASS,
     arms: ["glass"],
   },
+  {
+    id: "density-cycle-grid",
+    keys: "Ctrl-a D",
+    label: "Cycle Command Center tile density (comfortable / compact / overview)",
+    section: "Command Center",
+    source: "jmux",
+    prefixKey: "D",
+    // Capital D, not lowercase d (glass detach): shadows tmux's stock
+    // choose-client, accepted on the same precedent as Ctrl-a z shadowing
+    // resize-pane -Z — there is no client to choose from inside the grid.
+    context: IN_GLASS,
+    arms: ["glass"],
+  },
 
   // --- Settings ---
   {

@@ -156,6 +156,10 @@ export interface InputRouterOptions {
   onGlassGroupCycle?: () => void;
   onGlassSortCycle?: () => void;
   onGlassFilterCycle?: () => void;
+  // Ctrl-a D — glass only: cycle the grid's tile-size density. Capital D on
+  // purpose — lowercase d is glass detach, and tmux's own D (choose-client)
+  // has no client to choose from inside the grid.
+  onGlassCycleDensity?: () => void;
   // Diff panel additions
   onDiffPanelData?: (data: string) => void;
   onDiffPanelFocusToggle?: () => void;
@@ -517,6 +521,7 @@ export class InputRouter {
           if (data === "\r") { this.opts.onGlassOpenFocused?.(); return; }
           if (data === "x") { this.opts.onGlassCycleFace?.(); return; }
           if (data === "z") { this.opts.onGlassZoom?.(); return; }
+          if (data === "D") { this.opts.onGlassCycleDensity?.(); return; }
           // --- keymap:glass-prefix end ---
           // Not a jmux chord — flush the buffered prefix, then the key, to the tile.
           if (deferred) this.opts.onPtyData("\x01");
