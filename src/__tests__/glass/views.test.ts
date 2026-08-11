@@ -66,6 +66,49 @@ describe("normalizeViews", () => {
   test("if all entries are dropped, falls back to the seed default", () => {
     expect(normalizeViews([{ id: "" }, "x"])).toEqual([seed]);
   });
+
+  test("drops an id that isn't shaped like a slug — the CRUD path never writes one", () => {
+    const raw = [
+      seed,
+      { id: "Has Spaces", name: "Spaces", filter: "all", groupBy: "none", sortBy: "name" },
+      { id: "UPPER", name: "Upper", filter: "all", groupBy: "none", sortBy: "name" },
+      { id: "-leading-hyphen", name: "Leading", filter: "all", groupBy: "none", sortBy: "name" },
+      { id: "trailing-hyphen-", name: "Trailing", filter: "all", groupBy: "none", sortBy: "name" },
+      { id: "double--hyphen", name: "Double", filter: "all", groupBy: "none", sortBy: "name" },
+      { id: "review", name: "Review", filter: "all", groupBy: "project", sortBy: "name" },
+    ];
+    expect(normalizeViews(raw)).toEqual([
+      seed,
+      { id: "review", name: "Review", filter: "all", groupBy: "project", sortBy: "name" },
+    ]);
+  });
+
+  test("drops a name that is blank after trimming or over 24 characters", () => {
+    const raw = [
+      seed,
+      { id: "blank", name: "   ", filter: "all", groupBy: "none", sortBy: "name" },
+      { id: "toolong", name: "This name is far too long to fit", filter: "all", groupBy: "none", sortBy: "name" },
+      { id: "trimmed", name: "  Trimmed  ", filter: "all", groupBy: "none", sortBy: "name" },
+    ];
+    expect(normalizeViews(raw)).toEqual([
+      seed,
+      // Stored trimmed — the same normalization validateViewName applies on
+      // the interactive path.
+      { id: "trimmed", name: "Trimmed", filter: "all", groupBy: "none", sortBy: "name" },
+    ]);
+  });
+
+  test("drops a name that collides case-insensitively with an earlier one, even under a different id", () => {
+    const raw = [
+      seed,
+      { id: "review", name: "Review", filter: "all", groupBy: "project", sortBy: "name" },
+      { id: "review-2", name: "REVIEW", filter: "all", groupBy: "none", sortBy: "activity" },
+    ];
+    expect(normalizeViews(raw)).toEqual([
+      seed,
+      { id: "review", name: "Review", filter: "all", groupBy: "project", sortBy: "name" },
+    ]);
+  });
 });
 
 describe("normalizeAxes", () => {

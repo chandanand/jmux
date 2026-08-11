@@ -60,28 +60,57 @@ function clampAxis<T>(value: unknown, legal: readonly T[], fallback: T): T {
   return (legal as readonly unknown[]).includes(value) ? (value as T) : fallback;
 }
 
+const MAX_VIEW_NAME = 24;
+
+/**
+ * The shape `slugifyViewName` produces: lowercase alphanumerics, hyphen
+ * separated, no leading/trailing/doubled hyphen. `normalizeViews` enforces
+ * this on every hand-edited or hot-reloaded id — not because an id has to be
+ * *derived from* its name, only shaped like one — so a config that never went
+ * through the CRUD path can't smuggle in something `slugifyViewName` itself
+ * would never produce (spaces, punctuation, empty).
+ */
+const SLUG_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
 /**
  * Parse/validate/synthesize the view registry. Always returns a non-empty
- * array. Malformed entries are dropped and duplicate ids are collapsed (first
- * occurrence wins) — the defensive shape the tab registry this replaced used
- * to have. Additionally
- * clamps each axis to its legal enum, falling back to the seed's value: a
- * hand-edited or stale config axis must never propagate an illegal mode into
- * `orderSessions`.
+ * array. Malformed entries are dropped — the defensive shape the tab registry
+ * this replaced used to have — rather than repaired, on the same reasoning
+ * `normalizeTabs` used: a config that can't be trusted to round-trip a name
+ * shouldn't be trusted to round-trip a truncation of it either.
+ *
+ * Enforces every invariant the interactive CRUD path (`addView`/`renameView`
+ * via `validateViewName`/`slugifyViewName`) already promises, because
+ * `config.json` is hand-editable and hot-reloaded — nothing routes a
+ * malformed entry through CRUD first:
+ *
+ * - `id` must look like a slug (`SLUG_ID_RE`) and be unique.
+ * - `name` must be non-empty after trimming and at most `MAX_VIEW_NAME`
+ *   characters, unique **case-insensitively** — `validateViewName`'s own
+ *   uniqueness rule — and is stored trimmed.
+ * - Each axis is clamped to its legal enum, falling back to the seed's value:
+ *   a hand-edited or stale config axis must never propagate an illegal mode
+ *   into `orderSessions`.
  */
 export function normalizeViews(raw: unknown): CommandCenterView[] {
   if (!Array.isArray(raw)) return seedViews();
   const seed = seedView();
   const out: CommandCenterView[] = [];
-  const seen = new Set<string>();
+  const seenIds = new Set<string>();
+  const seenNames = new Set<string>();
   for (const entry of raw) {
     if (!entry || typeof entry !== "object") continue;
     const id = (entry as { id?: unknown }).id;
-    const name = (entry as { name?: unknown }).name;
-    if (typeof id !== "string" || id.length === 0) continue;
-    if (typeof name !== "string" || name.length === 0) continue;
-    if (seen.has(id)) continue;
-    seen.add(id);
+    const rawName = (entry as { name?: unknown }).name;
+    if (typeof id !== "string" || !SLUG_ID_RE.test(id)) continue;
+    if (typeof rawName !== "string") continue;
+    const name = rawName.trim();
+    if (name.length === 0 || name.length > MAX_VIEW_NAME) continue;
+    if (seenIds.has(id)) continue;
+    const nameKey = name.toLowerCase();
+    if (seenNames.has(nameKey)) continue;
+    seenIds.add(id);
+    seenNames.add(nameKey);
     out.push({
       id,
       name,
@@ -120,8 +149,6 @@ export function resolveActiveViewId(
   if (rawId && views.some((v) => v.id === rawId)) return rawId;
   return views[0].id;
 }
-
-const MAX_VIEW_NAME = 24;
 
 /** Build a stable, unique slug id from a display name. */
 export function slugifyViewName(name: string, existingIds: Iterable<string>): string {
