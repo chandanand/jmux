@@ -171,6 +171,7 @@ import { parsePaneStateLines, PANE_STATE_FORMAT } from "./glass/reflect";
 import { US, splitFields } from "./tmux-fields";
 import { buildPaneLabel } from "./glass/pane-label";
 import { AGENT_DETECT_FORMAT, parseAgentDetectLines, detectAgentPanes } from "./glass/auto-detect";
+import { PANE_ROW_FORMAT, parsePaneRowLines, electRepresentative } from "./glass/representative";
 import { GlassView, type GlassTileSpec } from "./glass/view";
 import { normalizeTabs, defaultTabId, resolveTabId, summarizeTabState, addTab, renameTab, deleteTab, moveTab, type TabEntry } from "./glass/tabs";
 import { buildCcCommands, NEW_TAB_OPTION_ID } from "./glass/cc-commands";
@@ -3102,26 +3103,21 @@ async function setDiffView(view: HunkView): Promise<void> {
 // those hunks. Neither can close the loop alone.
 
 /**
- * The pane to type at for a session.
- *
- * `@jmux-agent-pane` is the protocol's own answer and is preferred. The
- * fallback reads `@jmux-agent-kind` per pane, which is the only trustworthy
- * pane-level identity: `@jmux-agent-state` *inherits* from the session, so
- * "has state" is true of every pane including editors and shells, while
- * nothing writes `kind` at session scope. Order matters — an explicit pane
- * beats a guess.
+ * The pane to type at for a session — "which pane wrote this diff", so it
+ * wants the live answer. Delegates to the stateless `electRepresentative`:
+ * `@jmux-agent-pane` (the protocol's own answer) beats a live urgency-ranked
+ * guess among the session's panes when it names one still present. This is
+ * deliberately the *stateless* election, not the sticky one `GlassView` shows
+ * on the grid — pasting a review must go to the pane that is actually most
+ * urgent right now, not wherever a tile happened to be parked.
  */
 function resolveAgentPane(sessionId: string): string | null {
   const explicit = runTmux(["show-options", "-v", "-t", sessionId, "@jmux-agent-pane"]);
-  if (explicit.ok && explicit.lines[0]) return explicit.lines[0];
+  const explicitPane = explicit.ok && explicit.lines[0] ? explicit.lines[0] : null;
 
-  const panes = runTmux(["list-panes", "-s", "-t", sessionId, "-F", "#{pane_id} #{@jmux-agent-kind}"]);
+  const panes = runTmux(["list-panes", "-s", "-t", sessionId, "-F", PANE_ROW_FORMAT]);
   if (!panes.ok) return null;
-  for (const line of panes.lines) {
-    const [paneId, kind] = line.split(" ");
-    if (paneId && kind) return paneId;
-  }
-  return null;
+  return electRepresentative(parsePaneRowLines(panes.lines), explicitPane, agentPaneRegex);
 }
 
 /**
