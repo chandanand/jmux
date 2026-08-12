@@ -83,6 +83,7 @@ export class SetupModal {
   private providers: SetupProviders;
   private cached: SetupRow[] = [];
   private termRows = 30;
+  private scrollOffset = 0;
 
   constructor(providers: SetupProviders) {
     this.providers = providers;
@@ -91,12 +92,14 @@ export class SetupModal {
   open(): void {
     this._open = true;
     this.selectedIndex = 0;
+    this.scrollOffset = 0;
     this.refresh();
   }
 
   close(): void {
     this._open = false;
     this.selectedIndex = 0;
+    this.scrollOffset = 0;
     this.cached = [];
   }
 
@@ -115,9 +118,10 @@ export class SetupModal {
 
   private refresh(): void {
     this.cached = this.providers.rows();
-    if (this.selectedIndex >= this.paintedRows) {
-      this.selectedIndex = Math.max(0, this.paintedRows - 1);
+    if (this.selectedIndex >= this.cached.length) {
+      this.selectedIndex = Math.max(0, this.cached.length - 1);
     }
+    this.ensureVisible();
   }
 
   setTermRows(rows: number): void {
@@ -156,15 +160,17 @@ export class SetupModal {
     // did not knowingly choose. Rows past the fold are reached by resizing,
     // which is what the notice tells them to do.
     if (data === "\x1b[B" || data === "j") {
-      if (this.paintedRows > 0) {
-        this.selectedIndex = (this.selectedIndex + 1) % this.paintedRows;
+      if (this.cached.length > 0) {
+        this.selectedIndex = (this.selectedIndex + 1) % this.cached.length;
+        this.ensureVisible();
       }
       return { type: "consumed" };
     }
 
     if (data === "\x1b[A" || data === "k") {
-      if (this.paintedRows > 0) {
-        this.selectedIndex = (this.selectedIndex - 1 + this.paintedRows) % this.paintedRows;
+      if (this.cached.length > 0) {
+        this.selectedIndex = (this.selectedIndex - 1 + this.cached.length) % this.cached.length;
+        this.ensureVisible();
       }
       return { type: "consumed" };
     }
@@ -223,26 +229,38 @@ export class SetupModal {
     return Math.min(Math.max(1, this.cached.length), this.maxRows);
   }
 
-  /**
-   * Rows actually painted, and the one number navigation and rendering both
-   * read. When rows are cut, the "…and N more" line takes a slot of its own,
-   * so this is one less than `rowSlots` — counting against `rowSlots` instead
-   * made the notice undercount by exactly the row it was occupying.
-   */
+  /** How many rows the window shows at once. */
   private get paintedRows(): number {
-    const slots = this.rowSlots;
-    if (this.cached.length <= slots) return this.cached.length;
-    return slots >= 2 ? slots - 1 : slots; // no room for the notice at 1 slot
+    return Math.min(this.cached.length, this.rowSlots);
   }
 
-  /** Rows there was no room for. Zero whenever everything fits. */
-  private get hiddenRows(): number {
-    return Math.max(0, this.cached.length - this.paintedRows);
+  /**
+   * Keep the cursor inside the window.
+   *
+   * The list used to bound itself and tell you to resize, which was tolerable
+   * at five fixed rows. Sequenced steps make that a wall on a short terminal,
+   * and the rows past the fold are exactly the ones a new user has not done.
+   */
+  private ensureVisible(): void {
+    const visible = this.paintedRows;
+    if (visible <= 0) return;
+    if (this.selectedIndex < this.scrollOffset) {
+      this.scrollOffset = this.selectedIndex;
+    } else if (this.selectedIndex >= this.scrollOffset + visible) {
+      this.scrollOffset = this.selectedIndex - visible + 1;
+    }
+    const maxOffset = Math.max(0, this.cached.length - visible);
+    if (this.scrollOffset > maxOffset) this.scrollOffset = maxOffset;
   }
 
   getHeight(): number {
     // title(1) + rows + blank(1) + detail(1) + hint(1)
     return 4 + this.rowSlots;
+  }
+
+  /** Exposed for tests: the first row currently in the window. */
+  getScrollOffset(): number {
+    return this.scrollOffset;
   }
 
   getGrid(width: number): CellGrid {
@@ -276,12 +294,13 @@ export class SetupModal {
     // the user cannot see is a setup step they will not do, and a checklist
     // that quietly hides items is worse than one that admits it is cramped.
     const rowCount = this.paintedRows;
-    const hidden = this.hiddenRows;
+    const offset = this.scrollOffset;
 
     for (let i = 0; i < rowCount; i++) {
-      const row = this.cached[i];
+      const row = this.cached[offset + i];
+      if (!row) break;
       const y = rect.top + i;
-      const isSelected = i === this.selectedIndex;
+      const isSelected = offset + i === this.selectedIndex;
 
       if (isSelected) writeString(grid, y, 0, " ".repeat(width), SELECTED_BG_ATTRS);
 
@@ -307,13 +326,6 @@ export class SetupModal {
           writeString(grid, y, noteX, note, CATEGORY_ATTRS);
         }
       }
-    }
-
-    if (hidden > 0) {
-      writeString(grid, rect.top + rowCount, 4,
-        truncateToCols(`…and ${hidden} more — resize the terminal to see ${hidden === 1 ? "it" : "them"}`,
-          Math.max(1, width - 6)),
-        NO_MATCHES_ATTRS);
     }
 
     // Explain line for the selected row. One shared line rather than a second

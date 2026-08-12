@@ -197,12 +197,21 @@ describe("SetupModal in a short terminal", () => {
     }
   });
 
-  test("says how many rows it could not show, rather than dropping them silently", () => {
-    // A setup step the user cannot see is a setup step they will not do.
+  // Was: "says how many rows it could not show". The concern — a setup step the
+  // user cannot see is a setup step they will not do — is now answered by
+  // scrolling to it rather than by counting it, so the assertion is that no row
+  // is unreachable, not that the unreachable ones are tallied.
+  test("no row is unreachable, so there is nothing to tally", () => {
     const modal = new SetupModal({ rows: () => many(20), onActivate: () => {} });
     modal.setTermRows(14);
     modal.open();
-    expect(gridText(modal)).toContain("more");
+    expect(gridText(modal)).not.toContain("more —");
+    const seen = new Set<number>();
+    for (let i = 0; i < 20; i++) {
+      seen.add(modal.getSelectedIndex());
+      modal.handleInput("\x1b[B");
+    }
+    expect(seen.size).toBe(20);
   });
 
   test("shows every row when they all fit", () => {
@@ -230,7 +239,16 @@ describe("SetupModal activation that hands off", () => {
   });
 });
 
-describe("SetupModal hidden-row accounting", () => {
+// Rewritten, not removed. These asserted the deliberate old design: the list
+// bounded itself to the terminal, said "…and N more — resize", and refused to
+// let the cursor reach a row it had not painted, because a cursor on an
+// invisible row acts on Enter without the user knowing which row they hit.
+//
+// That reasoning still holds; what changed is the answer to it. At five fixed
+// rows, resizing was a fair ask. With sequenced steps the rows past the fold
+// are exactly the ones a new user has not done, so the list scrolls and the
+// cursor stays visible by moving the window instead of by being fenced in.
+describe("SetupModal windowing", () => {
   const many = (n: number): SetupRow[] =>
     Array.from({ length: n }, (_, i) => ({
       id: `row-${i}`, label: `Setup step ${i}`, detail: `detail ${i}`, state: "todo" as const,
@@ -243,29 +261,33 @@ describe("SetupModal hidden-row accounting", () => {
     return modal;
   };
 
-  test("the notice counts every row it did not paint", () => {
-    // The notice occupies a row slot itself, so counting against the slots
-    // rather than the painted rows undercounts by exactly one.
+  const textOf = (modal: SetupModal): string =>
+    modal.getGrid(64).cells.map((r) => r.map((c) => c.char).join("")).join("\n");
+
+  test("no resize notice is shown — the list scrolls instead", () => {
+    const modal = cramped(20, 14);
+    expect(textOf(modal)).not.toContain("more —");
+  });
+
+  test("every row is reachable, however cramped the terminal", () => {
     for (const termRows of [13, 14, 16, 20]) {
       const modal = cramped(20, termRows);
-      const text = modal.getGrid(64).cells.map((r) => r.map((c) => c.char).join("")).join("\n");
-      const painted = many(20).filter((r) => text.includes(r.label)).length;
-      const claimed = Number(/…and (\d+) more/.exec(text)?.[1] ?? -1);
-      expect(claimed).toBe(20 - painted);
+      const seen = new Set<number>();
+      for (let i = 0; i < 20; i++) {
+        seen.add(modal.getSelectedIndex());
+        modal.handleInput("\x1b[B");
+      }
+      expect(seen.size).toBe(20);
     }
   });
 
-  test("selection never leaves the rows that were painted", () => {
+  // The original invariant, preserved: a cursor on a row nobody can see would
+  // act on Enter without the user knowing which row they hit.
+  test("the selected row is always one of the painted rows", () => {
     const modal = cramped(20, 14);
-    const text = () => modal.getGrid(64).cells.map((r) => r.map((c) => c.char).join("")).join("\n");
-    const painted = many(20).filter((r) => text().includes(r.label)).length;
     for (let i = 0; i < 40; i++) {
       modal.handleInput("\x1b[B");
-      expect(modal.getSelectedIndex()).toBeLessThan(painted);
-    }
-    for (let i = 0; i < 40; i++) {
-      modal.handleInput("\x1b[A");
-      expect(modal.getSelectedIndex()).toBeGreaterThanOrEqual(0);
+      expect(textOf(modal)).toContain(`Setup step ${modal.getSelectedIndex()}`);
     }
   });
 
@@ -273,10 +295,10 @@ describe("SetupModal hidden-row accounting", () => {
     const modal = cramped(20, 14);
     for (let i = 0; i < 10; i++) {
       modal.handleInput("\x1b[B");
-      const text = modal.getGrid(64).cells.map((r) => r.map((c) => c.char).join("")).join("\n");
+      const text = textOf(modal);
       const shown = /detail (\d+)/.exec(text);
       expect(shown).not.toBeNull();
-      expect(text).toContain(`Setup step ${shown![1]}`);
+      expect(Number(shown![1])).toBe(modal.getSelectedIndex());
     }
   });
 });
@@ -403,5 +425,64 @@ describe("SetupModal async activation", () => {
     const after = calls;
     await new Promise((r) => setTimeout(r, 25));
     expect(calls).toBe(after);
+  });
+});
+
+// --- Scrolling ---
+//
+// The list bounded itself to the terminal and told you to resize. That was
+// tolerable at five fixed rows; with sequenced steps it is a wall on a short
+// terminal, and the rows past the fold are exactly the ones a new user has not
+// done yet.
+function manyRows(n: number): SetupRow[] {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `s${i}`, label: `Step ${i}`, detail: `detail ${i}`, state: "todo" as const,
+  }));
+}
+
+describe("SetupModal scrolling", () => {
+  function textOf(modal: SetupModal, width = 60): string {
+    return modal.getGrid(width).cells.map((r) => r.map((c) => c.char).join("")).join("\n");
+  }
+
+  test("navigating past the fold scrolls rather than stopping", () => {
+    const { modal } = build({ rows: manyRows(12) });
+    modal.setTermRows(14);          // room for only a few rows
+    modal.open();
+    for (let i = 0; i < 11; i++) modal.handleInput("\x1b[B");
+    expect(modal.getSelectedIndex()).toBe(11);
+    expect(textOf(modal)).toContain("Step 11");
+  });
+
+  test("scrolling back up brings the earlier rows into view again", () => {
+    const { modal } = build({ rows: manyRows(12) });
+    modal.setTermRows(14);
+    modal.open();
+    for (let i = 0; i < 11; i++) modal.handleInput("\x1b[B");
+    for (let i = 0; i < 11; i++) modal.handleInput("\x1b[A");
+    expect(modal.getSelectedIndex()).toBe(0);
+    expect(textOf(modal)).toContain("Step 0");
+  });
+
+  test("every row is reachable on a short terminal", () => {
+    const { modal } = build({ rows: manyRows(12) });
+    modal.setTermRows(12);
+    modal.open();
+    const seen = new Set<number>();
+    for (let i = 0; i < 12; i++) {
+      seen.add(modal.getSelectedIndex());
+      modal.handleInput("\x1b[B");
+    }
+    expect(seen.size).toBe(12);
+  });
+
+  test("a list that fits is unchanged", () => {
+    const { modal } = build({ rows: manyRows(3) });
+    modal.setTermRows(30);
+    modal.open();
+    const text = textOf(modal);
+    expect(text).toContain("Step 0");
+    expect(text).toContain("Step 2");
+    expect(text).not.toContain("more —");
   });
 });
