@@ -6197,6 +6197,14 @@ function buildSettingsCategories(): SettingsCategory[] {
       collapsed: false,
       settings: [
         {
+          id: "agent-screen-detection", label: "Detect agent state from pane text", type: "boolean" as const,
+          getValue: () => configStore.config.agentScreenDetection ? "on" : "off",
+          describe: () => "Last resort for agents with no hook integration. Off by default: a screen guess can be confidently wrong where a hook cannot.",
+          onToggle: () => {
+            configStore.set("agentScreenDetection", !configStore.config.agentScreenDetection);
+          },
+        },
+        {
           id: "code-host", label: "Code host", type: "list" as const,
           getValue: () => adapterCfg()?.codeHost?.type ?? "none",
           options: ["gitlab", "github", "none"],
@@ -6265,6 +6273,128 @@ function buildSettingsCategories(): SettingsCategory[] {
           onTextCommit: (v) => {
             const newDirs = v.split(",").map((s: string) => s.trim()).filter(Boolean);
             configStore.set("projectDirs", newDirs);
+          },
+        },
+      ],
+    },
+    {
+      // Not an "Advanced" bucket: these differ in kind — a naming subprocess, a
+      // diff viewer, browser resource use — and filing them together by how
+      // rarely they are touched is a junk drawer. Collapsed, because most
+      // people never need them; findable, because `/` searches every category.
+      label: "Session titles",
+      collapsed: true,
+      settings: [
+        {
+          id: "title-command", label: "Naming command", type: "text" as const,
+          getValue: () => (configStore.config.sessionTitle?.command ?? []).join(" ") || "off",
+          getEditValue: () => (configStore.config.sessionTitle?.command ?? []).join(" "),
+          describe: () => "Argv jmux runs to name a session; it reads a prompt on stdin and prints a name. Blank turns titling off.",
+          onTextCommit: (v: string) => {
+            const argv = v.trim().split(/\s+/).filter(Boolean);
+            if (argv.length > 0 && Bun.which(argv[0]) === null) return `${argv[0]} is not on PATH`;
+            configStore.set("sessionTitle", { ...configStore.config.sessionTitle, command: argv });
+            return null;
+          },
+        },
+        {
+          id: "title-max-chars", label: "Title length", type: "text" as const,
+          getValue: () => String(configStore.config.sessionTitle?.maxChars ?? 32),
+          describe: () => "Budget stated to the model and the cap applied to its reply. The sidebar shows around twenty columns.",
+          onTextCommit: (v: string) => {
+            const n = parseInt(v, 10);
+            if (isNaN(n) || n < 8 || n > 120) return "must be a number between 8 and 120";
+            configStore.set("sessionTitle", { ...configStore.config.sessionTitle, maxChars: n });
+            return null;
+          },
+        },
+      ],
+    },
+    {
+      label: "Diff panel",
+      collapsed: true,
+      settings: [
+        {
+          id: "diff-watch", label: "Follow the working tree", type: "boolean" as const,
+          getValue: () => configStore.config.diffPanel?.watch !== false ? "on" : "off",
+          describe: () => "Launches hunk with --watch so the panel follows edits instead of being a snapshot from when it opened.",
+          onToggle: () => configStore.set("diffPanel", {
+            ...configStore.config.diffPanel,
+            watch: configStore.config.diffPanel?.watch === false,
+          }),
+        },
+        {
+          id: "diff-control-plane", label: "Diff stats and review notes", type: "boolean" as const,
+          getValue: () => configStore.config.diffPanel?.controlPlane !== false ? "on" : "off",
+          describe: () => "Talks to hunk's session daemon. Off falls back to exactly the behaviour jmux had before the daemon existed.",
+          onToggle: () => configStore.set("diffPanel", {
+            ...configStore.config.diffPanel,
+            controlPlane: configStore.config.diffPanel?.controlPlane === false,
+          }),
+        },
+        {
+          id: "diff-clear-notes", label: "Clear notes once sent", type: "boolean" as const,
+          getValue: () => configStore.config.diffPanel?.clearNotesOnSend ? "on" : "off",
+          describe: () => "Keeps the note badge meaning \"written but not yet sent\". Off keeps them as a record, and every send re-sends everything.",
+          onToggle: () => configStore.set("diffPanel", {
+            ...configStore.config.diffPanel,
+            clearNotesOnSend: !configStore.config.diffPanel?.clearNotesOnSend,
+          }),
+        },
+      ],
+    },
+    {
+      label: "Browser panes",
+      collapsed: true,
+      settings: [
+        {
+          id: "browser-isolate", label: "One daemon per pane", type: "boolean" as const,
+          getValue: () => configStore.config.browser?.isolate !== false ? "on" : "off",
+          describe: () => "Off makes every browser pane share one daemon, which makes them all draw the same page.",
+          onToggle: () => configStore.set("browser", {
+            ...configStore.config.browser,
+            isolate: configStore.config.browser?.isolate === false,
+          }),
+        },
+        {
+          id: "browser-pane-size", label: "Pane size", type: "text" as const,
+          getValue: () => String(configStore.config.browser?.paneSize ?? DEFAULT_BROWSER_PANE_SIZE),
+          describe: () => "Fraction of the current pane a browser pane takes. 0.2–0.95.",
+          onTextCommit: (v: string) => {
+            const n = parseFloat(v);
+            if (isNaN(n) || n < 0.2 || n > 0.95) return "must be between 0.2 and 0.95";
+            configStore.set("browser", { ...configStore.config.browser, paneSize: n });
+            return null;
+          },
+        },
+        {
+          id: "browser-display-scale", label: "Display scale", type: "text" as const,
+          getValue: () => String(configStore.config.browser?.displayScale ?? "auto"),
+          describe: () => "Chooses which layout a page picks. \"auto\" follows the terminal.",
+          onTextCommit: (v: string) => {
+            if (v.trim() === "auto" || v.trim() === "") {
+              configStore.set("browser", { ...configStore.config.browser, displayScale: "auto" });
+              return null;
+            }
+            const n = parseFloat(v);
+            if (isNaN(n) || n <= 0) return "a positive number, or \"auto\"";
+            configStore.set("browser", { ...configStore.config.browser, displayScale: n });
+            return null;
+          },
+        },
+        {
+          id: "browser-fps", label: "Frame rate", type: "text" as const,
+          getValue: () => String(configStore.config.browser?.fps ?? "auto"),
+          describe: () => "Frames per second a browser pane redraws at. \"auto\" lets jmux choose.",
+          onTextCommit: (v: string) => {
+            if (v.trim() === "auto" || v.trim() === "") {
+              configStore.set("browser", { ...configStore.config.browser, fps: "auto" });
+              return null;
+            }
+            const n = parseInt(v, 10);
+            if (isNaN(n) || n < 1 || n > 120) return "1–120, or \"auto\"";
+            configStore.set("browser", { ...configStore.config.browser, fps: n });
+            return null;
           },
         },
       ],
