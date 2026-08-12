@@ -185,7 +185,7 @@ import { INTERNAL_SESSION_FILTER, PARK_SESSION } from "./glass/internal-sessions
 import { PinnedPaneTracker } from "./glass/pinned-pane-tracker";
 import type { PaneLocation } from "./glass/types";
 import { US, splitFields } from "./tmux-fields";
-import { resolveIssueProject } from "./project-routing";
+import { resolveIssueProject, attachProjectDrift } from "./project-routing";
 import {
   PROJECT_SETTING_DEFAULTS,
   PROJECT_OPTION,
@@ -8307,6 +8307,23 @@ function attachIssueTo(
   }
   sessionState.addLink(sessionName, { type: "issue", id: issue.id });
   pollCoordinator.addLinkedIssue(sessionName, issue);
+
+  // Crossing a Project boundary is reported, not refused and not acted on. The
+  // user linked *this issue* to *this session*, which is a statement about one
+  // issue — writing a route from it would be inventing a rule they did not
+  // make, and refusing would reject the ordinary case of a feature filed under
+  // two teams.
+  const target = currentSessions.find((x) => x.name === sessionName);
+  const drift = attachProjectDrift(
+    target?.projectId ?? null,
+    resolveIssueProjectFor(issue),
+  );
+  if (drift) {
+    const mine = projectById(configStore.config.projects ?? [], drift.sessionProjectId);
+    showToast(
+      `${issue.identifier} routes to ${drift.issueProject.title}, not ${mine?.title ?? drift.sessionProjectId}`,
+    );
+  }
   return { movedFrom };
 }
 

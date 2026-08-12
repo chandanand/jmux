@@ -3271,3 +3271,40 @@ describe("Sidebar project titles", () => {
     expect(grid.cells.map((r) => r.map((c) => c.char).join("")).join("\n")).toContain("beta");
   });
 });
+
+// Pinned and Parked are extracted before project grouping, so their headers
+// name no project and their rows have to. Under group=project the header
+// already says it, so the row must not repeat it — the same rule, and the same
+// placement-time flag, that `stageInHeader` already follows.
+describe("Sidebar project identity on row 2", () => {
+  const withProject = (): SessionInfo[] =>
+    makeSessions([{ name: "alpha" }, { name: "beta" }]).map((s, i) => ({
+      ...s,
+      projectId: i === 0 ? "api" : "web",
+      projectName: i === 0 ? "API" : "Web",
+    }));
+
+  const allText = (sidebar: Sidebar): string =>
+    sidebar.getGrid().cells.map((r) => r.map((c) => c.char).join("")).join("\n");
+
+  test("a pinned row names its project — its band header does not", () => {
+    const sidebar = new Sidebar(40, 30);
+    sidebar.setPinnedSessions(new Set(["alpha"]));
+    sidebar.updateSessions(withProject());
+    expect(allText(sidebar)).toContain("API");
+  });
+
+  test("grouped by project, the row does not repeat what the header says", () => {
+    const sidebar = new Sidebar(40, 30);
+    sidebar.setGroupMode("project");
+    sidebar.updateSessions(withProject());
+    const naming = allText(sidebar).split("\n").filter((l) => l.includes("API"));
+    expect(naming.length).toBe(1);
+  });
+
+  test("a session with no project name says nothing and does not throw", () => {
+    const sidebar = new Sidebar(40, 30);
+    sidebar.updateSessions(makeSessions([{ name: "alpha" }]));
+    expect(() => allText(sidebar)).not.toThrow();
+  });
+});

@@ -3,6 +3,8 @@ import {
   resolveIssueProject,
   prunableIssueRoutes,
   mayOfferLinearProjectRoute,
+  attachProjectDrift,
+  type RoutingOutcome,
 } from "../project-routing";
 import type { ProjectConfig } from "../project";
 
@@ -169,5 +171,33 @@ describe("mayOfferLinearProjectRoute", () => {
       { linearProjectId: "LP2", projectId: "web" },
     ];
     expect(mayOfferLinearProjectRoute(observed, "LP1")).toBe(true);
+  });
+});
+
+describe("attachProjectDrift", () => {
+  const api = p("api", { teamId: "T1" });
+  const resolved = (project = api): RoutingOutcome => ({ kind: "resolved", project, via: "sole claimant" });
+
+  test("reports when the issue routes to a different Project than the session", () => {
+    const drift = attachProjectDrift("web", resolved());
+    expect(drift?.issueProject.id).toBe("api");
+    expect(drift?.sessionProjectId).toBe("web");
+  });
+
+  test("says nothing when they agree", () => {
+    expect(attachProjectDrift("api", resolved())).toBeNull();
+  });
+
+  // A session nobody stamped has no claim to disagree with.
+  test("says nothing when the session carries no Project", () => {
+    expect(attachProjectDrift(null, resolved())).toBeNull();
+    expect(attachProjectDrift(undefined, resolved())).toBeNull();
+  });
+
+  // An issue that routes nowhere is not evidence of a conflict.
+  test("says nothing when the issue does not resolve", () => {
+    expect(attachProjectDrift("web", { kind: "unclaimed", teamName: "Core" })).toBeNull();
+    expect(attachProjectDrift("web", { kind: "ambiguous", candidates: [api] })).toBeNull();
+    expect(attachProjectDrift("web", { kind: "orphaned", stampedId: null })).toBeNull();
   });
 });

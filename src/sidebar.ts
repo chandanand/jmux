@@ -431,7 +431,15 @@ type RenderItem =
   // *placed* rather than re-derived at paint time: a session under group=stage
   // can still land in Pinned or Parked, whose headers name neither, and a rule
   // evaluated twice is a rule that can disagree with itself.
-  | { type: "session"; sessionIndex: number; grouped: boolean; groupLabel?: string; stageInHeader?: boolean }
+  // `projectInHeader` is the same rule for the Project name: Pinned and Parked
+  // are extracted *before* project grouping, so their headers name no project
+  // and their rows must say which one they belong to. Stamped at placement for
+  // the same reason as `stageInHeader` — a rule evaluated twice can disagree
+  // with itself.
+  | {
+      type: "session"; sessionIndex: number; grouped: boolean; groupLabel?: string;
+      stageInHeader?: boolean; projectInHeader?: boolean;
+    }
   // One issue of an expanded session, drawn directly below that session's own
   // rows. A sub-row, not a peer: it is absent from `displayOrder` and from
   // `navOrder`, because both mean "somewhere to go" and this row's session is
@@ -618,6 +626,7 @@ function buildRenderPlan(
     collapsedByDefault = false,
     ghostIndices: readonly number[] = [],
     stageInHeader = false,
+    projectInHeader = false,
   ): void => {
     // Parked inverts the collapse default: the band exists to hide rows, so an
     // absent entry in `collapsedGroups` means collapsed, and toggling records
@@ -644,6 +653,7 @@ function buildRenderPlan(
         grouped: true,
         groupLabel: label,
         stageInHeader,
+        projectInHeader,
       });
     }
     // Ghosts last within the band: work someone is on outranks work nobody is.
@@ -663,7 +673,7 @@ function buildRenderPlan(
   // every bucket is a stage, so its header already carries what row 2 would
   // otherwise say.
   for (const b of buckets) {
-    emitGroup(b.key, b.label, b.indices, false, b.ghostIndices, groupMode === "stage");
+    emitGroup(b.key, b.label, b.indices, false, b.ghostIndices, groupMode === "stage", groupMode === "project");
   }
 
   // Flat list: group=none, or the project-less remainder in group=project.
@@ -2097,6 +2107,21 @@ export class Sidebar {
           : isActive || isHovered
             ? detailAttrs
             : { ...WORKFLOW_ATTRS, ...bgAttrs });
+        leftCol = fieldCol + textCols(field.text);
+      }
+    }
+
+    // The Project name, claimed last of everything on row 2 and therefore the
+    // first thing to go as the sidebar narrows — the same degradation order the
+    // workflow field follows, and for the same reason: the identity fields to
+    // its left matter more. Suppressed under group=project, where the band
+    // header already says it.
+    if (!item.projectInHeader && session.projectName) {
+      const sep = leftCol !== detailStart ? " · " : "";
+      const text = `${sep}${session.projectName}`;
+      if (textCols(text) <= rightEdge - leftCol + 1) {
+        writeString(grid, detailRow, leftCol, text,
+          isActive || isHovered ? detailAttrs : { ...WORKFLOW_ATTRS, ...bgAttrs });
       }
     }
 

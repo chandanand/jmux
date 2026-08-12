@@ -164,3 +164,29 @@ export function mayOfferLinearProjectRoute(
   );
   return seen.size <= 1;
 }
+
+/**
+ * Whether attaching an issue to a session crosses a Project boundary.
+ *
+ * Attaching does **not** write a route and does **not** move the session. The
+ * user linked *this issue* to *this session*, which is a statement about one
+ * issue — turning it into a rule about its whole Linear project would be the
+ * "correction writes the rule" principle applied where no correction was made.
+ * And refusing the link outright is wrong too: a feature filed under two teams
+ * is ordinary, and the link store has always been many-to-one.
+ *
+ * So it is reported, using drift — the vocabulary the sidebar already has for
+ * "these two facts disagree and nobody has acted on it".
+ *
+ * Returns null when there is nothing to say: the session carries no Project,
+ * the issue routes nowhere, or the two agree.
+ */
+export function attachProjectDrift(
+  sessionProjectId: string | null | undefined,
+  outcome: RoutingOutcome,
+): { sessionProjectId: string; issueProject: ProjectConfig } | null {
+  if (!sessionProjectId) return null;
+  if (outcome.kind !== "resolved") return null;
+  if (outcome.project.id === sessionProjectId) return null;
+  return { sessionProjectId, issueProject: outcome.project };
+}
