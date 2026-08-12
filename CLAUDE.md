@@ -154,6 +154,70 @@ Rendering is coalesced via `scheduleRender()`, at `RENDER_INTERVAL_ACTIVE` while
 
   Related: `handleInput` splits merged mouse chunks up front (`parseSgrMouseChunk`). The kernel merges mouse reports into one read whenever jmux falls behind — which a live drag reliably causes — and every mouse path matches a *single* anchored report, so an unsplit chunk would leak raw escape bytes to the pty.
 
+### The settings row dialect
+
+One `SettingDef` feeds three surfaces — the settings screen, the workflow
+screen, and `buildRepoRows`, which renders the same descriptions into a global
+and a per-repo tier. Four rules hold the editing model together.
+
+**◂ ▸ always change the selected row's value; Enter is only for values you must
+type or search.** `boolean` toggles, `number` steps its ladder, `list` cycles
+and commits live. A row with no ordered ladder — `text`, `multiselect`, `map` —
+declines rather than pretending, and `hintGroups()` reads `canStep()` so the
+footer names only keys that row actually answers. This is why there is no
+inline list mode: a `list` cycles in place and opens the searchable picker on
+Enter, so the three keystrokes it once took to commit one of three colours is
+one, while the twenty-five-tracker-status rows get search instead of a cycle.
+
+**A numeric row's four forms come from one `NumberSpec`, because hand-written
+they drift and the drift is silent.** Display, edit-buffer, parse and clamp
+were written per row; the panel width displayed `auto`, seeded its prompt with
+`auto`, and a typed digit committed `auto55`, which parsed to NaN and reported
+nothing — the setting could not be changed from its own prompt, and the command
+palette carried a second copy of the same bug. `editNumber` returning `""` for a
+sentinel is the line that matters: there is no state in which the buffer holds a
+word a digit can be typed onto. An empty buffer means *cleared*, which on a row
+that opened empty means nothing at all — reading it as the low rung
+unconditionally demoted `all` to `never` on an Enter that typed nothing.
+`stepNumber` **clamps** where `stepGhostCap` **wraps**: wrapping is a property of
+a ladder closed at both ends, where `all` sits one press from `never`; a bare
+range is not a loop and 60 → 10 under a held key is a surprise. `stepGhostCap`
+is therefore not migrated — it is tested domain logic with its own reasoning,
+and it started working here for free once ◂ ▸ was wired.
+
+**A stepped value applies live and its write is debounced.** The press assigns
+the module-level variable and relayouts, so the sidebar moves while the key is
+held; `persistSoon` coalesces the write at 250ms and `flushPendingPersists`
+drains it when the screen closes, so a value stepped and immediately dismissed
+is kept. The order is the drag handle's, and preserves its guarantee: the
+module var is already the new value when the config watcher fires, so it sees no
+change and starts no second resize. Trailing-only, unlike `scheduleDragResize` —
+a drag needs its first movement instant because the pointer is already moving, a
+keypress is discrete and already applied.
+
+**`info` is a real type, and the explain row is always reserved.** Three
+Diagnostics rows were `text` with no `onTextCommit`: Enter did nothing while the
+hint said "↵ edit", the failure `sectionedViewNotice()` exists to prevent.
+`BOTTOM_RESERVED_ROWS` is shared by `render()` and `ensureVisible()` for the
+reason `CONTENT_START_ROW` is — a hint line that moved as the cursor travelled
+would cost more than one blank row, and a content height that varied with the
+selected row is a scroll-clamp bug.
+
+**The naming command stores argv, never a preset name** (`session-title/presets.ts`).
+The row reads back which preset is in force by matching the stored `string[]`
+against the table, so `sessionTitle.command` keeps the shape `resolveTitleConfig`
+already validates: no migration, no second source of truth, and a config.json
+still legible to someone who has never seen the picker. Only commands run end to
+end on a real terminal ship as presets — the rule `agent-screen.ts` states for
+its signature table, since an unverified entry produces a confident wrong answer
+instead of an honest blank; everything else is reachable by typing one. `◂ ▸`
+cycles only rungs that are *values*, so authoring lives on Enter alone and no
+press can land on an option that is not a setting. **"Test naming command" is
+what makes the row honest**: an automatic naming failure is silent by design
+(`requestSessionTitles` runs every poll), so a hand-written command that returns
+a preamble or nothing has no other way to announce itself — an explicit request
+answers, the same distinction `TitleGenerator.request`'s `explicit` flag draws.
+
 ### Modals
 
 Modals implement the `Modal` interface in `src/modal.ts` and are rendered as an overlay by the main renderer. When a modal is open, `InputRouter` routes input to `onModalInput` instead of the PTY. Existing modals: `CommandPalette`, `InputModal`, `ListModal`, `ContentModal`, `NewSessionModal`. Each returns `{type: "consumed" | "closed" | "result"}` from `handleInput`.

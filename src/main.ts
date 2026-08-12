@@ -94,10 +94,18 @@ import {
 import {
   titleSignature,
   buildTitlePrompt,
+  parseTitle,
   promptTextFromHook,
   type TitleInput,
 } from "./session-title/prompt";
-import { TitleGenerator, spawnTitleRunner, resolveTitleConfig } from "./session-title/generator";
+import {
+  TitleGenerator, spawnTitleRunner, resolveTitleConfig,
+  MAX_CHARS_DEFAULT, MAX_CHARS_MIN, MAX_CHARS_MAX,
+} from "./session-title/generator";
+import {
+  TITLE_PRESETS, TITLE_OFF, TITLE_CUSTOM, presetForCommand, commandForPreset,
+  titlePresetOptions, formatTitleCommand, parseTitleCommand,
+} from "./session-title/presets";
 import {
   linkKey,
   drivingIssue,
@@ -5906,18 +5914,28 @@ interface RepoRow {
   field: keyof RepoSettings;
   kind: RepoRowKind;
   group: "workflow" | "transitions";
+  /** One sentence for the explain line. Described once, shown in both tiers. */
+  describe: string;
 }
 
 const REPO_SETTING_ROWS: RepoRow[] = [
-  { id: "default-branch", label: "Default base branch", field: "defaultBaseBranch", kind: "text", group: "workflow" },
-  { id: "session-template", label: "Session name template", field: "sessionNameTemplate", kind: "text", group: "workflow" },
-  { id: "claude-command", label: "Claude command", field: "claudeCommand", kind: "text", group: "workflow" },
-  { id: "wtm", label: "wtm integration", field: "wtmIntegration", kind: "boolean", group: "workflow" },
-  { id: "auto-agent", label: "Auto-launch agent", field: "autoLaunchAgent", kind: "boolean", group: "workflow" },
+  { id: "default-branch", label: "Default base branch", field: "defaultBaseBranch", kind: "text", group: "workflow",
+    describe: "The branch a new worktree is cut from." },
+  { id: "session-template", label: "Session name template", field: "sessionNameTemplate", kind: "text", group: "workflow",
+    describe: "Names the session, the branch and the worktree directory. {identifier} is the ticket's id." },
+  { id: "claude-command", label: "Claude command", field: "claudeCommand", kind: "text", group: "workflow",
+    describe: "What runs in a new session's first pane when an agent is launched for you." },
+  { id: "wtm", label: "wtm integration", field: "wtmIntegration", kind: "boolean", group: "workflow",
+    describe: "On uses `wtm create`, which manages the bare repo. Off uses plain `git worktree add`." },
+  { id: "auto-agent", label: "Auto-launch agent", field: "autoLaunchAgent", kind: "boolean", group: "workflow",
+    describe: "Whether starting work on an issue also starts the agent, or leaves you a shell." },
 
-  { id: "on-start", label: "On session start", field: "onSessionStartState", kind: "state", group: "transitions" },
-  { id: "on-mr-open", label: "On MR opened", field: "onMrOpenState", kind: "state", group: "transitions" },
-  { id: "on-mr-merged", label: "On MR merged", field: "onMrMergedState", kind: "state", group: "transitions" },
+  { id: "on-start", label: "On session start", field: "onSessionStartState", kind: "state", group: "transitions",
+    describe: "The status to move an issue to when you start work on it. Never writes until you name one." },
+  { id: "on-mr-open", label: "On MR opened", field: "onMrOpenState", kind: "state", group: "transitions",
+    describe: "The status to move an issue to when its merge request opens." },
+  { id: "on-mr-merged", label: "On MR merged", field: "onMrMergedState", kind: "state", group: "transitions",
+    describe: "The status to move an issue to when its merge request merges." },
 ];
 
 /** Sentinel option meaning "leave the tracker alone on this event". */
@@ -5950,6 +5968,7 @@ function buildRepoRows(group: RepoRow["group"], tier: RepoTier): SettingDef[] {
       label: row.label,
       type: row.kind === "state" ? "list" : row.kind,
       getValue: shown,
+      describe: () => row.describe,
       ...(tier.scope ? { getScope: () => tier.scope!(row.field) } : {}),
       ...(tier.clear ? { onClearOverride: () => tier.clear!(row.field) } : {}),
     };
@@ -6044,6 +6063,160 @@ function adapterRestartNote(configured: string | undefined, live: string | undef
   return (configured ?? "none") === (live ?? "none") ? null : "restart to apply";
 }
 
+// --- Session title settings ---
+//
+// The last hand-written naming command, so the ◂ ▸ ladder can step past
+// `custom` and come back to it. Without this the rung disappears the moment
+// you leave it — the ladder rebuilding itself out from under the key — and a
+// command the user typed by hand would be gone with one stray press.
+let lastCustomTitleCommand: string[] | undefined =
+  presetForCommand(configStore.config.sessionTitle?.command) === TITLE_CUSTOM
+    ? configStore.config.sessionTitle?.command
+    : undefined;
+
+function titleCommand(): string[] | undefined {
+  return configStore.config.sessionTitle?.command;
+}
+
+/**
+ * Write the naming command and hot-apply it.
+ *
+ * `command` unset is the entire off state — there is no second boolean that
+ * could disagree with it — so turning titling off deletes the key rather than
+ * storing a falsy one. The generator is rebuilt and the capture gate follows,
+ * exactly as the config watcher would, so the change lands on this keypress
+ * instead of the next file event.
+ */
+function setTitleCommand(command: string[] | undefined): void {
+  if (command && presetForCommand(command) === TITLE_CUSTOM) lastCustomTitleCommand = command;
+  const rest = { ...configStore.config.sessionTitle };
+  if (command) rest.command = command;
+  else delete rest.command;
+  if (Object.keys(rest).length > 0) configStore.set("sessionTitle", rest);
+  else configStore.delete("sessionTitle");
+  titleGenerator = makeTitleGenerator();
+  control.sendCommand(titleCaptureCommand()).catch(() => {});
+}
+
+function titleSettings(): SettingDef[] {
+  return [
+    {
+      // One row does both jobs, because "type the argv" *is* how a custom
+      // command is authored — the same thing Enter means on every other row.
+      // A separate "custom…" picker entry would have needed a second row to
+      // hold the value, and two rows that can disagree about one setting.
+      id: "title-command", label: "Naming command", type: "text" as const,
+      getValue: () => {
+        const command = titleCommand();
+        const preset = presetForCommand(command);
+        return preset === TITLE_CUSTOM ? formatTitleCommand(command) : preset;
+      },
+      getEditValue: () => formatTitleCommand(titleCommand()),
+      describe: () => {
+        const preset = presetForCommand(titleCommand());
+        if (preset === TITLE_OFF) {
+          return "Sessions keep their own names. ◂ ▸ for a ready-made command, or ↵ to type one.";
+        }
+        const hit = TITLE_PRESETS.find((p) => p.id === preset);
+        return hit
+          ? `${hit.note} ↵ to edit the arguments.`
+          : "Your own command: the prompt arrives on stdin, the title is read from stdout.";
+      },
+      onStep: (delta: number) => {
+        // The memo, not the current command, so `custom` stays on the ladder
+        // after you step off it.
+        const options = titlePresetOptions(lastCustomTitleCommand ?? titleCommand());
+        const at = options.indexOf(presetForCommand(titleCommand()));
+        const from = at >= 0 ? at : 0;
+        const next = options[((from + delta) % options.length + options.length) % options.length];
+        setTitleCommand(next === TITLE_CUSTOM ? lastCustomTitleCommand : commandForPreset(next));
+      },
+      onTextCommit: (v: string) => setTitleCommand(parseTitleCommand(v)),
+    },
+    numberSetting({
+      id: "title-max-chars", label: "Title length",
+      // The bounds resolveTitleConfig actually clamps to, read from it rather
+      // than retyped — a row offering a range the validator then enforced
+      // differently would be the same trap as buildTitlePrompt reading raw
+      // config instead of the clamped budget.
+      spec: { min: MAX_CHARS_MIN, max: MAX_CHARS_MAX, unit: "chars" },
+      read: () => configStore.config.sessionTitle?.maxChars ?? MAX_CHARS_DEFAULT,
+      write: (v) => {
+        if (typeof v !== "number") return;
+        configStore.set("sessionTitle", { ...configStore.config.sessionTitle, maxChars: v });
+        titleGenerator = makeTitleGenerator();
+      },
+      describe: () => "The budget stated in the prompt and the cap applied to the reply. The sidebar shows about 20.",
+    }),
+    {
+      // The row that makes the other two honest. An *automatic* naming failure
+      // is silent by design — requestSessionTitles runs on every poll, and one
+      // unreachable command would otherwise report itself forever — so a
+      // hand-written command that returns a preamble, ANSI colour or nothing
+      // has no other way to announce itself. An explicit test is an explicit
+      // request, so it answers.
+      id: "title-test", label: "Test naming command", type: "action" as const,
+      getValue: () => titleTestResult ?? (titleCommand() ? "↵ to run" : "nothing configured"),
+      describe: () => "Runs the command above on a sample session and shows the name it produces.",
+      onActivate: () => { void runTitleTest(); },
+    },
+  ];
+}
+
+/** The last test's outcome, shown on the row until another one runs. */
+let titleTestResult: string | null = null;
+
+/**
+ * Bounded like the generator's own calls, and for the same reason the runner
+ * kills its subprocess: a wedged agent CLI must not leave the row saying
+ * "running…" for the life of the process.
+ */
+const TITLE_TEST_TIMEOUT_MS = 60_000;
+
+const TITLE_TEST_PROMPT = buildTitlePrompt(
+  {
+    kind: "git",
+    repo: "jmux",
+    branch: "feat/settings-stepper",
+    commits: ["make the settings editor steppable", "one spec for every numeric row"],
+  },
+  MAX_CHARS_DEFAULT,
+);
+
+/**
+ * Run the configured naming command once and report what came back.
+ *
+ * Reports through parseTitle rather than raw stdout, so what the user reads is
+ * what would actually be stored — a command whose output survives the escape
+ * strip only as an empty string says so, which is the answer the row would
+ * have acted on.
+ */
+async function runTitleTest(): Promise<void> {
+  const command = titleCommand();
+  if (!command) {
+    showToast("No naming command configured — set one on the row above");
+    return;
+  }
+  // It spawns an agent CLI, measured at 6-12s. A control that looks inert for
+  // ten seconds is the problem this screen exists to fix.
+  titleTestResult = "running…";
+  scheduleRender();
+  try {
+    const maxChars = titleGenerator?.maxChars() ?? MAX_CHARS_DEFAULT;
+    const raw = await spawnTitleRunner(command, TITLE_TEST_PROMPT, TITLE_TEST_TIMEOUT_MS);
+    const title = parseTitle(raw, maxChars);
+    titleTestResult = title ?? "returned nothing usable";
+    showToast(title ? `Naming command returned: ${title}` : "Naming command returned nothing usable");
+    if (!title) logError("jmux", `title test produced no usable name from: ${raw.slice(0, 400)}`);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    titleTestResult = "failed";
+    showToast(`Naming command failed — ${reason}`);
+    logError("jmux", `title test failed: ${reason}`);
+  }
+  scheduleRender();
+}
+
 function buildSettingsCategories(): SettingsCategory[] {
   const wf = () => configStore.config.issueWorkflow;
   const adapterCfg = () => configStore.config.adapters;
@@ -6068,6 +6241,7 @@ function buildSettingsCategories(): SettingsCategory[] {
         {
           id: "cache-timers", label: "Cache timers", type: "boolean" as const,
           getValue: () => cacheTimersEnabled ? "on" : "off",
+          describe: () => "Show how long each agent's last prompt-cache read took, beside its session.",
           onToggle: () => {
             cacheTimersEnabled = !cacheTimersEnabled;
             sidebar.cacheTimersEnabled = cacheTimersEnabled;
@@ -6088,6 +6262,7 @@ function buildSettingsCategories(): SettingsCategory[] {
             if (imagesSupported === false) return "off (terminal can't draw)";
             return "off (detecting…)";
           },
+          describe: () => "Draw pictures for images in issue text. Needs a terminal that speaks the kitty graphics protocol.",
           onToggle: () => {
             configStore.set("images", { ...configStore.config.images, enabled: !imagesOn() });
             applyImageSupport();
@@ -6108,6 +6283,7 @@ function buildSettingsCategories(): SettingsCategory[] {
           label: "Auto-pin agent panes to Command Center",
           type: "boolean" as const,
           getValue: () => autoPinAgentPanes ? "on" : "off",
+          describe: () => "Whether a pane running an agent joins the Command Center on its own.",
           onToggle: () => {
             autoPinAgentPanes = !autoPinAgentPanes;
             configStore.set("autoPinAgentPanes", autoPinAgentPanes);
@@ -6119,6 +6295,7 @@ function buildSettingsCategories(): SettingsCategory[] {
           label: "Auto-pin command match (regex)",
           type: "text" as const,
           getValue: () => agentPaneRegex,
+          describe: () => "A pane whose command matches this is treated as an agent pane.",
           onTextCommit: (v) => {
             agentPaneRegex = v;
             configStore.set("agentPaneCommandRegex", v);
@@ -6128,18 +6305,21 @@ function buildSettingsCategories(): SettingsCategory[] {
         {
           id: "running-color", label: "Running state color", type: "list" as const,
           getValue: () => currentStateColorName("running"),
+          describe: () => "The colour of the RUNNING badge and its dot in the sidebar.",
           options: [...STATE_COLOR_NAMES],
           onOptionSelect: (v) => persistStateColor("running", v),
         },
         {
           id: "waiting-color", label: "Waiting state color", type: "list" as const,
           getValue: () => currentStateColorName("waiting"),
+          describe: () => "The colour of the WAITING badge and its dot in the sidebar.",
           options: [...STATE_COLOR_NAMES],
           onOptionSelect: (v) => persistStateColor("waiting", v),
         },
         {
           id: "complete-color", label: "Complete state color", type: "list" as const,
           getValue: () => currentStateColorName("complete"),
+          describe: () => "The colour of the COMPLETE badge and its dot in the sidebar.",
           options: [...STATE_COLOR_NAMES],
           onOptionSelect: (v) => persistStateColor("complete", v),
         },
@@ -6151,6 +6331,7 @@ function buildSettingsCategories(): SettingsCategory[] {
       settings: [
         {
           id: "code-host", label: "Code host", type: "list" as const,
+          describe: () => "Where merge requests come from. Drives the MR badge and the MR-open and MR-merged transitions.",
           getValue: () => adapterCfg()?.codeHost?.type ?? "none",
           options: ["gitlab", "github", "none"],
           onOptionSelect: (v) => configStore.setAdapter("codeHost", v === "none" ? null : { type: v }),
@@ -6162,6 +6343,7 @@ function buildSettingsCategories(): SettingsCategory[] {
           // type into config that resolved to no adapter, so every issue tab
           // silently vanished with no error anywhere the user could see it.
           id: "issue-tracker", label: "Issue tracker", type: "list" as const,
+          describe: () => "Where issues come from. With none configured the queues, ghosts and stage bands have nothing to show.",
           getValue: () => adapterCfg()?.issueTracker?.type ?? "none",
           options: ["linear", "none"],
           onOptionSelect: (v) => configStore.setAdapter("issueTracker", v === "none" ? null : { type: v }),
@@ -6176,6 +6358,7 @@ function buildSettingsCategories(): SettingsCategory[] {
         ...repoDefaultSettings(),
         {
           id: "team-repo-map", label: "Team → repo mappings", type: "map" as const,
+          describe: () => "Which repo an issue's worktree is created in, decided by the team that owns it.",
           getValue: () => {
             const entries = Object.entries(wf()?.teamRepoMap ?? {});
             return entries.length > 0 ? `${entries.length} mapped` : "none";
@@ -6205,6 +6388,7 @@ function buildSettingsCategories(): SettingsCategory[] {
       settings: [
         {
           id: "project-dirs", label: "Project directories", type: "text" as const,
+          describe: () => "Comma-separated roots jmux looks in for repos. Blank scans the usual places.",
           getValue: () => {
             const dirs = configStore.config.projectDirs ?? [];
             return dirs.length > 0 ? dirs.join(", ") : "auto-detect";
@@ -6215,6 +6399,11 @@ function buildSettingsCategories(): SettingsCategory[] {
           },
         },
       ],
+    },
+    {
+      label: "Session titles",
+      collapsed: false,
+      settings: titleSettings(),
     },
     {
       // One row, because the whole chain — tabs, which statuses land in each,
@@ -6249,12 +6438,14 @@ function buildSettingsCategories(): SettingsCategory[] {
       settings: [
         {
           id: "park-status", label: "Parking status", type: "info" as const,
+          describe: () => "Read-only. Configure which statuses park on the workflow screen.",
           getValue: () =>
             parkingSetupWarning(derivedStages().parked.length)
             ?? `active — ${currentSessions.filter((x) => sidebar.isParked(x.name)).length} parked`,
         },
         {
           id: "drift-status", label: "Drift detection", type: "info" as const,
+          describe: () => "Read-only. An issue drifts when its status sits behind where a transition would have put it.",
           getValue: () => {
             const inputs = workflowInputs();
             // The issues actually examined, not just whether one had a target:
@@ -6273,6 +6464,7 @@ function buildSettingsCategories(): SettingsCategory[] {
         },
         {
           id: "stage-source", label: "Tracker states available", type: "info" as const,
+          describe: () => "Read-only. The statuses your tracker reports, which the workflow screen maps into stages.",
           getValue: () => {
             if (adapters.issueTracker?.authState !== "ok") return "tracker not connected";
             return cachedWorkflowStates.length > 0

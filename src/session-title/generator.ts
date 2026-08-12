@@ -58,10 +58,10 @@ const TIMEOUT_MAX_MS = 120_000;
  * constrains it. The palette and `ctl` have more room, and a title that fits
  * everywhere beats one that fits only where there is space.
  */
-const MAX_CHARS_DEFAULT = 32;
+export const MAX_CHARS_DEFAULT = 32;
 /** Below this a title is not a phrase; `maxChars: 0` stores a bare `…`. */
-const MAX_CHARS_MIN = 8;
-const MAX_CHARS_MAX = 200;
+export const MAX_CHARS_MIN = 8;
+export const MAX_CHARS_MAX = 200;
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
