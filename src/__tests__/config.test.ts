@@ -701,3 +701,43 @@ describe("ConfigStore project migration", () => {
     expect(JSON.parse(readFileSync(join(dir, backups[0]), "utf-8")).issueWorkflow).toBeDefined();
   });
 });
+
+describe("ConfigStore.upsertProjects", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = join(tmpdir(), `jmux-ups-${process.pid}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    path = join(dir, "config.json");
+    writeFileSync(path, "{}");
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("adds several in one write", () => {
+    const store = new ConfigStore(path);
+    store.upsertProjects([
+      { id: "a", title: "A", dir: "/a" },
+      { id: "b", title: "B", dir: "/b" },
+    ]);
+    expect(JSON.parse(readFileSync(path, "utf-8")).projects).toHaveLength(2);
+  });
+
+  test("replaces by id rather than appending duplicates", () => {
+    const store = new ConfigStore(path);
+    store.upsertProject({ id: "a", title: "A", dir: "/a" });
+    store.upsertProjects([{ id: "a", title: "A2", dir: "/a", teamId: "T1" }]);
+    const projects = store.config.projects ?? [];
+    expect(projects).toHaveLength(1);
+    expect(projects[0].teamId).toBe("T1");
+  });
+
+  test("an empty list writes nothing", () => {
+    writeFileSync(path, '{"sidebarWidth":26}');
+    const store = new ConfigStore(path);
+    const before = readFileSync(path, "utf-8");
+    store.upsertProjects([]);
+    expect(readFileSync(path, "utf-8")).toBe(before);
+  });
+});

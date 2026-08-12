@@ -715,6 +715,25 @@ export class ConfigStore {
     return this.persist();
   }
 
+  /**
+   * Add or replace several Projects in one write.
+   *
+   * One `persist()` per Project means one temp file, two fsyncs and a rename
+   * each — fine for a keystroke, wasteful for a resolver that may touch every
+   * Project at once.
+   */
+  upsertProjects(projects: readonly ProjectConfig[]): void {
+    if (projects.length === 0) return;
+    const list = [...(this.data.projects ?? [])];
+    for (const project of projects) {
+      const at = list.findIndex((p) => p.id === project.id);
+      if (at >= 0) list[at] = project;
+      else list.push(project);
+    }
+    this.data.projects = list;
+    this.persist();
+  }
+
   /** Add or replace a Project by id. */
   upsertProject(project: ProjectConfig): void {
     const list = [...(this.data.projects ?? [])];

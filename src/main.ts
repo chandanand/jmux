@@ -1963,6 +1963,13 @@ const TEAM_REFRESH_INTERVAL_MS = 300_000; // 5 minutes
 
 async function refreshTeams(): Promise<void> {
   if (adapters.issueTracker?.authState !== "ok") return;
+  // Before the TTL guard, not after it. The migration runs in late startup and
+  // races the first team fetch: with a warm cache and freshly migrated Projects,
+  // a resolver behind the guard would not run for five minutes — and until it
+  // does, group start fails and the checklist says "awaiting" with nothing on
+  // screen explaining why. Cheap and idempotent, so calling it every time costs
+  // nothing when there is nothing to resolve.
+  resolveLegacyTeamNames();
   if (Date.now() - lastTeamFetchMs < TEAM_REFRESH_INTERVAL_MS && cachedTeams.length > 0) return;
   // These caches live outside PollCoordinator, so its epoch does not protect
   // them: a swap during either await would land one workspace's teams and
@@ -2004,8 +2011,9 @@ async function refreshTeams(): Promise<void> {
  */
 function resolveLegacyTeamNames(): void {
   const changed = resolveLegacyTeams(configStore.config.projects ?? [], cachedTeams);
-  for (const project of changed) configStore.upsertProject(project);
-  if (changed.length > 0) scheduleRender();
+  if (changed.length === 0) return;
+  configStore.upsertProjects(changed);
+  scheduleRender();
 }
 
 
@@ -10807,6 +10815,9 @@ async function start(): Promise<void> {
   try {
     if (await configStore.migrateProjects(commonDirForMigration)) {
       logError("jmux", `migrated ${configStore.config.projects?.length ?? 0} project(s) from legacy config`);
+      // Teams may already be cached by now — resolve straight away rather than
+      // waiting for the next fetch.
+      resolveLegacyTeamNames();
       scheduleRender();
     }
   } catch (e) {
