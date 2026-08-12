@@ -839,6 +839,8 @@ export class Sidebar {
   private pinnedSessions = new Set<string>();
   private parkedSessions = new Set<string>();
   private sessionWorkflow = new Map<string, SessionWorkflow>();
+  /** Session name → Project title, for the bands that do not name one. */
+  private sessionProjects = new Map<string, string>();
   private ghosts: GhostEntry[] = [];
   private pinnedPanes: PinnedPaneEntry[] = [];
   private rowToSelection = new Map<number, SidebarSelection>();
@@ -964,6 +966,20 @@ export class Sidebar {
    * depends on the tracker, the stage config and the live session list, none of
    * which the sidebar knows about.
    */
+  /**
+   * Session name → Project title, resolved by the caller.
+   *
+   * Same boundary as `setSessionWorkflow`: the sidebar knows nothing about
+   * config or the `@jmux-project` stamp. Used only where the band header does
+   * *not* already name the Project — Pinned and Parked are extracted before
+   * project grouping, so their rows would otherwise be the only ones on screen
+   * that cannot say which Project they belong to.
+   */
+  setSessionProjects(titles: Map<string, string>): void {
+    this.sessionProjects = new Map(titles);
+    this.rebuildPlan();
+  }
+
   setGhostSessions(ghosts: readonly GhostEntry[]): void {
     this.ghosts = [...ghosts];
     this.rebuildPlan();

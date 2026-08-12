@@ -3871,6 +3871,15 @@ async function fetchSessions(): Promise<void> {
       if (!knownSessions.has(name)) pollCoordinator.removeSession(name);
     }
     sidebar.setSessionContexts(pollCoordinator.getAllContexts());
+    // Resolved here, not in the sidebar: it knows nothing about config or the
+    // @jmux-project stamp. Same boundary as setSessionWorkflow.
+    const titles = new Map<string, string>();
+    for (const sess of sessions) {
+      const project = projectById(configStore.config.projects ?? [], sess.projectId ?? null)
+        ?? projectForDir(configStore.config.projects ?? [], sessionDir(sess.name));
+      if (project) titles.set(sess.name, project.title);
+    }
+    sidebar.setSessionProjects(titles);
     recomputeSessionBands();
 
     // Prune state for dead sessions

@@ -3233,3 +3233,44 @@ describe("the branch row", () => {
     expect(sidebar.getSessionByRow(5)?.name).toBe("tra-1787-notify");
   });
 });
+
+describe("Sidebar project titles", () => {
+  // Pinned and Parked are extracted before project grouping, so their rows are
+  // the only ones on screen that cannot say which Project they belong to. The
+  // resolution happens in main.ts — the sidebar knows nothing about config or
+  // the @jmux-project stamp, the same boundary setSessionWorkflow draws.
+  const sessions = [
+    { id: "$1", name: "alpha", activity: 0, attached: false, windowCount: 1 },
+    { id: "$2", name: "beta", activity: 0, attached: false, windowCount: 1 },
+  ];
+
+  test("accepts resolved titles without disturbing navigation", () => {
+    const sb = new Sidebar(SIDEBAR_WIDTH, 30);
+    sb.updateSessions(sessions);
+    const before = sb.getNavOrder().length;
+    sb.setSessionProjects(new Map([["alpha", "API"]]));
+    expect(sb.getNavOrder().length).toBe(before);
+  });
+
+  test("an empty map is accepted", () => {
+    const sb = new Sidebar(SIDEBAR_WIDTH, 30);
+    sb.updateSessions(sessions);
+    expect(() => sb.setSessionProjects(new Map())).not.toThrow();
+  });
+
+  test("replacing the map does not accumulate stale entries", () => {
+    const sb = new Sidebar(SIDEBAR_WIDTH, 30);
+    sb.updateSessions(sessions);
+    sb.setSessionProjects(new Map([["alpha", "API"]]));
+    sb.setSessionProjects(new Map([["alpha", "Web"]]));
+    expect(sb.getNavOrder().length).toBe(2);
+  });
+
+  test("a session absent from the map is unaffected", () => {
+    const sb = new Sidebar(SIDEBAR_WIDTH, 30);
+    sb.updateSessions(sessions);
+    sb.setSessionProjects(new Map([["alpha", "API"]]));
+    const grid = sb.getGrid();
+    expect(grid.cells.map((r) => r.map((c) => c.char).join("")).join("\n")).toContain("beta");
+  });
+});
