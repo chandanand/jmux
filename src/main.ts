@@ -1142,6 +1142,31 @@ interface PreflightCheck {
   detail: string;
 }
 
+/**
+ * The checks that need a subprocess, run on demand rather than derived.
+ *
+ * `runSetupPreflight` proves *configuration* — a directory exists, a binary is
+ * on PATH. These prove *function*: that the directory is a git repo at all, and
+ * that the base branch Start would fork from actually resolves. Both are
+ * ordinary reasons a Start fails with everything above it green.
+ *
+ * Deliberately read-only. The spec called for a throwaway session provisioned
+ * and torn down, and that is a destructive act — it creates a branch and a
+ * worktree in the user's repo — which is not something a checklist row should
+ * fire without asking. These catch the same failures without touching anything.
+ */
+let deepPreflight: { dir: string; isRepo: boolean; base: string | null } | null = null;
+
+async function runDeepPreflight(): Promise<void> {
+  const projects = (configStore.config.projects ?? []).filter((p) => p.deletedAt === undefined);
+  const project = projectForCurrentSession() ?? (projects.length === 1 ? projects[0] : null);
+  if (!project) { deepPreflight = null; return; }
+  const isRepo = (await gitOutput(project.dir, ["rev-parse", "--git-dir"])) !== null;
+  const base = isRepo ? await resolveBaseBranch(project.dir) : null;
+  deepPreflight = { dir: project.dir, isRepo, base };
+  scheduleRender();
+}
+
 function runSetupPreflight(): PreflightCheck[] {
   const checks: PreflightCheck[] = [];
   const projects = (configStore.config.projects ?? []).filter((p) => p.deletedAt === undefined);
@@ -1195,6 +1220,24 @@ function runSetupPreflight(): PreflightCheck[] {
     detail: present.length === 0
       ? "no agents installed"
       : hooksOk ? present.map((a) => a.label).join(", ") : "hooks out of date",
+  });
+
+  // Only reported once actually run, and only for the Project it was run
+  // against — a stale answer about a different repo is worse than none.
+  const deep = project && deepPreflight?.dir === project.dir ? deepPreflight : null;
+  checks.push({
+    label: "It is a git repository",
+    ok: deep === null || deep.isRepo,
+    detail: deep === null
+      ? "not checked yet — press Enter"
+      : deep.isRepo ? "yes" : "no git repository at that path",
+  });
+  checks.push({
+    label: "The base branch resolves",
+    ok: deep === null || deep.base !== null,
+    detail: deep === null
+      ? "not checked yet — press Enter"
+      : deep.base ?? "no main, master or configured branch exists",
   });
 
   const tracker = adapters.issueTracker;
@@ -6031,8 +6074,13 @@ function buildSetupRows(): SetupRow[] {
     detail: failed.length === 0
       ? "Everything a new session needs is in place."
       : failed.map((c) => `${c.label}: ${c.detail}`).join("  ·  "),
-    state: failed.length === 0 ? "done" : "todo",
-    note: failed.length === 0 ? "passing" : `${failed.length} failing`,
+    // Stays `todo` until the subprocess checks have actually run: a row that
+    // reported "done" while two of its checks said "not checked yet" would be
+    // claiming a pass it had not performed. Enter runs them.
+    state: failed.length === 0 && deepPreflight !== null ? "done" : "todo",
+    note: failed.length === 0
+      ? (deepPreflight === null ? "not run" : "passing")
+      : `${failed.length} failing`,
   });
 
   // The diff viewer is a separate binary. jmux genuinely cannot install it, so
@@ -6051,7 +6099,8 @@ function buildSetupRows(): SetupRow[] {
 
 const setupModal = new SetupModal({
   rows: () => buildSetupRows(),
-  onActivate: (id) => {
+  // Async because some steps finish later — see SetupProviders.onActivate.
+  onActivate: async (id) => {
     switch (id) {
       case "agent-hooks": {
         const reports = installAllAgents();
@@ -6089,6 +6138,9 @@ const setupModal = new SetupModal({
         openWorkflowScreen();
         return;
       case "preflight": {
+        // The subprocess checks first, so the notice reports what was actually
+        // verified rather than "not checked yet" twice.
+        await runDeepPreflight();
         const results = runSetupPreflight();
         showNotice({
           title: results.every((c) => c.ok) ? "Ready" : "Not ready yet",
