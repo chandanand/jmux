@@ -7779,8 +7779,11 @@ async function startWorkOnIssue(
       // Fallback: no config mapping — open manual modal
       const modal = new NewSessionModal(getNewSessionProviders(newSessionDirs()));
       modal.open();
-      refreshProjectDirsInBackground((dirs) => {
-        modal.updateProjectDirs(dirs);
+      refreshProjectDirsInBackground(() => {
+        // Re-derived, not passed through: the scan yields bare paths, and
+        // handing those straight to the modal would replace the named Project
+        // rows with anonymous ones the moment it finished.
+        modal.updateProjectDirs(newSessionDirs());
         scheduleRender();
       });
       openModal(modal, async (value) => {
@@ -8638,17 +8641,27 @@ function focusPanelOnIssue(issueId: string): void {
  * Deduplicated by path: several Projects may share a directory, and offering it
  * twice would ask the user to choose between two identical rows.
  */
-function newSessionDirs(): string[] {
-  const projectDirs = (configStore.config.projects ?? [])
-    .filter((p) => p.deletedAt === undefined)
-    .map((p) => p.dir);
+function newSessionDirs(): Array<{ dir: string; label?: string }> {
+  const live = (configStore.config.projects ?? []).filter((p) => p.deletedAt === undefined);
+  const out: Array<{ dir: string; label?: string }> = [];
+  // Projects first, and each is its own row even when two share a directory:
+  // that is the monorepo-serving-two-teams shape, and collapsing them to one
+  // path makes them indistinguishable at the moment the user has to choose.
+  // projectLabel is what stops the two rows reading identically.
+  for (const p of live) {
+    out.push({
+      dir: p.dir,
+      label: projectLabel(p, live, (id) => cachedTeams.find((t) => t.id === id)?.name ?? null),
+    });
+  }
+  // Then whatever the scan found, minus anything a Project already offered —
+  // a bare path below a named row is the same destination said twice.
+  const claimed = new Set(live.map((p) => p.dir));
   const scanned = cachedProjectDirs.length > 0 ? cachedProjectDirs : [homedir()];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const d of [...projectDirs, ...scanned]) {
-    if (seen.has(d)) continue;
-    seen.add(d);
-    out.push(d);
+  for (const d of scanned) {
+    if (claimed.has(d)) continue;
+    claimed.add(d);
+    out.push({ dir: d });
   }
   return out;
 }
@@ -8713,7 +8726,7 @@ function refreshProjectDirsInBackground(onUpdate?: (dirs: string[]) => void): vo
     });
 }
 
-function getNewSessionProviders(preScannedDirs: string[]): NewSessionProviders {
+function getNewSessionProviders(preScannedDirs: Array<{ dir: string; label?: string }>): NewSessionProviders {
   return {
     scanProjectDirs: () => preScannedDirs,
     isBareRepo: (dir) => {
@@ -8922,8 +8935,11 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       // modal live when it completes.
       const modal = new NewSessionModal(getNewSessionProviders(newSessionDirs()));
       modal.open();
-      refreshProjectDirsInBackground((dirs) => {
-        modal.updateProjectDirs(dirs);
+      refreshProjectDirsInBackground(() => {
+        // Re-derived, not passed through: the scan yields bare paths, and
+        // handing those straight to the modal would replace the named Project
+        // rows with anonymous ones the moment it finished.
+        modal.updateProjectDirs(newSessionDirs());
         scheduleRender();
       });
       openModal(modal, async (value) => {

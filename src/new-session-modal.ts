@@ -9,7 +9,15 @@ export { sanitizeTmuxSessionName };
 export { tq } from "./shell-quote";
 
 export interface NewSessionProviders {
-  scanProjectDirs: () => string[];
+  /**
+   * Directories to start a session in, most relevant first.
+   *
+   * A `label` exists because two Projects may share one directory — a monorepo
+   * serving two teams — and offering one row for both makes them
+   * indistinguishable at the moment the user has to choose. The `dir` is still
+   * what everything downstream consumes.
+   */
+  scanProjectDirs: () => Array<{ dir: string; label?: string }>;
   isBareRepo: (dir: string) => boolean;
   getWorktrees: (dir: string) => Array<{ name: string; path: string }>;
   getRemoteBranches: (dir: string) => string[];
@@ -83,14 +91,14 @@ export class NewSessionModal {
     return this.currentInner!.getGrid(width);
   }
 
-  updateProjectDirs(dirs: string[]): void {
+  updateProjectDirs(dirs: Array<{ dir: string; label?: string }>): void {
     if (!this._open) return;
     if (this.currentStep !== "dir") return;
     const inner = this.currentInner;
     if (!(inner instanceof ListModal)) return;
-    const items: ListItem[] = dirs.map(dir => ({
+    const items: ListItem[] = dirs.map(({ dir, label }) => ({
       id: dir,
-      label: this.shortenPath(dir),
+      label: label ?? this.shortenPath(dir),
     }));
     inner.updateItems(items);
   }
@@ -254,9 +262,9 @@ export class NewSessionModal {
 
   private createDirPicker(): ListModal {
     const dirs = this.providers.scanProjectDirs();
-    const items: ListItem[] = dirs.map(dir => ({
+    const items: ListItem[] = dirs.map(({ dir, label }) => ({
       id: dir,
-      label: this.shortenPath(dir),
+      label: label ?? this.shortenPath(dir),
     }));
     return new ListModal({
       header: "New Session",
