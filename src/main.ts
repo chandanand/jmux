@@ -8831,7 +8831,18 @@ process.on("SIGWINCH", () => {
 let configWatcher: ReturnType<typeof import("fs").watch> | null = null;
 try {
   const { watch } = await import("fs");
-  configWatcher = watch(configStore.configPath, () => {
+  const { dirname: dirOf, basename: baseOf } = await import("path");
+  // Watch the *directory*, not the file. persist() replaces the config with an
+  // atomic rename (src/atomic-write.ts), which swaps the inode — and fs.watch
+  // on a path follows the inode, so a file watcher goes deaf after the first
+  // write jmux itself makes, and every later external edit is missed. The
+  // rename surfaces here as an event naming the basename.
+  const configDir = dirOf(configStore.configPath);
+  const configBase = baseOf(configStore.configPath);
+  configWatcher = watch(configDir, (_event, filename) => {
+    // A null filename means the OS reported a change without saying what, so
+    // it has to fall through rather than be filtered out.
+    if (filename !== null && filename !== configBase) return;
     const updated = configStore.reload();
     const newWidth = updated.sidebarWidth || 26;
     // No claudeCommand to refresh here: it is resolved per repo at each use
