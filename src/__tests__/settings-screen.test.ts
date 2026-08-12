@@ -549,3 +549,65 @@ describe("SettingsScreen action rows", () => {
     expect(rowText(grid, 3, left, right)).toContain("4 tabs · 7 groups");
   });
 });
+
+// --- Explain line ---
+//
+// `SettingDef.describe` has existed since the workflow screen shipped and this
+// screen explicitly ignored it, so every row was a label and a value with
+// nothing saying what it did.
+
+function describedCategory(describe_?: () => string): SettingsCategory[] {
+  return [{
+    label: "General",
+    collapsed: false,
+    settings: [
+      { id: "a", label: "Cache timers", type: "boolean", getValue: () => "on", onToggle: () => {}, describe: describe_ },
+    ],
+  }];
+}
+
+function fullRow(grid: CellGrid, row: number): string {
+  return grid.cells[row].map((c) => c.char).join("").trimEnd();
+}
+
+describe("SettingsScreen explain line", () => {
+  test("shows the selected row's description", () => {
+    const s = new SettingsScreen();
+    s.open(describedCategory(() => "Shows how long the cache has been warm."));
+    s.handleInput("\x1b[B");
+    const grid = s.render(80, 24);
+    expect(fullRow(grid, 22)).toContain("Shows how long the cache has been warm.");
+  });
+
+  test("is blank for a row with no description", () => {
+    const s = new SettingsScreen();
+    s.open(describedCategory());
+    s.handleInput("\x1b[B");
+    expect(fullRow(s.render(80, 24), 22)).toBe("");
+  });
+
+  test("does not overlap the hint row", () => {
+    const s = new SettingsScreen();
+    s.open(describedCategory(() => "A description."));
+    s.handleInput("\x1b[B");
+    const grid = s.render(80, 24);
+    expect(fullRow(grid, 23)).toContain("navigate");
+    expect(fullRow(grid, 23)).not.toContain("A description.");
+  });
+
+  test("truncates a long description rather than wrapping onto the rows above", () => {
+    const s = new SettingsScreen();
+    s.open(describedCategory(() => "x".repeat(500)));
+    s.handleInput("\x1b[B");
+    const grid = s.render(80, 24);
+    expect(fullRow(grid, 22).length).toBeLessThanOrEqual(80);
+    expect(fullRow(grid, 21)).not.toContain("x");
+  });
+
+  test("a category header shows no description of its own", () => {
+    const s = new SettingsScreen();
+    s.open(describedCategory(() => "Only for the setting."));
+    // selectedIndex 0 is the category header
+    expect(fullRow(s.render(80, 24), 22)).toBe("");
+  });
+});

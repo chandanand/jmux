@@ -112,6 +112,9 @@ const VALUE_ATTRS: CellAttrs = { fg: 8, fgMode: ColorMode.Palette };
 const VALUE_ACTIVE: CellAttrs = { fg: 7, fgMode: ColorMode.Palette };
 const DIM_ATTRS: CellAttrs = { fg: 8, fgMode: ColorMode.Palette, dim: true };
 const HINT_ATTRS: CellAttrs = { fg: 8, fgMode: ColorMode.Palette, dim: true };
+// The explain line, matching the workflow screen's treatment so the two
+// full-screen surfaces read the same way.
+const EXPLAIN_ATTRS: CellAttrs = { fg: tokens.textSecondary.fg, fgMode: tokens.textSecondary.fgMode, dim: true };
 const HINT_KEY_ATTRS: CellAttrs = { fg: tokens.accentMuted.fg, fgMode: tokens.accentMuted.fgMode };
 const HINT_LABEL_ATTRS: CellAttrs = { fg: tokens.textSecondary.fg, fgMode: tokens.textSecondary.fgMode };
 const HINT_SEP_ATTRS: CellAttrs = { fg: tokens.ruleHairline.fg, fgMode: tokens.ruleHairline.fgMode, dim: tokens.ruleHairline.dim };
@@ -129,7 +132,7 @@ const OFF_ATTRS: CellAttrs = { fg: 1, fgMode: ColorMode.Palette };
 // Objects whose foreground tracks the accent / neutral-text / hairline tokens — patched by role.
 const ACCENT_ROLE: CellAttrs[] = [HEADER_ATTRS, CATEGORY_ACTIVE, LABEL_ACTIVE, CURSOR_ATTRS, EDIT_CURSOR, MAP_KEY_ACTIVE];
 const NEUTRAL_ROLE: CellAttrs[] = [LABEL_ATTRS, VALUE_ACTIVE, EDIT_TEXT];
-const TEXT_SECONDARY_ROLE: CellAttrs[] = [CATEGORY_ATTRS, HINT_LABEL_ATTRS];
+const TEXT_SECONDARY_ROLE: CellAttrs[] = [CATEGORY_ATTRS, HINT_LABEL_ATTRS, EXPLAIN_ATTRS];
 const HAIRLINE_ROLE: CellAttrs[] = [HAIRLINE_ATTRS, HINT_SEP_ATTRS];
 
 export function rebuildSettingsColors(): void {
@@ -349,14 +352,14 @@ export class SettingsScreen {
     // Header
     writeString(grid, 0, left, "Settings", HEADER_ATTRS);
 
-    // The hint line is its own bottom row — settings is a frameless
-    // full-screen takeover (no shared footer), so it keeps one hint line
-    // of its own, reserved at the bottom of the content band.
+    // Two reserved rows at the bottom: the explain line sits above the hints,
+    // the same layout the workflow screen uses.
     const hintRow = rows - 1;
+    const explainRow = rows - 2;
 
     for (let r = 0; r < rowPlan.length; r++) {
       const row = CONTENT_START_ROW + r - this.scrollOffset;
-      if (row < CONTENT_START_ROW || row >= hintRow) continue;
+      if (row < CONTENT_START_ROW || row >= explainRow) continue;
 
       const entry = rowPlan[r];
       if (entry.kind === "blank") continue;
@@ -374,6 +377,16 @@ export class SettingsScreen {
         const indent = left + 4;
         writeString(grid, row, indent, "+ Add mapping", isSelected ? MAP_KEY_ACTIVE : MAP_ADD_ATTRS);
         if (isSelected) writeString(grid, row, indent - 2, "▸", CURSOR_ATTRS);
+      }
+    }
+
+    // Only a `setting` row has a description; a category header or a map entry
+    // deliberately shows nothing rather than inheriting its neighbour's.
+    const selectedNode = nodes[this.selectedIndex];
+    if (selectedNode?.kind === "setting") {
+      const text = selectedNode.setting.describe?.() ?? "";
+      if (text) {
+        writeString(grid, explainRow, left, truncateToCols(text, Math.max(1, right - left)), EXPLAIN_ATTRS);
       }
     }
 
@@ -929,7 +942,7 @@ export class SettingsScreen {
 
     // Reserve CONTENT_START_ROW rows above the content and 1 row for the
     // hint line at the bottom.
-    const visibleCount = Math.max(1, this.lastRenderRows - CONTENT_START_ROW - 1);
+    const visibleCount = Math.max(1, this.lastRenderRows - CONTENT_START_ROW - 2);
     const relativeIdx = rowPos - this.scrollOffset;
     if (relativeIdx < 0) {
       this.scrollOffset = rowPos;
