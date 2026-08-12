@@ -194,8 +194,8 @@ export interface AgentStateRecord {
  *
  * Unlike `@jmux-agent-state`, nothing ever writes this at session scope, so it
  * has no inheritance source — a non-empty value is proof *this* pane hosts an
- * agent. That distinction is load-bearing for pane detection; see
- * `glass/auto-detect.ts`.
+ * agent. That distinction is load-bearing for the representative-pane
+ * election; see `glass/representative.ts`.
  */
 export type AgentKind = "claude" | "codex" | "pi";
 

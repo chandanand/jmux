@@ -223,6 +223,14 @@ function pidAlive(pid: number): boolean {
 export function setupDemo(opts: DemoOptions = {}): DemoContext {
   reapStaleDemoServers();
 
+  // A demo must not inherit the recorder's tmux config. `config/tmux.conf`
+  // gates its user-config step on this being non-empty, and the demo starts its
+  // own server below — before main.ts has resolved anything — so an unset
+  // variable would leave the answer to whatever the surrounding shell happens
+  // to export. That is the same hazard the `env: { ...process.env }` note
+  // further down exists for, and it is settled the same way: state it.
+  process.env.JMUX_USER_CONF = "";
+
   const pid = process.pid;
   const socketName = `jmux-demo-${pid}`;
   const tmpDir = `/tmp/jmux-demo-${pid}`;
@@ -343,11 +351,6 @@ export function setupDemo(opts: DemoOptions = {}): DemoContext {
       defaultBaseBranch: "main",
       autoLaunchAgent: true,
     },
-    // Off in the shipped default, on here for the same reason as
-    // `showUnstartedInSidebar`: demo mode exists to show the feature. Under
-    // `--live` this is what fills the Command Center — the agent panes surface
-    // themselves off `@jmux-agent-kind`, with nothing to pin by hand.
-    autoPinAgentPanes: true,
   };
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
 

@@ -6,60 +6,75 @@ honest and current — when a term's meaning sharpens during design, update it h
 
 ## Glossary
 
-### Pin / Pinned pane
+### Membership
 
-A **pane** the user (or an agent) has marked for the Command Center. A pin is
-**pane-scoped and non-destructive**: it adds the pane as a live tile in the
-Command Center without ever moving the pane out of its own session / window /
-layout. To remove a pane from the Command Center, you unpin it.
+Which sessions the Command Center shows. It is **derived, not curated**: the set
+is the same one the sidebar would emit under the grid's own filter/group/sort,
+so the two surfaces cannot disagree about what exists. There is nothing to set
+up — an agent you start appears on the grid because it is a session, not because
+anyone registered it.
 
-**Source of truth.** Pin state lives in a **per-pane** tmux user option
-`@jmux-pinned`, and that option is the *sole* source of truth. The value stored
-is a **tab id** (e.g. `"default"`, `"backend"`) — not a bare `"1"`. Legacy
-values of `"1"` and any id not present in the tab registry are silently resolved
-to the **default tab** (index 0) by `resolveTabId`. The TUI reflects the option
-via a per-pane `#{P:...}` control-channel subscription (the same family of
-mechanism as `@jmux-agent-state`). Pins are deliberately **tmux-server-lifetime**
-— the option is re-read on TUI restart, and a server restart that would clear it
-also kills the agent processes the pins pointed at, so there is nothing to
-restore. There is **no** config-file mirror. The TUI's own pin/unpin actions and
-the CLI both write the *same* option, so they can never diverge.
+**One tile per session, always.** Not a preference: a tile is a second tmux
+client attached to the session, and two clients attached to one session share
+that session's current window, while tmux's zoom is window-global. So the grid
+physically cannot show two panes of one session at once. Seeing a session's
+other agents is a *cycle* within its one tile, not a second tile.
 
-**Agent surface.** Agents pin/unpin via the CLI:
-`jmux ctl pane pin` / `unpin` / `pinned` (list). The TUI exposes the same via
-command-palette actions "Pin to Command Center" / "Unpin from Command Center"
-(operating on the active pane). This rides the CLI's existing "talk only to tmux"
-model — no IPC to the TUI is required. The boundary is deliberate: **agents
-control Command Center *membership* (pins), never the user's *view*.** Pinning a
-pane makes it appear as a tile; it does not force the user's screen into the
-glass. Choosing to look at the Command Center is always the human's sidebar
-selection.
+### Pin (force-on)
 
-### Tab
+An explicit "keep this session on the grid, and show me **this** pane in it".
+Pane-scoped and non-destructive: `@jmux-pinned` on a pane, which does two things
+— its session is a member whatever the current view's filter says, and that pane
+is preferred as the session's **face**.
 
-A **registry-backed named bucket** in the Command Center. Each tab has a stable
-**id** (e.g. `"default"`, `"backend"`) and a human-readable **name**
-(e.g. `"Main"`, `"Backend"`). The ordered list of `{id, name}` entries lives in
-`~/.config/jmux/config.json` under `commandCenterTabs` and is the sole authority
-for tab order and display names.
+Note what a pin is *not*, since it used to be: it does not add a tile. Under one
+tile per session it cannot. Pinning a second pane of an already-visible session
+changes which pane you are looking at, not how many tiles there are.
 
-A pane belongs to exactly **one tab**: the id stored in `@jmux-pinned`. Because
-the pane stores the id — not the display name — **renaming a tab is a
-registry-only edit** and never touches any pane option. Tab id assignment and
-name/order changes can never drift apart.
+### Hide (force-off)
 
-Tabs render as a horizontal strip above the tile grid inside the Command Center.
-The strip is hidden when only one tab exists (the default). All tab operations
-(create, rename, delete, reorder, pin-to-tab, move-pane, switch) are
-command-palette driven (`Ctrl-a p`).
+The mirror of a pin: `@jmux-grid-hidden`, a **session**-scoped option meaning
+"keep this session off the grid". Session-scoped because its subject is a
+session; a pane-scoped hide would evaporate the moment the face moved to another
+pane.
 
-### Default tab
+**Hide beats a pin in the same session.** The two exceptions have different
+subjects — hide names the whole session, a pin names one pane in it — so "more
+specific wins" does not apply. A rule where pinning any pane silently defeated
+an explicit "keep this session off my grid" would make the hide untrustworthy.
 
-The **index-0 tab**, always present, always first, non-deletable. It is seeded
-with id `"default"` and name `"Main"`. It acts as the **fallback bucket**: any
-pane whose `@jmux-pinned` value is the legacy literal `"1"` or an id not found
-in the current registry is automatically routed here by `resolveTabId`, preserving
-backward compatibility without rewriting pane options.
+### Face
+
+The one pane a session's tile is currently mirroring. Elected from the session's
+panes: an explicitly declared agent pane, else a pinned one, else the most urgent
+pane that declares an agent kind, else the active pane. Within a tier, urgency
+decides, then the active pane, then the lowest pane id.
+
+The election is **stateless** — it answers "who represents this session right
+now". Deciding when to *ask it again* is a separate, sticky rule: a tile keeps
+its face until that pane dies, the user cycles it, or the pin set changes, so a
+sibling agent changing state never moves the picture out from under someone
+reading it.
+
+### View
+
+A **named preset of the session-list axes** — filter, grouping, sort — that the
+grid is showing. `Active`, `Needs you`, whatever the user saves. Views live in
+`~/.config/jmux/config.json` under `commandCenterViews`; the live axes are
+`commandCenterAxes`, which can be nudged away from the selected view, at which
+point the strip marks it as changed rather than continuing to name a view you
+are not in.
+
+A view is a **filter, not a bucket**. Nothing belongs *to* a view: switching one
+re-selects from the same derived set. This is the distinction that replaced
+Command Center *tabs*, which were hand-assigned buckets a pane was placed into.
+
+**Agent surface.** Agents shape membership via the CLI — `jmux ctl pane
+pin`/`unpin`/`pinned` and `ctl session hide`/`unhide`/`hidden` — riding the
+existing "talk only to tmux" model, no IPC to the TUI. The boundary is
+deliberate: **agents control Command Center *membership*, never the user's
+*view*.** Pinning makes a session appear; it does not force the user's screen
+into the grid. Looking at the Command Center is always the human's choice.
 
 ### Command Center
 

@@ -110,11 +110,17 @@ describe("the compiled binary boots", () => {
 
       const { alive, exitCode, output } = await boot(home);
 
-      // `detach-on-destroy off` is set by core.conf and by nothing else, so its
-      // presence proves tmux read a real file at a real path — the whole point
-      // of materialization.
+      // `status off` is set by core.conf and by nothing else, so its presence
+      // proves tmux read a real file at a real path — the whole point of
+      // materialization.
+      //
+      // This probe used to be `detach-on-destroy off`, until jmux started
+      // writing that one over the control channel too (see
+      // DETACH_ON_DESTROY_COMMAND). A probe the program under test sets by a
+      // second route cannot fail, so it has to be an option only the file can
+      // account for.
       const opt = Bun.spawnSync(
-        [TMUX!, "-L", SOCKET, "show-options", "-g", "detach-on-destroy"],
+        [TMUX!, "-L", SOCKET, "show-options", "-g", "status"],
         { stdout: "pipe", stderr: "pipe" },
       );
       const sourced = new TextDecoder().decode(opt.stdout).trim();

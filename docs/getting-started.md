@@ -237,9 +237,22 @@ When you have several agents running in different sessions:
 
 Switch to a session to check on it. The indicators clear when you type something in that session — not when you're just passing through.
 
-For a bird's-eye view, open the **Command Center** from the entry at the top of the sidebar: a grid of live, drivable tiles mirroring your pinned panes, with borders colored by agent state. Pin a pane with `Ctrl-a p` → **Pin to Command Center** (or turn on auto-pin in settings to surface every agent automatically). It's non-destructive — panes stay in their own sessions.
+For a bird's-eye view, open the **Command Center** — `Ctrl-a C`, or the entry at
+the top of the sidebar: a grid of live, drivable tiles, one per session, with
+borders colored by agent state. It's non-destructive — panes stay in their own
+sessions. You don't pin anything to populate it: membership is **derived**, the
+same way the sidebar's own rows are — the grid shows whichever sessions the
+active view's filter would put in front of you, automatically, as agents start
+and finish. A session with several agent panes still gets one tile; `Ctrl-a x`
+cycles which pane it's showing.
 
-When you're juggling a lot, group pinned panes from different sessions into **named tabs** (e.g. `Backend`, `Review`). Everything is palette-driven: **Pin to Command Center**, **Move tile to tab…**, **New / Rename / Delete tab**. While the Command Center is open, switch tabs with `Ctrl-a <number>`, or `Ctrl-a [` / `Ctrl-a ]` for previous / next.
+When the derived set isn't quite what you want, two per-session overrides are a
+keystroke away: `Ctrl-a P` on a session removes it from the grid (or, from
+inside a session, adds it, showing the pane you're on); a hidden session stays
+off the grid until you bring it back from the palette's **Show hidden sessions
+(N)…**. Switch between saved presets of the grid's own filter/group/sort with
+`Ctrl-a <number>` or `Ctrl-a [` / `Ctrl-a ]`, or save your current narrowing as
+a new one with **Save current axes as view…** in the palette.
 
 ---
 
@@ -349,7 +362,7 @@ the row reads `restart to apply` until you relaunch.
 - **Scroll the sidebar** with your mouse wheel when you have many sessions
 - **Click the version** at the bottom of the sidebar to see release notes
 - **Mouse selection** works — click and drag to select text, it copies to your clipboard
-- **Your tmux config** still works. If you have `~/.tmux.conf`, jmux loads it. Your plugins, themes, and custom bindings carry over
+- **Your tmux config** still works. If you have `~/.tmux.conf` (or `~/.config/tmux/tmux.conf`), jmux loads it. Your plugins, themes, and custom bindings carry over — and `userTmuxConfig: false` turns that off if its chrome collides with jmux's
 - **Resize panes** with `Ctrl-a` then arrow keys (hold for continuous resize)
 - **Zoom a pane** with `Ctrl-a` then `z` — the tab shows ⤢ when zoomed, press again to unzoom
 - **Pane borders** auto-show when a window has multiple panes and hide for single-pane windows

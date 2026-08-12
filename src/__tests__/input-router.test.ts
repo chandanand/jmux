@@ -1434,14 +1434,14 @@ describe("panel filter mode", () => {
 });
 
 describe("glass-buffered prefix + Ctrl-a <n>", () => {
-  test("Ctrl-a then digit switches tabs and forwards nothing to the tile", () => {
+  test("Ctrl-a then digit switches views and forwards nothing to the tile", () => {
     const sent: string[] = [];
     const switched: number[] = [];
     const router = new InputRouter({
       onPtyData: (d) => sent.push(d),
       onSidebarClick: () => {},
       glassActive: () => true,
-      onGlassTabSwitch: (n) => switched.push(n),
+      onGlassViewSwitch: (n) => switched.push(n),
     }, baseLayout(26));
     router.handleInput("\x01");
     router.handleInput("2");
@@ -1461,14 +1461,14 @@ describe("glass-buffered prefix + Ctrl-a <n>", () => {
     expect(sent).toEqual(["\x01", "k"]);
   });
 
-  test("Ctrl-a then [ / ] switch to prev/next tab and forward nothing", () => {
+  test("Ctrl-a then [ / ] switch to prev/next view and forward nothing", () => {
     const sent: string[] = [];
     const deltas: number[] = [];
     const router = new InputRouter({
       onPtyData: (d) => sent.push(d),
       onSidebarClick: () => {},
       glassActive: () => true,
-      onGlassTabRelative: (delta) => deltas.push(delta),
+      onGlassViewRelative: (delta) => deltas.push(delta),
     }, baseLayout(26));
     router.handleInput("\x01");
     router.handleInput("[");
@@ -1492,6 +1492,137 @@ describe("glass-buffered prefix + Ctrl-a <n>", () => {
     expect(detached).toBe(1);
     expect(sent).toEqual([]); // buffered prefix dropped, not forwarded
   });
+
+  test("Ctrl-a C toggles the Command Center from inside the grid", () => {
+    const sent: string[] = [];
+    let toggled = 0;
+    const router = new InputRouter({
+      onPtyData: (d) => sent.push(d),
+      onSidebarClick: () => {},
+      glassActive: () => true,
+      onGlassToggle: () => toggled++,
+    }, baseLayout(26));
+    router.handleInput("\x01");
+    router.handleInput("C");
+    expect(toggled).toBe(1);
+    expect(sent).toEqual([]);
+  });
+
+  test("Ctrl-a P removes the focused session from the grid", () => {
+    const sent: string[] = [];
+    let pinned = 0;
+    const router = new InputRouter({
+      onPtyData: (d) => sent.push(d),
+      onSidebarClick: () => {},
+      glassActive: () => true,
+      onGlassPinToggle: () => pinned++,
+    }, baseLayout(26));
+    router.handleInput("\x01");
+    router.handleInput("P");
+    expect(pinned).toBe(1);
+    expect(sent).toEqual([]);
+  });
+
+  test("Ctrl-a Enter opens the focused tile full-size", () => {
+    const sent: string[] = [];
+    let opened = 0;
+    const router = new InputRouter({
+      onPtyData: (d) => sent.push(d),
+      onSidebarClick: () => {},
+      glassActive: () => true,
+      onGlassOpenFocused: () => opened++,
+    }, baseLayout(26));
+    router.handleInput("\x01");
+    router.handleInput("\r");
+    expect(opened).toBe(1);
+    expect(sent).toEqual([]);
+  });
+
+  test("Ctrl-a x cycles the focused tile's face", () => {
+    const sent: string[] = [];
+    let cycled = 0;
+    const router = new InputRouter({
+      onPtyData: (d) => sent.push(d),
+      onSidebarClick: () => {},
+      glassActive: () => true,
+      onGlassCycleFace: () => cycled++,
+    }, baseLayout(26));
+    router.handleInput("\x01");
+    router.handleInput("x");
+    expect(cycled).toBe(1);
+    expect(sent).toEqual([]);
+  });
+
+  test("Ctrl-a z zooms the focused tile", () => {
+    const sent: string[] = [];
+    let zoomed = 0;
+    const router = new InputRouter({
+      onPtyData: (d) => sent.push(d),
+      onSidebarClick: () => {},
+      glassActive: () => true,
+      onGlassZoom: () => zoomed++,
+    }, baseLayout(26));
+    router.handleInput("\x01");
+    router.handleInput("z");
+    expect(zoomed).toBe(1);
+    expect(sent).toEqual([]);
+  });
+
+  test("Ctrl-a G/s/f cycle the grid's own axes in glass, not the sidebar's", () => {
+    const sent: string[] = [];
+    let glassGroup = 0;
+    let glassSort = 0;
+    let glassFilter = 0;
+    let sidebarGroup = 0;
+    let sidebarSort = 0;
+    let sidebarFilter = 0;
+    const router = new InputRouter({
+      onPtyData: (d) => sent.push(d),
+      onSidebarClick: () => {},
+      glassActive: () => true,
+      onGlassGroupCycle: () => glassGroup++,
+      onGlassSortCycle: () => glassSort++,
+      onGlassFilterCycle: () => glassFilter++,
+      onGroupCycle: () => sidebarGroup++,
+      onSortCycle: () => sidebarSort++,
+      onFilterCycle: () => sidebarFilter++,
+    }, baseLayout(26));
+    router.handleInput("\x01");
+    router.handleInput("G");
+    router.handleInput("\x01");
+    router.handleInput("s");
+    router.handleInput("\x01");
+    router.handleInput("f");
+    expect([glassGroup, glassSort, glassFilter]).toEqual([1, 1, 1]);
+    expect([sidebarGroup, sidebarSort, sidebarFilter]).toEqual([0, 0, 0]);
+    expect(sent).toEqual([]);
+  });
+});
+
+describe("Ctrl-a C / Ctrl-a P outside the grid", () => {
+  test("Ctrl-a C toggles the Command Center from a normal session", () => {
+    let toggled = 0;
+    const router = new InputRouter({
+      onPtyData: () => {},
+      onSidebarClick: () => {},
+      onGlassToggle: () => toggled++,
+    }, baseLayout(26));
+    router.handleInput("\x01");
+    router.handleInput("C");
+    expect(toggled).toBe(1);
+  });
+
+  test("Ctrl-a P force-ons the current pane from a normal session", () => {
+    let pinned = 0;
+    const router = new InputRouter({
+      onPtyData: () => {},
+      onSidebarClick: () => {},
+      onGlassPinToggle: () => pinned++,
+    }, baseLayout(26));
+    router.handleInput("\x01");
+    router.handleInput("P");
+    expect(pinned).toBe(1);
+  });
 });
 
 describe("glass strip mouse routing", () => {
@@ -1502,7 +1633,7 @@ describe("glass strip mouse routing", () => {
   // task report for the corroborating renderer.ts trace.)
   const press = (col: number, row: number) => `\x1b[<0;${col};${row}M`;
 
-  test("a click on the strip row routes to onGlassTabClick", () => {
+  test("a click on the strip row routes to onGlassViewClick", () => {
     const tabClicks: number[] = [];
     const tileClicks: Array<[number, number]> = [];
     const router = new InputRouter({
@@ -1510,7 +1641,7 @@ describe("glass strip mouse routing", () => {
       onSidebarClick: () => {},
       glassActive: () => true,
       glassStripRows: () => 1,
-      onGlassTabClick: (x) => tabClicks.push(x),
+      onGlassViewClick: (x) => tabClicks.push(x),
       onGlassClick: (x, y) => tileClicks.push([x, y]),
     }, baseLayout(26));
     router.handleInput(press(30, 1)); // row 1 = strip
@@ -1526,7 +1657,7 @@ describe("glass strip mouse routing", () => {
       glassActive: () => true,
       glassStripRows: () => 1,
       onGlassClick: (x, y) => tileClicks.push([x, y]),
-      onGlassTabClick: () => {},
+      onGlassViewClick: () => {},
     }, baseLayout(26));
     router.handleInput(press(30, 5)); // row 5: cy = (5-1) - 1 stripRow = 3
     expect(tileClicks).toEqual([[2, 3]]);
@@ -2154,5 +2285,105 @@ describe("preview strip keys", () => {
     r.setPanelFocused(false);
     r.handleInput("}");
     expect(calls).toEqual(["pty:}"]);
+  });
+});
+
+// The panel's tab strip is painted into the toolbar *row* (renderer.ts blits it
+// at destY 0 over the panel's columns), so row 0 is shared between two owners
+// and the column decides which. The toolbar branch claims the whole row
+// regardless of column, which is why these tests exist: the strip must be
+// tested first, or every tab click is swallowed by a toolbar that isn't drawn
+// there.
+describe("panel tab bar clicks", () => {
+  function tabRouter(
+    layout: FrameLayout,
+    strip: boolean,
+    opts: Partial<InputRouterOptions> = {},
+  ) {
+    const calls = { tabs: [] as number[], hovers: [] as number[], toolbar: [] as number[] };
+    const router = new InputRouter(
+      {
+        onPtyData: () => {},
+        onSidebarClick: () => {},
+        panelTabBarShown: () => strip,
+        onPanelTabClick: (col) => { calls.tabs.push(col); },
+        onPanelTabHover: (col) => { calls.hovers.push(col); },
+        onToolbarClick: (col) => { calls.toolbar.push(col); },
+        ...opts,
+      },
+      layout,
+    );
+    return { router, calls };
+  }
+
+  const pressAt = (x: number, y: number) => `\x1b[<0;${x + 1};${y + 1}M`;
+  const hoverAt = (x: number, y: number) => `\x1b[<35;${x + 1};${y + 1}M`;
+
+  test("a click on the strip switches tabs instead of hitting the toolbar", () => {
+    const layout = diffPanelLayout(26, 40, 30);
+    const { router, calls } = tabRouter(layout, true);
+    router.handleInput(pressAt(layout.panel!.x + 3, 0));
+    expect(calls.tabs).toEqual([3]);
+    expect(calls.toolbar).toEqual([]);
+  });
+
+  test("hover over the strip reports the panel column", () => {
+    const layout = diffPanelLayout(26, 40, 30);
+    const { router, calls } = tabRouter(layout, true);
+    router.handleInput(hoverAt(layout.panel!.x + 7, 0));
+    expect(calls.hovers).toEqual([7]);
+  });
+
+  test("main-area toolbar columns still reach the toolbar in split mode", () => {
+    const layout = diffPanelLayout(26, 40, 30);
+    const { router, calls } = tabRouter(layout, true);
+    router.handleInput(pressAt(layout.main.x + 4, 0));
+    expect(calls.toolbar).toEqual([4]);
+    expect(calls.tabs).toEqual([]);
+  });
+
+  // Full mode puts panel.x at main.x, so the strip's columns are the toolbar's
+  // columns. When the strip isn't drawn (a lone Diff tab with no badge) the
+  // toolbar is what's on screen there, and it has to stay clickable.
+  test("with no strip drawn, row 0 belongs to the toolbar even in full mode", () => {
+    const layout = baseLayout(24, "full", 0);
+    const { router, calls } = tabRouter(layout, false);
+    router.handleInput(pressAt(layout.panel!.x + 5, 0));
+    expect(calls.toolbar).toEqual([5]);
+    expect(calls.tabs).toEqual([]);
+  });
+
+  // With the toolbar degraded away (resolveChrome's ladder on a short
+  // terminal) the strip has no row to be painted into, and row 0 is the
+  // panel's first *content* row — clicking it must select a list item.
+  test("with no toolbar row, row 0 is panel content", () => {
+    const layout = computeFrameLayout({
+      termCols: 120,
+      termRows: 5,
+      sidebarWidth: 24,
+      borderWidth: 1,
+      toolbarRows: 1,
+      diffState: "split",
+      requestedPanelCols: 40,
+      frameRulesEnabled: true,
+      footerEnabled: true,
+    });
+    expect(layout.toolbarRows).toBe(0);
+    const itemClicks: number[] = [];
+    const { router, calls } = tabRouter(layout, true, {
+      onPanelItemClick: (row) => { itemClicks.push(row); },
+    });
+    router.setPanelTabsActive(true);
+    router.handleInput(pressAt(layout.panel!.x + 5, 0));
+    expect(calls.tabs).toEqual([]);
+    expect(itemClicks).toEqual([0]);
+  });
+
+  test("with the strip drawn, it owns row 0 in full mode", () => {
+    const layout = baseLayout(24, "full", 0);
+    const { router, calls } = tabRouter(layout, true);
+    router.handleInput(pressAt(layout.panel!.x + 5, 0));
+    expect(calls.tabs).toEqual([5]);
+    expect(calls.toolbar).toEqual([]);
   });
 });

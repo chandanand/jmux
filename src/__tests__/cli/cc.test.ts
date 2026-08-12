@@ -1,30 +1,34 @@
 import { describe, test, expect } from "bun:test";
-import { buildTabSummaries } from "../../cli/cc";
-import type { TabEntry } from "../../glass/tabs";
+import { resolveCcViews } from "../../cli/cc";
+import { DEFAULT_VIEW_SEED_ID, DEFAULT_VIEW_SEED_NAME } from "../../glass/views";
 
-describe("buildTabSummaries", () => {
-  const tabs: TabEntry[] = [
-    { id: "default", name: "Main" },
-    { id: "backend", name: "Backend" },
-  ];
-
-  test("counts live pinned panes per resolved tab (legacy + unknown fold to default)", () => {
-    const pins = [
-      { id: "%1", tab: "1" },        // legacy → default
-      { id: "%2", tab: "backend" },  // backend
-      { id: "%3", tab: "ghost" },    // unknown → default
-      { id: "%4", tab: "backend" },  // backend
+describe("resolveCcViews", () => {
+  test("returns the normalized view registry, not counts", () => {
+    const views = [
+      { id: "active", name: "Active", filter: "active" as const, groupBy: "status" as const, sortBy: "status" as const },
+      { id: "backend", name: "Backend", filter: "all" as const, groupBy: "project" as const, sortBy: "name" as const },
     ];
-    expect(buildTabSummaries(tabs, pins)).toEqual([
-      { id: "default", name: "Main", order: 0, count: 2 },
-      { id: "backend", name: "Backend", order: 1, count: 2 },
-    ]);
+    const result = resolveCcViews({ commandCenterViews: views });
+    expect(result).toEqual(views);
+    // No member/count field anywhere — deriving one here would be a second
+    // reading of live tmux state the CLI has no business producing.
+    for (const v of result) expect(v).not.toHaveProperty("count");
   });
 
-  test("empty tabs report count 0", () => {
-    expect(buildTabSummaries(tabs, [])).toEqual([
-      { id: "default", name: "Main", order: 0, count: 0 },
-      { id: "backend", name: "Backend", order: 1, count: 0 },
-    ]);
+  test("seeds the default view when the config has none", () => {
+    const views = resolveCcViews({});
+    expect(views).toHaveLength(1);
+    expect(views[0]).toEqual({
+      id: DEFAULT_VIEW_SEED_ID, name: DEFAULT_VIEW_SEED_NAME,
+      filter: "active", groupBy: "status", sortBy: "status",
+    });
+  });
+
+  test("drops a malformed entry rather than surfacing it", () => {
+    const views = resolveCcViews({
+      commandCenterViews: [{ id: "", name: "Nameless" } as any],
+    });
+    expect(views).toHaveLength(1);
+    expect(views[0].id).toBe(DEFAULT_VIEW_SEED_ID);
   });
 });
