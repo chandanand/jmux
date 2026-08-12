@@ -667,13 +667,34 @@ function sessionSettingsFor(sessionName: string): ResolvedProjectSettings {
  * The one call site for `resolveIssueProject` in the TUI, so the sidebar, the
  * ghost preview and group start cannot answer differently.
  */
+/**
+ * Cached because the callers are hot and quadratic without it.
+ *
+ * `issueRepoDir` resolves through the router, and `recomputeSessionBands` reaches
+ * it once per issue per drift event on every poll — rebuilding this map each
+ * time is sessions x contexts per call, so the poll became O(n^2) the moment
+ * repo resolution stopped being a plain map lookup.
+ *
+ * Invalidated wherever the session list is replaced or a context updates, which
+ * are the only two things it derives from. Cheap to rebuild, so a missed
+ * invalidation costs a stale answer for one tick rather than a leak — but both
+ * writers are listed below so there is nowhere else to forget.
+ */
+let sessionIssueIndex: Map<string, SessionInfo> | null = null;
+
+function invalidateSessionIssueIndex(): void {
+  sessionIssueIndex = null;
+}
+
 function sessionByIssueId(): Map<string, SessionInfo> {
+  if (sessionIssueIndex) return sessionIssueIndex;
   const index = new Map<string, SessionInfo>();
   for (const sess of currentSessions) {
     for (const i of pollCoordinator.getContext(sess.name)?.issues ?? []) {
       if (!index.has(i.id)) index.set(i.id, sess);
     }
   }
+  sessionIssueIndex = index;
   return index;
 }
 
@@ -2065,6 +2086,9 @@ const pollCoordinator = new PollCoordinator({
   codeHost: adapters.codeHost,
   issueTracker: adapters.issueTracker,
   onUpdate: (sessionName) => {
+    // Contexts are the index's other input, so a poll that changed one must not
+    // leave a stale answer behind for recomputeSessionBands to read below.
+    invalidateSessionIssueIndex();
     sidebar.setSessionContexts(pollCoordinator.getAllContexts());
     // A poll is the main way a stage changes (and the only way an unpark
     // signal arrives), so both bands are re-derived on every one.
@@ -4051,6 +4075,7 @@ async function fetchSessions(): Promise<void> {
       });
     const previousSessions = currentSessions;
     currentSessions = sessions;
+    invalidateSessionIssueIndex();
 
     // Mark sessions with activity since last viewed
     for (const session of sessions) {
@@ -8307,6 +8332,7 @@ function attachIssueTo(
   }
   sessionState.addLink(sessionName, { type: "issue", id: issue.id });
   pollCoordinator.addLinkedIssue(sessionName, issue);
+  invalidateSessionIssueIndex();
 
   // Crossing a Project boundary is reported, not refused and not acted on. The
   // user linked *this issue* to *this session*, which is a statement about one
@@ -8525,7 +8551,10 @@ function removeIssueLinkFrom(
     removed = writeOptionIssueLinks(sessionName, remaining) || removed;
   }
 
-  if (removed) pollCoordinator.removeLinkedIssue(sessionName, issue.id);
+  if (removed) {
+    pollCoordinator.removeLinkedIssue(sessionName, issue.id);
+    invalidateSessionIssueIndex();
+  }
   return removed;
 }
 
