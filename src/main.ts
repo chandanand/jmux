@@ -978,6 +978,30 @@ function forgetBrowserInstalled(): void {
   browserInstalled = null;
 }
 
+/**
+ * Whether the checklist still has work the user has not declined.
+ *
+ * Cached per frame's worth of time: every row's detector touches the
+ * filesystem, and this runs from makeToolbar, which runs on every frame.
+ */
+let setupOutstandingCache: { at: number; value: boolean } | null = null;
+const SETUP_OUTSTANDING_TTL_MS = 5000;
+function setupStepsOutstanding(): boolean {
+  const now = Date.now();
+  if (setupOutstandingCache && now - setupOutstandingCache.at < SETUP_OUTSTANDING_TTL_MS) {
+    return setupOutstandingCache.value;
+  }
+  let value = false;
+  try {
+    value = buildSetupRows().some((r) => r.state === "todo" || r.state === "blocked");
+  } catch {
+    // A detector throwing must not take the toolbar down with it.
+    value = false;
+  }
+  setupOutstandingCache = { at: now, value };
+  return value;
+}
+
 function makeToolbar(): ToolbarConfig {
   return {
     buttons: buildToolbarButtons({
@@ -986,6 +1010,7 @@ function makeToolbar(): ToolbarConfig {
       // both — openBrowserPane refuses on either, and a button that opens a
       // notice is not a button.
       browserAvailable: isBrowserInstalled() && imagesOn(),
+      setupPending: setupStepsOutstanding(),
     }),
     mainCols,
     hoveredButton: hoveredToolbarButton,

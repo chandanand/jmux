@@ -124,7 +124,21 @@ export interface GhostIssue {
    * gives a completed issue a session, so it would never age out.
    */
   inactive: boolean;
+  /**
+   * Which Project this issue would start in, as far as routing can tell.
+   *
+   * `orphaned` cannot occur here: a ghost has no session by definition, and
+   * that outcome only exists to describe one. Carried on the row so the sidebar
+   * can file it under the Project it will join *after* Start — the row's whole
+   * claim is that starting it changes only the state.
+   */
+  project?: GhostProject;
 }
+
+export type GhostProject =
+  | { kind: "resolved"; id: string; title: string }
+  | { kind: "unclaimed" }
+  | { kind: "ambiguous" };
 
 /** One stage's issues, in the order its own tab shows them. */
 export interface GhostQueue {
@@ -148,6 +162,8 @@ export interface GhostEntry {
   stageId?: string;
   stageLabel?: string;
   rank?: number;
+  /** See `GhostIssue.project`. Absent when routing was not consulted. */
+  project?: GhostProject;
 }
 
 /** An issue is a ghost when nobody is on it and it is still live work. */
@@ -156,7 +172,12 @@ function eligible(issue: GhostIssue): boolean {
 }
 
 function entryOf(issue: GhostIssue): GhostEntry {
-  return { issueId: issue.id, identifier: issue.identifier, title: issue.title };
+  return {
+    issueId: issue.id,
+    identifier: issue.identifier,
+    title: issue.title,
+    ...(issue.project ? { project: issue.project } : {}),
+  };
 }
 
 /**
@@ -205,4 +226,19 @@ export function selectGhosts(queues: readonly GhostQueue[], cap: number): GhostE
     }
   }
   return out;
+}
+
+/**
+ * Which band a ghost belongs to on the **project** grouping axis.
+ *
+ * Rows that cannot be routed collect under one "Unassigned" band rather than
+ * disappearing. Hiding them would make a misconfigured team map silently
+ * shorten the ghost list — the original reported failure wearing a new costume,
+ * and invisible in exactly the way that made it hard to diagnose.
+ */
+export const UNASSIGNED_GHOST_BAND = "Unassigned";
+
+export function ghostProjectBand(entry: GhostEntry): string {
+  const p = entry.project;
+  return p && p.kind === "resolved" ? p.title : UNASSIGNED_GHOST_BAND;
 }

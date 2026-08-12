@@ -85,6 +85,19 @@ export function buildToolbarButtons(opts: {
    * that do. `Ctrl-a b` still answers, and says what to install.
    */
   browserAvailable?: boolean;
+  /**
+   * Setup steps are outstanding.
+   *
+   * Marked on `?` rather than on a settings button, because there is no
+   * settings button and `?` is the one affordance here reachable with no prior
+   * knowledge of the prefix concept — the same audience the checklist is for.
+   * Rendered as the accent colour, like the panel toggle's active state, so it
+   * costs no column: every label must be exactly one display cell or the mouse
+   * hit boxes shift.
+   *
+   * Never set for a capability the user has declined; see `config.setup`.
+   */
+  setupPending?: boolean;
 }): ToolbarButton[] {
   return [
     // The keyboard reference leads the cluster rather than joining the end of
@@ -93,7 +106,12 @@ export function buildToolbarButtons(opts: {
     // because that is the side the panel docks on. Leading is the only spot
     // that costs neither. It is also the one affordance here reachable with no
     // prior knowledge of the prefix concept, which is the whole point of it.
-    { label: "?", id: "help" },
+    {
+      label: "?",
+      id: "help",
+      fg: opts.setupPending ? tokens.accent.fg : undefined,
+      fgMode: opts.setupPending ? tokens.accent.fgMode : undefined,
+    },
     { label: "+", id: "new-window" },
     { label: "⊟", id: "split-h" },
     { label: "◫", id: "split-v" },

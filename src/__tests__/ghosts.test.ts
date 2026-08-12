@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import {
   selectGhosts, ghostCapValue, formatGhostCap, editGhostCap, parseGhostCap, stepGhostCap,
+  ghostProjectBand, UNASSIGNED_GHOST_BAND,
   GHOST_CAP_MAX, type GhostIssue, type GhostQueue,
 } from "../ghosts";
 
@@ -233,5 +234,47 @@ describe("the ghost cap", () => {
   test("garbage steps onto the ladder rather than sticking", () => {
     expect(stepGhostCap("banana", 1)).toBe(1);
     expect(stepGhostCap(undefined, 1)).toBe(1);
+  });
+});
+
+describe("ghost Project outcomes", () => {
+  const issue = (id: string, project?: any) => ({
+    id, identifier: id.toUpperCase(), title: `t-${id}`,
+    hasSession: false, inactive: false,
+    ...(project ? { project } : {}),
+  });
+
+  test("a resolved Project rides along on the entry", () => {
+    const out = selectGhosts(
+      [{ viewId: "v", label: "To do", rank: 0, issues: [issue("a", { kind: "resolved", id: "api", title: "API" })] }],
+      5,
+    );
+    expect(out[0].project).toEqual({ kind: "resolved", id: "api", title: "API" });
+  });
+
+  test("an entry with no routing carries no project", () => {
+    const out = selectGhosts([{ viewId: "v", label: "To do", rank: 0, issues: [issue("a")] }], 5);
+    expect(out[0].project).toBeUndefined();
+  });
+
+  test("a resolved ghost bands under its Project's title", () => {
+    expect(ghostProjectBand({
+      issueId: "a", identifier: "A", title: "t",
+      project: { kind: "resolved", id: "api", title: "API" },
+    })).toBe("API");
+  });
+
+  // Hiding unroutable work would make a misconfigured team map silently
+  // shorten the ghost list — the original failure in a new costume.
+  test("unclaimed and ambiguous ghosts band together rather than vanishing", () => {
+    expect(ghostProjectBand({ issueId: "a", identifier: "A", title: "t", project: { kind: "unclaimed" } }))
+      .toBe(UNASSIGNED_GHOST_BAND);
+    expect(ghostProjectBand({ issueId: "b", identifier: "B", title: "t", project: { kind: "ambiguous" } }))
+      .toBe(UNASSIGNED_GHOST_BAND);
+  });
+
+  test("a ghost with no routing at all also bands as unassigned", () => {
+    expect(ghostProjectBand({ issueId: "a", identifier: "A", title: "t" }))
+      .toBe(UNASSIGNED_GHOST_BAND);
   });
 });
