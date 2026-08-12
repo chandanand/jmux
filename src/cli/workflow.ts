@@ -37,6 +37,7 @@ import { resolve } from "path";
 import { homedir } from "os";
 import { existsSync } from "fs";
 import { runTmuxDirect } from "./tmux";
+import { PROJECT_OPTION, type ProjectConfig } from "../project";
 import { CliError, type CliContext } from "./context";
 import { loadUserConfig, type JmuxConfig } from "../config";
 import { RepoFactsCache, resolveForRepo } from "../repo-settings";
@@ -100,6 +101,28 @@ export interface BoardSession {
   pinned: boolean;
   parked: boolean;
   issue: BoardIssue | null;
+  /**
+   * Same three answers as `ctl status`: null is a session nobody adopted,
+   * `deleted` a dangling stamp. Flattening them would hide a real
+   * misconfiguration behind "no project".
+   */
+  project: { id: string; title: string } | { id: string; state: "deleted" } | null;
+}
+
+/**
+ * The Project a board row reports. Same three answers as `ctl status`, and the
+ * same reason: a dangling stamp is a real misconfiguration an agent can act on,
+ * and must not read as "no project".
+ */
+function resolveBoardProject(
+  stampedId: string,
+  projects: readonly ProjectConfig[],
+): BoardSession["project"] {
+  if (!stampedId) return null;
+  const match = projects.find((p) => p.id === stampedId);
+  if (!match) return null;
+  if (match.deletedAt !== undefined) return { id: match.id, state: "deleted" };
+  return { id: match.id, title: match.title };
 }
 
 export interface BoardStage {
@@ -189,6 +212,8 @@ export interface BoardSessionInput {
   pinned: boolean;
   /** `session_activity`, epoch ms — feeds `parking.autoParkIdleDays`. */
   lastActivity: number;
+  /** The `@jmux-project` stamp, or "" when the session carries none. */
+  projectId?: string;
 }
 
 export interface BoardInputs {
@@ -197,6 +222,8 @@ export interface BoardInputs {
   upNextOrder: string[];
   /** `pipeline.parkedStates` — the statuses whose sessions park. */
   parkedStates: string[];
+  /** Including soft-deleted, so a dangling stamp is reportable. */
+  projects?: readonly ProjectConfig[];
   parking: ParkingConfig;
   unstartedCap: number | "all";
   sessions: BoardSessionInput[];
@@ -271,6 +298,7 @@ export function buildBoard(inp: BoardInputs): Board {
         pinned: s.pinned,
         parked,
         issue: issue ? toBoardIssue(issue) : null,
+        project: resolveBoardProject(s.projectId ?? "", inp.projects ?? []),
       },
     };
   });
@@ -457,6 +485,7 @@ const STATUS_FORMAT = [
   `#{${ISSUE_LINK_OPTION}}`,
   "#{pane_current_path}",
   "#{pane_active}",
+  `#{${PROJECT_OPTION}}`,
 ].join(US);
 
 function readSessionRows(ctx: CliContext): StatusSessionRow[] {
@@ -572,6 +601,9 @@ async function gatherBoard(ctx: CliContext): Promise<Board> {
     views,
     upNextOrder: config.pipeline?.upNext ?? [],
     parkedStates: parked,
+    // Soft-deleted included, so a dangling stamp reports `deleted` rather than
+    // being indistinguishable from a session nobody adopted.
+    projects: config.projects ?? [],
     parking: parkingConfig(config),
     unstartedCap: capValue(config),
     issues,
@@ -601,6 +633,7 @@ async function gatherBoard(ctx: CliContext): Promise<Board> {
         attentionReason: row.attention === "1" ? row.attentionReason || null : null,
         pinned: pinned.has(row.name),
         lastActivity: activity.get(row.id) ?? Date.now(),
+        projectId: row.projectId,
       };
     }),
   });
