@@ -63,7 +63,8 @@ export interface SettingDef {
   onClearOverride?: () => void;
   /**
    * A short qualifier on the *effective* value, shown dim after it — for a row
-   * whose stored value is not yet the value in force ("restart to apply").
+   * whose value alone does not say what is actually true right now (the
+   * adapter rows report the connected organization, or why there isn't one).
    *
    * Distinct from `describe`, which explains what the setting does and is the
    * same every time. This says what is true right now, and returns null the

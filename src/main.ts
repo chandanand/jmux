@@ -115,9 +115,10 @@ import {
   resolveIssueSessionName as sharedIssueSessionName,
 } from "./issue-session";
 import { createAdapters } from "./adapters/registry";
+import { ActiveAdapters } from "./adapters/active-set";
 import { PollCoordinator } from "./adapters/poll-coordinator";
 import { SessionState } from "./session-state";
-import type { SessionContext, WorkflowState } from "./adapters/types";
+import type { SessionContext, WorkflowState, AdapterConfig } from "./adapters/types";
 import { stageForIssue, resolveIssueRepoDir, STAGE_ORDER, STAGE_LABELS } from "./work-stage";
 import {
   selectGhosts, ghostCapValue, formatGhostCap, editGhostCap, parseGhostCap, stepGhostCap,
@@ -1577,9 +1578,14 @@ import { GhostPreview, rebuildGhostPreviewColors, type GhostPreviewPort, type St
 import { buildPreflight, type Preflight } from "./ghost-preflight";
 import { resolveNavStep, type NavFocus } from "./nav-order";
 
-const adapters = demoCtx
-  ? { codeHost: demoCtx.codeHost, issueTracker: demoCtx.issueTracker }
-  : createAdapters(configStore.config.adapters);
+// Mutable behind an epoch, so a tracker change applies without a restart. Every
+// existing `adapters.issueTracker` / `adapters.codeHost` read still works —
+// they are getters. See src/adapters/active-set.ts for why the epoch exists.
+const adapters = new ActiveAdapters(
+  demoCtx
+    ? { codeHost: demoCtx.codeHost, issueTracker: demoCtx.issueTracker }
+    : createAdapters(configStore.config.adapters),
+);
 const infoPanel = new InfoPanel({ viewIds: [], viewLabels: new Map() });
 let panelViews = parseViews(configStore.config.panelViews);
 const viewStates = new Map<string, ViewState>();
@@ -1617,6 +1623,47 @@ function panelViewCounts(views: PanelView[]): Map<string, number> {
     counts.set(view.id, buildViewNodes(items, view, new Set()).filter((n) => n.kind === "item").length);
   }
   return counts;
+}
+
+/**
+ * Apply an adapter configuration change without a restart.
+ *
+ * Builds and *verifies* the replacement before publishing it: a bad token must
+ * never displace a working adapter, and `authenticate()` now makes a real
+ * identity request, so "verified" means something. `unreachable` is refused
+ * too — jmux cannot tell a good token on a dead network from a bad one, so it
+ * keeps what works and says which case it could not distinguish.
+ */
+async function swapAdapters(next: AdapterConfig): Promise<boolean> {
+  const candidate = createAdapters(next);
+  if (candidate.issueTracker) await candidate.issueTracker.authenticate();
+  if (candidate.codeHost) await candidate.codeHost.authenticate();
+
+  const bad =
+    (candidate.issueTracker && candidate.issueTracker.authState !== "ok" ? candidate.issueTracker : null) ??
+    (candidate.codeHost && candidate.codeHost.authState !== "ok" ? candidate.codeHost : null);
+  if (bad) {
+    showToast(
+      bad.authState === "unreachable"
+        ? `${bad.type}: could not reach it — keeping the current connection`
+        : `${bad.type}: not connected — check ${bad.authHint}`,
+    );
+    return false;
+  }
+
+  adapters.swap(candidate);
+  pollCoordinator.setAdapters(candidate);
+  // Provider-scoped and outside the coordinator, so they are cleared here.
+  cachedTeams = [];
+  cachedWorkflowStates = [];
+  lastTeamFetchMs = 0;
+  refreshPanelViews();
+  void refreshTeams();
+  void pollCoordinator.pollGlobal();
+  scheduleRender();
+  const org = candidate.issueTracker?.identity?.organization;
+  showToast(org ? `Connected to ${org}` : "Connection updated");
+  return true;
 }
 
 /** Re-publish the visible tab set to the panel (after auth, or a saved view). */
@@ -1673,15 +1720,25 @@ const TEAM_REFRESH_INTERVAL_MS = 300_000; // 5 minutes
 async function refreshTeams(): Promise<void> {
   if (adapters.issueTracker?.authState !== "ok") return;
   if (Date.now() - lastTeamFetchMs < TEAM_REFRESH_INTERVAL_MS && cachedTeams.length > 0) return;
+  // These caches live outside PollCoordinator, so its epoch does not protect
+  // them: a swap during either await would land one workspace's teams and
+  // statuses in the caches the pickers and the workflow screen read.
+  const epoch = adapters.epoch;
   try {
-    cachedTeams = await adapters.issueTracker.getTeams();
+    const teams = await adapters.issueTracker.getTeams();
+    if (!adapters.isCurrent(epoch)) return;
+    cachedTeams = teams;
     lastTeamFetchMs = Date.now();
   } catch (e) {
+    if (!adapters.isCurrent(epoch)) return;
     logError("jmux", `team fetch failed: ${(e as Error).message}`);
   }
   try {
-    cachedWorkflowStates = await adapters.issueTracker.listWorkflowStates();
+    const states = await adapters.issueTracker.listWorkflowStates();
+    if (!adapters.isCurrent(epoch)) return;
+    cachedWorkflowStates = states;
   } catch (e) {
+    if (!adapters.isCurrent(epoch)) return;
     logError("jmux", `workflow state fetch failed: ${(e as Error).message}`);
   }
 }
@@ -2053,10 +2110,15 @@ async function applyStatusPick(
   if (issue.status === target) return null;
 
   const from = issue.status;
+  const epoch = adapters.epoch;
   pollCoordinator.optimisticIssueStatus(issue.id, target);
   try {
     await tracker.updateStatus(issue.id, target);
   } catch (e) {
+    // Only roll back into the world this write started in. After a swap the
+    // coordinator's caches belong to a different workspace, and restoring a
+    // status there would invent an issue state nobody asked for.
+    if (!adapters.isCurrent(epoch)) return null;
     // Put the optimistic change back: leaving it would show a status the
     // tracker never accepted until the next global poll overwrote it.
     pollCoordinator.optimisticIssueStatus(issue.id, from);
@@ -5993,21 +6055,24 @@ function currentRepoCategory(): SettingsCategory[] {
 }
 
 /**
- * "restart to apply" for an adapter row whose config no longer matches the
- * adapter this process is running.
+ * What the row says after its value: the organization when connected, the
+ * reason when not.
  *
- * `adapters` is built once at startup (see `createAdapters` above) and the
- * config watcher deliberately doesn't rebuild it — a live adapter owns polling
- * state and in-flight requests. So changing the row here writes config that
- * does nothing until the next launch, and the row has to say so rather than
- * reading as applied. It clears itself: after a restart the two agree.
- *
- * Demo mode reports `demo` for both adapters against a config that names
- * neither, which is not a pending change — hence the guard.
+ * Replaces `adapterRestartNote`. That existed because changing an adapter wrote
+ * config that did nothing until relaunch; swapAdapters applies it immediately,
+ * so the concept is gone. The note now reports something the user cannot
+ * otherwise see — "connected" used to be a claim about a string existing.
  */
-function adapterRestartNote(configured: string | undefined, live: string | undefined): string | null {
-  if (demoCtx) return null;
-  return (configured ?? "none") === (live ?? "none") ? null : "restart to apply";
+function adapterConnectionNote(
+  adapter: { authState: string; authHint: string; identity: { organization: string | null } | null } | null,
+): string | null {
+  if (demoCtx || !adapter) return null;
+  switch (adapter.authState) {
+    case "ok": return adapter.identity?.organization ?? "connected";
+    case "unreachable": return "unreachable";
+    case "failed": return `not connected — check ${adapter.authHint}`;
+    default: return null;
+  }
 }
 
 function buildSettingsCategories(): SettingsCategory[] {
@@ -6130,8 +6195,11 @@ function buildSettingsCategories(): SettingsCategory[] {
           id: "code-host", label: "Code host", type: "list" as const,
           getValue: () => adapterCfg()?.codeHost?.type ?? "none",
           options: ["gitlab", "github", "none"],
-          onOptionSelect: (v) => configStore.setAdapter("codeHost", v === "none" ? null : { type: v }),
-          getNote: () => adapterRestartNote(adapterCfg()?.codeHost?.type, adapters.codeHost?.type),
+          onOptionSelect: (v) => {
+            configStore.setAdapter("codeHost", v === "none" ? null : { type: v });
+            void swapAdapters(configStore.config.adapters ?? {});
+          },
+          getNote: () => adapterConnectionNote(adapters.codeHost),
         },
         {
           // Only the trackers `createAdapters` can actually build. GitHub is a
@@ -6141,8 +6209,11 @@ function buildSettingsCategories(): SettingsCategory[] {
           id: "issue-tracker", label: "Issue tracker", type: "list" as const,
           getValue: () => adapterCfg()?.issueTracker?.type ?? "none",
           options: ["linear", "none"],
-          onOptionSelect: (v) => configStore.setAdapter("issueTracker", v === "none" ? null : { type: v }),
-          getNote: () => adapterRestartNote(adapterCfg()?.issueTracker?.type, adapters.issueTracker?.type),
+          onOptionSelect: (v) => {
+            configStore.setAdapter("issueTracker", v === "none" ? null : { type: v });
+            void swapAdapters(configStore.config.adapters ?? {});
+          },
+          getNote: () => adapterConnectionNote(adapters.issueTracker),
         },
       ],
     },
