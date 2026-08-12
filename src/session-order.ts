@@ -171,7 +171,16 @@ export function orderSessions(input: OrderSessionsInput): SessionBand[] {
         ungrouped.push(i);
         continue;
       }
-      bucketFor(`project:${label}`, label, 0).indices.push(i);
+      // Keyed on the Project *id* where the session carries one: two Projects
+      // may share a title, and keying on the label would merge two teams' work
+      // under one header. Sessions with no Project fall back to the label,
+      // which is the repo — the same bucket they had before Projects existed.
+      // Sessions with no Project keep the label key they have always had, so a
+      // persisted collapse state survives this change untouched.
+      const key = sessions[i]!.projectId
+        ? `project:id:${sessions[i]!.projectId}`
+        : `project:${label}`;
+      bucketFor(key, label, 0).indices.push(i);
       continue;
     }
     if (groupMode === "stage") {

@@ -550,6 +550,21 @@ function buildRenderPlan(
       if (groupMode === "stage" && ghost.stageId !== undefined) {
         bucketFor(`stage:${ghost.stageId}`, ghost.stageLabel ?? ghost.stageId, ghost.rank ?? 0)
           .ghostIndices.push(g);
+      } else if (groupMode === "project" && ghost.project !== undefined) {
+        // Keyed on the Project *id*, matching the key sessions band under, so a
+        // ghost lands in the band its session will join after Start rather than
+        // a second one beside it. Two Projects may share a title.
+        //
+        // Work that cannot be routed collects in one band rather than
+        // disappearing: an issue nobody can place is exactly what the user
+        // needs to see, and hiding it is how a misconfigured team map reads as
+        // "there is nothing to do".
+        if (ghost.project.kind === "resolved") {
+          bucketFor(`project:id:${ghost.project.id}`, ghost.project.title, 0).ghostIndices.push(g);
+        } else {
+          bucketFor("project:Unassigned", "Unassigned", Number.MAX_SAFE_INTEGER)
+            .ghostIndices.push(g);
+        }
       } else if (groupMode !== "stage") {
         flatGhosts.push(g);
       }

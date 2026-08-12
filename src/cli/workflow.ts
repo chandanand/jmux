@@ -661,6 +661,45 @@ function capValue(config: JmuxConfig): number | "all" {
   return n === Infinity ? "all" : n;
 }
 
+/**
+ * The board's sessions re-bucketed by Project.
+ *
+ * Keyed on the Project *id*, never its title — two Projects may share one, and
+ * merging them would put two teams' work under one heading. A session with no
+ * `@jmux-project` stamp is reported under a null id rather than dropped: an
+ * unadopted session is a fact an agent needs, and silently omitting it makes
+ * the board disagree with `ctl session list`.
+ */
+export interface BoardProjectGroup {
+  id: string | null;
+  title: string | null;
+  sessions: unknown[];
+}
+
+function groupBoardByProject(board: Awaited<ReturnType<typeof gatherBoard>>): unknown {
+  const groups = new Map<string | null, BoardProjectGroup>();
+  const every = [...board.stages.flatMap((st) => st.sessions), ...board.ungrouped];
+  for (const session of every) {
+    const project = (session as { project?: { id?: string; title?: string } | null }).project ?? null;
+    const id = project?.id ?? null;
+    let group = groups.get(id);
+    if (!group) {
+      group = { id, title: project?.title ?? null, sessions: [] };
+      groups.set(id, group);
+    }
+    group.sessions.push(session);
+  }
+  // Unadopted last: it is the residue, not a peer.
+  const ordered = [...groups.values()].sort((a, b) =>
+    a.id === null ? 1 : b.id === null ? -1 : a.id.localeCompare(b.id));
+  return {
+    groupedBy: "project",
+    projects: ordered,
+    upNext: board.upNext,
+    unstartedCap: board.unstartedCap,
+  };
+}
+
 function narrowToStage(board: Board, stageId: string): Board {
   const stage = board.stages.find((s) => s.id === stageId);
   if (!stage) {
@@ -686,7 +725,11 @@ export async function handleWorkflow(
     case "board": {
       const board = await gatherBoard(ctx);
       const stage = typeof parsed.flags.stage === "string" ? parsed.flags.stage : null;
-      return stage ? narrowToStage(board, stage) : board;
+      const narrowed = stage ? narrowToStage(board, stage) : board;
+      // `--group project` re-buckets the same sessions the stage view already
+      // resolved, rather than re-deriving membership: an agent grouping one way
+      // and a human reading the other must not see different sets.
+      return parsed.flags.group === "project" ? groupBoardByProject(narrowed) : narrowed;
     }
 
     case "next": {

@@ -239,3 +239,69 @@ describe("compareGroupBands", () => {
     expect(compareGroupBands(ghostOnly, sessionBearing, "project")).toBe(0);
   });
 });
+
+describe("project grouping keys on the Project id", () => {
+  // Two Projects may share a title — a monorepo serving two teams migrates to
+  // exactly that — so keying on the label would put two teams' work under one
+  // header. Ghosts bucket on the same key, so an unstarted issue lands in the
+  // band its session will join after Start rather than a second one beside it.
+  test("two Projects with the same title get separate bands", () => {
+    const sessions = makeSessions([
+      { name: "a" },
+      { name: "b" },
+    ]);
+    sessions[0]!.projectId = "platform";
+    sessions[0]!.projectName = "platform";
+    sessions[1]!.projectId = "platform-2";
+    sessions[1]!.projectName = "platform";
+    const bands = orderSessions({
+      sessions,
+      sortInfos: makeSortInfos(sessions),
+      groupMode: "project",
+      sortMode: "name",
+      filterMode: "all",
+      pinnedSessions: new Set(),
+      parkedSessions: new Set(),
+      workflowByName: new Map(),
+      includeParked: true,
+    });
+    const groups = bands.filter((b) => b.kind === "group");
+    expect(groups).toHaveLength(2);
+    expect(new Set(groups.map((g) => g.key)).size).toBe(2);
+  });
+
+  test("the key is namespaced on the id, which is what ghosts bucket on", () => {
+    const sessions = makeSessions([{ name: "a" }]);
+    sessions[0]!.projectId = "platform";
+    sessions[0]!.projectName = "platform";
+    const bands = orderSessions({
+      sessions,
+      sortInfos: makeSortInfos(sessions),
+      groupMode: "project",
+      sortMode: "name",
+      filterMode: "all",
+      pinnedSessions: new Set(),
+      parkedSessions: new Set(),
+      workflowByName: new Map(),
+      includeParked: true,
+    });
+    expect(bands.find((b) => b.kind === "group")?.key).toBe("project:id:platform");
+  });
+
+  // A persisted collapse state must survive Projects arriving.
+  test("a session with no Project keeps the label key it always had", () => {
+    const sessions = makeSessions([{ name: "a", repoName: "alpha" }]);
+    const bands = orderSessions({
+      sessions,
+      sortInfos: makeSortInfos(sessions),
+      groupMode: "project",
+      sortMode: "name",
+      filterMode: "all",
+      pinnedSessions: new Set(),
+      parkedSessions: new Set(),
+      workflowByName: new Map(),
+      includeParked: true,
+    });
+    expect(bands.find((b) => b.kind === "group")?.key).toBe("project:alpha");
+  });
+});

@@ -356,6 +356,8 @@ Agent Control (JSON output):
   jmux ctl run-claude            Launch Claude Code in a new session
   jmux ctl pane capture          Read pane contents
   jmux ctl workflow board        Your stages, their sessions and unstarted work
+  jmux ctl workflow board --group project
+                                 The same sessions, bucketed by project
   jmux ctl workflow next --start Start the next thing in the queue
   jmux ctl --help                Show all ctl subcommands
 
