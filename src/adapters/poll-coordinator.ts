@@ -379,7 +379,12 @@ export class PollCoordinator {
         === issueLinkSignature(this.linkIdsFor(name));
       if (this.contexts.has(name) && !this.degradedSessions.has(name) && fresh) continue;
       this.inFlight.add(name);
+      const startedAt = this.epoch;
       void this.resolveContext(name).finally(() => {
+        // Only the epoch that added this marker may remove it. A retired
+        // resolve settling late would otherwise delete a marker the current
+        // epoch had just added, and two resolves would run for one session.
+        if (!this.isCurrent(startedAt)) return;
         this.inFlight.delete(name);
         void this.drainBackfill();
       });
@@ -419,6 +424,7 @@ export class PollCoordinator {
   private async resolveContext(name: string): Promise<void> {
     const dir = this.sessionDirs.get(name);
     if (!dir) return;
+    const epoch = this.epoch;
     try {
       // Both link stores. Their id shapes differ — a tracker UUID from
       // state.json, a human identifier from the tmux option — and the resolver's
@@ -437,6 +443,14 @@ export class PollCoordinator {
         manualIssueIds,
         manualMrIds,
       });
+      // The signature above was stamped *before* the await — deliberately, so a
+      // link added mid-resolution stays stale. That stamp would otherwise
+      // survive a swap that cleared the map, marking this session fresh against
+      // adapters it was never resolved from, and it would never re-resolve.
+      if (!this.isCurrent(epoch)) {
+        this.resolvedLinkSignatures.delete(name);
+        return;
+      }
       this.contexts.set(name, ctx);
       // Cache it either way — a partial context still shows whatever resolved —
       // but remember an incomplete one so the background sweep tries again.
@@ -445,6 +459,10 @@ export class PollCoordinator {
       else this.degradedSessions.delete(name);
       this.opts.onUpdate(name);
     } catch (e) {
+      if (!this.isCurrent(epoch)) {
+        this.resolvedLinkSignatures.delete(name);
+        return;
+      }
       logError("PollCoordinator", `resolve session "${name}" failed: ${(e as Error).message}`);
       this.degradedSessions.add(name);
     }

@@ -593,3 +593,40 @@ describe("PollCoordinator adapter swap", () => {
     expect(coord.getGlobalIssues().map((i) => i.id)).toEqual(["new"]);
   });
 });
+
+describe("PollCoordinator swap during in-flight resolution", () => {
+  test("a retired resolve does not leave a stale link signature or context", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = () => r(); });
+    const tracker = {
+      type: "linear", authState: "ok" as AdapterAuthState, authHint: "", identity: null,
+      authenticate: async () => {},
+      getMyIssues: async () => [],
+      pollAllIssues: async () => { await gate; return new Map(); },
+    } as unknown as IssueTrackerAdapter;
+
+    const coord = new PollCoordinator({
+      codeHost: null, issueTracker: tracker,
+      onUpdate: () => {}, getSessionDir: () => "/tmp/x", sessionState: null,
+    });
+    coord.addSession("s1", "/tmp/x");
+
+    const inFlight = coord.setActiveSession("s1");
+    coord.setAdapters({ codeHost: null, issueTracker: null });
+    release();
+    await inFlight;
+
+    // The retired resolve must not have published a context into the new world.
+    expect(coord.getContext("s1")).toBeNull();
+  });
+
+  test("a swap drains the in-flight set rather than stranding a marker", async () => {
+    const coord = new PollCoordinator({
+      codeHost: null, issueTracker: null,
+      onUpdate: () => {}, getSessionDir: () => "/tmp/x", sessionState: null,
+    });
+    coord.addSession("s1", "/tmp/x");
+    coord.setAdapters({ codeHost: null, issueTracker: null });
+    expect(coord.inFlightCount).toBe(0);
+  });
+});
