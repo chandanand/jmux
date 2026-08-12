@@ -512,3 +512,56 @@ describe("SetupModal declined steps", () => {
     expect(activated).toEqual([]);
   });
 });
+
+// Declining is the other half of persisted intent. Without it `setup.tracker
+// === "never"` is read by two call sites and written by nothing, so the user it
+// exists for — someone who will never connect a tracker — is nagged forever.
+describe("SetupModal declining a step", () => {
+  function declinable(): SetupRow[] {
+    return [
+      { id: "tracker", label: "Connect an issue tracker", detail: "d", state: "todo" },
+      { id: "hunk", label: "Install the diff viewer", detail: "d", state: "unavailable" },
+    ];
+  }
+
+  test("x on a todo row reports a decline", () => {
+    const declined: string[] = [];
+    const modal = new SetupModal({
+      rows: declinable,
+      onActivate: () => {},
+      onDecline: (id) => declined.push(id),
+    });
+    modal.open();
+    modal.handleInput("x");
+    expect(declined).toEqual(["tracker"]);
+  });
+
+  test("x on a row jmux could never do anyway is inert", () => {
+    const declined: string[] = [];
+    const modal = new SetupModal({
+      rows: declinable,
+      onActivate: () => {},
+      onDecline: (id) => declined.push(id),
+    });
+    modal.open();
+    modal.handleInput("\x1b[B");   // onto the unavailable row
+    modal.handleInput("x");
+    expect(declined).toEqual([]);
+  });
+
+  test("x is inert when the host offers no decline handler", () => {
+    const modal = new SetupModal({ rows: declinable, onActivate: () => {} });
+    modal.open();
+    expect(() => modal.handleInput("x")).not.toThrow();
+    expect(modal.isOpen()).toBe(true);
+  });
+
+  test("the hint line advertises it, or nobody will find it", () => {
+    const modal = new SetupModal({
+      rows: declinable, onActivate: () => {}, onDecline: () => {},
+    });
+    modal.open();
+    const text = modal.getGrid(70).cells.map((r) => r.map((c) => c.char).join("")).join("\n");
+    expect(text.toLowerCase()).toContain("not for me");
+  });
+});

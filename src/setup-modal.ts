@@ -66,6 +66,16 @@ export interface SetupProviders {
    * important moment.
    */
   onActivate: (id: string) => void | Promise<void>;
+  /**
+   * "I am never going to do this." Optional, and only ever called for a row
+   * jmux *could* have done — declining something it cannot do anyway is
+   * meaningless.
+   *
+   * The other half of persisted intent: without a way to write it, the
+   * preference is read by its consumers and set by nobody, and the user it
+   * exists for is nagged forever.
+   */
+  onDecline?: (id: string) => void;
 }
 
 const GLYPH: Record<SetupState, string> = {
@@ -175,6 +185,17 @@ export class SetupModal {
       return { type: "consumed" };
     }
 
+    if (data === "x" && this.providers.onDecline) {
+      const row = this.cached[this.selectedIndex];
+      // Only a step jmux could have taken. `unavailable` means it cannot, so
+      // declining it says nothing, and `done` is already true.
+      if (row && (row.state === "todo" || row.state === "blocked")) {
+        this.providers.onDecline(row.id);
+        if (this._open) this.refresh();
+      }
+      return { type: "consumed" };
+    }
+
     if (data === "\r") {
       const row = this.cached[this.selectedIndex];
       // A row that is already done, or that jmux cannot do, is inert. Firing
@@ -218,6 +239,7 @@ export class SetupModal {
       hints: [
         { key: "↑↓", label: "move" },
         { key: "↵", label: "set up" },
+        ...(this.providers.onDecline ? [{ key: "x", label: "not for me" }] : []),
         { key: "esc", label: "close" },
       ],
       hairlineAfterInput: false,

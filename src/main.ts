@@ -6000,7 +6000,13 @@ function buildSetupRows(): SetupRow[] {
     detail: present.length === 0
       ? "Install Claude Code, Codex or pi and this will light up."
       : "Shows RUNNING / WAITING / COMPLETE per agent pane, so you can see who needs you.",
-    state: present.length === 0 ? "unavailable" : stale.length === 0 ? "done" : "todo",
+    state: present.length === 0
+      ? "unavailable"
+      : stale.length === 0
+        ? "done"
+        : configStore.config.setup?.agentHooks === "never"
+          ? "unavailable"
+          : "todo",
     note: present.length === 0
       ? "no agents found"
       : stale.length === 0
@@ -6122,8 +6128,26 @@ function buildSetupRows(): SetupRow[] {
   return rows;
 }
 
+/** Steps a user can decline outright. Others are machine truth, not preference. */
+const DECLINABLE: Record<string, "tracker" | "agentHooks"> = {
+  tracker: "tracker",
+  "agent-hooks": "agentHooks",
+};
+
 const setupModal = new SetupModal({
   rows: () => buildSetupRows(),
+  // Writes the preference its consumers already read. Without this half,
+  // `setup.tracker === "never"` was set by nobody and the row it silences
+  // nagged forever — which is the thing it was added to prevent.
+  onDecline: (id) => {
+    const key = DECLINABLE[id];
+    if (!key) return;
+    // A toggle, so it is reversible from the same key that set it. A preference
+    // you cannot take back is worse than the nag it replaced.
+    const declining = configStore.config.setup?.[key] !== "never";
+    configStore.setSetupIntent(key, declining ? "never" : null);
+    showToast(declining ? "Won't ask about this again" : "Asking about this again");
+  },
   // Async because some steps finish later — see SetupProviders.onActivate.
   onActivate: async (id) => {
     switch (id) {

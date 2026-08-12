@@ -126,10 +126,16 @@ export interface JmuxConfig {
    * a `todo` row and a toolbar dot forever.
    */
   setup?: {
-    /** `never` removes the tracker steps and the dot; `later` only quiets the dot. */
-    tracker?: "later" | "never";
-    hunk?: "later" | "never";
-    agentHooks?: "later" | "never";
+    /**
+     * `never` makes the step inert and drops it from the toolbar dot.
+     *
+     * Only the steps that can actually nag are here. The diff viewer is
+     * reported `unavailable` whenever it is missing — jmux cannot install it —
+     * so it never asks twice and a preference for it would be written and read
+     * by nothing.
+     */
+    tracker?: "never";
+    agentHooks?: "never";
   };
   /**
    * Which tmux config jmux sources on the user's behalf, between its own
@@ -921,8 +927,13 @@ export class ConfigStore {
     this.persist();
   }
 
-  /** Record a declared preference about an optional capability. */
-  setSetupIntent(key: "tracker" | "hunk" | "agentHooks", value: "later" | "never" | null): void {
+  /**
+   * Record — or clear — a declared preference about an optional capability.
+   *
+   * `null` is how it is taken back. A preference you cannot reverse from the
+   * same place you set it is worse than the nag it replaced.
+   */
+  setSetupIntent(key: "tracker" | "agentHooks", value: "never" | null): void {
     const setup = { ...this.data.setup };
     if (value === null) delete setup[key];
     else setup[key] = value;
