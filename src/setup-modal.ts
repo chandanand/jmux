@@ -26,6 +26,15 @@ export type SetupState =
   | "done"
   /** Not yet, and jmux can do it — Enter runs it. */
   | "todo"
+  /**
+   * Not yet, and something else has to happen first (see `dependsOn`).
+   *
+   * Distinct from `unavailable`: that one jmux can never do for you, this one
+   * it can, just not yet. A flat list gave both the same weight, so a step that
+   * was merely *next* looked as impossible as one that needed a package
+   * manager.
+   */
+  | "blocked"
   /** Not yet, and jmux cannot do it for you (see `note`). */
   | "unavailable";
 
@@ -37,18 +46,34 @@ export interface SetupRow {
   state: SetupState;
   /** Right-hand summary: the current value, or what to run yourself. */
   note?: string;
+  /**
+   * Ids of the rows that must be `done` first. Used to name the blocker on the
+   * detail line, so a blocked row says what to go and do rather than just
+   * refusing.
+   */
+  dependsOn?: string[];
 }
 
 export interface SetupProviders {
   /** Called on open and after each activation. Free to touch the filesystem. */
   rows: () => SetupRow[];
-  /** Enter on a `todo` row. Never called for `done` or `unavailable`. */
-  onActivate: (id: string) => void;
+  /**
+   * Enter on a `todo` row. Never called for `done`, `blocked` or `unavailable`.
+   *
+   * May return a promise. It used to be synchronous `void`, which meant a step
+   * whose work finished later — writing a credential, authenticating — could
+   * never tick its own row over, and the wizard appeared dead at its most
+   * important moment.
+   */
+  onActivate: (id: string) => void | Promise<void>;
 }
 
 const GLYPH: Record<SetupState, string> = {
   done: "✓",
   todo: "○",
+  // Distinct from both: not a circle (which reads as available) and not a dash
+  // (which reads as never).
+  blocked: "·",
   unavailable: "—",
 };
 
@@ -151,7 +176,7 @@ export class SetupModal {
       // all, and "I pressed Enter and cannot tell whether it worked" is the
       // exact doubt this screen exists to remove.
       if (!row || row.state !== "todo") return { type: "consumed" };
-      this.providers.onActivate(row.id);
+      const result = this.providers.onActivate(row.id);
       // Re-derive immediately: the row the user just actioned should tick over
       // under the cursor, which is the entire feedback for the keypress.
       //
@@ -159,6 +184,15 @@ export class SetupModal {
       // (the settings screen, the project-dirs prompt) do. Every detector here
       // hits the filesystem, and there is no one left to show the result to.
       if (this._open) this.refresh();
+      // And again when the work actually finishes, for the steps that are
+      // asynchronous. Guarded on still being open for the same reason, and the
+      // rejection is swallowed because a failing step is the step's own to
+      // report — throwing here would escape a keypress handler.
+      if (result && typeof (result as Promise<void>).then === "function") {
+        void (result as Promise<void>)
+          .then(() => { if (this._open) this.refresh(); })
+          .catch(() => { if (this._open) this.refresh(); });
+      }
       return { type: "consumed" };
     }
 
@@ -167,7 +201,11 @@ export class SetupModal {
 
   private buildChrome(): ModalChrome {
     const done = this.cached.filter((r) => r.state === "done").length;
-    const actionable = this.cached.filter((r) => r.state !== "unavailable").length;
+    // Blocked steps are not offered yet, so counting them would report work as
+    // available that pressing Enter refuses to do.
+    const actionable = this.cached.filter(
+      (r) => r.state !== "unavailable" && r.state !== "blocked",
+    ).length;
     return {
       title: "Set up jmux",
       count: `${done}/${actionable} done`,
@@ -259,7 +297,7 @@ export class SetupModal {
       const labelRoom = Math.max(1, width - labelStart - noteCols - 1);
       const label = truncateToCols(row.label, labelRoom);
       writeString(grid, y, labelStart, label,
-        row.state === "unavailable"
+        row.state === "unavailable" || row.state === "blocked"
           ? inertAttrs
           : isSelected ? SELECTED_RESULT_ATTRS : RESULT_ATTRS);
 
@@ -285,8 +323,17 @@ export class SetupModal {
     const selected = this.cached[this.selectedIndex];
     if (selected && rect.rows >= 2) {
       const detailRow = rect.top + rect.rows - 1;
+      // A blocked row explains itself by naming what to do first, rather than
+      // repeating what it would eventually get you.
+      const blockers = (selected.dependsOn ?? [])
+        .map((id) => this.cached.find((r) => r.id === id))
+        .filter((r): r is SetupRow => r !== undefined && r.state !== "done")
+        .map((r) => r.label);
+      const detail = selected.state === "blocked" && blockers.length > 0
+        ? `First: ${blockers.join(", ")}`
+        : selected.detail;
       writeString(grid, detailRow, 2,
-        truncateToCols(selected.detail, Math.max(1, width - 4)), NO_MATCHES_ATTRS);
+        truncateToCols(detail, Math.max(1, width - 4)), NO_MATCHES_ATTRS);
     }
 
     drawModalChrome(grid, chrome);

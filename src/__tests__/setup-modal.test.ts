@@ -280,3 +280,128 @@ describe("SetupModal hidden-row accounting", () => {
     }
   });
 });
+
+// --- Sequencing ---
+//
+// A flat checklist gives every step the same weight, so "Connect an issue
+// tracker" and "Attach a team" look equally available when the second cannot
+// be done until the first is. `blocked` names what has to come first.
+
+function sequencedRows(): SetupRow[] {
+  return [
+    { id: "tracker", label: "Connect an issue tracker", detail: "d", state: "todo" },
+    { id: "team", label: "Attach a team", detail: "d", state: "blocked", dependsOn: ["tracker"] },
+    { id: "workflow", label: "Your workflow", detail: "d", state: "blocked", dependsOn: ["tracker"] },
+    { id: "hunk", label: "Install the diff viewer", detail: "d", state: "unavailable" },
+  ];
+}
+
+describe("SetupModal blocked steps", () => {
+  test("a blocked row is not counted as actionable", () => {
+    const { modal } = build({ rows: sequencedRows() });
+    modal.open();
+    const grid = modal.getGrid(60);
+    const text = grid.cells.map((r) => r.map((c) => c.char).join("")).join("\n");
+    // One actionable step (tracker); blocked and unavailable are both inert.
+    expect(text).toContain("0/1 done");
+  });
+
+  test("Enter on a blocked row does nothing", () => {
+    const { modal, activated } = build({ rows: sequencedRows() });
+    modal.open();
+    modal.handleInput("\x1b[B");        // onto "Attach a team"
+    modal.handleInput("\r");
+    expect(activated).toEqual([]);
+  });
+
+  test("Enter on a todo row still activates", () => {
+    const { modal, activated } = build({ rows: sequencedRows() });
+    modal.open();
+    modal.handleInput("\r");
+    expect(activated).toEqual(["tracker"]);
+  });
+
+  test("a blocked row names what must come first", () => {
+    const { modal } = build({ rows: sequencedRows() });
+    modal.open();
+    modal.handleInput("\x1b[B");
+    const grid = modal.getGrid(60);
+    const text = grid.cells.map((r) => r.map((c) => c.char).join("")).join("\n");
+    expect(text).toContain("Connect an issue tracker");
+  });
+
+  test("blocked and unavailable render differently from each other", () => {
+    const { modal } = build({ rows: sequencedRows() });
+    modal.open();
+    const grid = modal.getGrid(60);
+    const rows = grid.cells.map((r) => r.map((c) => c.char).join(""));
+    const blocked = rows.find((r) => r.includes("Attach a team"))!;
+    const unavailable = rows.find((r) => r.includes("Install the diff viewer"))!;
+    expect(blocked.trimStart()[0]).not.toBe(unavailable.trimStart()[0]);
+  });
+});
+
+// --- Async activation ---
+//
+// onActivate was synchronous `void`, so anything that finishes later — a
+// credential write, an auth round-trip — could never tick its own row over.
+// The wizard's most important step would appear to do nothing.
+describe("SetupModal async activation", () => {
+  test("refreshes after an activation that resolves later", async () => {
+    let done = false;
+    const modal = new SetupModal({
+      rows: () => [{
+        id: "tracker",
+        label: "Connect an issue tracker",
+        detail: "d",
+        state: done ? "done" : "todo",
+      }],
+      onActivate: async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        done = true;
+      },
+    });
+    modal.open();
+    expect(modal.getRows()[0].state).toBe("todo");
+    modal.handleInput("\r");
+    // Not yet — the work has not finished.
+    expect(modal.getRows()[0].state).toBe("todo");
+    await new Promise((r) => setTimeout(r, 25));
+    expect(modal.getRows()[0].state).toBe("done");
+  });
+
+  test("a synchronous activation still refreshes immediately", () => {
+    let done = false;
+    const modal = new SetupModal({
+      rows: () => [{ id: "x", label: "X", detail: "d", state: done ? "done" : "todo" }],
+      onActivate: () => { done = true; },
+    });
+    modal.open();
+    modal.handleInput("\r");
+    expect(modal.getRows()[0].state).toBe("done");
+  });
+
+  test("an activation that rejects does not throw out of handleInput", async () => {
+    const modal = new SetupModal({
+      rows: () => [{ id: "x", label: "X", detail: "d", state: "todo" }],
+      onActivate: async () => { throw new Error("boom"); },
+    });
+    modal.open();
+    expect(() => modal.handleInput("\r")).not.toThrow();
+    await new Promise((r) => setTimeout(r, 10));
+  });
+
+  test("a late activation does not refresh a closed modal", async () => {
+    let calls = 0;
+    const modal = new SetupModal({
+      rows: () => { calls++; return [{ id: "x", label: "X", detail: "d", state: "todo" }]; },
+      onActivate: async () => { await new Promise((r) => setTimeout(r, 5)); },
+    });
+    modal.open();
+    modal.handleInput("\r");
+    modal.close();
+    const after = calls;
+    await new Promise((r) => setTimeout(r, 25));
+    expect(calls).toBe(after);
+  });
+});
