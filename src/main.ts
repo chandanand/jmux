@@ -1537,6 +1537,7 @@ const workflowScreen = new WorkflowScreen();
 const ghostPreview = new GhostPreview();
 
 import { SettingsScreen, rebuildSettingsColors, type SettingDef, type SettingsCategory, type SettingsAction } from "./settings-screen";
+import { numberSetting, editNumber, parseNumber, rangeHint, type NumberSpec } from "./setting-number";
 import { WorkflowScreen, rebuildWorkflowColors, TRANSITIONS_BAND, type WorkflowPort, type WorkflowBand, type SettingsTier } from "./workflow-screen";
 import { GhostPreview, rebuildGhostPreviewColors, type GhostPreviewPort, type StartOutcome } from "./ghost-preview";
 import { buildPreflight, type Preflight } from "./ghost-preflight";
@@ -2843,6 +2844,74 @@ function persistDragWidth(handle: DragHandle): void {
     configStore.set("infoPanelSplitRatio", infoPanelSplitRatio);
   }
 }
+
+// --- Debounced setting writes ---
+//
+// A ◂ ▸ press applies its value live and schedules the disk write, so holding
+// the key moves the sidebar every frame but writes config.json once. Same
+// order as the drag handle, and for the same reason: `main.ts` assigns the
+// module-level width *before* configStore.set, so the config watcher sees no
+// change and doesn't fire a second resize.
+//
+// Trailing-only, deliberately unlike scheduleDragResize's leading+trailing
+// throttle. A drag needs its first movement instant because the pointer is
+// already moving; a keypress is discrete and already applied live, so the only
+// thing this governs is the write, and a leading edge would write on the first
+// press of every burst for nothing.
+const PERSIST_DEBOUNCE_MS = 250;
+const pendingPersists = new Map<string, { timer: ReturnType<typeof setTimeout>; write: () => void }>();
+
+function persistSoon(key: string, write: () => void): void {
+  const existing = pendingPersists.get(key);
+  if (existing) clearTimeout(existing.timer);
+  const timer = setTimeout(() => {
+    pendingPersists.delete(key);
+    write();
+  }, PERSIST_DEBOUNCE_MS);
+  pendingPersists.set(key, { timer, write });
+}
+
+/**
+ * Write anything still queued. Called when the settings screen closes, so a
+ * value stepped and immediately dismissed is kept rather than dropped — the
+ * change was applied on screen the moment it was made, and a surface that
+ * silently forgot it would be worse than one that never applied it.
+ */
+function flushPendingPersists(): void {
+  const queued = [...pendingPersists.values()];
+  pendingPersists.clear();
+  for (const entry of queued) {
+    clearTimeout(entry.timer);
+    entry.write();
+  }
+}
+
+/** Apply a stepped or typed sidebar width live, and queue the write. */
+function applySidebarWidth(value: unknown): void {
+  if (typeof value !== "number" || value === sidebarWidth) return;
+  sidebarWidth = value;
+  relayout();
+  persistSoon("sidebarWidth", () => configStore.set("sidebarWidth", sidebarWidth));
+}
+
+/** As above for the info panel, where the low rung is `auto` — the key deleted. */
+function applyPanelWidth(value: unknown): void {
+  const next = typeof value === "number" ? value : null;
+  if (next === infoPanelWidth) return;
+  infoPanelWidth = next;
+  relayout();
+  persistSoon("infoPanelWidth", () => {
+    if (infoPanelWidth === null) configStore.delete("infoPanelWidth");
+    else configStore.set("infoPanelWidth", infoPanelWidth);
+  });
+}
+
+// The bounds, written once. They used to be spelled out at three call sites —
+// this row and both command-palette modals — with the range also restated as
+// English in each modal's subheader: five copies of two numbers, and the
+// surface that actually clamped the value never mentioned them.
+const SIDEBAR_WIDTH_SPEC: NumberSpec = { min: 10, max: 60 };
+const PANEL_WIDTH_SPEC: NumberSpec = { min: 20, max: 120, low: { label: "auto", store: null } };
 
 /**
  * Moves the info panel's list/detail split so its separator lands on the
@@ -5984,28 +6053,18 @@ function buildSettingsCategories(): SettingsCategory[] {
       label: "Display",
       collapsed: false,
       settings: [
-        {
-          id: "sidebar-width", label: "Sidebar width", type: "text" as const,
-          getValue: () => String(sidebarWidth),
-          onTextCommit: (v) => {
-            const n = parseInt(v, 10);
-            if (!isNaN(n) && n >= 10 && n <= 60) configStore.set("sidebarWidth", n);
-          },
-        },
-        {
-          id: "panel-width", label: "Panel width", type: "text" as const,
-          getValue: () => infoPanelWidth !== null ? String(infoPanelWidth) : "auto",
-          onTextCommit: (v) => {
-            if (v === "auto" || v === "") {
-              configStore.set("infoPanelWidth", undefined as any);
-            } else {
-              const n = parseInt(v, 10);
-              if (!isNaN(n) && n >= 20 && n <= 120) {
-                configStore.set("infoPanelWidth", n);
-              }
-            }
-          },
-        },
+        numberSetting({
+          id: "sidebar-width", label: "Sidebar width", spec: SIDEBAR_WIDTH_SPEC,
+          read: () => sidebarWidth,
+          write: applySidebarWidth,
+          describe: () => "How many columns the session list occupies. Drag its right edge for the same result.",
+        }),
+        numberSetting({
+          id: "panel-width", label: "Panel width", spec: PANEL_WIDTH_SPEC,
+          read: () => infoPanelWidth,
+          write: applyPanelWidth,
+          describe: () => "How wide the issue panel opens. auto splits the remaining space with the terminal.",
+        }),
         {
           id: "cache-timers", label: "Cache timers", type: "boolean" as const,
           getValue: () => cacheTimersEnabled ? "on" : "off",
@@ -6034,17 +6093,16 @@ function buildSettingsCategories(): SettingsCategory[] {
             applyImageSupport();
           },
         },
-        {
-          id: "image-max-rows", label: "Max image height (rows)", type: "text" as const,
-          getValue: () => String(configStore.config.images?.maxRows ?? DEFAULT_IMAGE_MAX_ROWS),
-          onTextCommit: (v) => {
-            const n = parseInt(v, 10);
-            if (!isNaN(n) && n >= 1 && n <= 60) {
-              configStore.set("images", { ...configStore.config.images, maxRows: n });
-              scheduleRender();
-            }
+        numberSetting({
+          id: "image-max-rows", label: "Max image height", spec: { min: 1, max: 60, unit: "rows" },
+          read: () => configStore.config.images?.maxRows ?? DEFAULT_IMAGE_MAX_ROWS,
+          write: (v) => {
+            if (typeof v !== "number") return;
+            configStore.set("images", { ...configStore.config.images, maxRows: v });
+            scheduleRender();
           },
-        },
+          describe: () => "The tallest an inline image is drawn in an issue preview. Wider images scale to fit.",
+        }),
         {
           id: "auto-pin-agents",
           label: "Auto-pin agent panes to Command Center",
@@ -6190,13 +6248,13 @@ function buildSettingsCategories(): SettingsCategory[] {
       collapsed: false,
       settings: [
         {
-          id: "park-status", label: "Parking status", type: "text" as const,
+          id: "park-status", label: "Parking status", type: "info" as const,
           getValue: () =>
             parkingSetupWarning(derivedStages().parked.length)
             ?? `active — ${currentSessions.filter((x) => sidebar.isParked(x.name)).length} parked`,
         },
         {
-          id: "drift-status", label: "Drift detection", type: "text" as const,
+          id: "drift-status", label: "Drift detection", type: "info" as const,
           getValue: () => {
             const inputs = workflowInputs();
             // The issues actually examined, not just whether one had a target:
@@ -6214,7 +6272,7 @@ function buildSettingsCategories(): SettingsCategory[] {
           },
         },
         {
-          id: "stage-source", label: "Tracker states available", type: "text" as const,
+          id: "stage-source", label: "Tracker states available", type: "info" as const,
           getValue: () => {
             if (adapters.issueTracker?.authState !== "ok") return "tracker not connected";
             return cachedWorkflowStates.length > 0
@@ -6231,6 +6289,7 @@ function buildSettingsCategories(): SettingsCategory[] {
 function toggleSettingsScreen(): void {
   if (settingsScreen.isOpen) {
     settingsScreen.close();
+    flushPendingPersists();
     inputRouter.setModalOpen(inputConsumerActive());
   } else {
     if (ghostPreview.isOpen) closeGhostPreview();
@@ -6327,26 +6386,21 @@ function workflowBands(tier: SettingsTier): WorkflowBand[] {
             recomputeSessionBands();
           },
         },
-        {
-          id: "auto-park-idle", label: "Park issue-less sessions after", type: "text" as const,
-          getValue: () => {
-            const d = configStore.config.pipeline?.autoParkIdleDays ?? null;
-            return d === null ? "never" : `${d} ${d === 1 ? "day" : "days"}`;
-          },
-          // "never" is prose, not an editable number: seeding the prompt with it
-          // meant typing a day count produced "never3", which parses to nothing,
-          // so this setting could not be switched on from its own prompt.
-          getEditValue: () => {
-            const d = configStore.config.pipeline?.autoParkIdleDays ?? null;
-            return d === null ? "" : String(d);
-          },
-          describe: () => "Sessions with a linked issue are governed by their tab instead. Blank or 0 turns this off.",
-          onTextCommit: (v: string) => {
-            const n = parseInt(v, 10);
-            configStore.setPipeline("autoParkIdleDays", isNaN(n) || n <= 0 ? null : n);
+        // The hand-written getEditValue that used to live here is what the
+        // NumberSpec generalises: "never" is prose, not an editable number, and
+        // seeding the prompt with it meant typing a day count produced
+        // "never3". Now one spec derives the display, edit, parse and step
+        // forms, so they cannot fall out of step per row.
+        numberSetting({
+          id: "auto-park-idle", label: "Park issue-less sessions after",
+          spec: { min: 1, max: 365, unit: "days", low: { label: "never", store: null } },
+          read: () => configStore.config.pipeline?.autoParkIdleDays ?? null,
+          write: (v) => {
+            configStore.setPipeline("autoParkIdleDays", (typeof v === "number" ? v : null) as never);
             recomputeSessionBands();
           },
-        },
+          describe: () => "Sessions with a linked issue are governed by their tab instead. Blank or 0 turns this off.",
+        }),
       ],
     },
     {
@@ -6662,6 +6716,11 @@ function handleSettingsInput(data: string): void {
     // through toggleSettingsScreen(). Re-sync the chrome layout the same way
     // that path does, or the input router keeps classifying clicks against
     // the stale frameless layout until the next resize.
+    //
+    // A value stepped and immediately dismissed is written rather than
+    // dropped: it was applied on screen the moment the key was pressed, so
+    // forgetting it here would be worse than never applying it.
+    flushPendingPersists();
     applyChromeLayout();
     inputRouter.setModalOpen(inputConsumerActive());
   }
@@ -8113,38 +8172,31 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
     case "setup":
       openSetup();
       return;
+    // Both modals read the same NumberSpec the settings rows do — the seed,
+    // the bounds in the subheader and the parse all come off it. The panel one
+    // used to seed its field with the word "auto" and then parseInt it, so it
+    // carried the same unsettable-from-its-own-prompt bug as the row.
     case "setting-sidebar-width": {
       const modal = new InputModal({
         header: "Sidebar Width",
-        subheader: `Current: ${sidebarWidth} (range: 10-60)`,
-        value: String(sidebarWidth),
+        subheader: `Current: ${sidebarWidth} ${rangeHint(SIDEBAR_WIDTH_SPEC)}`,
+        value: editNumber(SIDEBAR_WIDTH_SPEC, sidebarWidth),
       });
       modal.open();
       openModal(modal, async (value) => {
-        const newWidth = parseInt(value as string, 10);
-        if (!isNaN(newWidth) && newWidth >= 10 && newWidth <= 60) {
-          configStore.set("sidebarWidth", newWidth);
-        }
+        applySidebarWidth(parseNumber(SIDEBAR_WIDTH_SPEC, value as string, sidebarWidth));
       });
       return;
     }
     case "setting-panel-width": {
       const modal = new InputModal({
         header: "Panel Width",
-        subheader: `Current: ${infoPanelWidth ?? "auto"} (range: 20-120, or "auto")`,
-        value: infoPanelWidth !== null ? String(infoPanelWidth) : "auto",
+        subheader: `Current: ${infoPanelWidth ?? "auto"} ${rangeHint(PANEL_WIDTH_SPEC)}`,
+        value: editNumber(PANEL_WIDTH_SPEC, infoPanelWidth),
       });
       modal.open();
       openModal(modal, async (value) => {
-        const v = (value as string).trim();
-        if (v === "auto" || v === "") {
-          configStore.set("infoPanelWidth", undefined as any);
-        } else {
-          const n = parseInt(v, 10);
-          if (!isNaN(n) && n >= 20 && n <= 120) {
-            configStore.set("infoPanelWidth", n);
-          }
-        }
+        applyPanelWidth(parseNumber(PANEL_WIDTH_SPEC, value as string, infoPanelWidth));
       });
       return;
     }
