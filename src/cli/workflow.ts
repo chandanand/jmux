@@ -37,11 +37,11 @@ import { resolve } from "path";
 import { homedir } from "os";
 import { existsSync } from "fs";
 import { runTmuxDirect } from "./tmux";
-import { PROJECT_OPTION, type ProjectConfig } from "../project";
+import { PROJECT_OPTION, resolveSettingsFor, type ProjectConfig } from "../project";
 import { resolveIssueProject } from "../project-routing";
 import { CliError, type CliContext } from "./context";
 import { loadUserConfig, type JmuxConfig } from "../config";
-import { RepoFactsCache, resolveForRepo } from "../repo-settings";
+import { RepoFactsCache } from "../repo-settings";
 import { INTERNAL_SESSION_FILTER } from "../glass/internal-sessions";
 import { SessionState } from "../session-state";
 import { LinearAdapter } from "../adapters/linear";
@@ -560,8 +560,12 @@ async function gatherBoard(ctx: CliContext): Promise<Board> {
 
   const liveSessions = new Set(rows.map((r) => r.name));
   const repoFacts = new RepoFactsCache();
+  // Through Projects. resolveForRepo reads config.repos, which the migration
+  // deletes — so this silently returned the built-in template and ignored
+  // whatever the user had configured.
   const templateFor = (repoDir: string) =>
-    resolveForRepo(config, repoFacts.get(repoDir)).sessionNameTemplate;
+    resolveSettingsFor(config, { dir: repoDir, bare: repoFacts.get(repoDir).bare })
+      .sessionNameTemplate;
   // Same router as the TUI: a board that resolved repos differently from the
   // sidebar is the disagreement the shared-module rule exists to prevent.
   const repoDirFor = (issue: Issue): string | null => {

@@ -119,7 +119,7 @@ import { ActiveAdapters } from "./adapters/active-set";
 import { PollCoordinator } from "./adapters/poll-coordinator";
 import { SessionState } from "./session-state";
 import type { SessionContext, WorkflowState, AdapterConfig } from "./adapters/types";
-import { stageForIssue, resolveIssueRepoDir, STAGE_ORDER, STAGE_LABELS } from "./work-stage";
+import { stageForIssue, STAGE_ORDER, STAGE_LABELS } from "./work-stage";
 import {
   selectGhosts, ghostCapValue, formatGhostCap, editGhostCap, parseGhostCap, stepGhostCap,
   GHOST_CAP_ALL, type GhostQueue, type GhostCap,
@@ -154,7 +154,6 @@ import { ConfigStore, ConfigCorruptError, sanitizeTmuxSessionName, DEFAULT_IMAGE
 import {
   RepoFactsCache,
   canonicalizeRepoPath,
-  resolveForRepo,
   buildWorktreeCommand,
   type RepoSettings,
   type WorkStage,

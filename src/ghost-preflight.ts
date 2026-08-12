@@ -35,7 +35,7 @@ export type PreflightPlan =
       /** The command that will launch, or null when no agent will run. */
       agentCommand: string | null;
     }
-  /** No teamRepoMap entry — Start falls through to the manual session picker. */
+  /** Routing found no project — Start falls through to the manual session picker. */
   | { kind: "manual"; team: string | null }
   /** A live session already claims this issue; Start just switches to it. */
   | { kind: "existing"; sessionName: string };
@@ -64,7 +64,7 @@ export interface PreflightInput {
  */
 export function buildPreflight(input: PreflightInput): Preflight {
   // The existing-session check comes first, before the repo lookup, because an
-  // explicit L-key link has to work even for a team with no teamRepoMap entry.
+  // explicit L-key link has to work even for a team that routes to no project.
   if (input.issueState === "session" && input.linkedSessionName) {
     return {
       action: "switch",
