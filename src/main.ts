@@ -149,7 +149,7 @@ import {
 import type { DemoContext } from "./demo/setup";
 import type { SessionInfo, WindowTab, PaletteCommand, PaletteResult, AgentState } from "./types";
 import { loadProjectDirsCache, saveProjectDirsCache } from "./project-dirs-cache";
-import { ConfigStore, sanitizeTmuxSessionName, DEFAULT_IMAGE_MAX_ROWS, DEFAULT_BROWSER_PANE_SIZE, DEFAULT_BROWSER_DISPLAY_SCALE, DEFAULT_BROWSER_FPS } from "./config";
+import { ConfigStore, ConfigCorruptError, sanitizeTmuxSessionName, DEFAULT_IMAGE_MAX_ROWS, DEFAULT_BROWSER_PANE_SIZE, DEFAULT_BROWSER_DISPLAY_SCALE, DEFAULT_BROWSER_FPS } from "./config";
 import {
   RepoFactsCache,
   resolveForRepo,
@@ -280,6 +280,8 @@ Usage:
 
 Options:
   -L, --socket <name>      Use a separate tmux server socket
+  --config <path>          Use a specific config file
+                           (default ~/.config/jmux/config.json)
   --demo                   Run in demo mode with mock data
   --live                   With --demo: run real agents in the demo sessions
                            (needs the claude CLI; spends real tokens)
@@ -415,6 +417,19 @@ process.env.JMUX = "1";
 
 // Check for --demo flag early (before config, before arg loop)
 const demoMode = process.argv.includes("--demo");
+
+// Same reason, and it must be the same shape: the config is built ~40 lines
+// below, and the main arg loop does not run until several hundred lines after
+// that. Without an early scan there is no way to point jmux at a config file
+// other than the real one — which makes the corrupt-config startup path
+// testable only against the developer's own ~/.config/jmux/config.json.
+const configFlagAt = process.argv.indexOf("--config");
+const configPathOverride: string | null =
+  configFlagAt >= 0 ? (process.argv[configFlagAt + 1] ?? null) : null;
+if (configFlagAt >= 0 && configPathOverride === null) {
+  console.error("--config requires a path");
+  process.exit(1);
+}
 let demoCtx: DemoContext | null = null;
 let demoCleanup: ((ctx: DemoContext) => void) | null = null;
 
@@ -449,7 +464,24 @@ if (demoMode) {
   }
 }
 
-const configStore = new ConfigStore(demoCtx?.configPath);
+let configStore: ConfigStore;
+try {
+  configStore = new ConfigStore(demoCtx?.configPath ?? configPathOverride ?? undefined);
+} catch (e) {
+  if (e instanceof ConfigCorruptError) {
+    // Deliberately before the alt screen, the snapshot restore and the tmux
+    // pty — all of which start below this line. Exiting here costs the user
+    // nothing but a message; starting anyway meant the first setting change
+    // overwrote a file they could still have fixed by hand.
+    process.stderr.write(
+      `jmux: ${e.message}\n` +
+      `jmux: refusing to start rather than overwrite it.\n` +
+      `jmux: fix the file, or move it aside and jmux will start with defaults.\n`,
+    );
+    process.exit(1);
+  }
+  throw e;
+}
 let sidebarWidth = configStore.config.sidebarWidth || 26;
 // `Ctrl-a \` — the sidebar hidden by the user, as opposed to by the terminal
 // being too narrow for it. Deliberately not persisted: this is "give the panes
@@ -603,6 +635,9 @@ for (let i = 2; i < process.argv.length; i++) {
       console.error("--live requires --demo");
       process.exit(1);
     }
+    continue;
+  } else if (arg === "--config") {
+    i++; // already read above, before the config store was built
     continue;
   } else if (arg === "--socket" || arg === "-L") {
     if (demoMode) {
