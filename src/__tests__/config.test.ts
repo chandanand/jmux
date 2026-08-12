@@ -461,3 +461,65 @@ describe("ConfigStore construction on a corrupt file", () => {
     expect(store.config.snapshot?.enabled).toBe(true);
   });
 });
+
+describe("ConfigStore hot reload of a corrupt file", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = join(tmpdir(), `jmux-hot-${process.pid}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    path = join(dir, "config.json");
+    writeFileSync(path, '{"sidebarWidth":42}');
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("reload does not throw", () => {
+    const store = new ConfigStore(path);
+    writeFileSync(path, "{ broken");
+    expect(() => store.reload()).not.toThrow();
+  });
+
+  test("keeps the last known good value in memory", () => {
+    const store = new ConfigStore(path);
+    writeFileSync(path, "{ broken");
+    store.reload();
+    expect(store.config.sidebarWidth).toBe(42);
+  });
+
+  test("reports the load error", () => {
+    const store = new ConfigStore(path);
+    writeFileSync(path, "{ broken");
+    store.reload();
+    expect(store.loadError).not.toBeNull();
+    expect(store.writesDisabled).toBe(true);
+  });
+
+  test("a latched store refuses to write over the corrupt file", () => {
+    const store = new ConfigStore(path);
+    writeFileSync(path, "{ broken");
+    store.reload();
+    store.set("sidebarWidth", 99);
+    expect(readFileSync(path, "utf-8")).toBe("{ broken");
+  });
+
+  test("a valid reload clears the latch", () => {
+    const store = new ConfigStore(path);
+    writeFileSync(path, "{ broken");
+    store.reload();
+    writeFileSync(path, '{"sidebarWidth":43}');
+    store.reload();
+    expect(store.loadError).toBeNull();
+    expect(store.writesDisabled).toBe(false);
+    expect(store.config.sidebarWidth).toBe(43);
+  });
+
+  test("in-memory changes still apply while latched, so the UI stays responsive", () => {
+    const store = new ConfigStore(path);
+    writeFileSync(path, "{ broken");
+    store.reload();
+    store.set("sidebarWidth", 99);
+    expect(store.config.sidebarWidth).toBe(99);
+  });
+});

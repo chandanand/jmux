@@ -427,6 +427,7 @@ export class ConfigStore {
   private data: JmuxConfig;
   private readonly path: string;
   private _lastWriteError: string | null = null;
+  private _loadError: string | null = null;
 
   constructor(configPath?: string) {
     this.path = configPath ?? DEFAULT_CONFIG_PATH;
@@ -460,6 +461,23 @@ export class ConfigStore {
    */
   get lastWriteError(): string | null {
     return this._lastWriteError;
+  }
+
+  /**
+   * Why the last reload failed, or null. Non-null means the file on disk is
+   * unparseable and memory holds the last version that wasn't.
+   */
+  get loadError(): string | null {
+    return this._loadError;
+  }
+
+  /**
+   * True while the on-disk file is corrupt. Writes are refused rather than
+   * queued: persisting now would replace a file the user may still be able to
+   * fix by hand with whatever jmux happens to hold in memory.
+   */
+  get writesDisabled(): boolean {
+    return this._loadError !== null;
   }
 
   /**
@@ -580,7 +598,18 @@ export class ConfigStore {
    * external changes. Returns the new config.
    */
   reload(): JmuxConfig {
-    this.data = loadUserConfig(this.path);
+    const read = readConfigFile(this.path);
+    if (read.kind === "corrupt") {
+      // Deliberately does not throw: this runs from the fs.watch callback in a
+      // live TUI, where a throw is an unhandled rejection. Startup can exit
+      // cleanly (see the constructor); a running process has to degrade.
+      this._loadError = read.error;
+      return this.data;
+    }
+    const raw: JmuxConfig = read.kind === "ok" ? read.raw : {};
+    const { config } = migrateLegacyConfig(raw);
+    this.data = mergeConfigWithDefaults(config, defaultConfig);
+    this._loadError = null;
     return this.data;
   }
 
@@ -597,6 +626,7 @@ export class ConfigStore {
   }
 
   private persist(): boolean {
+    if (this.writesDisabled) return false;
     try {
       writeFileAtomicSync(this.path, JSON.stringify(this.data, null, 2) + "\n");
       this._lastWriteError = null;
