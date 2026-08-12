@@ -346,7 +346,7 @@ about.
 | --- | --- |
 | Explain line | `SettingDef.describe` **exists** and is ignored here. Highest value per line in the plan. |
 | **`/` to search** | Bare typing cannot work: `q` closes and `d` clears an override in navigation mode (`settings-screen.ts:287`). |
-| Input parity | `j/k`, mouse click and scroll, `◂ ▸` driving `onStep`. The only chrome surface with no mouse. |
+| Input parity | `j/k` and `◂ ▸` driving `onStep`, matching the workflow screen and setup modal. |
 | Validation feedback | `onTextCommit` returns `string \| null`. `sidebar width: 200` is silently discarded today. The workflow screen consumes the same callback and must be updated with it. |
 
 Orphaned config — `sessionTitle`, `diffPanel.*`, `agentScreenDetection`,
@@ -458,6 +458,13 @@ session to prove function rather than configuration.
 - **A monorepo package is not a Project.**
 - **`ctl --project` teaches nothing** (§4.2).
 - **Downgrade is inert, not lossy** (§5.1).
+- **No full-screen surface handles the mouse.** Not settings, not the workflow
+  screen, not the ghost preview — the sidebar, toolbar and panel do, and
+  `InputRouter` has no route to a surface for a mouse report at all. Giving one
+  of them mouse support means building that route, and doing it for one surface
+  would leave the other two inconsistent in the opposite direction. It is
+  deliberately not in phase 1, and when it happens it should happen for all
+  three at once.
 
 ## 14. What changed from the 2026-05-10 spec
 
