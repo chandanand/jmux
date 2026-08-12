@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { sanitizeTmuxSessionName, buildOtelResourceAttrs, loadUserConfig, ConfigStore, defaultConfig } from "../config";
-import { writeFileSync, unlinkSync, existsSync, mkdirSync, rmSync } from "fs";
+import { writeFileSync, unlinkSync, existsSync, mkdirSync, rmSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -352,5 +352,44 @@ describe("snapshot config merging", () => {
     expect(reloaded.config.snapshot?.scrollbackIntervalMs).toBe(8000);
     expect(reloaded.config.snapshot?.scrollbackMaxBytes).toBe(3 * 1024 * 1024);
     expect(reloaded.config.snapshot?.dir).toBe("/data");
+  });
+});
+
+describe("ConfigStore durability", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = join(tmpdir(), `jmux-cfg-${process.pid}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    path = join(dir, "config.json");
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a successful write leaves no temp files", () => {
+    writeFileSync(path, "{}");
+    const store = new ConfigStore(path);
+    store.set("sidebarWidth", 30);
+    expect(readdirSync(dir)).toEqual(["config.json"]);
+    expect(store.lastWriteError).toBeNull();
+  });
+
+  test("the written file is valid JSON containing the new value", () => {
+    writeFileSync(path, "{}");
+    const store = new ConfigStore(path);
+    store.set("sidebarWidth", 31);
+    expect(JSON.parse(readFileSync(path, "utf-8")).sidebarWidth).toBe(31);
+  });
+
+  test("lastWriteError reports a failed write instead of throwing", () => {
+    writeFileSync(path, "{}");
+    const store = new ConfigStore(path);
+    rmSync(path);
+    mkdirSync(path);
+    store.set("sidebarWidth", 32);
+    expect(store.lastWriteError).not.toBeNull();
   });
 });

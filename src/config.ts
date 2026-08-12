@@ -9,6 +9,7 @@ import type { UnparkTrigger } from "./parking";
 import type { ScreenSignature } from "./agent-screen";
 import { migrateLegacyConfig } from "./repo-settings";
 import { logError } from "./log";
+import { writeFileAtomicSync } from "./atomic-write";
 
 /**
  * Cross-repo routing only. Everything that is a property of a *repo* rather
@@ -386,6 +387,7 @@ export function loadUserConfig(configPath?: string): JmuxConfig {
 export class ConfigStore {
   private data: JmuxConfig;
   private readonly path: string;
+  private _lastWriteError: string | null = null;
 
   constructor(configPath?: string) {
     this.path = configPath ?? DEFAULT_CONFIG_PATH;
@@ -412,6 +414,15 @@ export class ConfigStore {
   /** Path to the config file on disk. */
   get configPath(): string {
     return this.path;
+  }
+
+  /**
+   * Why the last write failed, or null if it succeeded. Exposed so the UI can
+   * say so: a persist that fails silently is how a user's setting change looks
+   * applied on screen and is gone on the next launch.
+   */
+  get lastWriteError(): string | null {
+    return this._lastWriteError;
   }
 
   /**
@@ -548,13 +559,15 @@ export class ConfigStore {
     return true;
   }
 
-  private persist(): void {
+  private persist(): boolean {
     try {
-      const dir = dirname(this.path);
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      writeFileSync(this.path, JSON.stringify(this.data, null, 2) + "\n");
+      writeFileAtomicSync(this.path, JSON.stringify(this.data, null, 2) + "\n");
+      this._lastWriteError = null;
+      return true;
     } catch (e) {
-      logError("ConfigStore", `persist failed: ${(e as Error).message}`);
+      this._lastWriteError = (e as Error).message;
+      logError("ConfigStore", `persist failed: ${this._lastWriteError}`);
+      return false;
     }
   }
 }
