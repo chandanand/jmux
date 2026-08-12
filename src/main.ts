@@ -5600,12 +5600,13 @@ function buildSetupRows(): SetupRow[] {
   // Issue tracker. jmux can't supply a token, so this routes to the settings
   // screen rather than pretending to be able to connect on its own.
   const tracker = adapters.issueTracker;
+  const trackerOk = tracker?.authState === "ok";
   rows.push({
     id: "tracker",
     label: "Connect an issue tracker",
     detail: "Puts your issues and merge requests in the info panel, and lets you start work from one.",
-    state: tracker?.authState === "ok" ? "done" : "todo",
-    note: tracker?.authState === "ok"
+    state: trackerOk ? "done" : "todo",
+    note: trackerOk
       ? "connected"
       : tracker
         ? "not connected"
@@ -5620,6 +5621,43 @@ function buildSetupRows(): SetupRow[] {
     detail: "Where Ctrl-a n looks for projects and worktrees when you make a new session.",
     state: dirs.length > 0 ? "done" : "todo",
     note: dirs.length > 0 ? `${dirs.length} dir${dirs.length === 1 ? "" : "s"}` : undefined,
+  });
+
+  // The two steps that only exist once a tracker answers. Both were previously
+  // invisible — a new user had no way to learn that a team has to be attached
+  // before starting work from an issue does anything, which is exactly the
+  // failure this checklist is being sequenced to prevent.
+  const projects = configStore.config.projects ?? [];
+  const live = projects.filter((p) => p.deletedAt === undefined);
+  const attached = live.filter((p) => p.teamId !== undefined).length;
+  const unresolved = live.filter((p) => p.teamId === undefined && p.legacyTeamName).length;
+  rows.push({
+    id: "attach-team",
+    label: "Attach a team to a project",
+    detail: "Routes an issue to the repo its work happens in. Without it, starting work from an issue does nothing.",
+    dependsOn: ["tracker"],
+    state: trackerOk
+      ? (attached > 0 ? "done" : "todo")
+      : "blocked",
+    note: attached > 0
+      ? `${attached} attached`
+      : unresolved > 0
+        ? `${unresolved} awaiting`
+        : live.length === 0 ? "no projects yet" : undefined,
+  });
+
+  // suggestLayout already exists and the workflow screen already offers it —
+  // this step routes there rather than owning a second copy of the seeding.
+  const issueTabs = panelViews.filter((v) => v.source === "issues" && (v.states?.length ?? 0) > 0);
+  rows.push({
+    id: "workflow",
+    label: "Set up your workflow",
+    detail: "Groups your tracker's statuses into stages, which drives the sidebar bands and the issue tabs.",
+    dependsOn: ["tracker"],
+    state: trackerOk
+      ? (issueTabs.length > 0 ? "done" : "todo")
+      : "blocked",
+    note: issueTabs.length > 0 ? `${issueTabs.length} stages` : undefined,
   });
 
   // The diff viewer is a separate binary. jmux genuinely cannot install it, so
@@ -5661,6 +5699,19 @@ const setupModal = new SetupModal({
       case "project-dirs":
         closeModal();
         void handlePaletteAction({ commandId: "setting-project-dirs" });
+        return;
+      case "attach-team":
+        // The Projects screen is where a team is attached. Closing first for
+        // the same reason the tracker row does: a full-area surface with a
+        // modal left painted over it is the "open but deaf" failure.
+        closeModal();
+        toggleSettingsScreen();
+        return;
+      case "workflow":
+        // Routes to the workflow screen's own seed row rather than owning a
+        // second copy of suggestLayout.
+        closeModal();
+        openWorkflowScreen();
         return;
     }
   },
