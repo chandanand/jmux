@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { sanitizeTmuxSessionName, buildOtelResourceAttrs, loadUserConfig, ConfigStore, defaultConfig, ConfigCorruptError, readConfigFile } from "../config";
+import { sanitizeTmuxSessionName, buildOtelResourceAttrs, loadUserConfig, ConfigStore, defaultConfig, ConfigCorruptError, readConfigFile, CONFIG_SCHEMA_VERSION } from "../config";
 import { writeFileSync, unlinkSync, existsSync, mkdirSync, rmSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -521,5 +521,47 @@ describe("ConfigStore hot reload of a corrupt file", () => {
     store.reload();
     store.set("sidebarWidth", 99);
     expect(store.config.sidebarWidth).toBe(99);
+  });
+});
+
+describe("forward compatibility", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = join(tmpdir(), `jmux-fwd-${process.pid}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    path = join(dir, "config.json");
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  // Load-bearing: an older jmux must carry a newer jmux's config through
+  // untouched rather than deleting what it does not understand. Phase 2 ships
+  // `projects` and relies on exactly this.
+  test("a key this version knows nothing about survives a write", () => {
+    writeFileSync(path, JSON.stringify({ sidebarWidth: 26, projects: [{ id: "x" }] }));
+    const store = new ConfigStore(path);
+    store.set("sidebarWidth", 30);
+    const written = JSON.parse(readFileSync(path, "utf-8"));
+    expect(written.projects).toEqual([{ id: "x" }]);
+    expect(written.sidebarWidth).toBe(30);
+  });
+
+  test("writes stamp the current schema version", () => {
+    writeFileSync(path, "{}");
+    const store = new ConfigStore(path);
+    store.set("sidebarWidth", 30);
+    expect(JSON.parse(readFileSync(path, "utf-8")).schemaVersion).toBe(CONFIG_SCHEMA_VERSION);
+  });
+
+  test("a newer schemaVersion is preserved and does not block startup", () => {
+    writeFileSync(path, JSON.stringify({ schemaVersion: 999, sidebarWidth: 26 }));
+    const store = new ConfigStore(path);
+    expect(store.config.sidebarWidth).toBe(26);
+    store.set("sidebarWidth", 30);
+    // Not downgraded: this jmux migrated nothing, so claiming its own version
+    // would be a lie about the contents.
+    expect(JSON.parse(readFileSync(path, "utf-8")).schemaVersion).toBe(999);
   });
 });

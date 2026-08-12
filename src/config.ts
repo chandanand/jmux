@@ -99,6 +99,8 @@ export interface SessionTitleConfig {
 }
 
 export interface JmuxConfig {
+  /** See CONFIG_SCHEMA_VERSION. Absent on files written before it existed. */
+  schemaVersion?: number;
   sidebarWidth?: number;
   infoPanelWidth?: number;
   /** Info panel list/detail split, as a fraction of the splittable rows. */
@@ -318,6 +320,15 @@ export function buildOtelResourceAttrs(sessionName: string): string {
 }
 
 const DEFAULT_CONFIG_PATH = resolve(homedir(), ".config", "jmux", "config.json");
+
+/**
+ * Stamped on every write, read for diagnostics and by migrations. Deliberately
+ * NOT a gate: a multiplexer that refuses to attach because of a config file is
+ * holding running work hostage, and unknown-key preservation (see
+ * mergeConfigWithDefaults) already means a newer file survives an older jmux
+ * intact rather than being destroyed by it.
+ */
+export const CONFIG_SCHEMA_VERSION = 1;
 
 export const defaultConfig: JmuxConfig = {
   snapshot: {
@@ -627,6 +638,11 @@ export class ConfigStore {
 
   private persist(): boolean {
     if (this.writesDisabled) return false;
+    // Never lower a higher stamp: a newer jmux wrote it, this one migrated
+    // nothing, and claiming its own version would misdescribe the contents.
+    if ((this.data.schemaVersion ?? 0) < CONFIG_SCHEMA_VERSION) {
+      this.data.schemaVersion = CONFIG_SCHEMA_VERSION;
+    }
     try {
       writeFileAtomicSync(this.path, JSON.stringify(this.data, null, 2) + "\n");
       this._lastWriteError = null;
