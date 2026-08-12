@@ -185,7 +185,7 @@ import { INTERNAL_SESSION_FILTER, PARK_SESSION } from "./glass/internal-sessions
 import { PinnedPaneTracker } from "./glass/pinned-pane-tracker";
 import type { PaneLocation } from "./glass/types";
 import { US, splitFields } from "./tmux-fields";
-import { resolveIssueProject, attachProjectDrift } from "./project-routing";
+import { resolveIssueProject, attachProjectDrift, mayOfferLinearProjectRoute } from "./project-routing";
 import {
   PROJECT_SETTING_DEFAULTS,
   PROJECT_OPTION,
@@ -6655,6 +6655,55 @@ function repoDefaultSettings(group: RepoRow["group"] = "workflow"): SettingDef[]
  * provisioning time: a Project whose directory has gone says so here, and one
  * whose team never resolved says that too — both are silent failures otherwise.
  */
+/** Every route pointing at this Project, as removable entries. */
+function routesToProject(projectId: string): Array<{ kind: "issue" | "linearProject"; key: string }> {
+  const routes = configStore.config.routes ?? {};
+  const out: Array<{ kind: "issue" | "linearProject"; key: string }> = [];
+  for (const [key, id] of Object.entries(routes.issue ?? {})) {
+    if (id === projectId) out.push({ kind: "issue", key });
+  }
+  for (const [key, id] of Object.entries(routes.linearProject ?? {})) {
+    if (id === projectId) out.push({ kind: "linearProject", key });
+  }
+  return out;
+}
+
+/**
+ * Review and remove the routes pointing at a Project.
+ *
+ * Names each by what a human would recognise — the issue identifier or the
+ * Linear project name — rather than the id it is keyed on, which is what the
+ * user would actually have to match it against.
+ */
+function openRouteReview(project: ProjectConfig): void {
+  const entries = routesToProject(project.id);
+  if (entries.length === 0) {
+    showToast(`${project.title}: no remembered routes`);
+    return;
+  }
+  const issues = pollCoordinator.getGlobalIssues();
+  const label = (e: { kind: "issue" | "linearProject"; key: string }): string => {
+    if (e.kind === "issue") {
+      const found = issues.find((i) => i.id === e.key);
+      return `Issue ${found?.identifier ?? e.key}`;
+    }
+    const named = issues.find((i) => i.linearProjectId === e.key)?.project;
+    return `Linear project ${named ?? e.key}`;
+  };
+  const picker = new ListModal({
+    header: `Remove a route to ${project.title}?`,
+    items: entries.map((e, i) => ({ id: String(i), label: label(e) })),
+  });
+  picker.open();
+  openModal(picker, (value) => {
+    const at = Number((value as ListItem | undefined)?.id ?? -1);
+    const entry = entries[at];
+    if (!entry) return;
+    configStore.clearRoute(entry.kind, entry.key);
+    showToast(`Forgot ${label(entry)}`);
+  });
+}
+
 function projectCategories(): SettingsCategory[] {
   const all = configStore.config.projects ?? [];
   const live = all.filter((p) => p.deletedAt === undefined);
@@ -6680,6 +6729,21 @@ function projectCategories(): SettingsCategory[] {
       label: `Project · ${projectLabel(project, live, (id) => cachedTeams.find((t) => t.id === id)?.name ?? null)}`,
       collapsed: true,
       settings: [
+        {
+          // Routes are written as a side effect of answering a question at
+          // Start, so a rule can exist that the user does not remember making.
+          // The spec requires it be inspectable and deletable; without this
+          // clearRoute had no callers and a wrong answer was permanent.
+          id: `project-${project.id}-routes`,
+          label: "Remembered routes",
+          type: "action" as const,
+          getValue: () => {
+            const n = routesToProject(project.id).length;
+            return n === 0 ? "none" : `${n}`;
+          },
+          describe: () => "Answers you gave when an issue could have gone to more than one project. Enter to review and remove.",
+          onActivate: () => openRouteReview(project),
+        },
         {
           id: `project-${project.id}-status`,
           label: "Repository",
@@ -7829,6 +7893,67 @@ async function provisionIssueSession(o: {
  * key and the capture composer's "capture & start", so both go through exactly
  * one implementation of the three-state flow.
  */
+/**
+ * Ask which Project an ambiguous issue belongs to, and remember the answer.
+ *
+ * This is the write half of `routes`. Without it `setRoute` had no callers at
+ * all: the resolver read a table nothing ever filled, so a team claimed by two
+ * Projects stayed `ambiguous` forever and every start fell through to the
+ * manual picker having learned nothing — the "asked forever" outcome routes
+ * exist to prevent.
+ *
+ * The correction writes the *rule*, not an exception — but only when a rule is
+ * honest. "Always" is withheld when the Linear project has already resolved to
+ * two different Projects (`mayOfferLinearProjectRoute`), and when the issue has
+ * no Linear project there is no durable key for one, so only the exact
+ * issue-level answer is offered.
+ */
+function pickProjectForIssue(
+  issue: import("./adapters/types").Issue,
+  candidates: readonly ProjectConfig[],
+  then: (project: ProjectConfig) => void,
+): void {
+  const picker = new ListModal({
+    header: `Which project for ${issue.identifier}?`,
+    items: candidates.map((c) => ({ id: c.id, label: c.title })),
+  });
+  picker.open();
+  openModal(picker, (value) => {
+    const chosen = candidates.find((c) => c.id === (value as ListItem | undefined)?.id);
+    if (!chosen) return;
+
+    // What the sidebar has actually seen, so "always" is only offered when the
+    // Linear project has behaved like a 1:1 so far.
+    const observed = currentSessions
+      .flatMap((sess) => (pollCoordinator.getContext(sess.name)?.issues ?? [])
+        .map((i) => ({ linearProjectId: i.linearProjectId, projectId: sess.projectId })))
+      .flatMap((o) => (o.projectId ? [{ linearProjectId: o.linearProjectId, projectId: o.projectId }] : []));
+
+    const lp = issue.linearProjectId;
+    const lpName = issue.project;
+    if (lp && mayOfferLinearProjectRoute(observed, lp)) {
+      const scope = new ListModal({
+        header: "Remember this choice?",
+        items: [
+          { id: "issue", label: `Just ${issue.identifier}` },
+          { id: "always", label: `Always for "${lpName ?? lp}"` },
+        ],
+      });
+      scope.open();
+      openModal(scope, (scopeValue) => {
+        const how = (scopeValue as ListItem | undefined)?.id;
+        if (how === "always") configStore.setRoute("linearProject", lp, chosen.id);
+        else if (how === "issue") configStore.setRoute("issue", issue.id, chosen.id);
+        if (how) then(chosen);
+      });
+      return;
+    }
+    // No durable key for a rule, so the exact answer is the only honest one.
+    configStore.setRoute("issue", issue.id, chosen.id);
+    then(chosen);
+  });
+}
+
 async function startWorkOnIssue(
   issue: import("./adapters/types").Issue,
   issueState: "none" | "worktree" | "session",
@@ -7849,6 +7974,17 @@ async function startWorkOnIssue(
       // undefined for every issue afterwards and every start fell through to
       // the manual picker.
       const startOutcome = resolveIssueProjectFor(issue);
+      // Ambiguity is answerable, so ask rather than falling through to the
+      // manual picker having learned nothing. The answer is written as a route,
+      // which is what stops the same question being asked again.
+      if (startOutcome.kind === "ambiguous") {
+        pickProjectForIssue(issue, startOutcome.candidates, () => {
+          // Re-entered with the same state: the route is written, so the
+          // resolver now answers and this pass takes the automated path.
+          void startWorkOnIssue(issue, issueState, linkedSessionName);
+        });
+        return "failed";
+      }
       const repoDir = startOutcome.kind === "resolved" ? startOutcome.project.dir : undefined;
 
       // Automated path: routing resolved this issue to a project
