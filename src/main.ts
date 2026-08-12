@@ -1046,6 +1046,87 @@ function setupStepsOutstanding(): boolean {
   return value;
 }
 
+/**
+ * The checklist's last step: prove the configuration actually works.
+ *
+ * Green configuration rows prove configuration. This proves *function* — the
+ * same reason `--wait` polls for the setup pane exiting rather than trusting
+ * that a directory exists.
+ *
+ * Deliberately read-only. An earlier shape provisioned a throwaway session and
+ * tore it down, which on a wtm repo means creating and deleting a real worktree
+ * and branch on somebody's machine to answer a question — and leaves debris if
+ * it fails halfway, which is exactly when it would fail. Every gate below is
+ * the same fact the real path reads, checked without writing anything.
+ */
+interface PreflightCheck {
+  label: string;
+  ok: boolean;
+  detail: string;
+}
+
+function runSetupPreflight(): PreflightCheck[] {
+  const checks: PreflightCheck[] = [];
+  const projects = (configStore.config.projects ?? []).filter((p) => p.deletedAt === undefined);
+
+  const project = projectForCurrentSession() ?? projects[0] ?? null;
+  checks.push({
+    label: "A project to work in",
+    ok: project !== null,
+    detail: project ? project.title : "none configured — add one in Settings",
+  });
+
+  const dirOk = project !== null && existsSync(project.dir);
+  checks.push({
+    label: "Its repository exists",
+    ok: dirOk,
+    detail: project ? project.dir.replace(homedir(), "~") : "—",
+  });
+
+  const settings = project ? repoSettingsFor(project.dir, project.id) : null;
+
+  const agent = settings?.agentCommand ?? "";
+  const agentBin = agent.trim().split(/\s+/)[0] ?? "";
+  const agentOk = agentBin.length > 0 && Bun.which(agentBin) !== null;
+  checks.push({
+    label: "The agent command runs",
+    ok: agentOk,
+    detail: agentOk ? agent : `${agentBin || "unset"} is not on PATH`,
+  });
+
+  const wtm = settings?.wtmIntegration === true;
+  const toolOk = !wtm || Bun.which("wtm") !== null;
+  checks.push({
+    label: "The worktree tool is available",
+    ok: toolOk,
+    detail: wtm ? (toolOk ? "wtm" : "wtm is not on PATH") : "git worktree",
+  });
+
+  const present = AGENT_INTEGRATIONS.filter((a) => a.isPresent());
+  const hooksOk = present.length === 0 || present.every((a) => a.detect() === "current");
+  checks.push({
+    label: "Agent state reaches the sidebar",
+    ok: hooksOk,
+    detail: present.length === 0
+      ? "no agents installed"
+      : hooksOk ? present.map((a) => a.label).join(", ") : "hooks out of date",
+  });
+
+  const tracker = adapters.issueTracker;
+  const declined = configStore.config.setup?.tracker === "never";
+  checks.push({
+    label: "The tracker answers",
+    ok: declined || tracker?.authState === "ok",
+    detail: declined
+      ? "not using one"
+      : tracker?.authState === "ok"
+        ? (tracker.identity?.organization ?? "connected")
+        : `not connected — check ${tracker?.authHint ?? "the tracker settings"}`,
+  });
+
+  return checks;
+}
+
 function makeToolbar(): ToolbarConfig {
   return {
     buttons: buildToolbarButtons({
@@ -5735,6 +5816,20 @@ function buildSetupRows(): SetupRow[] {
     note: issueTabs.length > 0 ? `${issueTabs.length} stages` : undefined,
   });
 
+  // Last, because it is the one step that answers "does any of this work?"
+  // rather than "is this configured?".
+  const preflight = runSetupPreflight();
+  const failed = preflight.filter((c) => !c.ok);
+  rows.push({
+    id: "preflight",
+    label: "Check it all works",
+    detail: failed.length === 0
+      ? "Everything a new session needs is in place."
+      : failed.map((c) => `${c.label}: ${c.detail}`).join("  ·  "),
+    state: failed.length === 0 ? "done" : "todo",
+    note: failed.length === 0 ? "passing" : `${failed.length} failing`,
+  });
+
   // The diff viewer is a separate binary. jmux genuinely cannot install it, so
   // the row says what to run instead of offering an Enter that would fail.
   const hunkInstalled = Bun.which(hunkCommand) !== null;
@@ -5788,6 +5883,17 @@ const setupModal = new SetupModal({
         closeModal();
         openWorkflowScreen();
         return;
+      case "preflight": {
+        const results = runSetupPreflight();
+        showNotice({
+          title: results.every((c) => c.ok) ? "Ready" : "Not ready yet",
+          message: results
+            .map((c) => `${c.ok ? "✓" : "✗"} ${c.label} — ${c.detail}`)
+            .join("\n"),
+          tone: results.every((c) => c.ok) ? "plain" : "error",
+        });
+        return;
+      }
     }
   },
 });
