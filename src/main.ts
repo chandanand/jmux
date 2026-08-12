@@ -7361,8 +7361,7 @@ async function startWorkOnIssue(
       }
 
       // Fallback: no config mapping — open manual modal
-      const initialDirs = cachedProjectDirs.length > 0 ? cachedProjectDirs : [homedir()];
-      const modal = new NewSessionModal(getNewSessionProviders(initialDirs));
+      const modal = new NewSessionModal(getNewSessionProviders(newSessionDirs()));
       modal.open();
       refreshProjectDirsInBackground((dirs) => {
         modal.updateProjectDirs(dirs);
@@ -8208,6 +8207,33 @@ function focusPanelOnIssue(issueId: string): void {
   focusPanelWhere(byIssueId(issueId), linkedIds);
 }
 
+/**
+ * Directories `Ctrl-a n` offers, Projects first.
+ *
+ * A configured Project is a repo the user has already adopted, so it leads —
+ * and this is what stops `projectDirs` being load-bearing for making a session
+ * at all, which was one of the three reported failures. A repo that belongs to
+ * no Project still appears, from the scan cache, so Projects never become
+ * mandatory before jmux is usable.
+ *
+ * Deduplicated by path: several Projects may share a directory, and offering it
+ * twice would ask the user to choose between two identical rows.
+ */
+function newSessionDirs(): string[] {
+  const projectDirs = (configStore.config.projects ?? [])
+    .filter((p) => p.deletedAt === undefined)
+    .map((p) => p.dir);
+  const scanned = cachedProjectDirs.length > 0 ? cachedProjectDirs : [homedir()];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const d of [...projectDirs, ...scanned]) {
+    if (seen.has(d)) continue;
+    seen.add(d);
+    out.push(d);
+  }
+  return out;
+}
+
 function pickRepoForTeam(teamName: string): void {
   const dirs = cachedProjectDirs.length > 0 ? cachedProjectDirs : [homedir()];
   const dirItems = dirs.map((d) => ({ id: d, label: d.replace(homedir(), "~") }));
@@ -8483,10 +8509,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       // Open modal immediately with whatever is in the cache (could be empty
       // on a cold first start). Kick off a background rescan and update the
       // modal live when it completes.
-      const initialDirs = cachedProjectDirs.length > 0
-        ? cachedProjectDirs
-        : [homedir()];
-      const modal = new NewSessionModal(getNewSessionProviders(initialDirs));
+      const modal = new NewSessionModal(getNewSessionProviders(newSessionDirs()));
       modal.open();
       refreshProjectDirsInBackground((dirs) => {
         modal.updateProjectDirs(dirs);
