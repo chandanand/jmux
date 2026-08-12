@@ -28,6 +28,7 @@ describe("parseStatusLine", () => {
       linearIssues: [],
       path: "/repo/wt",
       active: true,
+      projectId: "",
     });
   });
 
@@ -48,6 +49,7 @@ describe("parseStatusLine", () => {
       linearIssues: [],
       path: "/repo/wt",
       active: true,
+      projectId: "",
     });
   });
 });
@@ -68,6 +70,7 @@ describe("buildStatusSnapshot", () => {
   }
 
   const baseRow = (o: Partial<StatusSessionRow>): StatusSessionRow => ({
+    projectId: "",
     id: "$1",
     name: "TRA-123",
     agentState: "",
@@ -150,6 +153,7 @@ describe("buildStatusSnapshot", () => {
 
 describe("collapseStatusRows", () => {
   const row = (o: Partial<StatusSessionRow> & { id: string }): StatusSessionRow => ({
+    projectId: "",
     name: "s",
     agentState: "",
     agentSince: "",
@@ -218,5 +222,56 @@ describe("collapseStatusRows", () => {
     expect(out).toHaveLength(2);
     expect(out.find((r) => r.id === "$1")?.attentionReason).toBe("ci");
     expect(out.find((r) => r.id === "$2")?.linearIssues).toEqual(["TRA-9"]);
+  });
+});
+
+describe("ctl status project", () => {
+  const row = (o: Partial<StatusSessionRow> & { id: string }): StatusSessionRow => ({
+    projectId: "",
+    name: "s",
+    agentState: "",
+    agentSince: "",
+    attention: "",
+    attentionReason: "",
+    linearIssues: [],
+    path: "/code/api",
+    active: true,
+    ...o,
+  });
+
+  const inputs = (rows: StatusSessionRow[], projects: any[]) => ({
+    rows,
+    linksByName: () => [],
+    pinnedNames: new Set<string>(),
+    branchByPath: () => null,
+    nowSeconds: 1781480123,
+    projects,
+  });
+
+  test("a stamped session reports its Project's id and title", () => {
+    const out = buildStatusSnapshot(inputs(
+      [row({ id: "$1", projectId: "api" })],
+      [{ id: "api", title: "API", dir: "/code/api" }],
+    ));
+    expect(out.sessions[0].project).toEqual({ id: "api", title: "API" });
+  });
+
+  // A session nobody adopted and a dangling reference are different problems.
+  test("an unstamped session reports null", () => {
+    const out = buildStatusSnapshot(inputs([row({ id: "$1" })], []));
+    expect(out.sessions[0].project).toBeNull();
+  });
+
+  test("a stamp naming a soft-deleted Project reports deleted, not null", () => {
+    const out = buildStatusSnapshot(inputs(
+      [row({ id: "$1", projectId: "gone" })],
+      [{ id: "gone", title: "Gone", dir: "/code/x", deletedAt: "2026-08-01T00:00:00Z" }],
+    ));
+    expect(out.sessions[0].project).toEqual({ id: "gone", state: "deleted" });
+  });
+
+  test("a stamp naming a Project that no longer exists at all reports null", () => {
+    const out = buildStatusSnapshot(inputs([row({ id: "$1", projectId: "vanished" })], []));
+    expect(out.sessions[0].project).toBeNull();
   });
 });
