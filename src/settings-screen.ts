@@ -23,8 +23,16 @@ export interface SettingDef {
   getEditValue?: () => string;
   // For boolean: toggle callback
   onToggle?: () => void;
-  // For text: commit callback
-  onTextCommit?: (value: string) => void;
+  /**
+   * Commit a text value. Return a message to **reject** it; return nothing to
+   * accept. A rejected commit leaves the editor open with the message on the
+   * row — the alternative, which is what this screen used to do, was to discard
+   * the value in silence and leave the old one on screen looking applied.
+   *
+   * `void` stays in the union so the many rows that return nothing keep
+   * compiling unchanged.
+   */
+  onTextCommit?: (value: string) => string | null | void;
   /**
    * Nudge the value one place with ◂ ▸, without opening an editor.
    *
@@ -266,6 +274,7 @@ export class SettingsScreen {
    */
   private filter = "";
   private filtering = false;
+  private commitError: string | null = null;
 
   get isOpen(): boolean { return this._open; }
   get isEditing(): boolean { return this.editState !== null; }
@@ -277,6 +286,7 @@ export class SettingsScreen {
     this.editState = null;
     this.filter = "";
     this.filtering = false;
+    this.commitError = null;
     this._open = true;
   }
 
@@ -285,6 +295,7 @@ export class SettingsScreen {
     this.editState = null;
     this.filter = "";
     this.filtering = false;
+    this.commitError = null;
   }
 
   updateCategories(categories: SettingsCategory[]): void {
@@ -580,6 +591,14 @@ export class SettingsScreen {
     const cursorCol = fieldStart + state.cursorPos - sliceOffset;
     const cursorChar = state.cursorPos < state.buffer.length ? state.buffer[state.cursorPos] : " ";
     writeString(grid, row, cursorCol, cursorChar, EDIT_CURSOR);
+
+    // The rejection shares the row, right-aligned, so it costs no extra height
+    // and sits where the eye already is.
+    if (this.commitError) {
+      const msg = truncateToCols(this.commitError, Math.max(1, right - fieldStart - 2));
+      const col = right - textCols(msg);
+      if (col > fieldStart) writeString(grid, row, col, msg, OFF_ATTRS);
+    }
   }
 
   private renderListEdit(grid: CellGrid, row: number, left: number, setting: SettingDef, state: Extract<EditState, { mode: "list" }>): void {
@@ -621,12 +640,19 @@ export class SettingsScreen {
       if (data === "\x1b") {
         // Cancel
         this.editState = null;
+        this.commitError = null;
         return { type: "none" };
       }
       if (data === "\r") {
-        // Commit
+        // Commit. A returned string is a rejection: stay in the editor so the
+        // value can be corrected, with the reason on the row.
         const setting = this.findSetting(state.settingId);
-        if (setting?.onTextCommit) setting.onTextCommit(state.buffer);
+        const err = setting?.onTextCommit ? setting.onTextCommit(state.buffer) : null;
+        if (typeof err === "string" && err.length > 0) {
+          this.commitError = err;
+          return { type: "none" };
+        }
+        this.commitError = null;
         this.editState = null;
         return { type: "none" };
       }

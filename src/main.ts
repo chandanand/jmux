@@ -6087,23 +6087,27 @@ function buildSettingsCategories(): SettingsCategory[] {
         {
           id: "sidebar-width", label: "Sidebar width", type: "text" as const,
           getValue: () => String(sidebarWidth),
+          describe: () => "How many columns the session list takes. 10–60.",
           onTextCommit: (v) => {
             const n = parseInt(v, 10);
-            if (!isNaN(n) && n >= 10 && n <= 60) configStore.set("sidebarWidth", n);
+            if (isNaN(n) || n < 10 || n > 60) return "must be a number between 10 and 60";
+            configStore.set("sidebarWidth", n);
+            return null;
           },
         },
         {
           id: "panel-width", label: "Panel width", type: "text" as const,
           getValue: () => infoPanelWidth !== null ? String(infoPanelWidth) : "auto",
+          describe: () => "Width of the issues/MRs panel. 20–120, or \"auto\" to size it to the terminal.",
           onTextCommit: (v) => {
             if (v === "auto" || v === "") {
               configStore.set("infoPanelWidth", undefined as any);
-            } else {
-              const n = parseInt(v, 10);
-              if (!isNaN(n) && n >= 20 && n <= 120) {
-                configStore.set("infoPanelWidth", n);
-              }
+              return null;
             }
+            const n = parseInt(v, 10);
+            if (isNaN(n) || n < 20 || n > 120) return "20–120, or \"auto\"";
+            configStore.set("infoPanelWidth", n);
+            return null;
           },
         },
         {
@@ -6137,12 +6141,13 @@ function buildSettingsCategories(): SettingsCategory[] {
         {
           id: "image-max-rows", label: "Max image height (rows)", type: "text" as const,
           getValue: () => String(configStore.config.images?.maxRows ?? DEFAULT_IMAGE_MAX_ROWS),
+          describe: () => "Tallest an inline image may be drawn, in terminal rows. 1–60.",
           onTextCommit: (v) => {
             const n = parseInt(v, 10);
-            if (!isNaN(n) && n >= 1 && n <= 60) {
-              configStore.set("images", { ...configStore.config.images, maxRows: n });
-              scheduleRender();
-            }
+            if (isNaN(n) || n < 1 || n > 60) return "must be a number between 1 and 60";
+            configStore.set("images", { ...configStore.config.images, maxRows: n });
+            scheduleRender();
+            return null;
           },
         },
         {

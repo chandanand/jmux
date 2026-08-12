@@ -715,6 +715,12 @@ function type(s: SettingsScreen, text: string): void {
   for (const ch of text) s.handleInput(ch);
 }
 
+// The editor opens seeded with the current value and the cursor at its end, so
+// a test that just types would be appending to it.
+function clearField(s: SettingsScreen, n = 16): void {
+  for (let i = 0; i < n; i++) s.handleInput("\x7f");
+}
+
 describe("SettingsScreen search", () => {
   test("slash opens a filter that narrows the visible rows", () => {
     const s = new SettingsScreen();
@@ -791,5 +797,101 @@ describe("SettingsScreen search", () => {
     expect(painted(s)).toContain("No matches");
     s.handleInput("\x7f");
     expect(painted(s)).toContain("Cache timers");
+  });
+});
+
+// --- Validation feedback ---
+//
+// `sidebar width: 200` was parsed, found out of range, and discarded in
+// silence, leaving the old value on screen looking applied — the same defect
+// the explain line and search exist to remove, inside the screen meant to
+// surface it.
+function widthCategory(): SettingsCategory[] {
+  return [{
+    label: "Display", collapsed: false,
+    settings: [{
+      id: "w", label: "Sidebar width", type: "text",
+      getValue: () => "26",
+      onTextCommit: (v: string) => {
+        const n = parseInt(v, 10);
+        if (isNaN(n) || n < 10 || n > 60) return "must be between 10 and 60";
+        return null;
+      },
+    }],
+  }];
+}
+
+describe("SettingsScreen validation feedback", () => {
+  test("a rejected value shows the message", () => {
+    const s = new SettingsScreen();
+    s.open(widthCategory());
+    s.handleInput("\x1b[B");
+    s.handleInput("\r");
+    clearField(s);
+    type(s, "200");
+    s.handleInput("\r");
+    expect(painted(s)).toContain("must be between 10 and 60");
+  });
+
+  test("a rejected value keeps the editor open so it can be corrected", () => {
+    const s = new SettingsScreen();
+    s.open(widthCategory());
+    s.handleInput("\x1b[B");
+    s.handleInput("\r");
+    clearField(s);
+    type(s, "200");
+    s.handleInput("\r");
+    expect(s.isEditing).toBe(true);
+  });
+
+  test("an accepted value closes the editor and shows no message", () => {
+    const s = new SettingsScreen();
+    s.open(widthCategory());
+    s.handleInput("\x1b[B");
+    s.handleInput("\r");
+    clearField(s);
+    type(s, "30");
+    s.handleInput("\r");
+    expect(s.isEditing).toBe(false);
+    expect(painted(s)).not.toContain("must be between");
+  });
+
+  test("a row whose commit returns nothing still closes the editor", () => {
+    const s = new SettingsScreen();
+    s.open([{
+      label: "Display", collapsed: false,
+      settings: [{ id: "t", label: "Command", type: "text", getValue: () => "", onTextCommit: () => {} }],
+    }]);
+    s.handleInput("\x1b[B");
+    s.handleInput("\r");
+    s.handleInput("x");
+    s.handleInput("\r");
+    expect(s.isEditing).toBe(false);
+  });
+
+  test("escaping a rejected edit clears the message", () => {
+    const s = new SettingsScreen();
+    s.open(widthCategory());
+    s.handleInput("\x1b[B");
+    s.handleInput("\r");
+    clearField(s);
+    type(s, "200");
+    s.handleInput("\r");
+    s.handleInput("\x1b");
+    expect(painted(s)).not.toContain("must be between");
+  });
+
+  test("correcting a rejected value after the message accepts it", () => {
+    const s = new SettingsScreen();
+    s.open(widthCategory());
+    s.handleInput("\x1b[B");
+    s.handleInput("\r");
+    clearField(s);
+    type(s, "200");
+    s.handleInput("\r");
+    expect(s.isEditing).toBe(true);   // rejected
+    s.handleInput("\x7f");            // 200 -> 20
+    s.handleInput("\r");
+    expect(s.isEditing).toBe(false);
   });
 });
