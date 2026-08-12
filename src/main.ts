@@ -8314,9 +8314,14 @@ function attachIssueTo(
   // make, and refusing would reject the ordinary case of a feature filed under
   // two teams.
   const target = currentSessions.find((x) => x.name === sessionName);
+  // Resolved with an *empty* session index, deliberately. The question is where
+  // this issue routes by configuration — not where it sits now. Consulting
+  // sessions would find the link made two lines above, return `via: "existing
+  // session"` naming this very session's Project, and make the comparison below
+  // always equal: a disclosure that could never fire.
   const drift = attachProjectDrift(
     target?.projectId ?? null,
-    resolveIssueProjectFor(issue),
+    resolveIssueProjectFor(issue, new Map()),
   );
   if (drift) {
     const mine = projectById(configStore.config.projects ?? [], drift.sessionProjectId);

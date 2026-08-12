@@ -201,3 +201,32 @@ describe("attachProjectDrift", () => {
     expect(attachProjectDrift("web", { kind: "orphaned", stampedId: null })).toBeNull();
   });
 });
+
+// The trap the caller must avoid, pinned here because main.ts cannot be tested.
+//
+// `attachIssueTo` links the issue *before* it asks where the issue routes. If
+// that question is asked with session evidence, resolution finds the link just
+// made, returns `via: "existing session"` naming the very session being
+// attached to, and the comparison is always equal — a disclosure that can never
+// fire. The caller therefore resolves with no session evidence at all.
+describe("attach drift must be resolved without session evidence", () => {
+  const api = p("api", { teamId: "T1" });
+  const all = [api, p("web", { teamId: "T2" })];
+
+  test("with session evidence the outcome echoes the session, so drift is always null", () => {
+    const withEvidence = resolveIssueProject(
+      issue(), all, {}, { hasSession: true, sessionProjectId: "web" },
+    );
+    // Not even a Project of the issue's own team — just whatever it is attached to.
+    expect(withEvidence.kind).toBe("resolved");
+    if (withEvidence.kind === "resolved") expect(withEvidence.project.id).toBe("web");
+    expect(attachProjectDrift("web", withEvidence)).toBeNull();
+  });
+
+  test("without session evidence the issue's own team answers, and drift fires", () => {
+    const byConfig = resolveIssueProject(issue(), all, {}, {});
+    expect(byConfig.kind).toBe("resolved");
+    if (byConfig.kind === "resolved") expect(byConfig.project.id).toBe("api");
+    expect(attachProjectDrift("web", byConfig)?.issueProject.id).toBe("api");
+  });
+});
