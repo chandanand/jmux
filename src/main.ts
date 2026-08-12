@@ -169,6 +169,7 @@ import { INTERNAL_SESSION_FILTER, PARK_SESSION } from "./glass/internal-sessions
 import { PinnedPaneTracker } from "./glass/pinned-pane-tracker";
 import { parsePaneStateLines, PANE_STATE_FORMAT } from "./glass/reflect";
 import { US, splitFields } from "./tmux-fields";
+import { resolveIssueProject } from "./project-routing";
 import {
   PROJECT_SETTING_DEFAULTS,
   PROJECT_OPTION,
@@ -575,6 +576,49 @@ function sessionSettingsFor(sessionName: string): ResolvedProjectSettings {
  * not share a `dir` — and null when it is, since that is exactly what the stamp
  * is for and guessing would edit settings on the wrong Project.
  */
+/**
+ * Route an issue to a Project, with everything this process knows.
+ *
+ * The one call site for `resolveIssueProject` in the TUI, so the sidebar, the
+ * ghost preview and group start cannot answer differently.
+ */
+function resolveIssueProjectFor(
+  issue: import("./adapters/types").Issue,
+): import("./project-routing").RoutingOutcome {
+  const linked = currentSessions.find((sess) =>
+    (pollCoordinator.getContext(sess.name)?.issues ?? []).some((i) => i.id === issue.id));
+  return resolveIssueProject(
+    {
+      id: issue.id,
+      teamId: (issue as { teamId?: string }).teamId,
+      teamName: issue.team ?? undefined,
+      linearProjectId: (issue as { projectId?: string }).projectId,
+    },
+    configStore.config.projects ?? [],
+    configStore.config.routes ?? {},
+    { hasSession: !!linked, sessionProjectId: linked?.projectId ?? null },
+  );
+}
+
+/** One sentence naming what went wrong, for a notice or a preflight line. */
+function describeRoutingOutcome(
+  issue: import("./adapters/types").Issue,
+  outcome: import("./project-routing").RoutingOutcome,
+): string {
+  switch (outcome.kind) {
+    case "resolved":
+      return `${issue.identifier} → ${outcome.project.title} (${outcome.via})`;
+    case "unclaimed":
+      return `${issue.identifier} belongs to team "${outcome.teamName ?? "?"}", which no project claims.`;
+    case "ambiguous":
+      return `${issue.identifier} could go to ${outcome.candidates.map((c) => c.title).join(" or ")}.`;
+    case "conflict":
+      return `${issue.identifier} has conflicting routes — ${outcome.evidence.join("; ")}.`;
+    case "orphaned":
+      return `${issue.identifier}'s session names a project that no longer exists.`;
+  }
+}
+
 function projectForCurrentSession(): ProjectConfig | null {
   const session = currentSessions.find((s) => s.id === currentSessionId);
   if (!session) return null;
@@ -7676,34 +7720,42 @@ async function startIssueGroup(
     return;
   }
 
-  const repos = new Map<string, string[]>();
+  // Grouped by **Project**, not by directory. Two Projects can share a
+  // directory, so a path-keyed check would happily merge a set that belongs to
+  // two different teams' work — and the session it created would carry one
+  // stamp for issues routed to both.
+  const byProject = new Map<string, { title: string; ids: string[] }>();
   for (const issue of fresh) {
-    const dir = issueRepoDir(issue);
-    if (!dir) {
+    const outcome = resolveIssueProjectFor(issue);
+    if (outcome.kind !== "resolved") {
       showNotice({
-        title: "No Repo Mapped",
-        message: `${issue.identifier} belongs to team "${issue.team ?? "?"}", which maps to no repository.`,
-        hint: "Set one in Settings → Issue workflow, then try again.",
+        title: outcome.kind === "unclaimed" ? "No Project For This Team" : "Project Not Resolved",
+        message: describeRoutingOutcome(issue, outcome),
+        hint: outcome.kind === "unclaimed"
+          ? "Create a project for the team in Settings, then try again."
+          : "Start one of these on its own first, and jmux will remember the choice.",
         tone: "error",
       });
       return;
     }
-    const seen = repos.get(dir);
-    if (seen) seen.push(issue.identifier);
-    else repos.set(dir, [issue.identifier]);
+    const seen = byProject.get(outcome.project.id);
+    if (seen) seen.ids.push(issue.identifier);
+    else byProject.set(outcome.project.id, { title: outcome.project.title, ids: [issue.identifier] });
   }
-  if (repos.size > 1) {
+  if (byProject.size > 1) {
     showNotice({
-      title: "Group Spans Several Repos",
-      message: `${label || "This group"} covers ${repos.size} repositories, and a session has one worktree.`,
-      hint: [...repos.entries()].map(([dir, ids]) => `${dir.replace(homedir(), "~")}: ${ids.join(", ")}`).join("  ·  "),
+      title: "Group Spans Several Projects",
+      message: `${label || "This group"} covers ${byProject.size} projects, and a session has one worktree.`,
+      hint: [...byProject.values()].map((p) => `${p.title}: ${p.ids.join(", ")}`).join("  ·  "),
       tone: "error",
     });
     return;
   }
 
-  const repoDir = [...repos.keys()][0]!;
-  const settings = repoSettingsFor(repoDir);
+  const groupProjectId = [...byProject.keys()][0]!;
+  const groupProject = (configStore.config.projects ?? []).find((p) => p.id === groupProjectId)!;
+  const repoDir = groupProject.dir;
+  const settings = repoSettingsFor(repoDir, groupProjectId);
   const skipped = taken.length > 0 ? `  (${taken.length} already started)` : "";
 
   const nameModal = new InputModal({
