@@ -175,3 +175,24 @@ export function projectsClaimingTeam(
   if (!teamId) return [];
   return liveProjects(all).filter((p) => p.teamId === teamId);
 }
+
+/**
+ * The session → Project link, as a tmux session option.
+ *
+ * An explicit stamp rather than a path lookup, for two independent reasons:
+ * two Projects may share a `dir`, so containment is genuinely ambiguous; and
+ * `jmux ctl` needs the answer with no IPC to the running TUI, which is the
+ * same constraint that already forces `@jmux-linear-issue` to exist beside
+ * `state.json`. Follows t3code's `projection_threads.project_id NOT NULL`.
+ *
+ * tmux options die with the server, so this is *not* the durable copy — the
+ * snapshot carries `projectId` and restore re-stamps it. A session whose stamp
+ * is missing resolves to `orphaned`, which is honest, rather than being
+ * silently re-routed by path.
+ */
+export const PROJECT_OPTION = "@jmux-project";
+
+/** An id that is safe to put in a tmux option value. */
+export function isWritableProjectId(id: string): boolean {
+  return id.length > 0 && !/\s/.test(id) && !id.includes("'") && !id.includes('"');
+}

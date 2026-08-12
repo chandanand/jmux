@@ -8,6 +8,8 @@ import {
   projectsClaimingTeam,
   type ProjectConfig,
   type ProjectSettings,
+  PROJECT_OPTION,
+  isWritableProjectId,
 } from "../project";
 
 function project(over: Partial<ProjectConfig> = {}): ProjectConfig {
@@ -135,5 +137,34 @@ describe("projectsClaimingTeam", () => {
   test("no team id yields nothing rather than every teamless Project", () => {
     const all = [project({ id: "a" }), project({ id: "b" })];
     expect(projectsClaimingTeam(all, undefined)).toEqual([]);
+  });
+});
+
+describe("PROJECT_OPTION", () => {
+  test("is the documented session option name", () => {
+    expect(PROJECT_OPTION).toBe("@jmux-project");
+  });
+});
+
+describe("isWritableProjectId", () => {
+  // Validated at the write, not guessed at the read — the same rule
+  // isWritableLinkId follows, and the reason a malformed value cannot silently
+  // become two links.
+  test("accepts an ordinary slug", () => {
+    expect(isWritableProjectId("payments-api")).toBe(true);
+  });
+
+  test("refuses whitespace, which would split the option value", () => {
+    expect(isWritableProjectId("two words")).toBe(false);
+    expect(isWritableProjectId("tab\there")).toBe(false);
+  });
+
+  test("refuses quotes, which would break the set-option command", () => {
+    expect(isWritableProjectId("it's")).toBe(false);
+    expect(isWritableProjectId('say"what')).toBe(false);
+  });
+
+  test("refuses empty", () => {
+    expect(isWritableProjectId("")).toBe(false);
   });
 });

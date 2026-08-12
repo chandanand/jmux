@@ -171,6 +171,7 @@ import { INTERNAL_SESSION_FILTER, PARK_SESSION } from "./glass/internal-sessions
 import { PinnedPaneTracker } from "./glass/pinned-pane-tracker";
 import { parsePaneStateLines, PANE_STATE_FORMAT } from "./glass/reflect";
 import { US, splitFields } from "./tmux-fields";
+import { PROJECT_OPTION, isWritableProjectId } from "./project";
 import { buildPaneLabel } from "./glass/pane-label";
 import { AGENT_DETECT_FORMAT, parseAgentDetectLines, detectAgentPanes } from "./glass/auto-detect";
 import { GlassView, type GlassTileSpec } from "./glass/view";
@@ -1046,6 +1047,15 @@ async function performBoot(opts: {
     // stops capturing and surfaces `error` instead of silently double-writing.
     onLockCompromised: (e) => snapshotter?.handleCompromised(e),
     sessionLinksSink: (name, links) => opts.sessionState.upsertLinksForSession(name, links),
+    // Re-stamp @jmux-project before anything resolves Project-scoped settings
+    // or polls: tmux options die with the server, so without this every
+    // restored session reads as unstamped and falls back to the global tier.
+    projectIdSink: (name, projectId) => {
+      if (!projectId || !isWritableProjectId(projectId)) return;
+      void control
+        .sendCommand(`set-option -t ${tq(name)} ${PROJECT_OPTION} ${tq(projectId)}`)
+        .catch(() => {});
+    },
     pinnedSink: (name, pinned) => {
       if (pinned && !opts.pinnedSessions.has(name)) {
         opts.pinnedSessions.add(name);
@@ -3599,6 +3609,7 @@ const SESSION_LIST_FORMAT = [
   `#{${ISSUE_LINK_OPTION}}`,
   `#{${SESSION_TITLE_OPTION}}`,
   `#{${TITLE_SIGNATURE_OPTION}}`,
+  `#{${PROJECT_OPTION}}`,
 ].join(US);
 
 async function fetchSessions(): Promise<void> {
@@ -3609,7 +3620,7 @@ async function fetchSessions(): Promise<void> {
     const sessions: SessionInfo[] = lines
       .filter((l) => l.length > 0)
       .map((line) => {
-        const [id, name, activity, attached, windows, issueLink, title, titleSig] =
+        const [id, name, activity, attached, windows, issueLink, title, titleSig, projectId] =
           splitFields(line);
         const cached = sessionDetailsCache.get(id);
         const issueLinks = parseIssueLinkOption(issueLink);
@@ -3625,6 +3636,7 @@ async function fetchSessions(): Promise<void> {
           ...(issueLinks.length > 0 ? { issueLinks } : {}),
           ...(title ? { title } : {}),
           ...(titleSig ? { titleSignature: titleSig } : {}),
+          ...(projectId ? { projectId } : {}),
         };
       });
     const previousSessions = currentSessions;
@@ -3636,6 +3648,13 @@ async function fetchSessions(): Promise<void> {
       if (session.activity > lastViewed && session.id !== currentSessionId) {
         sidebar.setActivity(session.id, true);
       }
+    }
+
+    // Keep the snapshot's copy of the Project stamp current. tmux options die
+    // with the server, so this is the durable half of the session → Project
+    // link; without it a restore reads every session as unstamped.
+    for (const session of sessions) {
+      snapshotter?.onProjectId(session.name, session.projectId ?? null);
     }
 
     sidebar.updateSessions(sessions);
@@ -6958,6 +6977,8 @@ async function provisionIssueSession(o: {
   prompt: (tracker: NonNullable<typeof adapters.issueTracker>) => string;
   /** What the error modal names when creation fails. */
   failureSubject: string;
+  /** The Project this work belongs to, stamped on the session. */
+  projectId?: string;
 }): Promise<StartOutcome> {
   try {
     // Seed the first user message for Claude by writing the prompt to a temp
@@ -7004,6 +7025,15 @@ async function provisionIssueSession(o: {
       );
       // The new worktree changes what git reports for these paths.
       repoFacts.clear();
+    }
+
+    // Stamp the Project before anything reads the session. Path containment
+    // cannot substitute: two Projects may share a directory, so a session in
+    // one is indistinguishable from a session in the other without this.
+    if (o.projectId && isWritableProjectId(o.projectId)) {
+      await control
+        .sendCommand(`set-option -t ${tq(o.session)} ${PROJECT_OPTION} ${tq(o.projectId)}`)
+        .catch(() => {});
     }
 
     await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(o.session)}`);

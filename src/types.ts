@@ -100,6 +100,15 @@ export interface SessionInfo {
    * is what stops jmux generating another over the top of their name.
    */
   titleSignature?: string;
+  /**
+   * The Project this session belongs to (`@jmux-project`).
+   *
+   * An explicit stamp, not a path lookup: two Projects may share a directory,
+   * so containment is ambiguous, and `jmux ctl` needs the answer with no IPC to
+   * the TUI. Absent means the session was not created by a Project-aware path —
+   * which resolves to `orphaned` rather than being guessed at.
+   */
+  projectId?: string;
 }
 
 export type ErrorState = {

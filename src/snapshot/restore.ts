@@ -30,6 +30,12 @@ export interface RestorerOptions {
     otel: import("./schema").SnapshotOtel | null,
   ) => void;
   pinnedSink?: (name: string, pinned: boolean) => void;
+  /**
+   * Re-stamp `@jmux-project`. Must run before anything resolves Project-scoped
+   * settings or polls, or the first frame reads a session as unstamped and
+   * falls back to the global tier for work that has a Project.
+   */
+  projectIdSink?: (sessionName: string, projectId: string | null) => void;
   agentStateSink?: (
     name: string,
     agentState: import("./schema").SnapshotAgentState | null,
@@ -368,6 +374,9 @@ export class Restorer {
       ]);
     }
 
+    // First of the sinks, deliberately: settings resolution and the poll both
+    // read the stamp, and a session restored unstamped resolves to `orphaned`.
+    this.opts.projectIdSink?.(session.name, session.projectId ?? null);
     this.opts.sessionLinksSink?.(session.name, session.links);
     this.opts.permissionModeSink?.(session.name, session.permissionMode);
     this.opts.otelSink?.(session.name, session.otel);

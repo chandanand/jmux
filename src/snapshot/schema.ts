@@ -59,6 +59,19 @@ export interface SnapshotSession {
   windows: SnapshotWindow[];
   /** Optional & nullable for v1 back-compat. Absent ⇒ "no agent signal seen yet". */
   agentState?: SnapshotAgentState | null;
+  /**
+   * The Project this session belongs to (`@jmux-project`).
+   *
+   * tmux options die with the server, so without this a durable-session restore
+   * would silently lose every session's Project and fall back to ambiguous path
+   * containment — settings dropping to the global tier and grouping collapsing.
+   *
+   * Optional and defaulted rather than a formatVersion bump, the same way
+   * `agentState` and `otel.contextTokens` were added. An old snapshot without
+   * it restores unstamped, which resolves to `orphaned` — honest, and exactly
+   * what a session jmux did not create already gets.
+   */
+  projectId?: string | null;
 }
 
 export interface SnapshotFile {
