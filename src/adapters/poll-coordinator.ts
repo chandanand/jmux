@@ -1,4 +1,5 @@
 import { resolveSessionContext } from "./context-resolver";
+import type { AdapterSet } from "./registry";
 import { logError } from "../log";
 import {
   HttpError,
@@ -78,6 +79,7 @@ export class PollCoordinator {
   private degradedSessions = new Set<string>();
   /** Backfill waits for start(), which main.ts calls once adapter auth settles. */
   private started = false;
+  private epoch = 0;
 
   get rateLimitState(): RateLimitState {
     return this._rateLimitState;
@@ -89,6 +91,43 @@ export class PollCoordinator {
 
   get issueTracker(): IssueTrackerAdapter | null {
     return this.opts.issueTracker;
+  }
+
+  /** The current adapter generation. Exposed so tests can observe a swap. */
+  get adapterEpoch(): number { return this.epoch; }
+
+  /** Sessions being resolved right now. Exposed so a swap can be seen to drain them. */
+  get inFlightCount(): number { return this.inFlight.size; }
+
+  /** Whether a captured epoch is still the live one. */
+  private isCurrent(epoch: number): boolean { return epoch === this.epoch; }
+
+  /**
+   * Replace the adapters and retire everything derived from the old ones.
+   *
+   * Clearing is not optional. Contexts, global caches and link signatures were
+   * all computed against a different workspace, and `resolvedLinkSignatures` in
+   * particular would make every session look freshly resolved and suppress the
+   * re-resolve that would fix it. Sessions are re-queued so they refill from
+   * the new adapters.
+   */
+  setAdapters(set: AdapterSet): void {
+    this.epoch++;
+    this.opts.codeHost = set.codeHost;
+    this.opts.issueTracker = set.issueTracker;
+
+    this.contexts.clear();
+    this.resolvedLinkSignatures.clear();
+    this.degradedSessions.clear();
+    this.globalIssues = [];
+    this.globalMrs = [];
+    this.globalReviewMrs = [];
+    this._rateLimitState = "normal";
+    this.pending.clear();
+    this.inFlight.clear();
+
+    for (const name of this.sessionDirs.keys()) this.enqueueBackfill(name);
+    this.opts.onUpdate("__global__");
   }
 
   getGlobalIssues(): Issue[] { return this.globalIssues; }
@@ -194,29 +233,41 @@ export class PollCoordinator {
 
   async pollGlobal(): Promise<void> {
     await this.retryUnreachableAuth();
+    // Captured after the retry, since that awaits and a swap can land inside it.
     const { codeHost, issueTracker } = this.opts;
+    const epoch = this.epoch;
 
     if (issueTracker && issueTracker.authState === "ok") {
       try {
-        this.globalIssues = await issueTracker.getMyIssues();
+        const issues = await issueTracker.getMyIssues();
+        if (!this.isCurrent(epoch)) return;
+        this.globalIssues = issues;
       } catch (e) {
+        if (!this.isCurrent(epoch)) return;
         logError("PollCoordinator", `global issues poll failed: ${(e as Error).message}`);
       }
     }
 
     if (codeHost && codeHost.authState === "ok") {
       try {
-        this.globalMrs = await codeHost.getMyMergeRequests();
+        const mrs = await codeHost.getMyMergeRequests();
+        if (!this.isCurrent(epoch)) return;
+        this.globalMrs = mrs;
       } catch (e) {
+        if (!this.isCurrent(epoch)) return;
         logError("PollCoordinator", `global MRs poll failed: ${(e as Error).message}`);
       }
       try {
-        this.globalReviewMrs = await codeHost.getMrsAwaitingMyReview();
+        const review = await codeHost.getMrsAwaitingMyReview();
+        if (!this.isCurrent(epoch)) return;
+        this.globalReviewMrs = review;
       } catch (e) {
+        if (!this.isCurrent(epoch)) return;
         logError("PollCoordinator", `global review MRs poll failed: ${(e as Error).message}`);
       }
     }
 
+    if (!this.isCurrent(epoch)) return;
     this.opts.onUpdate("__global__");
   }
 

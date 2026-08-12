@@ -529,3 +529,67 @@ describe("PollCoordinator retries unreachable adapters", () => {
     expect(authCalls).toBe(0);
   });
 });
+
+describe("PollCoordinator adapter swap", () => {
+  function tracker(over: Partial<IssueTrackerAdapter> = {}): IssueTrackerAdapter {
+    return {
+      type: "linear", authState: "ok" as AdapterAuthState, authHint: "", identity: null,
+      authenticate: async () => {},
+      getMyIssues: async () => [],
+      ...over,
+    } as unknown as IssueTrackerAdapter;
+  }
+
+  test("setAdapters advances the epoch", () => {
+    const coord = new PollCoordinator({
+      codeHost: null, issueTracker: null,
+      onUpdate: () => {}, getSessionDir: () => null, sessionState: null,
+    });
+    const before = coord.adapterEpoch;
+    coord.setAdapters({ codeHost: null, issueTracker: null });
+    expect(coord.adapterEpoch).toBeGreaterThan(before);
+  });
+
+  test("results from a retired adapter are dropped", async () => {
+    let release: (v: Issue[]) => void = () => {};
+    const slow = new Promise<Issue[]>((r) => { release = r; });
+    const coord = new PollCoordinator({
+      codeHost: null,
+      issueTracker: tracker({ getMyIssues: () => slow } as Partial<IssueTrackerAdapter>),
+      onUpdate: () => {}, getSessionDir: () => null, sessionState: null,
+    });
+
+    const inFlight = coord.pollGlobal();
+    coord.setAdapters({ codeHost: null, issueTracker: null });
+    release([{ id: "from-the-old-workspace" } as Issue]);
+    await inFlight;
+
+    expect(coord.getGlobalIssues()).toEqual([]);
+  });
+
+  test("setAdapters clears provider-derived caches", async () => {
+    const coord = new PollCoordinator({
+      codeHost: null,
+      issueTracker: tracker({ getMyIssues: async () => [{ id: "a" } as Issue] } as Partial<IssueTrackerAdapter>),
+      onUpdate: () => {}, getSessionDir: () => null, sessionState: null,
+    });
+    await coord.pollGlobal();
+    expect(coord.getGlobalIssues()).toHaveLength(1);
+    coord.setAdapters({ codeHost: null, issueTracker: null });
+    expect(coord.getGlobalIssues()).toEqual([]);
+  });
+
+  test("the new adapters are the ones subsequently polled", async () => {
+    const coord = new PollCoordinator({
+      codeHost: null,
+      issueTracker: tracker({ getMyIssues: async () => [{ id: "old" } as Issue] } as Partial<IssueTrackerAdapter>),
+      onUpdate: () => {}, getSessionDir: () => null, sessionState: null,
+    });
+    coord.setAdapters({
+      codeHost: null,
+      issueTracker: tracker({ getMyIssues: async () => [{ id: "new" } as Issue] } as Partial<IssueTrackerAdapter>),
+    });
+    await coord.pollGlobal();
+    expect(coord.getGlobalIssues().map((i) => i.id)).toEqual(["new"]);
+  });
+});
