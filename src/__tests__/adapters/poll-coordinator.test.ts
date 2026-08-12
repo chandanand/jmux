@@ -630,3 +630,55 @@ describe("PollCoordinator swap during in-flight resolution", () => {
     expect(coord.inFlightCount).toBe(0);
   });
 });
+
+describe("PollCoordinator retired-adapter reports", () => {
+  function liveTracker(): IssueTrackerAdapter {
+    return {
+      type: "linear", authState: "ok" as AdapterAuthState, authHint: "", identity: null,
+      authenticate: async () => {}, getMyIssues: async () => [],
+    } as unknown as IssueTrackerAdapter;
+  }
+
+  test("a late auth failure from a retired adapter does not mark the new one failed", () => {
+    const fresh = liveTracker();
+    const coord = new PollCoordinator({
+      codeHost: null, issueTracker: null,
+      onUpdate: () => {}, getSessionDir: () => null, sessionState: null,
+    });
+    const stale = coord.adapterEpoch;
+    coord.setAdapters({ codeHost: null, issueTracker: fresh });
+    coord.reportAuthFailure("issueTracker", stale);
+    expect(fresh.authState).toBe("ok");
+  });
+
+  test("a current auth failure still marks the adapter failed", () => {
+    const live = liveTracker();
+    const coord = new PollCoordinator({
+      codeHost: null, issueTracker: live,
+      onUpdate: () => {}, getSessionDir: () => null, sessionState: null,
+    });
+    coord.reportAuthFailure("issueTracker", coord.adapterEpoch);
+    expect(live.authState).toBe("failed");
+  });
+
+  test("an auth failure with no epoch still applies, for callers that have none", () => {
+    const live = liveTracker();
+    const coord = new PollCoordinator({
+      codeHost: null, issueTracker: live,
+      onUpdate: () => {}, getSessionDir: () => null, sessionState: null,
+    });
+    coord.reportAuthFailure("issueTracker");
+    expect(live.authState).toBe("failed");
+  });
+
+  test("a retired rate-limit report does not throttle the new adapter", () => {
+    const coord = new PollCoordinator({
+      codeHost: null, issueTracker: null,
+      onUpdate: () => {}, getSessionDir: () => null, sessionState: null,
+    });
+    const stale = coord.adapterEpoch;
+    coord.setAdapters({ codeHost: null, issueTracker: null });
+    coord.reportRateLimit("hard_limited", stale);
+    expect(coord.rateLimitState).toBe("normal");
+  });
+});

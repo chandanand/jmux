@@ -406,7 +406,14 @@ export class PollCoordinator {
     return this.contexts;
   }
 
-  reportRateLimit(state: RateLimitState): void {
+  /**
+   * `epoch` is optional so callers that have none keep working. When supplied
+   * and stale the report is dropped: a 429 belongs to the adapter that earned
+   * it, and applying a retired one throttles a brand-new adapter that has made
+   * no requests at all.
+   */
+  reportRateLimit(state: RateLimitState, epoch?: number): void {
+    if (epoch !== undefined && !this.isCurrent(epoch)) return;
     this._rateLimitState = state;
     this.stop();
     if (state !== "hard_limited") {
@@ -414,7 +421,13 @@ export class PollCoordinator {
     }
   }
 
-  reportAuthFailure(adapterKey: "codeHost" | "issueTracker"): void {
+  /**
+   * Looks up the *current* adapter, so a late 401 from a retired one would
+   * otherwise mark its replacement dead — with no request of its own having
+   * failed, and nothing on screen able to explain why.
+   */
+  reportAuthFailure(adapterKey: "codeHost" | "issueTracker", epoch?: number): void {
+    if (epoch !== undefined && !this.isCurrent(epoch)) return;
     const adapter = this.opts[adapterKey];
     if (adapter) {
       adapter.authState = "failed";
@@ -469,6 +482,10 @@ export class PollCoordinator {
   }
 
   private async pollActiveSession(): Promise<void> {
+    // Every catch below reports auth/rate state against the *current* adapter,
+    // so a failure from a retired one must not be applied. Captured once here
+    // and passed to each report.
+    const epoch = this.epoch;
     if (!this.activeSession || this._rateLimitState === "hard_limited") return;
     const name = this.activeSession;
     const ctx = this.contexts.get(name);
@@ -491,62 +508,74 @@ export class PollCoordinator {
     const dir = this.sessionDirs.get(name);
     if (dir) {
       const currentBranch = await getGitBranch(dir);
+      if (!this.isCurrent(epoch)) return;
       if (currentBranch !== ctx.branch) {
         await this.resolveContext(name);
         return;
       }
     }
 
+    // Re-read rather than reusing the `ctx` captured above: a swap clears
+    // `contexts`, which detaches that object from the map. Mutating it below
+    // would write into something nothing reads again.
+    const live = this.contexts.get(name);
+    if (!live) return;
+
     const { codeHost, issueTracker } = this.opts;
     let changed = false;
 
     // Poll all MRs by ID
-    if (ctx.mrs.length > 0 && codeHost && codeHost.authState === "ok") {
+    if (live.mrs.length > 0 && codeHost && codeHost.authState === "ok") {
       try {
-        const ids = ctx.mrs.map((mr) => mr.id);
+        const ids = live.mrs.map((mr) => mr.id);
         const updated = await codeHost.pollMergeRequestsByIds(ids);
-        for (let i = 0; i < ctx.mrs.length; i++) {
-          const fresh = updated.get(ctx.mrs[i].id);
+        if (!this.isCurrent(epoch)) return;
+        for (let i = 0; i < live.mrs.length; i++) {
+          const fresh = updated.get(live.mrs[i].id);
           if (fresh) {
-            ctx.mrs[i] = { ...fresh, source: ctx.mrs[i].source };
+            live.mrs[i] = { ...fresh, source: live.mrs[i].source };
             changed = true;
           }
         }
       } catch (e) {
+        if (!this.isCurrent(epoch)) return;
         const status = e instanceof HttpError ? e.status : 0;
-        if (status === 401 || status === 403) this.reportAuthFailure("codeHost");
-        else if (status === 429) this.reportRateLimit("rate_limited");
+        if (status === 401 || status === 403) this.reportAuthFailure("codeHost", epoch);
+        else if (status === 429) this.reportRateLimit("rate_limited", epoch);
         else logError("PollCoordinator", `poll error: ${(e as Error).message}`);
       }
     }
 
     // Poll all issues by ID
-    if (ctx.issues.length > 0 && issueTracker && issueTracker.authState === "ok") {
+    if (live.issues.length > 0 && issueTracker && issueTracker.authState === "ok") {
       try {
-        const ids = ctx.issues.map((issue) => issue.id);
+        const ids = live.issues.map((issue) => issue.id);
         const updated = await issueTracker.pollAllIssues(ids);
-        for (let i = 0; i < ctx.issues.length; i++) {
-          const fresh = updated.get(ctx.issues[i].id);
+        if (!this.isCurrent(epoch)) return;
+        for (let i = 0; i < live.issues.length; i++) {
+          const fresh = updated.get(live.issues[i].id);
           if (fresh) {
-            ctx.issues[i] = { ...fresh, source: ctx.issues[i].source };
+            live.issues[i] = { ...fresh, source: live.issues[i].source };
             changed = true;
           }
         }
       } catch (e) {
+        if (!this.isCurrent(epoch)) return;
         const status = e instanceof HttpError ? e.status : 0;
-        if (status === 401 || status === 403) this.reportAuthFailure("issueTracker");
-        else if (status === 429) this.reportRateLimit("rate_limited");
+        if (status === 401 || status === 403) this.reportAuthFailure("issueTracker", epoch);
+        else if (status === 429) this.reportRateLimit("rate_limited", epoch);
         else logError("PollCoordinator", `poll error: ${(e as Error).message}`);
       }
     }
 
     if (changed) {
-      ctx.resolvedAt = Date.now();
+      live.resolvedAt = Date.now();
       this.opts.onUpdate(name);
     }
   }
 
   private async pollBackgroundSessions(): Promise<void> {
+    const epoch = this.epoch;
     if (this._rateLimitState !== "normal") return;
     const { codeHost, issueTracker } = this.opts;
 
@@ -588,6 +617,9 @@ export class PollCoordinator {
     if (branchContexts.length > 0 && codeHost && codeHost.authState === "ok") {
       try {
         const results = await codeHost.pollAllMergeRequests(branchContexts);
+        // contexts is cleared by a swap, but re-queued sessions can repopulate it
+        // before these results land — so the map lookup alone is not enough.
+        if (!this.isCurrent(epoch)) return;
         for (const [sessionName, mr] of results) {
           const ctx = this.contexts.get(sessionName);
           if (ctx) {
@@ -598,8 +630,9 @@ export class PollCoordinator {
           }
         }
       } catch (e) {
+        if (!this.isCurrent(epoch)) return;
         const status = e instanceof HttpError ? e.status : 0;
-        if (status === 429) this.reportRateLimit("rate_limited");
+        if (status === 429) this.reportRateLimit("rate_limited", epoch);
         else logError("PollCoordinator", `poll error: ${(e as Error).message}`);
       }
     }
@@ -608,6 +641,7 @@ export class PollCoordinator {
     if (nonBranchMrIds.length > 0 && codeHost && codeHost.authState === "ok") {
       try {
         const results = await codeHost.pollMergeRequestsByIds(nonBranchMrIds);
+        if (!this.isCurrent(epoch)) return;
         for (const [mrId, mr] of results) {
           const sessionName = mrIdToSession.get(mrId);
           if (!sessionName) continue;
@@ -622,8 +656,9 @@ export class PollCoordinator {
           }
         }
       } catch (e) {
+        if (!this.isCurrent(epoch)) return;
         const status = e instanceof HttpError ? e.status : 0;
-        if (status === 429) this.reportRateLimit("rate_limited");
+        if (status === 429) this.reportRateLimit("rate_limited", epoch);
         else logError("PollCoordinator", `poll error: ${(e as Error).message}`);
       }
     }
@@ -632,6 +667,7 @@ export class PollCoordinator {
     if (allIssueIds.length > 0 && issueTracker && issueTracker.authState === "ok") {
       try {
         const results = await issueTracker.pollAllIssues(allIssueIds);
+        if (!this.isCurrent(epoch)) return;
         for (const [issueId, issue] of results) {
           const sessionName = issueIdToSession.get(issueId);
           if (!sessionName) continue;
@@ -646,8 +682,9 @@ export class PollCoordinator {
           }
         }
       } catch (e) {
+        if (!this.isCurrent(epoch)) return;
         const status = e instanceof HttpError ? e.status : 0;
-        if (status === 429) this.reportRateLimit("rate_limited");
+        if (status === 429) this.reportRateLimit("rate_limited", epoch);
         else logError("PollCoordinator", `poll error: ${(e as Error).message}`);
       }
     }
