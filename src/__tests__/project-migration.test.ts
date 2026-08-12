@@ -146,3 +146,33 @@ describe("migrateToProjects", () => {
     expect(r.projects.map((p) => p.id)).toEqual(["kept"]);
   });
 });
+
+describe("migrateToProjects — key canonicalization", () => {
+  // macOS: /var is a symlink to /private/var. A repos key written non-canonically
+  // will not string-equal the resolver's canonical answer, and the override then
+  // becomes its own orphan Project beside the real one — silently doubling the
+  // repo. Caught by running the migration against a real repo, not by the pure
+  // tests, which had been handing back exactly the key they were given.
+  test("matches a repos key that differs from the resolver's answer only by a symlink", () => {
+    const legacy: LegacyShape = {
+      issueWorkflow: { teamRepoMap: { Core: "/var/tmp/repo" } },
+      repos: { "/var/tmp/repo/.git": { claudeCommand: "cc" } },
+    };
+    const r = migrateToProjects(
+      legacy,
+      () => "/private/var/tmp/repo/.git",
+      (path) => path.replace(/^\/var\//, "/private/var/"),
+    );
+    expect(r.projects).toHaveLength(1);
+    expect(r.projects[0].settings?.agentCommand).toBe("cc");
+  });
+
+  test("without canonicalization the same input doubles the repo — the bug this guards", () => {
+    const legacy: LegacyShape = {
+      issueWorkflow: { teamRepoMap: { Core: "/var/tmp/repo" } },
+      repos: { "/var/tmp/repo/.git": { claudeCommand: "cc" } },
+    };
+    const r = migrateToProjects(legacy, () => "/private/var/tmp/repo/.git");
+    expect(r.projects).toHaveLength(2);
+  });
+});

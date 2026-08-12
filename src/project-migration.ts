@@ -60,6 +60,16 @@ function toProjectSettings(legacy: RepoSettings | undefined): ProjectSettings | 
 export function migrateToProjects(
   legacy: LegacyShape,
   resolveCommonDir: (dir: string) => string | null,
+  /**
+   * Applied to both sides of the join before matching.
+   *
+   * Load-bearing on macOS, where `/var` is a symlink to `/private/var`: a
+   * `repos` key written before canonicalization existed, or edited by hand,
+   * will not string-equal the resolver's canonical answer — and the override
+   * then becomes its own orphan Project beside the real one, silently doubling
+   * the repo. Defaults to identity so the pure tests stay pure.
+   */
+  canonicalize: (path: string) => string = (x) => x,
 ): MigrationResult {
   const globalDefaults = toProjectSettings(legacy.repoDefaults);
 
@@ -70,7 +80,14 @@ export function migrateToProjects(
   }
 
   const teamMap = legacy.issueWorkflow?.teamRepoMap ?? {};
-  const repos = legacy.repos ?? {};
+  // Re-keyed up front so every later lookup compares like with like.
+  const repos: Record<string, RepoSettings> = {};
+  const originalKey = new Map<string, string>();
+  for (const [key, value] of Object.entries(legacy.repos ?? {})) {
+    const canon = canonicalize(key);
+    repos[canon] = value;
+    originalKey.set(canon, key);
+  }
   if (Object.keys(teamMap).length === 0 && Object.keys(repos).length === 0) {
     return { projects: [], globalDefaults, changed: false };
   }
@@ -93,7 +110,8 @@ export function migrateToProjects(
   // override was a property of the *repo*.
   const matched = new Set<string>();
   for (const p of projects) {
-    const key = resolveCommonDir(p.dir);
+    const resolvedKey = resolveCommonDir(p.dir);
+    const key = resolvedKey ? canonicalize(resolvedKey) : null;
     const override = key ? repos[key] : undefined;
     if (!override) continue;
     matched.add(key!);
@@ -106,7 +124,7 @@ export function migrateToProjects(
   // silently dropped along with whatever they set on it.
   for (const [key, override] of Object.entries(repos)) {
     if (matched.has(key)) continue;
-    const dir = key.replace(/\/\.git$/, "");
+    const dir = (originalKey.get(key) ?? key).replace(/\/\.git$/, "");
     const title = basename(dir) || dir;
     const id = makeProjectId(title, taken);
     taken.add(id);

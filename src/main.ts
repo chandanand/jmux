@@ -153,6 +153,7 @@ import { loadProjectDirsCache, saveProjectDirsCache } from "./project-dirs-cache
 import { ConfigStore, ConfigCorruptError, sanitizeTmuxSessionName, DEFAULT_IMAGE_MAX_ROWS, DEFAULT_BROWSER_PANE_SIZE, DEFAULT_BROWSER_DISPLAY_SCALE, DEFAULT_BROWSER_FPS } from "./config";
 import {
   RepoFactsCache,
+  canonicalizeRepoPath,
   resolveForRepo,
   buildWorktreeCommand,
   REPO_SETTING_DEFAULTS,
@@ -1703,6 +1704,18 @@ const pollCoordinator = new PollCoordinator({
   },
   sessionState,
 });
+
+/**
+ * Resolve a repo directory to its git common dir, for the Projects migration.
+ *
+ * Async and bounded via `gitOutput` rather than the synchronous
+ * `resolveRepoRoot`: this runs once per configured repo at startup, and a
+ * worktree on a stalled mount would otherwise freeze the first frame.
+ */
+async function commonDirForMigration(dir: string): Promise<string | null> {
+  const out = await gitOutput(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  return out ? canonicalizeRepoPath(out) : null;
+}
 
 initAdapters().then(() => {
   pollCoordinator.start();
@@ -10304,6 +10317,26 @@ async function start(): Promise<void> {
   }
 
   renderFrame();
+
+  // The Projects migration, deliberately here and not beside the config store.
+  // It reaches `gitOutput`, which closes over a `const` declared thousands of
+  // lines below the store — running it at module scope hit that binding's
+  // temporal dead zone, and `gitOutput`'s own catch swallowed the error into a
+  // null, so the migration silently failed to match any per-repo override and
+  // doubled every repo. Exactly the hazard boot-smoke exists for, except it
+  // produced wrong data instead of a crash, so nothing caught it but a
+  // end-to-end run.
+  //
+  // A failure is logged and left: the legacy keys are still in place, so jmux
+  // keeps working exactly as it did.
+  try {
+    if (await configStore.migrateProjects(commonDirForMigration)) {
+      logError("jmux", `migrated ${configStore.config.projects?.length ?? 0} project(s) from legacy config`);
+      scheduleRender();
+    }
+  } catch (e) {
+    logError("jmux", `project migration failed, legacy config left in place: ${(e as Error).message}`);
+  }
 
   // First run opens the setup checklist rather than a wall of keybindings.
   // The chords it used to list now live in `Ctrl-a ?` (and the `?` button),

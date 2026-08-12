@@ -9,7 +9,7 @@ import type { UnparkTrigger } from "./parking";
 import type { ScreenSignature } from "./agent-screen";
 import type { ProjectConfig, ProjectSettings } from "./project";
 import type { ProjectRoutes } from "./project-routing";
-import { migrateLegacyConfig } from "./repo-settings";
+import { migrateLegacyConfig, canonicalizeRepoPath } from "./repo-settings";
 import { logError } from "./log";
 import { writeFileAtomicSync } from "./atomic-write";
 import { migrateToProjects } from "./project-migration";
@@ -676,6 +676,7 @@ export class ConfigStore {
         issueWorkflow: this.data.issueWorkflow,
       },
       (d) => resolved.get(d) ?? null,
+      canonicalizeRepoPath,
     );
     if (!result.changed) return false;
 
