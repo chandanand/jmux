@@ -565,3 +565,72 @@ describe("forward compatibility", () => {
     expect(JSON.parse(readFileSync(path, "utf-8")).schemaVersion).toBe(999);
   });
 });
+
+describe("ConfigStore projects", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = join(tmpdir(), `jmux-proj-${process.pid}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    path = join(dir, "config.json");
+    writeFileSync(path, "{}");
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("upsertProject adds and then replaces by id", () => {
+    const store = new ConfigStore(path);
+    store.upsertProject({ id: "api", title: "API", dir: "/code/api" });
+    expect(store.config.projects).toHaveLength(1);
+    store.upsertProject({ id: "api", title: "API v2", dir: "/code/api" });
+    expect(store.config.projects).toHaveLength(1);
+    expect(store.config.projects?.[0].title).toBe("API v2");
+  });
+
+  // Soft delete, so a session still stamped with the id can report `orphaned`
+  // rather than silently re-routing to whatever else claims its team.
+  test("deleteProject marks rather than removes", () => {
+    const store = new ConfigStore(path);
+    store.upsertProject({ id: "api", title: "API", dir: "/code/api" });
+    store.deleteProject("api");
+    expect(store.config.projects).toHaveLength(1);
+    expect(store.config.projects?.[0].deletedAt).toBeDefined();
+  });
+
+  test("setProjectSetting stores by key presence and clearProjectSetting removes the key", () => {
+    const store = new ConfigStore(path);
+    store.upsertProject({ id: "api", title: "API", dir: "/code/api" });
+    store.setProjectSetting("api", "agentCommand", "codex");
+    expect(store.config.projects?.[0].settings?.agentCommand).toBe("codex");
+    store.clearProjectSetting("api", "agentCommand");
+    expect("agentCommand" in (store.config.projects?.[0].settings ?? {})).toBe(false);
+  });
+
+  test("an explicit null is stored as a present key, not dropped", () => {
+    const store = new ConfigStore(path);
+    store.upsertProject({ id: "api", title: "API", dir: "/code/api" });
+    store.setProjectSetting("api", "onMrMergedState", null);
+    expect("onMrMergedState" in (store.config.projects?.[0].settings ?? {})).toBe(true);
+  });
+
+  test("routes are written and cleared by kind", () => {
+    const store = new ConfigStore(path);
+    store.setRoute("issue", "I1", "api");
+    store.setRoute("linearProject", "LP1", "web");
+    expect(store.config.routes?.issue?.I1).toBe("api");
+    expect(store.config.routes?.linearProject?.LP1).toBe("web");
+    store.clearRoute("issue", "I1");
+    expect(store.config.routes?.issue?.I1).toBeUndefined();
+  });
+
+  test("everything persists across a reload", () => {
+    const store = new ConfigStore(path);
+    store.upsertProject({ id: "api", title: "API", dir: "/code/api" });
+    store.setProjectSetting("api", "agentCommand", "codex");
+    store.setRoute("issue", "I1", "api");
+    const reloaded = new ConfigStore(path);
+    expect(reloaded.config.projects?.[0].settings?.agentCommand).toBe("codex");
+    expect(reloaded.config.routes?.issue?.I1).toBe("api");
+  });
+});

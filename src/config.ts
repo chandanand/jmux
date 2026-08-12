@@ -7,6 +7,8 @@ import type { TabEntry } from "./glass/tabs";
 import type { RepoSettings } from "./repo-settings";
 import type { UnparkTrigger } from "./parking";
 import type { ScreenSignature } from "./agent-screen";
+import type { ProjectConfig, ProjectSettings } from "./project";
+import type { ProjectRoutes } from "./project-routing";
 import { migrateLegacyConfig } from "./repo-settings";
 import { logError } from "./log";
 import { writeFileAtomicSync } from "./atomic-write";
@@ -101,6 +103,16 @@ export interface SessionTitleConfig {
 export interface JmuxConfig {
   /** See CONFIG_SCHEMA_VERSION. Absent on files written before it existed. */
   schemaVersion?: number;
+  /**
+   * One repo and at most one tracker team, each. Written by the migration off
+   * `teamRepoMap`/`repos`, and by the Projects screen. Its presence is what
+   * suppresses the migration, so a Project the user deleted stays deleted.
+   */
+  projects?: ProjectConfig[];
+  /** The global settings tier that per-Project overrides sit on top of. */
+  projectDefaults?: ProjectSettings;
+  /** Learned routes. One table — two could disagree. */
+  routes?: ProjectRoutes;
   sidebarWidth?: number;
   infoPanelWidth?: number;
   /** Info panel list/detail split, as a fraction of the splittable rows. */
@@ -634,6 +646,83 @@ export class ConfigStore {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     writeFileSync(this.path, JSON.stringify({}, null, 2) + "\n");
     return true;
+  }
+
+  /** Add or replace a Project by id. */
+  upsertProject(project: ProjectConfig): void {
+    const list = [...(this.data.projects ?? [])];
+    const at = list.findIndex((p) => p.id === project.id);
+    if (at >= 0) list[at] = project;
+    else list.push(project);
+    this.data.projects = list;
+    this.persist();
+  }
+
+  /**
+   * Soft delete, following t3code's `deleted_at`. A session still stamped with
+   * this id must be able to report `orphaned` rather than silently re-routing
+   * to whatever else claims its team.
+   */
+  deleteProject(id: string): void {
+    const list = [...(this.data.projects ?? [])];
+    const at = list.findIndex((p) => p.id === id);
+    if (at < 0) return;
+    list[at] = { ...list[at], deletedAt: new Date().toISOString() };
+    this.data.projects = list;
+    this.persist();
+  }
+
+  /**
+   * Write one setting on one Project.
+   *
+   * Stored by key *presence*: `null` and values equal to the global default are
+   * real overrides, and dropping either would erase intent the user cannot
+   * express any other way.
+   */
+  setProjectSetting<K extends keyof ProjectSettings>(
+    id: string,
+    field: K,
+    value: ProjectSettings[K],
+  ): void {
+    const list = [...(this.data.projects ?? [])];
+    const at = list.findIndex((p) => p.id === id);
+    if (at < 0) return;
+    list[at] = { ...list[at], settings: { ...list[at].settings, [field]: value } };
+    this.data.projects = list;
+    this.persist();
+  }
+
+  /** Remove the key entirely, so the row falls back to the global tier. */
+  clearProjectSetting(id: string, field: keyof ProjectSettings): void {
+    const list = [...(this.data.projects ?? [])];
+    const at = list.findIndex((p) => p.id === id);
+    if (at < 0) return;
+    const settings = { ...list[at].settings };
+    delete settings[field];
+    list[at] = { ...list[at], settings };
+    this.data.projects = list;
+    this.persist();
+  }
+
+  setProjectDefault<K extends keyof ProjectSettings>(field: K, value: ProjectSettings[K]): void {
+    this.data.projectDefaults = { ...this.data.projectDefaults, [field]: value };
+    this.persist();
+  }
+
+  setRoute(kind: "issue" | "linearProject", key: string, projectId: string): void {
+    const routes = { ...this.data.routes };
+    routes[kind] = { ...routes[kind], [key]: projectId };
+    this.data.routes = routes;
+    this.persist();
+  }
+
+  clearRoute(kind: "issue" | "linearProject", key: string): void {
+    const routes = { ...this.data.routes };
+    const table = { ...routes[kind] };
+    delete table[key];
+    routes[kind] = table;
+    this.data.routes = routes;
+    this.persist();
   }
 
   private persist(): boolean {
