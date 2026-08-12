@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { sanitizeTmuxSessionName, buildOtelResourceAttrs, loadUserConfig, ConfigStore, defaultConfig } from "../config";
+import { sanitizeTmuxSessionName, buildOtelResourceAttrs, loadUserConfig, ConfigStore, defaultConfig, ConfigCorruptError, readConfigFile } from "../config";
 import { writeFileSync, unlinkSync, existsSync, mkdirSync, rmSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -391,5 +391,73 @@ describe("ConfigStore durability", () => {
     mkdirSync(path);
     store.set("sidebarWidth", 32);
     expect(store.lastWriteError).not.toBeNull();
+  });
+});
+
+describe("readConfigFile", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = join(tmpdir(), `jmux-read-${process.pid}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    path = join(dir, "config.json");
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("missing file reports missing, not corrupt", () => {
+    expect(readConfigFile(path)).toEqual({ kind: "missing" });
+  });
+
+  test("valid JSON reports ok with the parsed object", () => {
+    writeFileSync(path, '{"sidebarWidth":40}');
+    const r = readConfigFile(path);
+    expect(r.kind).toBe("ok");
+    if (r.kind === "ok") expect(r.raw.sidebarWidth).toBe(40);
+  });
+
+  test("truncated JSON reports corrupt", () => {
+    writeFileSync(path, '{"sidebarWidth":4');
+    expect(readConfigFile(path).kind).toBe("corrupt");
+  });
+
+  test("a JSON array reports corrupt", () => {
+    writeFileSync(path, "[]");
+    expect(readConfigFile(path).kind).toBe("corrupt");
+  });
+
+  test("a bare JSON scalar reports corrupt", () => {
+    writeFileSync(path, "42");
+    expect(readConfigFile(path).kind).toBe("corrupt");
+  });
+});
+
+describe("ConfigStore construction on a corrupt file", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = join(tmpdir(), `jmux-corrupt-${process.pid}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    path = join(dir, "config.json");
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("throws ConfigCorruptError rather than falling back to defaults", () => {
+    writeFileSync(path, "{ not json");
+    expect(() => new ConfigStore(path)).toThrow(ConfigCorruptError);
+  });
+
+  test("does not overwrite the corrupt file", () => {
+    writeFileSync(path, "{ not json");
+    try { new ConfigStore(path); } catch { /* expected */ }
+    expect(readFileSync(path, "utf-8")).toBe("{ not json");
+  });
+
+  test("a missing file still constructs with defaults", () => {
+    const store = new ConfigStore(path);
+    expect(store.config.snapshot?.enabled).toBe(true);
   });
 });

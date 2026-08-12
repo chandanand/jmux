@@ -365,16 +365,55 @@ function mergeConfigWithDefaults(userConfig: JmuxConfig, defaults: JmuxConfig): 
  * Merges with defaults to ensure all required fields are present.
  * Returns merged config, or just defaults if the file is missing or unparseable.
  */
+export class ConfigCorruptError extends Error {
+  constructor(readonly path: string, readonly reason: string) {
+    super(`config at ${path} is not valid JSON: ${reason}`);
+    this.name = "ConfigCorruptError";
+  }
+}
+
+export type ConfigRead =
+  | { kind: "ok"; raw: JmuxConfig }
+  | { kind: "missing" }
+  | { kind: "corrupt"; error: string };
+
+/**
+ * Read the config file, distinguishing "absent" from "unparseable".
+ *
+ * These were one case for as long as the loader used `catch {}` and fell back
+ * to defaults, which is what made a truncated file destructive: the next
+ * setting change wrote defaults over a file that was only damaged. Absent is
+ * normal and means defaults; corrupt means touch nothing.
+ *
+ * A non-object (array, scalar, null) is corrupt rather than ok. `JSON.parse`
+ * accepts all of them and the spread in mergeConfigWithDefaults would silently
+ * produce a config with none of the user's keys.
+ */
+export function readConfigFile(path: string): ConfigRead {
+  if (!existsSync(path)) return { kind: "missing" };
+  let text: string;
+  try {
+    text = readFileSync(path, "utf-8");
+  } catch (e) {
+    return { kind: "corrupt", error: (e as Error).message };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    return { kind: "corrupt", error: (e as Error).message };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { kind: "corrupt", error: "expected a JSON object" };
+  }
+  return { kind: "ok", raw: parsed as JmuxConfig };
+}
+
 export function loadUserConfig(configPath?: string): JmuxConfig {
   const path = configPath ?? DEFAULT_CONFIG_PATH;
-  let raw: JmuxConfig = {};
-  try {
-    if (existsSync(path)) {
-      raw = JSON.parse(readFileSync(path, "utf-8")) as JmuxConfig;
-    }
-  } catch {
-    // Invalid config — use defaults
-  }
+  const read = readConfigFile(path);
+  if (read.kind === "corrupt") throw new ConfigCorruptError(path, read.error);
+  const raw = read.kind === "ok" ? read.raw : {};
   const { config } = migrateLegacyConfig(raw);
   return mergeConfigWithDefaults(config, defaultConfig);
 }
@@ -391,14 +430,12 @@ export class ConfigStore {
 
   constructor(configPath?: string) {
     this.path = configPath ?? DEFAULT_CONFIG_PATH;
-    let raw: JmuxConfig = {};
-    try {
-      if (existsSync(this.path)) {
-        raw = JSON.parse(readFileSync(this.path, "utf-8")) as JmuxConfig;
-      }
-    } catch {
-      // Invalid config — use defaults
-    }
+    const read = readConfigFile(this.path);
+    // Throws rather than falling back: a corrupt file that loads as defaults is
+    // one setting change away from being overwritten with them. main.ts catches
+    // this above the alt screen and the tmux pty, so it can exit cleanly.
+    if (read.kind === "corrupt") throw new ConfigCorruptError(this.path, read.error);
+    const raw: JmuxConfig = read.kind === "ok" ? read.raw : {};
     // Rewrite the file once when the on-disk shape predates repoDefaults/repos,
     // so no consumption site ever has to check two locations for a field.
     const { config, changed } = migrateLegacyConfig(raw);
