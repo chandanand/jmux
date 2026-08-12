@@ -258,6 +258,14 @@ export class SettingsScreen {
   private lastRenderRows = 24;
   private editState: EditState = null;
   private expandedMaps = new Set<string>();
+  /**
+   * The `/` filter. An explicit mode rather than type-to-filter, because bare
+   * typing collides with keys this screen already binds — `q` closes it and `d`
+   * clears an override, so "query" would close the screen on its first
+   * keystroke.
+   */
+  private filter = "";
+  private filtering = false;
 
   get isOpen(): boolean { return this._open; }
   get isEditing(): boolean { return this.editState !== null; }
@@ -267,12 +275,16 @@ export class SettingsScreen {
     this.selectedIndex = 0;
     this.scrollOffset = 0;
     this.editState = null;
+    this.filter = "";
+    this.filtering = false;
     this._open = true;
   }
 
   close(): void {
     this._open = false;
     this.editState = null;
+    this.filter = "";
+    this.filtering = false;
   }
 
   updateCategories(categories: SettingsCategory[]): void {
@@ -293,6 +305,34 @@ export class SettingsScreen {
     if (this.editState) {
       return this.handleEditInput(data);
     }
+
+    // Filter mode consumes everything printable, so the navigation keys below
+    // (q closes, d clears) cannot eat a search term.
+    if (this.filtering) {
+      if (data === "\x1b") {
+        this.filtering = false;
+        this.filter = "";
+        this.selectedIndex = 0;
+        this.scrollOffset = 0;
+        return { type: "none" };
+      }
+      if (data === "\r") { this.filtering = false; return { type: "none" }; }
+      if (data === "\x7f" || data === "\b") {
+        this.filter = this.filter.slice(0, -1);
+        this.clampSelection();
+        return { type: "none" };
+      }
+      if (data === "\x1b[A") { this.moveUp(); return { type: "none" }; }
+      if (data === "\x1b[B") { this.moveDown(); return { type: "none" }; }
+      if (data.length === 1 && data.charCodeAt(0) >= 32) {
+        this.filter += data;
+        this.clampSelection();
+        return { type: "none" };
+      }
+      return { type: "none" };
+    }
+
+    if (data === "/") { this.filtering = true; this.filter = ""; return { type: "none" }; }
 
     // Navigation mode
     if (data === "\x1b" || data === "q") {
@@ -362,6 +402,9 @@ export class SettingsScreen {
 
     // Header
     writeString(grid, 0, left, "Settings", HEADER_ATTRS);
+    if (this.filtering || this.filter) {
+      writeString(grid, 1, left, `/${this.filter}`, LABEL_ACTIVE);
+    }
 
     // Two reserved rows at the bottom: the explain line sits above the hints,
     // the same layout the workflow screen uses.
@@ -391,6 +434,10 @@ export class SettingsScreen {
       }
     }
 
+    if (this.filter && nodes.length === 0) {
+      writeString(grid, CONTENT_START_ROW, left + 2, "No matches", DIM_ATTRS);
+    }
+
     // Only a `setting` row has a description; a category header or a map entry
     // deliberately shows nothing rather than inheriting its neighbour's.
     const selectedNode = nodes[this.selectedIndex];
@@ -409,7 +456,7 @@ export class SettingsScreen {
   private renderHint(grid: CellGrid, row: number, left: number): void {
     const groups: Array<{ key: string; label: string }> = this.editState
       ? [{ key: "↵", label: "confirm" }, { key: "esc", label: "cancel" }]
-      : [{ key: "↵", label: "edit" }, { key: "esc", label: "close" }, { key: "↑↓", label: "navigate" }];
+      : [{ key: "↵", label: "edit" }, { key: "/", label: "search" }, { key: "esc", label: "close" }, { key: "↑↓", label: "navigate" }];
 
     let col = left;
     groups.forEach((group, i) => {
@@ -831,6 +878,14 @@ export class SettingsScreen {
     this.ensureVisible();
   }
 
+  /** Keep the cursor on a real node after the filter changes the node list. */
+  private clampSelection(): void {
+    const n = this.buildNodes().length;
+    if (this.selectedIndex >= n) this.selectedIndex = Math.max(0, n - 1);
+    this.scrollOffset = 0;
+    this.ensureVisible();
+  }
+
   private getSelectedNode(): SettingsNode | null {
     const nodes = this.buildNodes();
     return nodes[this.selectedIndex] ?? null;
@@ -851,16 +906,25 @@ export class SettingsScreen {
   }
 
   private buildNodes(): SettingsNode[] {
+    const q = this.filter.trim().toLowerCase();
     const nodes: SettingsNode[] = [];
     for (const cat of this.categories) {
+      const settings = q
+        ? cat.settings.filter((x) => x.label.toLowerCase().includes(q))
+        : cat.settings;
+      // A category with nothing matching is dropped whole: leaving its header
+      // would claim a section the filter has emptied.
+      if (q && settings.length === 0) continue;
       nodes.push({
         kind: "category",
         label: cat.label,
         collapsed: cat.collapsed,
-        count: cat.settings.length,
+        count: settings.length,
       });
-      if (cat.collapsed) continue;
-      for (const setting of cat.settings) {
+      // A filter overrides collapse. The user asked to see matches, and a match
+      // hidden inside a collapsed section reads as no match at all.
+      if (cat.collapsed && !q) continue;
+      for (const setting of settings) {
         nodes.push({ kind: "setting", setting });
         // Expanded map entries
         if (setting.type === "map" && this.expandedMaps.has(setting.id) && setting.getMapEntries) {

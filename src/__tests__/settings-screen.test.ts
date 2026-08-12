@@ -682,3 +682,114 @@ describe("SettingsScreen navigation parity", () => {
     expect(s.isOpen).toBe(false);
   });
 });
+
+// --- Search ---
+//
+// An explicit `/` mode rather than type-to-filter: bare typing collides with
+// the keys this screen already binds — `q` closes and `d` clears an override,
+// so "query" would close the screen on its first keystroke.
+function searchable(): SettingsCategory[] {
+  return [
+    {
+      label: "Display", collapsed: false,
+      settings: [
+        { id: "a", label: "Cache timers", type: "boolean", getValue: () => "on" },
+        { id: "b", label: "Inline images in issue previews", type: "boolean", getValue: () => "on" },
+      ],
+    },
+    {
+      label: "Integrations", collapsed: false,
+      settings: [
+        { id: "c", label: "Issue tracker", type: "text", getValue: () => "linear" },
+      ],
+    },
+  ];
+}
+
+function painted(s: SettingsScreen, cols = 80, rows = 24): string {
+  const grid = s.render(cols, rows);
+  return Array.from({ length: rows }, (_, r) => fullRow(grid, r)).join("\n");
+}
+
+function type(s: SettingsScreen, text: string): void {
+  for (const ch of text) s.handleInput(ch);
+}
+
+describe("SettingsScreen search", () => {
+  test("slash opens a filter that narrows the visible rows", () => {
+    const s = new SettingsScreen();
+    s.open(searchable());
+    s.handleInput("/");
+    type(s, "image");
+    const out = painted(s);
+    expect(out).toContain("Inline images");
+    expect(out).not.toContain("Cache timers");
+    expect(out).not.toContain("Issue tracker");
+  });
+
+  test("the filter is case-insensitive", () => {
+    const s = new SettingsScreen();
+    s.open(searchable());
+    s.handleInput("/");
+    type(s, "CACHE");
+    expect(painted(s)).toContain("Cache timers");
+  });
+
+  test("escape clears the filter and shows everything again", () => {
+    const s = new SettingsScreen();
+    s.open(searchable());
+    s.handleInput("/");
+    type(s, "cache");
+    s.handleInput("\x1b");
+    expect(painted(s)).toContain("Issue tracker");
+  });
+
+  test("q and d are typed into the filter, not treated as close and clear", () => {
+    const s = new SettingsScreen();
+    s.open(searchable());
+    s.handleInput("/");
+    s.handleInput("q");
+    s.handleInput("d");
+    expect(s.isOpen).toBe(true);
+  });
+
+  test("a filter matching nothing says so", () => {
+    const s = new SettingsScreen();
+    s.open(searchable());
+    s.handleInput("/");
+    type(s, "zzzz");
+    expect(painted(s)).toContain("No matches");
+  });
+
+  test("a category with no matching settings is hidden entirely", () => {
+    const s = new SettingsScreen();
+    s.open(searchable());
+    s.handleInput("/");
+    type(s, "tracker");
+    const out = painted(s);
+    expect(out).toContain("Integrations");
+    expect(out).not.toContain("Display");
+  });
+
+  test("a filter reaches into a collapsed category", () => {
+    const s = new SettingsScreen();
+    s.open([{
+      label: "Hidden Section", collapsed: true,
+      settings: [{ id: "x", label: "Buried setting", type: "text", getValue: () => "v" }],
+    }]);
+    expect(painted(s)).not.toContain("Buried setting");
+    s.handleInput("/");
+    type(s, "buried");
+    expect(painted(s)).toContain("Buried setting");
+  });
+
+  test("backspace widens the filter again", () => {
+    const s = new SettingsScreen();
+    s.open(searchable());
+    s.handleInput("/");
+    type(s, "cachez");
+    expect(painted(s)).toContain("No matches");
+    s.handleInput("\x7f");
+    expect(painted(s)).toContain("Cache timers");
+  });
+});
