@@ -9,6 +9,7 @@ import {
 } from "./types";
 import { logError } from "../log";
 import { openUrl } from "../platform";
+import { resolveCredential } from "../credentials";
 
 const GITHUB_API = "https://api.github.com";
 
@@ -112,7 +113,7 @@ export class GitHubAdapter implements CodeHostAdapter {
     // to be rejected. Without a real probe, swapping to a revoked token
     // replaces a working adapter with a dead one and reports success.
     const token =
-      process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN ?? this.readGhToken() ?? null;
+      resolveCredential("github", ["GH_TOKEN", "GITHUB_TOKEN"]).token ?? this.readGhToken() ?? null;
     if (!token) { this.authState = "failed"; this.identity = null; return; }
     this.token = token;
     try {

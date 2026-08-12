@@ -3,6 +3,7 @@ import { HttpError, type IssueTrackerAdapter, type AdapterAuthState, type Adapte
 import { buildLinearPrompt, buildLinearGroupPrompt } from "./linear-prompt";
 import { logError } from "../log";
 import { openUrl } from "../platform";
+import { resolveCredential } from "../credentials";
 
 const LINEAR_API = "https://api.linear.app/graphql";
 
@@ -30,7 +31,10 @@ export class LinearAdapter implements IssueTrackerAdapter {
   constructor(_config: Record<string, unknown>) {}
 
   async authenticate(): Promise<void> {
-    const token = process.env.LINEAR_API_KEY ?? process.env.LINEAR_TOKEN ?? null;
+    // Through the shared resolver, never process.env directly: `jmux ctl`
+    // constructs its own adapters, so a token stored by the wizard would
+    // otherwise work in the TUI and fail in the CLI.
+    const { token } = resolveCredential("linear", ["LINEAR_API_KEY", "LINEAR_TOKEN"]);
     if (!token) { this.authState = "failed"; this.identity = null; return; }
     this.token = token;
     // A real request, not merely a non-empty string. Presence proved nothing:
