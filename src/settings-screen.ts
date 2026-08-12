@@ -299,8 +299,19 @@ export class SettingsScreen {
       this.close();
       return { type: "none" };
     }
-    if (data === "\x1b[A") { this.moveUp(); return { type: "none" }; }
-    if (data === "\x1b[B") { this.moveDown(); return { type: "none" }; }
+    if (data === "\x1b[A" || data === "k") { this.moveUp(); return { type: "none" }; }
+    if (data === "\x1b[B" || data === "j") { this.moveDown(); return { type: "none" }; }
+
+    // ◂ ▸ nudge a value one place without opening an editor, for rows on an
+    // ordered ladder. Deliberately not how `list` rows work — see the note on
+    // SettingDef.onStep. Rows without onStep simply ignore them.
+    if (data === "\x1b[C" || data === "\x1b[D") {
+      const stepNode = this.getSelectedNode();
+      if (stepNode?.kind === "setting" && stepNode.setting.onStep) {
+        stepNode.setting.onStep(data === "\x1b[C" ? 1 : -1);
+      }
+      return { type: "none" };
+    }
 
     if (data === "\r") {
       return this.handleEnter();

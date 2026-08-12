@@ -611,3 +611,74 @@ describe("SettingsScreen explain line", () => {
     expect(fullRow(s.render(80, 24), 22)).toBe("");
   });
 });
+
+// --- Navigation parity ---
+//
+// j/k work in the setup modal and the workflow screen; ◂ ▸ drive onStep on the
+// workflow screen. This screen took neither, so muscle memory from either did
+// nothing here.
+describe("SettingsScreen navigation parity", () => {
+  test("j moves down and k moves up", () => {
+    const s = new SettingsScreen();
+    s.open(twoCategories());
+    s.handleInput("j");
+    const afterOne = s.render(80, 24);
+    s.handleInput("j");
+    const afterTwo = s.render(80, 24);
+    s.handleInput("k");
+    const backToOne = s.render(80, 24);
+    // The ▸ cursor marks the selected row; comparing frames avoids hard-coding
+    // row arithmetic that the blank-spacer plan owns.
+    expect(fullRow(afterTwo, 4)).not.toBe(fullRow(afterOne, 4));
+    expect(fullRow(backToOne, 4)).toBe(fullRow(afterOne, 4));
+  });
+
+  test("right and left arrows call onStep with +1 and -1", () => {
+    const deltas: number[] = [];
+    const s = new SettingsScreen();
+    s.open([{
+      label: "General", collapsed: false,
+      settings: [{
+        id: "n", label: "Count", type: "text",
+        getValue: () => "3", onTextCommit: () => {},
+        onStep: (d: number) => deltas.push(d),
+      }],
+    }]);
+    s.handleInput("\x1b[B");
+    s.handleInput("\x1b[C");
+    s.handleInput("\x1b[D");
+    expect(deltas).toEqual([1, -1]);
+  });
+
+  test("arrows do nothing on a row with no onStep", () => {
+    const s = new SettingsScreen();
+    s.open(twoCategories());
+    s.handleInput("\x1b[B");
+    expect(() => s.handleInput("\x1b[C")).not.toThrow();
+  });
+
+  test("j and k are typed into the buffer while editing, not treated as navigation", () => {
+    let committed = "";
+    const s = new SettingsScreen();
+    s.open([{
+      label: "General", collapsed: false,
+      settings: [{
+        id: "t", label: "Command", type: "text",
+        getValue: () => "", onTextCommit: (v: string) => { committed = v; },
+      }],
+    }]);
+    s.handleInput("\x1b[B");
+    s.handleInput("\r");
+    s.handleInput("j");
+    s.handleInput("k");
+    s.handleInput("\r");
+    expect(committed).toBe("jk");
+  });
+
+  test("q still closes and is not swallowed by navigation", () => {
+    const s = new SettingsScreen();
+    s.open(twoCategories());
+    s.handleInput("q");
+    expect(s.isOpen).toBe(false);
+  });
+});
