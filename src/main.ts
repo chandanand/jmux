@@ -5601,11 +5601,15 @@ function buildSetupRows(): SetupRow[] {
   // screen rather than pretending to be able to connect on its own.
   const tracker = adapters.issueTracker;
   const trackerOk = tracker?.authState === "ok";
+  // A declared "never" is a real answer, not an absence — the one thing no
+  // filesystem check can discover. It makes the step inert rather than a
+  // permanent `todo` nagging someone who told us they do not want it.
+  const trackerDeclined = configStore.config.setup?.tracker === "never";
   rows.push({
     id: "tracker",
     label: "Connect an issue tracker",
     detail: "Puts your issues and merge requests in the info panel, and lets you start work from one.",
-    state: trackerOk ? "done" : "todo",
+    state: trackerOk ? "done" : trackerDeclined ? "unavailable" : "todo",
     note: trackerOk
       ? "connected"
       : tracker
@@ -5627,6 +5631,8 @@ function buildSetupRows(): SetupRow[] {
   // invisible — a new user had no way to learn that a team has to be attached
   // before starting work from an issue does anything, which is exactly the
   // failure this checklist is being sequenced to prevent.
+  if (trackerDeclined) return rows;
+
   const projects = configStore.config.projects ?? [];
   const live = projects.filter((p) => p.deletedAt === undefined);
   const attached = live.filter((p) => p.teamId !== undefined).length;

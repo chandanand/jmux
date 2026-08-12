@@ -486,3 +486,29 @@ describe("SetupModal scrolling", () => {
     expect(text).not.toContain("more —");
   });
 });
+
+// --- Declined capabilities ---
+//
+// "Derived, never stored" is right for machine truth and wrong for preference:
+// nothing on the filesystem can discover that a user will never connect a
+// tracker, so without a stored answer they are nagged forever.
+describe("SetupModal declined steps", () => {
+  const declined = (): SetupRow[] => [
+    { id: "tracker", label: "Connect an issue tracker", detail: "d", state: "unavailable", note: "not for me" },
+    { id: "hunk", label: "Install the diff viewer", detail: "d", state: "todo" },
+  ];
+
+  test("a declined step is not counted as work outstanding", () => {
+    const { modal } = build({ rows: declined() });
+    modal.open();
+    const text = modal.getGrid(60).cells.map((r) => r.map((c) => c.char).join("")).join("\n");
+    expect(text).toContain("0/1 done");
+  });
+
+  test("Enter on a declined step does nothing", () => {
+    const { modal, activated } = build({ rows: declined() });
+    modal.open();
+    modal.handleInput("\r");
+    expect(activated).toEqual([]);
+  });
+});

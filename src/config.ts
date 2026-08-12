@@ -114,6 +114,20 @@ export interface JmuxConfig {
   projectDefaults?: ProjectSettings;
   /** Learned routes. One table — two could disagree. */
   routes?: ProjectRoutes;
+  /**
+   * Declared intent about optional capabilities.
+   *
+   * "Derived, never stored" is right for machine truth — *is hunk installed* —
+   * and wrong for preference, which no amount of filesystem inspection can
+   * discover. Without this a user who will never connect a tracker is nagged by
+   * a `todo` row and a toolbar dot forever.
+   */
+  setup?: {
+    /** `never` removes the tracker steps and the dot; `later` only quiets the dot. */
+    tracker?: "later" | "never";
+    hunk?: "later" | "never";
+    agentHooks?: "later" | "never";
+  };
   sidebarWidth?: number;
   infoPanelWidth?: number;
   /** Info panel list/detail split, as a fraction of the splittable rows. */
@@ -759,6 +773,15 @@ export class ConfigStore {
 
   setProjectDefault<K extends keyof ProjectSettings>(field: K, value: ProjectSettings[K]): void {
     this.data.projectDefaults = { ...this.data.projectDefaults, [field]: value };
+    this.persist();
+  }
+
+  /** Record a declared preference about an optional capability. */
+  setSetupIntent(key: "tracker" | "hunk" | "agentHooks", value: "later" | "never" | null): void {
+    const setup = { ...this.data.setup };
+    if (value === null) delete setup[key];
+    else setup[key] = value;
+    this.data.setup = setup;
     this.persist();
   }
 
