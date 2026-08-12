@@ -6193,6 +6193,75 @@ function repoDefaultSettings(group: RepoRow["group"] = "workflow"): SettingDef[]
  * there is no repo-backed session — an override category with nothing to
  * override would just be a second, confusing copy of the defaults.
  */
+/**
+ * One category per configured Project.
+ *
+ * Deliberately categories on the settings screen rather than a fifth full-area
+ * surface. The screen already has `/` search, explain lines, provenance markers
+ * and the shared row dialect; a separate screen would be a second copy of all
+ * of it, and the workflow screen is the precedent for how much that costs.
+ *
+ * Health is stated on the header row rather than left to be discovered at
+ * provisioning time: a Project whose directory has gone says so here, and one
+ * whose team never resolved says that too — both are silent failures otherwise.
+ */
+function projectCategories(): SettingsCategory[] {
+  const all = configStore.config.projects ?? [];
+  const live = all.filter((p) => p.deletedAt === undefined);
+  if (live.length === 0) return [];
+
+  return live.map((project) => {
+    const tier: RepoTier = {
+      idPrefix: `project-${project.id}-`,
+      read: (field) => repoSettingsFor(project.dir, project.id)[field as keyof ResolvedProjectSettings],
+      write: (field, value) => configStore.setProjectSetting(project.id, field, value as never),
+      scope: (field) => projectSettingScope(project, field, configStore.config.projectDefaults),
+      clear: (field) => configStore.clearProjectSetting(project.id, field),
+    };
+    return {
+      label: `Project · ${project.title}`,
+      collapsed: true,
+      settings: [
+        {
+          id: `project-${project.id}-status`,
+          label: "Repository",
+          type: "text" as const,
+          getValue: () => project.dir.replace(homedir(), "~"),
+          describe: () => existsSync(project.dir)
+            ? "Where worktree creation runs for this project."
+            : "This directory no longer exists — starting work here will fail.",
+          getNote: () => (existsSync(project.dir) ? null : "missing"),
+        },
+        {
+          id: `project-${project.id}-team`,
+          label: "Tracker team",
+          type: "text" as const,
+          getValue: () =>
+            project.teamId
+              ? (cachedTeams.find((t) => t.id === project.teamId)?.name ?? project.teamId)
+              : project.legacyTeamName
+                ? `${project.legacyTeamName} (unresolved)`
+                : "none",
+          describe: () => "Issues from this team route to this project. Without it, starting work from an issue does nothing.",
+        },
+        ...buildRepoRows("workflow", tier),
+        {
+          id: `project-${project.id}-delete`,
+          label: "Remove this project",
+          type: "action" as const,
+          getValue: () => "",
+          describe: () => "Marks it removed. Sessions still stamped with it report an orphaned project rather than being re-routed.",
+          onActivate: () => {
+            configStore.deleteProject(project.id);
+            settingsScreen.updateCategories(buildSettingsCategories());
+            showToast(`Removed project ${project.title}`);
+          },
+        },
+      ],
+    };
+  });
+}
+
 function currentRepoCategory(): SettingsCategory[] {
   const name = currentSessions.find((s) => s.id === currentSessionId)?.name;
   const dir = name ? sessionDir(name) : null;
@@ -6634,7 +6703,7 @@ function buildSettingsCategories(): SettingsCategory[] {
         },
       ],
     },
-    ...currentRepoCategory(),
+    ...projectCategories(),
   ];
 }
 
