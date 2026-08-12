@@ -594,7 +594,7 @@ function sessionByIssueId(): Map<string, SessionInfo> {
 }
 
 function resolveIssueProjectFor(
-  issue: import("./adapters/types").Issue,
+  issue: Pick<import("./adapters/types").Issue, "id" | "team" | "teamId" | "linearProjectId">,
   index: Map<string, SessionInfo> = sessionByIssueId(),
 ): import("./project-routing").RoutingOutcome {
   const linked = index.get(issue.id);
@@ -2081,7 +2081,7 @@ function workflowInputs(): WorkflowInputs {
     },
     targetFor: (issue, event) => transitionTarget(
       event,
-      repoSettingsFor(resolveIssueRepoDir(issue, configStore.config, homedir())),
+      repoSettingsFor(issueRepoDir(issue)),
     ),
   };
 }
@@ -2591,7 +2591,7 @@ async function requestTransitions(
       issue,
       target: transitionTarget(
         event,
-        repoSettingsFor(resolveIssueRepoDir(issue, configStore.config, homedir())),
+        repoSettingsFor(issueRepoDir(issue)),
       ),
     }))
     .filter((m): m is { issue: import("./adapters/types").Issue; target: string } =>
@@ -4596,17 +4596,17 @@ function clearSessionIndicators(): void {
 }
 
 function resolvePreselectedTeamId(): string | null {
-  const workflow = configStore.config.issueWorkflow;
-  if (!workflow?.teamRepoMap) return null;
-  // Absolute, so it is comparable to the expanded teamRepoMap paths below.
+  // The attached session's Project is the direct answer where it has one;
+  // otherwise fall back to whichever Project contains this directory.
+  const attached = projectForCurrentSession();
+  if (attached?.teamId) return attached.teamId;
+
   const sessionDir = sessionDetailsCache.get(currentSessionId ?? "")?.path ?? null;
   if (!sessionDir) return null;
-
-  for (const [teamName, repoDir] of Object.entries(workflow.teamRepoMap)) {
-    const expandedDir = repoDir.replace("~", homedir());
-    if (sessionDir === expandedDir || sessionDir.startsWith(expandedDir + "/")) {
-      const team = cachedTeams.find((t) => t.name === teamName);
-      if (team) return team.id;
+  for (const project of configStore.config.projects ?? []) {
+    if (project.deletedAt !== undefined || !project.teamId) continue;
+    if (sessionDir === project.dir || sessionDir.startsWith(project.dir + "/")) {
+      return project.teamId;
     }
   }
   return null;
@@ -6170,6 +6170,11 @@ function buildPaletteCommands(): PaletteCommand[] {
     category: "setting",
   });
   commands.push({
+    id: "setting-attach-team",
+    label: "Attach a team to a project",
+    category: "setting",
+  });
+  commands.push({
     id: "setting-project-dirs",
     label: "Project directories",
     category: "setting",
@@ -6228,11 +6233,6 @@ function buildPaletteCommands(): PaletteCommand[] {
   commands.push({
     id: "setting-default-branch",
     label: `Default base branch: ${repoNow.defaultBaseBranch}`,
-    category: "setting",
-  });
-  commands.push({
-    id: "setting-team-repo-map",
-    label: `Team → repo mappings (${Object.keys(wf?.teamRepoMap ?? {}).length})`,
     category: "setting",
   });
   commands.push({
@@ -6685,29 +6685,6 @@ function buildSettingsCategories(): SettingsCategory[] {
       collapsed: false,
       settings: [
         ...repoDefaultSettings(),
-        {
-          id: "team-repo-map", label: "Team → repo mappings", type: "map" as const,
-          getValue: () => {
-            const entries = Object.entries(wf()?.teamRepoMap ?? {});
-            return entries.length > 0 ? `${entries.length} mapped` : "none";
-          },
-          getMapEntries: () => Object.entries(wf()?.teamRepoMap ?? {}).map(([k, v]) => ({ key: k, value: v })),
-          getMapKeyOptions: () => {
-            // Provide Linear teams if available, otherwise manual entry
-            // Teams are fetched async in pollGlobal — use cached global issues' teams as proxy
-            const teams = new Set<string>();
-            for (const issue of pollCoordinator.getGlobalIssues()) {
-              if (issue.team) teams.add(issue.team);
-            }
-            return [...teams].sort().map((t) => ({ id: t, label: t }));
-          },
-          getMapValueOptions: () => {
-            const dirs = cachedProjectDirs.length > 0 ? cachedProjectDirs : [homedir()];
-            return dirs.map((d) => ({ id: d, label: d.replace(homedir(), "~") }));
-          },
-          onMapSave: (key, value) => configStore.setTeamRepo(key, value),
-          onMapRemove: (key) => configStore.setTeamRepo(key, null),
-        },
       ],
     },
     {
@@ -7181,7 +7158,7 @@ function buildGhostPreviewPort(): GhostPreviewPort {
       const issue = pollCoordinator.getGlobalIssues().find((i) => i.id === issueId);
       if (!issue) return null;
       const state = issueSessionStateFor(issue);
-      const repoDir = resolveIssueRepoDir(issue, configStore.config, homedir());
+      const repoDir = issueRepoDir(issue);
       return buildPreflight({
         issueState: state?.state ?? "none",
         linkedSessionName: state?.sessionName,
@@ -7361,10 +7338,18 @@ function handleSettingsInput(data: string): void {
   scheduleRender();
 }
 
-/** The repo an issue routes to, home-expanded, or null when its team is unmapped. */
-function issueRepoDir(issue: Pick<import("./adapters/types").Issue, "team">): string | null {
-  const repoDir = configStore.config.issueWorkflow?.teamRepoMap?.[issue.team ?? ""];
-  return repoDir ? repoDir.replace("~", homedir()) : null;
+/**
+ * The repo an issue routes to, or null when routing cannot answer.
+ *
+ * Through Projects, not `teamRepoMap` — the migration deletes that map, so this
+ * returned null for every issue afterwards, and it feeds
+ * `resolveIssueSessionName` and therefore the whole ghost and start flow.
+ */
+function issueRepoDir(
+  issue: Pick<import("./adapters/types").Issue, "id" | "team" | "teamId" | "linearProjectId">,
+): string | null {
+  const outcome = resolveIssueProjectFor(issue);
+  return outcome.kind === "resolved" ? outcome.project.dir : null;
 }
 
 function resolveIssueSessionName(issue: import("./adapters/types").Issue): string | null {
@@ -7490,8 +7475,8 @@ async function startWorkOnIssue(
 ): Promise<StartOutcome> {
       // STATE 3: a live session already exists for this issue (either via an
       // explicit L-key link or a workflow-derived name match). Switch to it.
-      // Done before the workflow/repoDir check so explicit links work even
-      // when the issue's team has no teamRepoMap entry.
+      // Done before the routing check so explicit links work even when the
+      // issue's team routes to no project.
       if (issueState === "session" && linkedSessionName) {
         if (!ptyClientName) await resolveClientName();
         if (!ptyClientName) return "failed";
@@ -7499,10 +7484,13 @@ async function startWorkOnIssue(
         return "switched";
       }
 
-      const workflow = configStore.config.issueWorkflow;
-      const repoDir = workflow?.teamRepoMap?.[issue.team ?? ""];
+      // Through Projects. The migration deletes teamRepoMap, so this read was
+      // undefined for every issue afterwards and every start fell through to
+      // the manual picker.
+      const startOutcome = resolveIssueProjectFor(issue);
+      const repoDir = startOutcome.kind === "resolved" ? startOutcome.project.dir : undefined;
 
-      // Automated path: config maps this issue's team to a repo
+      // Automated path: routing resolved this issue to a project
       if (repoDir) {
         if (!ptyClientName) await resolveClientName();
         if (!ptyClientName) return "failed";
@@ -8405,16 +8393,6 @@ function newSessionDirs(): string[] {
   return out;
 }
 
-function pickRepoForTeam(teamName: string): void {
-  const dirs = cachedProjectDirs.length > 0 ? cachedProjectDirs : [homedir()];
-  const dirItems = dirs.map((d) => ({ id: d, label: d.replace(homedir(), "~") }));
-  const dirPicker = new ListModal({ items: dirItems, header: `Repository for ${teamName}` });
-  dirPicker.open();
-  openModal(dirPicker, (dirValue) => {
-    const dirSel = dirValue as ListItem;
-    configStore.setTeamRepo(teamName, dirSel.id);
-  });
-}
 
 let viewSaveTimer: ReturnType<typeof setTimeout> | null = null;
 function debouncedViewSave(view: PanelView): void {
@@ -8997,59 +8975,55 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       });
       return;
     }
-    case "setting-team-repo-map": {
-      const current = configStore.config.issueWorkflow?.teamRepoMap ?? {};
-      const entries = Object.entries(current);
-      const items: Array<{ id: string; label: string }> = entries.map(([team, repo]) => ({
-        id: `edit:${team}`,
-        label: `${team} → ${repo}`,
-      }));
-      items.push({ id: "add", label: "➕ Add new mapping" });
-      const modal = new ListModal({ items, header: "Team → Repo Mappings" });
-      modal.open();
-      openModal(modal, async (value) => {
-        const sel = value as ListItem;
-        if (sel.id === "add") {
-          // Step 2: pick team from Linear
-          let teamItems: Array<{ id: string; label: string }> = [];
-          if (adapters.issueTracker?.authState === "ok") {
-            try {
-              const teams = await adapters.issueTracker.getTeams();
-              teamItems = teams.map((t) => ({ id: t.name, label: t.name }));
-            } catch {}
-          }
-          if (teamItems.length === 0) {
-            // Fallback: manual team name input
-            const teamModal = new InputModal({ header: "Team Name", subheader: "Enter the Linear team name", value: "" });
-            teamModal.open();
-            openModal(teamModal, (teamName) => {
-              pickRepoForTeam(teamName as string);
-            });
-            return;
-          }
-          const teamPicker = new ListModal({ items: teamItems, header: "Select Team" });
-          teamPicker.open();
-          openModal(teamPicker, (teamValue) => {
-            const teamSel = teamValue as ListItem;
-            pickRepoForTeam(teamSel.label);
-          });
-        } else if (sel.id.startsWith("edit:")) {
-          const teamName = sel.id.slice(5);
-          const editItems = [
-            { id: "change", label: "Change repository path" },
-            { id: "remove", label: "Remove mapping" },
-          ];
-          const editModal = new ListModal({ items: editItems, header: `${teamName} mapping` });
-          editModal.open();
-          openModal(editModal, async (editValue) => {
-            const editSel = editValue as ListItem;
-            if (editSel.id === "remove") {
-              configStore.setTeamRepo(teamName, null);
-            } else {
-              pickRepoForTeam(teamName);
-            }
-          });
-        }
+    // Replaces the old team → repo map, which the Projects migration deleted
+    // the readers of — leaving a command that wrote into a void.
+    case "setting-attach-team": {
+      const live = (configStore.config.projects ?? []).filter((p) => p.deletedAt === undefined);
+      if (live.length === 0) {
+        showNotice({
+          title: "No Projects",
+          message: "There is no project to attach a team to yet.",
+          hint: "Open a session in a repo, or add one in Settings.",
+          tone: "plain",
+        });
+        return;
+      }
+      if (cachedTeams.length === 0) {
+        showNotice({
+          title: "No Teams",
+          message: "The tracker has not reported any teams.",
+          hint: adapters.issueTracker?.authState === "ok"
+            ? "Wait for the next poll, or check the tracker has teams you can see."
+            : `Connect the tracker first — check ${adapters.issueTracker?.authHint ?? "its settings"}.`,
+          tone: "plain",
+        });
+        return;
+      }
+      const projectPicker = new ListModal({
+        header: "Attach a team to which project?",
+        items: live.map((p) => ({ id: p.id, label: p.title })),
+      });
+      projectPicker.open();
+      openModal(projectPicker, (projectValue) => {
+        const chosen = (projectValue as ListItem | undefined)?.id;
+        if (!chosen) return;
+        const teamPicker = new ListModal({
+          header: "Which team?",
+          items: cachedTeams.map((t) => ({ id: t.id, label: t.name })),
+        });
+        teamPicker.open();
+        openModal(teamPicker, (teamValue) => {
+          const teamId = (teamValue as ListItem | undefined)?.id;
+          if (!teamId) return;
+          const project = (configStore.config.projects ?? []).find((p) => p.id === chosen);
+          if (!project) return;
+          // legacyTeamName is dropped here and only here: an explicit choice
+          // supersedes the migrated name, and keeping both would leave two
+          // answers to one question.
+          const { legacyTeamName: _dropped, ...rest } = project;
+          configStore.upsertProject({ ...rest, teamId });
+          showToast(`${cachedTeams.find((t) => t.id === teamId)?.name ?? teamId} → ${project.title}`);
+        });
       });
       return;
     }

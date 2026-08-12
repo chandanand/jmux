@@ -182,17 +182,20 @@ describe("ConfigStore", () => {
     expect(store.config.repos?.["/code/jmux/.git"]).toBeUndefined(); // emptied entry pruned
   });
 
-  test("setTeamRepo adds and removes mappings", () => {
+  // Replaces "setTeamRepo adds and removes mappings". teamRepoMap is gone: the
+  // Projects migration deletes it, so a writer for it wrote into a void. The
+  // team now lives on the Project, and this asserts the replacement.
+  test("a team is attached to a project, and replaces a migrated name", () => {
     const store = new ConfigStore(cfgPath);
-    store.setTeamRepo("frontend", "/code/frontend");
-    expect(store.config.issueWorkflow?.teamRepoMap?.frontend).toBe("/code/frontend");
+    store.upsertProject({ id: "api", title: "API", dir: "/code/api", legacyTeamName: "Core" });
+    const project = store.config.projects![0];
+    const { legacyTeamName: _dropped, ...rest } = project;
+    store.upsertProject({ ...rest, teamId: "T1" });
 
-    store.setTeamRepo("backend", "/code/backend");
-    expect(store.config.issueWorkflow?.teamRepoMap?.backend).toBe("/code/backend");
-
-    store.setTeamRepo("frontend", null);
-    expect(store.config.issueWorkflow?.teamRepoMap?.frontend).toBeUndefined();
-    expect(store.config.issueWorkflow?.teamRepoMap?.backend).toBe("/code/backend");
+    const after = store.config.projects![0];
+    expect(after.teamId).toBe("T1");
+    // Two answers to one question is how they come to disagree.
+    expect(after.legacyTeamName).toBeUndefined();
   });
 
   test("setAdapter sets and removes adapter config", () => {

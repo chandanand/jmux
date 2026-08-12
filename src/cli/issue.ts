@@ -11,6 +11,7 @@ import {
 } from "../config";
 import { RepoFactsCache } from "../repo-settings";
 import { resolveSettingsFor, type ResolvedProjectSettings } from "../project";
+import { resolveIssueProject } from "../project-routing";
 import {
   resolveIssueSessionName,
   issueWorktreePath,
@@ -221,10 +222,22 @@ export function resolveRepoForIssue(
   config: JmuxConfig,
 ): string | null {
   if (typeof flags.repo === "string") return expandTilde(flags.repo);
-  const team = issue?.team;
-  const map = config.issueWorkflow?.teamRepoMap ?? {};
-  if (team && map[team]) return expandTilde(map[team]);
-  return null;
+  if (!issue) return null;
+  // Through the same router the TUI uses. teamRepoMap is deleted by the
+  // Projects migration, so reading it here answered null for every issue and
+  // `ctl issue start` refused work the sidebar would have started — the exact
+  // "the CLI disagrees with my sidebar" bug the shared-module rule exists for.
+  const outcome = resolveIssueProject(
+    {
+      id: issue.id,
+      teamId: issue.teamId,
+      teamName: issue.team ?? undefined,
+      linearProjectId: issue.linearProjectId,
+    },
+    config.projects ?? [],
+    config.routes ?? {},
+  );
+  return outcome.kind === "resolved" ? outcome.project.dir : null;
 }
 
 export interface IssueCreateArgs {
@@ -710,7 +723,7 @@ async function issueStart(
   const repo = resolveRepoForIssue(flags, issue, config);
   if (!repo) {
     throw new CliError(
-      `could not resolve a repo for "${issueId}". Pass --repo <path> or configure issueWorkflow.teamRepoMap.`,
+      `could not resolve a project for "${issueId}". Pass --repo <path>, or attach its team to a project.`,
     );
   }
   if (!existsSync(repo)) {

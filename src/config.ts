@@ -585,19 +585,6 @@ export class ConfigStore {
     this.persist();
   }
 
-  /**
-   * Set or remove a team → repo mapping and persist.
-   */
-  setTeamRepo(team: string, repoDir: string | null): void {
-    if (!this.data.issueWorkflow) this.data.issueWorkflow = {};
-    if (!this.data.issueWorkflow.teamRepoMap) this.data.issueWorkflow.teamRepoMap = {};
-    if (repoDir === null) {
-      delete this.data.issueWorkflow.teamRepoMap[team];
-    } else {
-      this.data.issueWorkflow.teamRepoMap[team] = repoDir;
-    }
-    this.persist();
-  }
 
   /**
    * Set an adapter config entry (codeHost or issueTracker) and persist.

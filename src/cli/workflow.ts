@@ -38,6 +38,7 @@ import { homedir } from "os";
 import { existsSync } from "fs";
 import { runTmuxDirect } from "./tmux";
 import { PROJECT_OPTION, type ProjectConfig } from "../project";
+import { resolveIssueProject } from "../project-routing";
 import { CliError, type CliContext } from "./context";
 import { loadUserConfig, type JmuxConfig } from "../config";
 import { RepoFactsCache, resolveForRepo } from "../repo-settings";
@@ -561,9 +562,20 @@ async function gatherBoard(ctx: CliContext): Promise<Board> {
   const repoFacts = new RepoFactsCache();
   const templateFor = (repoDir: string) =>
     resolveForRepo(config, repoFacts.get(repoDir)).sessionNameTemplate;
+  // Same router as the TUI: a board that resolved repos differently from the
+  // sidebar is the disagreement the shared-module rule exists to prevent.
   const repoDirFor = (issue: Issue): string | null => {
-    const dir = config.issueWorkflow?.teamRepoMap?.[issue.team ?? ""];
-    return dir ? dir.replace("~", homedir()) : null;
+    const outcome = resolveIssueProject(
+      {
+        id: issue.id,
+        teamId: issue.teamId,
+        teamName: issue.team ?? undefined,
+        linearProjectId: issue.linearProjectId,
+      },
+      config.projects ?? [],
+      config.routes ?? {},
+    );
+    return outcome.kind === "resolved" ? outcome.project.dir : null;
   };
 
   const issueSessionStates = new Map<string, IssueSessionInfo>();
