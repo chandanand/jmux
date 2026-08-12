@@ -171,7 +171,29 @@ export class PollCoordinator {
     if (this.globalTimer) { clearInterval(this.globalTimer); this.globalTimer = null; }
   }
 
+  /**
+   * Give an adapter that could not be *reached* another chance.
+   *
+   * `authenticate()` runs once at startup and every poll gates on
+   * `authState === "ok"`, so without this a network blip during startup would
+   * disable the adapter for the whole session with no way back but a restart.
+   * That is precisely why auth used to be a token-presence check with no I/O;
+   * a real identity probe is only safe alongside this retry.
+   *
+   * Deliberately only `unreachable`. A `failed` credential was *rejected* — the
+   * answer will not change by asking again, and re-probing a revoked token on
+   * every global tick is a request per tick, forever.
+   */
+  private async retryUnreachableAuth(): Promise<void> {
+    const { codeHost, issueTracker } = this.opts;
+    const attempts: Array<Promise<void>> = [];
+    if (issueTracker?.authState === "unreachable") attempts.push(issueTracker.authenticate());
+    if (codeHost?.authState === "unreachable") attempts.push(codeHost.authenticate());
+    if (attempts.length > 0) await Promise.allSettled(attempts);
+  }
+
   async pollGlobal(): Promise<void> {
+    await this.retryUnreachableAuth();
     const { codeHost, issueTracker } = this.opts;
 
     if (issueTracker && issueTracker.authState === "ok") {

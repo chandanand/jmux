@@ -6,6 +6,7 @@ import type {
   SessionContext,
   MergeRequest,
   AdapterAuthState,
+  Issue,
 } from "../../adapters/types";
 
 function makeMockCodeHost(overrides: Partial<CodeHostAdapter> = {}): CodeHostAdapter {
@@ -472,5 +473,59 @@ describe("PollCoordinator", () => {
         coord.stop();
       });
     });
+  });
+});
+
+describe("PollCoordinator retries unreachable adapters", () => {
+  // `unreachable` only earns its existence if something retries it. Nothing
+  // does otherwise: authenticate() runs once at startup and every poll gates on
+  // authState === "ok", so a network blip during startup would disable the
+  // adapter for the whole session — the exact failure the presence-only auth
+  // check was originally written to avoid.
+  test("re-authenticates an unreachable tracker before polling", async () => {
+    let authCalls = 0;
+    const tracker = {
+      type: "linear",
+      authState: "unreachable" as AdapterAuthState,
+      authHint: "",
+      identity: null,
+      authenticate: async () => { authCalls++; tracker.authState = "ok"; },
+      getMyIssues: async () => [{ id: "recovered" } as unknown as Issue],
+    } as unknown as IssueTrackerAdapter & { authState: AdapterAuthState };
+
+    const coord = new PollCoordinator({
+      codeHost: null,
+      issueTracker: tracker,
+      onUpdate: () => {},
+      getSessionDir: () => null,
+      sessionState: null,
+    });
+
+    await coord.pollGlobal();
+    expect(authCalls).toBe(1);
+    expect(coord.getGlobalIssues()).toHaveLength(1);
+  });
+
+  test("does not re-authenticate an adapter whose credential was rejected", async () => {
+    let authCalls = 0;
+    const tracker = {
+      type: "linear",
+      authState: "failed" as AdapterAuthState,
+      authHint: "",
+      identity: null,
+      authenticate: async () => { authCalls++; },
+      getMyIssues: async () => [],
+    } as unknown as IssueTrackerAdapter;
+
+    const coord = new PollCoordinator({
+      codeHost: null,
+      issueTracker: tracker,
+      onUpdate: () => {},
+      getSessionDir: () => null,
+      sessionState: null,
+    });
+
+    await coord.pollGlobal();
+    expect(authCalls).toBe(0);
   });
 });
