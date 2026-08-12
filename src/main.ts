@@ -4036,11 +4036,23 @@ async function fetchSessions(): Promise<void> {
     sidebar.setSessionContexts(pollCoordinator.getAllContexts());
     // Resolved here, not in the sidebar: it knows nothing about config or the
     // @jmux-project stamp. Same boundary as setSessionWorkflow.
+    const allProjects = configStore.config.projects ?? [];
+    const liveProjectList = allProjects.filter((p) => p.deletedAt === undefined);
     const titles = new Map<string, string>();
     for (const sess of sessions) {
-      const project = projectById(configStore.config.projects ?? [], sess.projectId ?? null)
-        ?? projectForDir(configStore.config.projects ?? [], sessionDir(sess.name));
-      if (project) titles.set(sess.name, project.title);
+      const project = projectById(allProjects, sess.projectId ?? null)
+        ?? projectForDir(allProjects, sessionDir(sess.name));
+      if (!project) continue;
+      // projectLabel, not project.title: two Projects on one repo is the
+      // intended shape, and both migrate titled from the directory basename —
+      // so the bare title produced two identical sidebar bands, exactly as it
+      // produced two identical settings headers.
+      const label = projectLabel(project, liveProjectList,
+        (id) => cachedTeams.find((t) => t.id === id)?.name ?? null);
+      titles.set(sess.name, label);
+      // Stamped on the session too, so session-order's grouping and the
+      // sidebar's bands read one resolution rather than two.
+      sess.projectName = label;
     }
     sidebar.setSessionProjects(titles);
     recomputeSessionBands();
@@ -6890,6 +6902,23 @@ function buildSettingsCategories(): SettingsCategory[] {
       label: "Project defaults",
       collapsed: false,
       settings: [
+        {
+          // One row rather than N inline categories, the precedent
+          // "Configure workflow…" already sets: a screen of settings should not
+          // grow a header per Project, and the per-Project rows are the same
+          // fields as the defaults above them — read in a different tier.
+          id: "open-projects", label: "Projects…", type: "action" as const,
+          getValue: () => {
+            const live = (configStore.config.projects ?? []).filter((p) => p.deletedAt === undefined);
+            if (live.length === 0) return "none yet";
+            const unattached = live.filter((p) => p.teamId === undefined).length;
+            return unattached > 0
+              ? `${live.length} · ${unattached} without a team`
+              : `${live.length} configured`;
+          },
+          describe: () => "One repo and at most one tracker team each. Enter to open.",
+          onActivate: () => openProjectsScreen(),
+        },
         ...repoDefaultSettings(),
         {
           id: "project-dirs", label: "Project directories", type: "text" as const,
@@ -7096,8 +7125,33 @@ function buildSettingsCategories(): SettingsCategory[] {
         },
       ],
     },
-    ...projectCategories(),
   ];
+}
+
+/**
+ * The Projects surface.
+ *
+ * Reuses SettingsScreen rather than adding a fifth full-area surface: it is the
+ * same list, search, explain line and validation over a different set of
+ * categories, and a bespoke screen would be a copy of all four. Replaces the
+ * open screen rather than layering, for the reason closeModal() exists — the
+ * settings screen consumes every keystroke while it is open.
+ */
+function openProjectsScreen(): void {
+  const categories = projectCategories();
+  if (categories.length === 0) {
+    showNotice({
+      title: "No Projects",
+      message: "Nothing has been migrated or added yet.",
+      hint: "Open a session in a repo, or add a directory under Project defaults.",
+      tone: "plain",
+    });
+    return;
+  }
+  settingsScreen.open(categories, "Projects");
+  inputRouter.setModalOpen(true);
+  applyChromeLayout();
+  scheduleRender();
 }
 
 function toggleSettingsScreen(): void {

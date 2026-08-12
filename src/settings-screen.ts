@@ -275,11 +275,20 @@ export class SettingsScreen {
   private filter = "";
   private filtering = false;
   private commitError: string | null = null;
+  private title = "Settings";
 
   get isOpen(): boolean { return this._open; }
   get isEditing(): boolean { return this.editState !== null; }
 
-  open(categories: SettingsCategory[]): void {
+  /**
+   * `title` exists because this class is a generic categories renderer, not a
+   * screen about one subject. The Projects surface is the same list, the same
+   * search, the same explain line and the same validation over a different set
+   * — building a second full-area surface to say "Projects" instead of
+   * "Settings" would be a copy of all four.
+   */
+  open(categories: SettingsCategory[], title = "Settings"): void {
+    this.title = title;
     this.categories = categories;
     this.selectedIndex = 0;
     this.scrollOffset = 0;
@@ -412,7 +421,7 @@ export class SettingsScreen {
     const rowPlan = this.buildRowPlan(nodes);
 
     // Header
-    writeString(grid, 0, left, "Settings", HEADER_ATTRS);
+    writeString(grid, 0, left, this.title, HEADER_ATTRS);
     if (this.filtering || this.filter) {
       writeString(grid, 1, left, `/${this.filter}`, LABEL_ACTIVE);
     }
