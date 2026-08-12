@@ -13,6 +13,7 @@ import {
   projectForDir,
   projectById,
   resolveSettingsFor,
+  resolveLegacyTeams,
 } from "../project";
 
 function project(over: Partial<ProjectConfig> = {}): ProjectConfig {
@@ -264,5 +265,51 @@ describe("resolveSettingsFor — the post-migration path", () => {
   test("a Project override beats runtime detection", () => {
     const c = { projects: [project({ id: "api", dir: "/code/api", settings: { wtmIntegration: false } })] };
     expect(resolveSettingsFor(c, { dir: "/code/api", bare: true }).wtmIntegration).toBe(false);
+  });
+});
+
+describe("resolveLegacyTeams", () => {
+  // The link that was missing entirely: nothing assigned teamId, so
+  // projectsClaimingTeam could only ever return [] and every issue routed to
+  // unclaimed — killing group start and making "attach a team" unsatisfiable.
+  const teams = [{ id: "T1", name: "Core Engineering" }, { id: "T2", name: "Web" }];
+
+  test("a migrated name becomes a real id", () => {
+    const changed = resolveLegacyTeams([project({ legacyTeamName: "Core Engineering" })], teams);
+    expect(changed).toHaveLength(1);
+    expect(changed[0].teamId).toBe("T1");
+  });
+
+  test("matching is case- and whitespace-insensitive", () => {
+    const changed = resolveLegacyTeams([project({ legacyTeamName: "  core ENGINEERING " })], teams);
+    expect(changed[0]?.teamId).toBe("T1");
+  });
+
+  test("a Project that already has a teamId is left alone", () => {
+    expect(resolveLegacyTeams([project({ teamId: "T9", legacyTeamName: "Web" })], teams)).toEqual([]);
+  });
+
+  // Dropping it would make the misconfiguration unrecoverable rather than
+  // merely visible: the team may simply have been renamed in the tracker.
+  test("a name matching no team is kept, not cleared", () => {
+    const changed = resolveLegacyTeams([project({ legacyTeamName: "Gone" })], teams);
+    expect(changed).toEqual([]);
+  });
+
+  test("no teams yet means no writes", () => {
+    expect(resolveLegacyTeams([project({ legacyTeamName: "Core Engineering" })], [])).toEqual([]);
+  });
+
+  test("only changed Projects are returned, so an idle poll writes nothing", () => {
+    const projects = [project({ id: "a", teamId: "T1" }), project({ id: "b" })];
+    expect(resolveLegacyTeams(projects, teams)).toEqual([]);
+  });
+
+  // The whole point: after resolution the router can find a claimant.
+  test("resolution is what makes projectsClaimingTeam able to answer", () => {
+    const before = [project({ id: "api", legacyTeamName: "Core Engineering" })];
+    expect(projectsClaimingTeam(before, "T1")).toEqual([]);
+    const after = resolveLegacyTeams(before, teams);
+    expect(projectsClaimingTeam(after, "T1").map((p) => p.id)).toEqual(["api"]);
   });
 });

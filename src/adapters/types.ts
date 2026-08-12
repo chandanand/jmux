@@ -36,7 +36,15 @@ export interface Issue {
   linkedMrUrls: string[];
   webUrl: string;
   team?: string;
+  /**
+   * The tracker's own id for the team. Routing keys on this, never on `team` —
+   * a name is not unique across workspaces, and `startIssueGroup` already
+   * carries a documented bug from name-keying.
+   */
+  teamId?: string;
   project?: string;
+  /** The tracker's own id for the project. See `teamId`. */
+  linearProjectId?: string;
   priority?: number;   // 0=none, 1=urgent, 2=high, 3=medium, 4=low
   updatedAt?: number;  // epoch ms
   description?: string;

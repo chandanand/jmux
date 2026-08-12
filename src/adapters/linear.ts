@@ -8,7 +8,7 @@ import { resolveCredential } from "../credentials";
 const LINEAR_API = "https://api.linear.app/graphql";
 
 // Shared GraphQL fields for issue queries
-const ISSUE_FIELDS = `id identifier title description branchName state { name type } assignee { name } team { name } project { name } priority updatedAt labels { nodes { name parent { name } } } attachments { nodes { title url sourceType } } comments(first: 20) { nodes { id parent { id } body user { name } createdAt } } url`;
+const ISSUE_FIELDS = `id identifier title description branchName state { name type } assignee { name } team { id name } project { id name } priority updatedAt labels { nodes { name parent { name } } } attachments { nodes { title url sourceType } } comments(first: 20) { nodes { id parent { id } body user { name } createdAt } } url`;
 
 const ISSUE_STATE_TYPES: ReadonlySet<IssueStateType> = new Set(["triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"]);
 function isIssueStateType(v: unknown): v is IssueStateType {
@@ -231,7 +231,9 @@ export class LinearAdapter implements IssueTrackerAdapter {
         .filter((u: string) => u && (u.includes("merge_requests") || u.includes("/pull/"))),
       webUrl: raw.url ?? "",
       team: raw.team?.name ?? undefined,
+      teamId: raw.team?.id ?? undefined,
       project: raw.project?.name ?? undefined,
+      linearProjectId: raw.project?.id ?? undefined,
       priority: typeof raw.priority === "number" ? raw.priority : undefined,
       updatedAt: raw.updatedAt ? new Date(raw.updatedAt).getTime() : undefined,
       description: raw.description ?? undefined,

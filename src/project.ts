@@ -246,3 +246,34 @@ export function resolveSettingsFor(
     wtmIntegration: opts.bare ?? false,
   });
 }
+
+/**
+ * Turn migrated `legacyTeamName` values into real `teamId`s.
+ *
+ * The migration can only carry the *name*, because `teamRepoMap` was keyed on
+ * one and ids need an authenticated tracker. Without this step nothing ever
+ * assigns `teamId`, `projectsClaimingTeam` returns the empty array forever, and
+ * every issue routes to `unclaimed` — which silently kills group start and
+ * leaves the "attach a team" checklist step permanently unsatisfiable.
+ *
+ * Returns only the Projects that changed, so the caller writes nothing when
+ * there is nothing to do. A name matching no team is **kept**, not cleared: the
+ * team may have been renamed in the tracker, and dropping the only record of
+ * what the user configured makes the misconfiguration unrecoverable rather than
+ * merely visible.
+ */
+export function resolveLegacyTeams(
+  projects: readonly ProjectConfig[],
+  teams: ReadonlyArray<{ id: string; name: string }>,
+): ProjectConfig[] {
+  if (teams.length === 0) return [];
+  const byName = new Map(teams.map((t) => [t.name.trim().toLowerCase(), t.id]));
+  const changed: ProjectConfig[] = [];
+  for (const project of projects) {
+    if (project.teamId !== undefined || !project.legacyTeamName) continue;
+    const id = byName.get(project.legacyTeamName.trim().toLowerCase());
+    if (!id) continue;
+    changed.push({ ...project, teamId: id });
+  }
+  return changed;
+}

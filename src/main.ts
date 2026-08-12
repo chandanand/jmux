@@ -176,6 +176,7 @@ import {
   isWritableProjectId,
   resolveProjectSettings,
   resolveSettingsFor,
+  resolveLegacyTeams,
   projectById,
   projectForDir,
   projectSettingScope,
@@ -582,17 +583,27 @@ function sessionSettingsFor(sessionName: string): ResolvedProjectSettings {
  * The one call site for `resolveIssueProject` in the TUI, so the sidebar, the
  * ghost preview and group start cannot answer differently.
  */
+function sessionByIssueId(): Map<string, SessionInfo> {
+  const index = new Map<string, SessionInfo>();
+  for (const sess of currentSessions) {
+    for (const i of pollCoordinator.getContext(sess.name)?.issues ?? []) {
+      if (!index.has(i.id)) index.set(i.id, sess);
+    }
+  }
+  return index;
+}
+
 function resolveIssueProjectFor(
   issue: import("./adapters/types").Issue,
+  index: Map<string, SessionInfo> = sessionByIssueId(),
 ): import("./project-routing").RoutingOutcome {
-  const linked = currentSessions.find((sess) =>
-    (pollCoordinator.getContext(sess.name)?.issues ?? []).some((i) => i.id === issue.id));
+  const linked = index.get(issue.id);
   return resolveIssueProject(
     {
       id: issue.id,
-      teamId: (issue as { teamId?: string }).teamId,
+      teamId: issue.teamId,
       teamName: issue.team ?? undefined,
-      linearProjectId: (issue as { projectId?: string }).projectId,
+      linearProjectId: issue.linearProjectId,
     },
     configStore.config.projects ?? [],
     configStore.config.routes ?? {},
@@ -1069,11 +1080,19 @@ function runSetupPreflight(): PreflightCheck[] {
   const checks: PreflightCheck[] = [];
   const projects = (configStore.config.projects ?? []).filter((p) => p.deletedAt === undefined);
 
-  const project = projectForCurrentSession() ?? projects[0] ?? null;
+  // Only the Project actually in play, or the sole one when there is exactly
+  // one. Falling back to projects[0] reported on a Project the user has nothing
+  // to do with — and a preflight that passes for the wrong thing is worse than
+  // one that fails.
+  const project = projectForCurrentSession() ?? (projects.length === 1 ? projects[0] : null);
   checks.push({
     label: "A project to work in",
     ok: project !== null,
-    detail: project ? project.title : "none configured — add one in Settings",
+    detail: project
+      ? project.title
+      : projects.length === 0
+        ? "none configured — add one in Settings"
+        : "not in a project session — switch to one, or open this from its session",
   });
 
   const dirOk = project !== null && existsSync(project.dir);
@@ -1966,7 +1985,29 @@ async function refreshTeams(): Promise<void> {
     if (!adapters.isCurrent(epoch)) return;
     logError("jmux", `workflow state fetch failed: ${(e as Error).message}`);
   }
+  resolveLegacyTeamNames();
 }
+
+/**
+ * Turn a migrated `legacyTeamName` into a real `teamId`.
+ *
+ * The migration can only carry the *name*, because `teamRepoMap` was keyed on
+ * one and ids need an authenticated tracker. Without this step nothing ever
+ * assigns `teamId`, so `projectsClaimingTeam` returns the empty array forever
+ * and every issue routes to `unclaimed` — which silently killed group start and
+ * left the "attach a team" checklist step permanently unsatisfiable.
+ *
+ * Runs after every team fetch. A name that matches nothing is *kept*, not
+ * cleared: the team may have been renamed in the tracker, and dropping the only
+ * record of what the user configured would make the misconfiguration
+ * unrecoverable rather than merely visible.
+ */
+function resolveLegacyTeamNames(): void {
+  const changed = resolveLegacyTeams(configStore.config.projects ?? [], cachedTeams);
+  for (const project of changed) configStore.upsertProject(project);
+  if (changed.length > 0) scheduleRender();
+}
+
 
 /**
  * Every workflow state the tracker offers, for the stage/transition pickers.
@@ -6370,6 +6411,10 @@ function projectCategories(): SettingsCategory[] {
   if (live.length === 0) return [];
 
   return live.map((project) => {
+    // Read once per category build, not inside the closures: describe() and
+    // getNote() run per frame per visible row, and a stat on the render path is
+    // the stall gitOutput exists to avoid.
+    const dirExists = existsSync(project.dir);
     const tier: RepoTier = {
       idPrefix: `project-${project.id}-`,
       read: (field) => repoSettingsFor(project.dir, project.id)[field as keyof ResolvedProjectSettings],
@@ -6386,10 +6431,10 @@ function projectCategories(): SettingsCategory[] {
           label: "Repository",
           type: "text" as const,
           getValue: () => project.dir.replace(homedir(), "~"),
-          describe: () => existsSync(project.dir)
+          describe: () => dirExists
             ? "Where worktree creation runs for this project."
             : "This directory no longer exists — starting work here will fail.",
-          getNote: () => (existsSync(project.dir) ? null : "missing"),
+          getNote: () => (dirExists ? null : "missing"),
         },
         {
           id: `project-${project.id}-team`,
@@ -7839,8 +7884,11 @@ async function startIssueGroup(
   // two different teams' work — and the session it created would carry one
   // stamp for issues routed to both.
   const byProject = new Map<string, { title: string; ids: string[] }>();
+  // Built once: the loop below is per issue, and rebuilding this inside it is
+  // sessions x contexts x issues to answer one question per issue.
+  const sessionIndex = sessionByIssueId();
   for (const issue of fresh) {
-    const outcome = resolveIssueProjectFor(issue);
+    const outcome = resolveIssueProjectFor(issue, sessionIndex);
     if (outcome.kind !== "resolved") {
       showNotice({
         title: outcome.kind === "unclaimed" ? "No Project For This Team" : "Project Not Resolved",

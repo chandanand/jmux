@@ -280,3 +280,72 @@ describe("GraphQL error handling", () => {
     expect(result).toBeNull();
   });
 });
+
+describe("LinearAdapter carries team and project ids", () => {
+  // Routing keys on ids, never names. Without these the Issue reaches
+  // resolveIssueProject with teamId undefined, projectsClaimingTeam returns the
+  // empty array for every issue, and group start fails for all of them — which
+  // is exactly what shipped before this test existed.
+  async function fetchIssue(node: Record<string, unknown> | null): Promise<{
+    issue: Awaited<ReturnType<LinearAdapter["getIssueByBranch"]>>;
+    queries: string[];
+  }> {
+    const real = globalThis.fetch;
+    const prev = process.env.LINEAR_TOKEN;
+    process.env.LINEAR_TOKEN = "lin_test";
+    const queries: string[] = [];
+    globalThis.fetch = (async (_u: string, init: { body: string }) => {
+      const body = JSON.parse(init.body);
+      const isProbe = typeof body.query === "string" && body.query.includes("viewer {");
+      if (isProbe) {
+        return new Response(JSON.stringify({
+          data: { viewer: { id: "u1", name: "T", organization: { name: "O" } } },
+        }));
+      }
+      queries.push(body.query);
+      return new Response(JSON.stringify({
+        data: { searchIssues: { nodes: node ? [node] : [] } },
+      }));
+    }) as unknown as typeof fetch;
+    try {
+      const adapter = new LinearAdapter({ type: "linear" });
+      await adapter.authenticate();
+      const issue = await adapter.getIssueByBranch("eng-1-x");
+      return { issue, queries };
+    } finally {
+      globalThis.fetch = real;
+      if (prev === undefined) delete process.env.LINEAR_TOKEN;
+      else process.env.LINEAR_TOKEN = prev;
+    }
+  }
+
+  const BASE = {
+    id: "i1", identifier: "ENG-1", title: "t", url: "u",
+    state: { name: "Todo", type: "unstarted" },
+  };
+
+  test("mapIssue populates teamId and linearProjectId", async () => {
+    const { issue } = await fetchIssue({
+      ...BASE,
+      team: { id: "team-uuid", name: "Core" },
+      project: { id: "proj-uuid", name: "Billing" },
+    });
+    expect(issue?.teamId).toBe("team-uuid");
+    expect(issue?.linearProjectId).toBe("proj-uuid");
+    // The names stay, for display.
+    expect(issue?.team).toBe("Core");
+    expect(issue?.project).toBe("Billing");
+  });
+
+  test("the query asks for both ids, or the mapper has nothing to map", async () => {
+    const { queries } = await fetchIssue(null);
+    expect(queries[0]).toContain("team { id name }");
+    expect(queries[0]).toContain("project { id name }");
+  });
+
+  test("an issue with no team or project leaves both ids undefined", async () => {
+    const { issue } = await fetchIssue({ ...BASE });
+    expect(issue?.teamId).toBeUndefined();
+    expect(issue?.linearProjectId).toBeUndefined();
+  });
+});
