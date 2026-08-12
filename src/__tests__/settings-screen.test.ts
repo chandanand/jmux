@@ -549,3 +549,226 @@ describe("SettingsScreen action rows", () => {
     expect(rowText(grid, 3, left, right)).toContain("4 tabs · 7 groups");
   });
 });
+
+// --- Stepper controls ---
+//
+// The rule these pin: ◂ ▸ always changes the selected row's value, and Enter
+// is only for values you must type or search. Before this, handleInput had no
+// case for \x1b[C or \x1b[D at all — Left and Right were swallowed in
+// navigation mode, so every numeric setting was a text field.
+
+const LEFT = "\x1b[D";
+const RIGHT = "\x1b[C";
+
+function steppedScreen(onStep: (d: number) => void, extra: Partial<SettingsCategory> = {}) {
+  const screen = new SettingsScreen();
+  screen.open([{
+    label: "General",
+    collapsed: false,
+    settings: [{
+      id: "n", label: "Sidebar width", type: "number",
+      getValue: () => "26", getEditValue: () => "26",
+      rangeHint: () => "(10–60)",
+      onStep,
+      onTextCommit: () => {},
+    }],
+    ...extra,
+  }]);
+  screen.handleInput("\x1b[B"); // onto the setting, off the category header
+  return screen;
+}
+
+describe("SettingsScreen stepping", () => {
+  test("▸ steps the selected number row forward, ◂ back", () => {
+    const deltas: number[] = [];
+    const screen = steppedScreen((d) => deltas.push(d));
+    screen.handleInput(RIGHT);
+    screen.handleInput(LEFT);
+    expect(deltas).toEqual([1, -1]);
+  });
+
+  test("stepping does not open an edit mode", () => {
+    const screen = steppedScreen(() => {});
+    screen.handleInput(RIGHT);
+    expect(screen.isEditing).toBe(false);
+  });
+
+  test("◂ ▸ toggles a boolean, so every row type answers the same keys", () => {
+    let on = false;
+    const screen = new SettingsScreen();
+    screen.open([{
+      label: "General", collapsed: false,
+      settings: [{
+        id: "b", label: "Cache timers", type: "boolean",
+        getValue: () => (on ? "on" : "off"), onToggle: () => { on = !on; },
+      }],
+    }]);
+    screen.handleInput("\x1b[B");
+    screen.handleInput(RIGHT);
+    expect(on).toBe(true);
+    screen.handleInput(LEFT);
+    expect(on).toBe(false);
+  });
+
+  test("◂ ▸ cycles a list in place and commits live, with no mode to confirm", () => {
+    const picked: string[] = [];
+    const screen = new SettingsScreen();
+    screen.open([{
+      label: "General", collapsed: false,
+      settings: [{
+        id: "l", label: "Running colour", type: "list",
+        getValue: () => "green", options: ["green", "blue", "red"],
+        onOptionSelect: (v) => picked.push(v),
+      }],
+    }]);
+    screen.handleInput("\x1b[B");
+    screen.handleInput(RIGHT);
+    screen.handleInput(LEFT);
+    expect(picked).toEqual(["blue", "red"]);
+    expect(screen.isEditing).toBe(false);
+  });
+
+  test("a text row ignores ◂ ▸ rather than pretending to step", () => {
+    let committed = 0;
+    const screen = new SettingsScreen();
+    screen.open([{
+      label: "General", collapsed: false,
+      settings: [{
+        id: "t", label: "Regex", type: "text",
+        getValue: () => "claude", onTextCommit: () => { committed++; },
+      }],
+    }]);
+    screen.handleInput("\x1b[B");
+    screen.handleInput(RIGHT);
+    expect(committed).toBe(0);
+    expect(screen.isEditing).toBe(false);
+  });
+
+  test("Enter on a number row still opens a prompt, seeded with the edit form", () => {
+    const screen = steppedScreen(() => {});
+    screen.handleInput("\r");
+    expect(screen.isEditing).toBe(true);
+  });
+
+  test("Enter on a list row opens the searchable picker, not an inline cycle", () => {
+    const picked: string[] = [];
+    const screen = new SettingsScreen();
+    screen.open([{
+      label: "General", collapsed: false,
+      settings: [{
+        id: "l", label: "Status", type: "list",
+        getValue: () => "todo", options: ["todo", "doing", "done"],
+        onOptionSelect: (v) => picked.push(v),
+      }],
+    }]);
+    screen.handleInput("\x1b[B");
+    screen.handleInput("\r");
+    expect(screen.isEditing).toBe(true);
+    const grid = screen.render(80, 24);
+    // The picker paints its own full-screen list with a filter line.
+    expect(rowText(grid, 1, 0, 12)).toContain("Filter");
+    screen.handleInput("\x1b[B"); // down to "doing"
+    screen.handleInput("\r");
+    expect(picked).toEqual(["doing"]);
+    expect(screen.isEditing).toBe(false);
+  });
+});
+
+describe("SettingsScreen info rows", () => {
+  function infoScreen(): SettingsScreen {
+    const screen = new SettingsScreen();
+    screen.open([{
+      label: "Diagnostics", collapsed: false,
+      settings: [{ id: "i", label: "Parking status", type: "info", getValue: () => "active — 2 parked" }],
+    }]);
+    screen.handleInput("\x1b[B");
+    return screen;
+  }
+
+  test("Enter does not open an editor on a read-only row", () => {
+    const screen = infoScreen();
+    screen.handleInput("\r");
+    expect(screen.isEditing).toBe(false);
+  });
+
+  test("◂ ▸ do nothing on a read-only row", () => {
+    const screen = infoScreen();
+    screen.handleInput(RIGHT);
+    screen.handleInput(LEFT);
+    expect(screen.isEditing).toBe(false);
+  });
+
+  test("its value still renders, so the row reads like the others", () => {
+    const screen = infoScreen();
+    const grid = screen.render(80, 24);
+    const { left, right } = expectedBounds(80);
+    expect(rowText(grid, 3, left, right)).toContain("active — 2 parked");
+  });
+
+  test("the hint line offers no edit key for it", () => {
+    const grid = infoScreen().render(80, 24);
+    expect(rowText(grid, 23, 0, 80)).not.toContain("edit");
+  });
+});
+
+describe("SettingsScreen hint line follows the selected row", () => {
+  test("a stepped row advertises ◂▸, a text row does not", () => {
+    const stepped = steppedScreen(() => {}).render(80, 24);
+    expect(rowText(stepped, 23, 0, 80)).toContain("◂▸");
+
+    const screen = new SettingsScreen();
+    screen.open([{
+      label: "General", collapsed: false,
+      settings: [{ id: "t", label: "Regex", type: "text", getValue: () => "x", onTextCommit: () => {} }],
+    }]);
+    screen.handleInput("\x1b[B");
+    expect(rowText(screen.render(80, 24), 23, 0, 80)).not.toContain("◂▸");
+  });
+});
+
+describe("SettingsScreen range hint and explain line", () => {
+  test("the selected stepped row carries its bounds after the value", () => {
+    const grid = steppedScreen(() => {}).render(80, 24);
+    const { left, right } = expectedBounds(80);
+    expect(rowText(grid, 3, left, right)).toContain("(10–60)");
+  });
+
+  test("an unselected row carries neither brackets nor bounds", () => {
+    const screen = new SettingsScreen();
+    screen.open([{
+      label: "General", collapsed: false,
+      settings: [
+        { id: "n", label: "Width", type: "number", getValue: () => "26", rangeHint: () => "(10–60)", onStep: () => {} },
+        { id: "m", label: "Other", type: "text", getValue: () => "x", onTextCommit: () => {} },
+      ],
+    }]);
+    screen.handleInput("\x1b[B");
+    screen.handleInput("\x1b[B"); // select the second row
+    const { left, right } = expectedBounds(80);
+    const row = rowText(screen.render(80, 24), 3, left, right);
+    expect(row).not.toContain("(10–60)");
+    expect(row).not.toContain("◂");
+  });
+
+  test("the explain line shows the selected row's describe()", () => {
+    const screen = new SettingsScreen();
+    screen.open([{
+      label: "General", collapsed: false,
+      settings: [{
+        id: "n", label: "Width", type: "number", getValue: () => "26",
+        onStep: () => {}, describe: () => "How wide the sidebar is.",
+      }],
+    }]);
+    screen.handleInput("\x1b[B");
+    expect(rowText(screen.render(80, 24), 22, 0, 80)).toContain("How wide the sidebar is.");
+  });
+
+  test("the explain row is reserved even with nothing to say, so the hint never moves", () => {
+    // A hint line that jumps as the cursor travels costs more than a blank row,
+    // and a content height that varies by selected row is a scroll-clamp bug.
+    const screen = steppedScreen(() => {}); // no describe()
+    const grid = screen.render(80, 24);
+    expect(rowText(grid, 22, 0, 80).trim()).toBe("");
+    expect(rowText(grid, 23, 0, 80)).toContain("esc");
+  });
+});

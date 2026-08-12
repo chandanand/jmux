@@ -9,7 +9,17 @@ import { tokens, space, frame } from "./chrome-tokens";
 export interface SettingDef {
   id: string;
   label: string;
-  type: "boolean" | "text" | "list" | "map" | "multiselect" | "action";
+  /**
+   * `number` is a `text` row that also walks an ordered ladder — see
+   * `numberSetting` in setting-number.ts, which derives its display, edit,
+   * parse and step forms from one spec so they cannot disagree.
+   *
+   * `info` is read-only. It exists because three Diagnostics rows were `text`
+   * with no `onTextCommit`: Enter did nothing while the hint line said
+   * "↵ edit". A row that advertises an action and silently declines is the
+   * failure `sectionedViewNotice()` was written to prevent.
+   */
+  type: "boolean" | "text" | "number" | "list" | "map" | "multiselect" | "action" | "info";
   getValue: () => string;
   /**
    * The *editable* form of the value, when it differs from the displayed one.
@@ -36,6 +46,13 @@ export interface SettingDef {
    * hundred presses.
    */
   onStep?: (delta: number) => void;
+  /**
+   * The bounds a stepped row enforces, e.g. `(auto, 20–120)`, drawn after the
+   * value on the selected row only. The range used to live solely in a command
+   * palette subheader, so the surface that actually clamps the value was the
+   * one that never mentioned it.
+   */
+  rangeHint?: () => string;
   // For list: cycle through options
   options?: string[];
   onOptionSelect?: (value: string) => void;
@@ -214,10 +231,12 @@ type SettingsNode =
 
 type PickerItem = { id: string; label: string };
 
+// There is no inline list mode. A `list` row cycles in place with ◂ ▸ and opens
+// the picker on Enter, so the two-step "enter a mode, cycle, confirm" edit that
+// used to sit here has no remaining caller.
 type EditState =
   | null
   | { mode: "text"; settingId: string; buffer: string; cursorPos: number }
-  | { mode: "list"; settingId: string; optionIndex: number; options: string[] }
   | { mode: "picker"; settingId: string; title: string; items: PickerItem[]; filtered: PickerItem[]; selectedIndex: number; filter: string; onSelect: (item: PickerItem) => void; multi?: boolean };
 
 export type SettingsAction =
@@ -245,6 +264,14 @@ type RenderRow =
 // starts at row 2. Shared between render() and ensureVisible() so the two
 // can't drift apart.
 const CONTENT_START_ROW = 2;
+
+// The bottom two rows: the explain line (the selected row's describe()) above
+// the hint line. Reserved whether or not there is anything to explain — a hint
+// line that moves as the cursor travels costs more than one dim blank row, and
+// a content height that varied with the selected row is a scroll-clamp bug
+// waiting to be written. Same reason CONTENT_START_ROW is shared: render() and
+// ensureVisible() must not be able to disagree about how tall the content is.
+const BOTTOM_RESERVED_ROWS = 2;
 
 export class SettingsScreen {
   private categories: SettingsCategory[] = [];
@@ -298,6 +325,13 @@ export class SettingsScreen {
     if (data === "\x1b[A") { this.moveUp(); return { type: "none" }; }
     if (data === "\x1b[B") { this.moveDown(); return { type: "none" }; }
 
+    // ◂ ▸ always change the selected row's value. Enter is only for values you
+    // must type or search. A row with no ordered ladder — text, multiselect,
+    // map — declines rather than pretending, and the hint line reflects that,
+    // so a row never advertises a key it does not answer.
+    if (data === "\x1b[D") { this.stepSelected(-1); return { type: "none" }; }
+    if (data === "\x1b[C") { this.stepSelected(1); return { type: "none" }; }
+
     if (data === "\r") {
       return this.handleEnter();
     }
@@ -348,14 +382,15 @@ export class SettingsScreen {
     // Header
     writeString(grid, 0, left, "Settings", HEADER_ATTRS);
 
-    // The hint line is its own bottom row — settings is a frameless
-    // full-screen takeover (no shared footer), so it keeps one hint line
-    // of its own, reserved at the bottom of the content band.
+    // Settings is a frameless full-screen takeover (no shared footer), so it
+    // keeps its own two bottom rows: what the selected row means, then what
+    // keys it takes.
     const hintRow = rows - 1;
+    const explainRow = rows - BOTTOM_RESERVED_ROWS;
 
     for (let r = 0; r < rowPlan.length; r++) {
       const row = CONTENT_START_ROW + r - this.scrollOffset;
-      if (row < CONTENT_START_ROW || row >= hintRow) continue;
+      if (row < CONTENT_START_ROW || row >= explainRow) continue;
 
       const entry = rowPlan[r];
       if (entry.kind === "blank") continue;
@@ -376,15 +411,63 @@ export class SettingsScreen {
       }
     }
 
+    this.renderExplain(grid, explainRow, left, right);
     this.renderHint(grid, hintRow, left);
 
     return grid;
   }
 
+  /** What the selected row means, in the row's own words. Blank when it has none. */
+  private renderExplain(grid: CellGrid, row: number, left: number, right: number): void {
+    const node = this.getSelectedNode();
+    if (node?.kind !== "setting") return;
+    const text = node.setting.describe?.();
+    if (!text) return;
+    writeString(grid, row, left, truncateToCols(text, Math.max(0, right - left)), DIM_ATTRS);
+  }
+
+  /**
+   * The keys the *selected* row actually takes. Varying it is the half that
+   * makes "◂ ▸ always change the value" honest: a row with no ladder to walk
+   * must not advertise the keys, and a read-only row must not claim an edit —
+   * three Diagnostics rows said "↵ edit" while Enter did nothing at all.
+   */
+  private hintGroups(): Array<{ key: string; label: string }> {
+    if (this.editState) {
+      return [{ key: "↵", label: "confirm" }, { key: "esc", label: "cancel" }];
+    }
+    const groups: Array<{ key: string; label: string }> = [{ key: "↑↓", label: "navigate" }];
+    const node = this.getSelectedNode();
+
+    if (node?.kind === "setting") {
+      const setting = node.setting;
+      if (this.canStep(setting)) groups.push({ key: "◂▸", label: "change" });
+      if (setting.type === "number" || setting.type === "text") {
+        if (setting.onTextCommit) groups.push({ key: "↵", label: "type a value" });
+      } else if (setting.type === "list" || setting.type === "multiselect") {
+        groups.push({ key: "↵", label: "choose…" });
+      } else if (setting.type === "map") {
+        groups.push({ key: "↵", label: this.expandedMaps.has(setting.id) ? "collapse" : "expand" });
+      } else if (setting.type === "action") {
+        groups.push({ key: "↵", label: "run" });
+      } else if (setting.type === "boolean") {
+        groups.push({ key: "↵", label: "toggle" });
+      }
+      if (setting.getScope?.() === "override") groups.push({ key: "d", label: "clear" });
+    } else if (node?.kind === "category") {
+      groups.push({ key: "↵", label: node.collapsed ? "expand" : "collapse" });
+    } else if (node?.kind === "map-entry") {
+      groups.push({ key: "↵", label: "change" }, { key: "d", label: "remove" });
+    } else if (node?.kind === "map-add") {
+      groups.push({ key: "↵", label: "add" });
+    }
+
+    groups.push({ key: "esc", label: "close" });
+    return groups;
+  }
+
   private renderHint(grid: CellGrid, row: number, left: number): void {
-    const groups: Array<{ key: string; label: string }> = this.editState
-      ? [{ key: "↵", label: "confirm" }, { key: "esc", label: "cancel" }]
-      : [{ key: "↵", label: "edit" }, { key: "esc", label: "close" }, { key: "↑↓", label: "navigate" }];
+    const groups = this.hintGroups();
 
     let col = left;
     groups.forEach((group, i) => {
@@ -449,10 +532,6 @@ export class SettingsScreen {
         this.renderTextEdit(grid, row, left, right, setting, this.editState);
         return;
       }
-      if (this.editState.mode === "list") {
-        this.renderListEdit(grid, row, left, setting, this.editState);
-        return;
-      }
     }
 
     const value = setting.getValue();
@@ -467,16 +546,27 @@ export class SettingsScreen {
     const scope = setting.getScope?.();
     const note = setting.getNote?.() ?? null;
 
+    // A steppable row wears its ◂ ▸ brackets and its bounds, on the selected
+    // row only — the same judgement the workflow screen records for its own:
+    // on every row at once they read as decoration and cost two columns on
+    // rows that don't step. The bounds sit beside the control that enforces
+    // them, rather than only in a command-palette subheader as before.
+    const stepped = selected && this.canStep(setting);
+    const bounds = stepped ? setting.rangeHint?.() ?? null : null;
+
     drawSettingRow(grid, row, { left, right }, {
       label: setting.label,
       labelAttrs: selected ? LABEL_ACTIVE : LABEL_ATTRS,
       value: [
+        ...(stepped ? [{ text: "◂ ", attrs: CURSOR_ATTRS }] : []),
         {
           text: valueStr,
           attrs: isBoolean
             ? (value === "on" ? ON_ATTRS : OFF_ATTRS)
             : (selected ? VALUE_ACTIVE : VALUE_ATTRS),
         },
+        ...(stepped ? [{ text: " ▸", attrs: CURSOR_ATTRS }] : []),
+        ...(bounds ? [{ text: ` ${bounds}`, attrs: DIM_ATTRS }] : []),
         ...(scope ? [{ text: ` (${scope})`, attrs: DIM_ATTRS }] : []),
         ...(note ? [{ text: ` · ${note}`, attrs: DIM_ATTRS }] : []),
       ],
@@ -508,16 +598,6 @@ export class SettingsScreen {
     const cursorCol = fieldStart + state.cursorPos - sliceOffset;
     const cursorChar = state.cursorPos < state.buffer.length ? state.buffer[state.cursorPos] : " ";
     writeString(grid, row, cursorCol, cursorChar, EDIT_CURSOR);
-  }
-
-  private renderListEdit(grid: CellGrid, row: number, left: number, setting: SettingDef, state: Extract<EditState, { mode: "list" }>): void {
-    const indent = left + 2;
-    writeString(grid, row, indent, setting.label + ": ", LABEL_ACTIVE);
-    const fieldStart = indent + setting.label.length + 2;
-
-    // Show current option with arrows
-    const option = state.options[state.optionIndex];
-    writeString(grid, row, fieldStart, `◂ ${option} ▸`, CURSOR_ATTRS);
   }
 
   private renderMapEntry(grid: CellGrid, row: number, left: number, right: number, node: Extract<SettingsNode, { kind: "map-entry" }>, selected: boolean): void {
@@ -591,30 +671,6 @@ export class SettingsScreen {
       return { type: "none" };
     }
 
-    if (this.editState.mode === "list") {
-      const state = this.editState;
-      if (data === "\x1b") {
-        this.editState = null;
-        return { type: "none" };
-      }
-      if (data === "\x1b[D" || data === "h") { // Left
-        state.optionIndex = (state.optionIndex - 1 + state.options.length) % state.options.length;
-        return { type: "none" };
-      }
-      if (data === "\x1b[C" || data === "l") { // Right
-        state.optionIndex = (state.optionIndex + 1) % state.options.length;
-        return { type: "none" };
-      }
-      if (data === "\r") {
-        const setting = this.findSetting(state.settingId);
-        const value = state.options[state.optionIndex];
-        if (setting?.onOptionSelect) setting.onOptionSelect(value);
-        this.editState = null;
-        return { type: "none" };
-      }
-      return { type: "none" };
-    }
-
     if (this.editState.mode === "picker") {
       const state = this.editState;
       if (data === "\x1b") {
@@ -683,20 +739,34 @@ export class SettingsScreen {
         return { type: "none" };
       }
 
-      if (setting.type === "text" && setting.onTextCommit) {
+      // A number is a text row that also steps: ◂ ▸ cover the nudges, Enter
+      // covers the jumps. getEditValue, never getValue — the display form is
+      // prose ("auto") and seeding the buffer with it is what produced
+      // "auto55", a commit that parsed to nothing and reported nothing.
+      if ((setting.type === "text" || setting.type === "number") && setting.onTextCommit) {
         const current = setting.getEditValue?.() ?? setting.getValue();
         this.editState = { mode: "text", settingId: setting.id, buffer: current, cursorPos: current.length };
         return { type: "none" };
       }
 
+      // The picker, not an inline cycle. These rows choose among every tracker
+      // state, and walking twenty-five of them one press at a time is why
+      // nobody found them; ◂ ▸ still cycles for the short lists.
       if (setting.type === "list" && setting.options && setting.onOptionSelect) {
-        const current = setting.getValue();
-        const idx = setting.options.indexOf(current);
+        const select = setting.onOptionSelect;
+        const items = setting.options.map((o) => ({ id: o, label: o }));
         this.editState = {
-          mode: "list",
+          mode: "picker",
           settingId: setting.id,
-          optionIndex: idx >= 0 ? idx : 0,
-          options: setting.options,
+          title: setting.label,
+          items,
+          filtered: items,
+          selectedIndex: Math.max(0, setting.options.indexOf(setting.getValue())),
+          filter: "",
+          onSelect: (item) => {
+            select(item.id);
+            this.editState = null;
+          },
         };
         return { type: "none" };
       }
@@ -793,6 +863,43 @@ export class SettingsScreen {
     }
 
     return { type: "none" };
+  }
+
+  /**
+   * Walk the selected row's value one place, applying it immediately.
+   *
+   * Deliberately no commit step. A stepped value is applied live — the caller
+   * relayouts on the same keypress, so you watch the sidebar move while the key
+   * is held — and there is nothing to confirm because nothing is staged.
+   */
+  private stepSelected(delta: number): void {
+    const node = this.getSelectedNode();
+    if (node?.kind !== "setting") return;
+    const setting = node.setting;
+
+    if (setting.onStep) { setting.onStep(delta); return; }
+    if (setting.type === "boolean") { setting.onToggle?.(); return; }
+
+    // A list cycles in place rather than opening a mode: three keystrokes to
+    // commit one of three colours was the shape that made these rows tedious.
+    // Enter still opens the searchable picker, which is what the twenty-five
+    // tracker-status rows actually need.
+    if (setting.type === "list" && setting.options && setting.onOptionSelect) {
+      const options = setting.options;
+      if (options.length === 0) return;
+      const at = options.indexOf(setting.getValue());
+      const from = at >= 0 ? at : 0;
+      const next = ((from + delta) % options.length + options.length) % options.length;
+      setting.onOptionSelect(options[next]);
+    }
+  }
+
+  /** Whether ◂ ▸ do anything on this row — the hint line asks before offering. */
+  private canStep(setting: SettingDef): boolean {
+    if (setting.onStep) return true;
+    if (setting.type === "boolean") return !!setting.onToggle;
+    if (setting.type === "list") return !!setting.options?.length && !!setting.onOptionSelect;
+    return false;
   }
 
   private moveUp(): void {
@@ -926,9 +1033,9 @@ export class SettingsScreen {
     const rowPos = rowPlan.findIndex((r) => r.kind === "node" && r.nodeIndex === this.selectedIndex);
     if (rowPos < 0) return;
 
-    // Reserve CONTENT_START_ROW rows above the content and 1 row for the
-    // hint line at the bottom.
-    const visibleCount = Math.max(1, this.lastRenderRows - CONTENT_START_ROW - 1);
+    // Reserve CONTENT_START_ROW rows above the content and the explain +
+    // hint rows below it.
+    const visibleCount = Math.max(1, this.lastRenderRows - CONTENT_START_ROW - BOTTOM_RESERVED_ROWS);
     const relativeIdx = rowPos - this.scrollOffset;
     if (relativeIdx < 0) {
       this.scrollOffset = rowPos;
