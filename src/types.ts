@@ -75,7 +75,13 @@ export interface SessionInfo {
   gitBranch?: string;
   windowCount: number;
   directory?: string;
-  project?: string; // wtm project name (bare repo basename)
+  /**
+   * The wtm bare-repo basename. Renamed from `project`, which now means the
+   * jmux Project: this one feeds session-title generation as the *repository*
+   * name, so overloading it would make the model's prompt lie about which repo
+   * the work is in.
+   */
+  repoName?: string;
   /**
    * The `@jmux-linear-issue` session option — the issue links `jmux ctl` writes.
    *
@@ -109,6 +115,11 @@ export interface SessionInfo {
    * which resolves to `orphaned` rather than being guessed at.
    */
   projectId?: string;
+  /**
+   * The Project's title, for display. Grouping keys on `projectId`, never this —
+   * two Projects may share a title and must not merge into one band.
+   */
+  projectName?: string;
 }
 
 export type ErrorState = {

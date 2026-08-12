@@ -277,3 +277,41 @@ export function resolveLegacyTeams(
   }
   return changed;
 }
+
+/**
+ * A label that distinguishes this Project from any other sharing its title.
+ *
+ * Two Projects on one repo is the intended shape — a monorepo serving two teams
+ * is two Projects and one directory — but the migration titles both from the
+ * directory basename, so they render as two identical headers with nothing to
+ * tell them apart. Disambiguation is done at *display* time rather than by
+ * rewriting titles, because a user can create the collision by hand too.
+ *
+ * Prefers the team, since that is what actually differs. Falls back to the
+ * directory, then the id, so the label is never ambiguous even when neither
+ * Project has a team yet.
+ */
+export function projectLabel(
+  project: ProjectConfig,
+  all: readonly ProjectConfig[],
+  teamName: (teamId: string) => string | null = () => null,
+): string {
+  const clashes = liveProjects(all).filter(
+    (p) => p.id !== project.id && p.title === project.title,
+  );
+  if (clashes.length === 0) return project.title;
+
+  const team = project.teamId ? teamName(project.teamId) : project.legacyTeamName ?? null;
+  if (team && !clashes.some((p) => {
+    const other = p.teamId ? teamName(p.teamId) : p.legacyTeamName ?? null;
+    return other === team;
+  })) {
+    return `${project.title} · ${team}`;
+  }
+
+  if (!clashes.some((p) => p.dir === project.dir)) {
+    return `${project.title} · ${project.dir.split("/").pop() ?? project.dir}`;
+  }
+  // Ids are unique by construction, so this always separates them.
+  return `${project.title} · ${project.id}`;
+}

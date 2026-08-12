@@ -33,11 +33,11 @@ function idsOf(sessions: SessionInfo[], indices: readonly number[]): string[] {
 describe("orderSessions", () => {
   test("buckets pinned, grouped, ungrouped and parked sessions in emission order", () => {
     const sessions = makeSessions([
-      { name: "p1", project: "alpha" },
-      { name: "s1", project: "alpha" },
-      { name: "s2", project: "beta" },
+      { name: "p1", repoName: "alpha" },
+      { name: "s1", repoName: "alpha" },
+      { name: "s2", repoName: "beta" },
       { name: "u1" },
-      { name: "k1", project: "alpha" },
+      { name: "k1", repoName: "alpha" },
     ]);
     const sortInfos = makeSortInfos(sessions);
 
@@ -106,7 +106,7 @@ describe("orderSessions", () => {
 
   test("headerless is true only for the ungrouped band, across every grouping axis", () => {
     const sessions = makeSessions([
-      { name: "a", project: "alpha" },
+      { name: "a", repoName: "alpha" },
       { name: "b" }, // no project → ungrouped under group=project
       { name: "c" },
     ]);
@@ -167,9 +167,9 @@ describe("orderSessions", () => {
 
   test("displayOrder equals the concatenated band indices, with nothing collapsed", () => {
     const sessions = makeSessions([
-      { name: "p1", project: "alpha" },
-      { name: "s1", project: "alpha" },
-      { name: "s2", project: "beta" },
+      { name: "p1", repoName: "alpha" },
+      { name: "s1", repoName: "alpha" },
+      { name: "s2", repoName: "beta" },
       { name: "u1" },
       { name: "k1" },
     ]);

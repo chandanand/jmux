@@ -80,7 +80,11 @@ function getGroupLabel(dir: string): string | null {
 }
 
 function projectLabelOf(session: SessionInfo): string | null {
-  if (session.project) return session.project;
+  // The Project first, then the repo. Grouping keys on the Project *id* upstream
+  // (see the caller): two Projects may share a title, and merging them into one
+  // band would put two teams' work under one header.
+  if (session.projectName) return session.projectName;
+  if (session.repoName) return session.repoName;
   const dir = session.directory;
   return dir ? getGroupLabel(dir) : null;
 }

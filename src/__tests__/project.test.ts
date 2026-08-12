@@ -14,6 +14,7 @@ import {
   projectById,
   resolveSettingsFor,
   resolveLegacyTeams,
+  projectLabel,
 } from "../project";
 
 function project(over: Partial<ProjectConfig> = {}): ProjectConfig {
@@ -311,5 +312,59 @@ describe("resolveLegacyTeams", () => {
     expect(projectsClaimingTeam(before, "T1")).toEqual([]);
     const after = resolveLegacyTeams(before, teams);
     expect(projectsClaimingTeam(after, "T1").map((p) => p.id)).toEqual(["api"]);
+  });
+});
+
+describe("projectLabel", () => {
+  const teams = (id: string) => ({ T1: "Core Engineering", T2: "Platform" }[id] ?? null);
+
+  test("a unique title is left alone", () => {
+    const all = [project({ id: "api", title: "api" })];
+    expect(projectLabel(all[0], all, teams)).toBe("api");
+  });
+
+  // The reported bug: a monorepo serving two teams migrates to two Projects
+  // titled from the same directory basename, rendering as two identical
+  // headers with nothing to tell them apart.
+  test("a shared title is disambiguated by team", () => {
+    const all = [
+      project({ id: "platform", title: "platform", teamId: "T1" }),
+      project({ id: "platform-2", title: "platform", teamId: "T2" }),
+    ];
+    expect(projectLabel(all[0], all, teams)).toBe("platform · Core Engineering");
+    expect(projectLabel(all[1], all, teams)).toBe("platform · Platform");
+  });
+
+  test("an unresolved legacy name disambiguates just as well", () => {
+    const all = [
+      project({ id: "a", title: "platform", legacyTeamName: "Core" }),
+      project({ id: "b", title: "platform", legacyTeamName: "Web" }),
+    ];
+    expect(projectLabel(all[0], all)).toBe("platform · Core");
+  });
+
+  test("falls back to the directory when the teams do not differ", () => {
+    const all = [
+      project({ id: "a", title: "platform", dir: "/code/one", teamId: "T1" }),
+      project({ id: "b", title: "platform", dir: "/code/two", teamId: "T1" }),
+    ];
+    expect(projectLabel(all[0], all, teams)).toBe("platform · one");
+  });
+
+  // Ids are unique by construction, so the label is never ambiguous.
+  test("falls back to the id when nothing else separates them", () => {
+    const all = [
+      project({ id: "a", title: "platform", dir: "/same" }),
+      project({ id: "b", title: "platform", dir: "/same" }),
+    ];
+    expect(projectLabel(all[0], all)).toBe("platform · a");
+  });
+
+  test("a soft-deleted twin is not a clash", () => {
+    const all = [
+      project({ id: "a", title: "platform" }),
+      project({ id: "b", title: "platform", deletedAt: "x" }),
+    ];
+    expect(projectLabel(all[0], all)).toBe("platform");
   });
 });

@@ -196,6 +196,7 @@ import {
   projectById,
   projectForDir,
   projectSettingScope,
+  projectLabel,
   type ProjectSettings,
   type ProjectConfig,
   type ResolvedProjectSettings,
@@ -3996,7 +3997,7 @@ async function fetchSessions(): Promise<void> {
           windowCount: parseInt(windows, 10) || 1,
           directory: cached?.directory,
           gitBranch: cached?.gitBranch,
-          project: cached?.project,
+          repoName: cached?.project,
           ...(issueLinks.length > 0 ? { issueLinks } : {}),
           ...(title ? { title } : {}),
           ...(titleSig ? { titleSignature: titleSig } : {}),
@@ -4181,7 +4182,7 @@ async function resolveGitTitleInput(session: SessionInfo): Promise<TitleInput | 
   const entry =
     cached && cached.branch === branch && !expired
       ? cached
-      : startGitTierRead(dir, branch, session.project);
+      : startGitTierRead(dir, branch, session.repoName);
   gitTitleInputs.set(session.id, entry);
 
   return (await entry.pending).input;
@@ -6557,7 +6558,11 @@ function projectCategories(): SettingsCategory[] {
       clear: (field) => configStore.clearProjectSetting(project.id, field),
     };
     return {
-      label: `Project · ${project.title}`,
+      // Through projectLabel, not project.title: two Projects on one repo is
+      // the intended shape (a monorepo serving two teams), and both migrate
+      // titled from the same directory basename — so the bare title rendered
+      // two identical headers with nothing to tell them apart.
+      label: `Project · ${projectLabel(project, live, (id) => cachedTeams.find((t) => t.id === id)?.name ?? null)}`,
       collapsed: true,
       settings: [
         {
@@ -6712,6 +6717,7 @@ function buildSettingsCategories(): SettingsCategory[] {
         },
         {
           id: "cache-timers", label: "Cache timers", type: "boolean" as const,
+          describe: () => "Show how long each agent's prompt cache has been warm, beside its state.",
           getValue: () => cacheTimersEnabled ? "on" : "off",
           onToggle: () => {
             cacheTimersEnabled = !cacheTimersEnabled;
@@ -6756,6 +6762,7 @@ function buildSettingsCategories(): SettingsCategory[] {
           // which panes are worth *electing* as a session's face when no agent
           // integration has declared a kind.
           id: "agent-pane-regex",
+          describe: () => "Case-insensitive regex over a pane's command, for agents that declare no kind of their own.",
           label: "Agent command match (regex)",
           type: "text" as const,
           getValue: () => agentPaneRegex,
@@ -6768,18 +6775,21 @@ function buildSettingsCategories(): SettingsCategory[] {
         },
         {
           id: "running-color", label: "Running state color", type: "list" as const,
+          describe: () => "Indicator colour while an agent is working. \"neutral\" lets the row recede instead.",
           getValue: () => currentStateColorName("running"),
           options: [...STATE_COLOR_NAMES],
           onOptionSelect: (v) => persistStateColor("running", v),
         },
         {
           id: "waiting-color", label: "Waiting state color", type: "list" as const,
+          describe: () => "Indicator colour while an agent needs you. \"neutral\" lets the row recede instead.",
           getValue: () => currentStateColorName("waiting"),
           options: [...STATE_COLOR_NAMES],
           onOptionSelect: (v) => persistStateColor("waiting", v),
         },
         {
           id: "complete-color", label: "Complete state color", type: "list" as const,
+          describe: () => "Indicator colour once an agent has finished. \"neutral\" lets the row recede instead.",
           getValue: () => currentStateColorName("complete"),
           options: [...STATE_COLOR_NAMES],
           onOptionSelect: (v) => persistStateColor("complete", v),
@@ -6808,14 +6818,28 @@ function buildSettingsCategories(): SettingsCategory[] {
           getValue: () => formatUserTmuxConfig(liveUserTmuxConfig(), homedir()),
           getEditValue: () => editableUserTmuxConfig(configStore.config.userTmuxConfig),
           getNote: userTmuxConfigRestartNote,
-          // No `describe` — the settings screen has no explain line and never
-          // reads it (only the workflow screen does), so a string here would be
-          // a field that reads as configured and can never be displayed. What
-          // the row accepts is documented in docs/configuration.md.
+          // The explain line exists now (it did not when this row was written),
+          // so the accepted forms are stated where the user is looking rather
+          // than only in docs/configuration.md. A bare text box for a setting
+          // whose two common answers are words is the wrong control.
+          describe: () => "◂ ▸ switches between auto-detect and none. Enter to type a path instead.",
+          // ◂ ▸ walks the two answers almost everyone wants; Enter still takes a
+          // path, so the escape hatch costs nothing and the common case costs
+          // one keypress. Same construction as the ghost-cap row.
+          onStep: (delta: number) => {
+            const current = configStore.config.userTmuxConfig;
+            // Only two rungs: a path is a destination you type, not one you
+            // step onto, and cycling through it would be a value nobody chose.
+            const next = current === false ? undefined : false;
+            void delta;
+            if (next === undefined) configStore.delete("userTmuxConfig");
+            else configStore.set("userTmuxConfig", next);
+          },
           onTextCommit: (v) => {
             const parsed = parseUserTmuxConfig(v);
             if (parsed === undefined) configStore.delete("userTmuxConfig");
             else configStore.set("userTmuxConfig", parsed);
+            return null;
           },
         },
       ],
@@ -6859,18 +6883,17 @@ function buildSettingsCategories(): SettingsCategory[] {
       ],
     },
     {
-      label: "Repo",
+      // "Repo" and "Project" were two headers for one idea, sitting above N
+      // more headers per Project — three overlapping ways to say the same
+      // thing. This is the tier every Project inherits from, so it says so,
+      // and where the scan for new ones happens lives with it.
+      label: "Project defaults",
       collapsed: false,
       settings: [
         ...repoDefaultSettings(),
-      ],
-    },
-    {
-      label: "Project",
-      collapsed: false,
-      settings: [
         {
           id: "project-dirs", label: "Project directories", type: "text" as const,
+          describe: () => "Comma-separated. Where Ctrl-a n looks for repos, and where adding a project scans.",
           getValue: () => {
             const dirs = configStore.config.projectDirs ?? [];
             return dirs.length > 0 ? dirs.join(", ") : "auto-detect";
@@ -7037,12 +7060,14 @@ function buildSettingsCategories(): SettingsCategory[] {
       settings: [
         {
           id: "park-status", label: "Parking status", type: "text" as const,
+          describe: () => "Whether any tab is configured to park its sessions, and how many are parked now.",
           getValue: () =>
             parkingSetupWarning(derivedStages().parked.length)
             ?? `active — ${currentSessions.filter((x) => sidebar.isParked(x.name)).length} parked`,
         },
         {
           id: "drift-status", label: "Drift detection", type: "text" as const,
+          describe: () => "Whether any transition target is configured, and how many issues sit behind theirs.",
           getValue: () => {
             const inputs = workflowInputs();
             // The issues actually examined, not just whether one had a target:
@@ -7061,6 +7086,7 @@ function buildSettingsCategories(): SettingsCategory[] {
         },
         {
           id: "stage-source", label: "Tracker states available", type: "text" as const,
+          describe: () => "How many workflow statuses the tracker reported. Empty means it is not connected.",
           getValue: () => {
             if (adapters.issueTracker?.authState !== "ok") return "tracker not connected";
             return cachedWorkflowStates.length > 0
@@ -10095,7 +10121,7 @@ async function lookupSessionDetails(sessions: SessionInfo[]): Promise<void> {
       sessionDetailsCache.set(session.id, { directory, path: cwd, gitBranch, project });
       session.directory = directory;
       session.gitBranch = gitBranch;
-      session.project = project;
+      session.repoName = project;
     } catch {
       // Session may not exist or no git repo
     }

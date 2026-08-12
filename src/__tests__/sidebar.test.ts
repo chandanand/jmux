@@ -11,7 +11,7 @@ const SIDEBAR_WIDTH = 24;
 const makeBlankOtelState = makeSessionOtelState;
 
 function makeSessions(
-  entries: Array<{ name: string; directory?: string; gitBranch?: string; project?: string }>,
+  entries: Array<{ name: string; directory?: string; gitBranch?: string; repoName?: string }>,
 ): SessionInfo[] {
   return entries.map((e, i) => ({
     id: `$${i}`,
@@ -21,7 +21,7 @@ function makeSessions(
     windowCount: 1,
     directory: e.directory,
     gitBranch: e.gitBranch,
-    project: e.project,
+    repoName: e.repoName,
   }));
 }
 
@@ -1708,10 +1708,10 @@ describe("Sidebar — sort & filter", () => {
   function seeded(): Sidebar {
     const sb = new Sidebar(WIDTH, 40);
     sb.updateSessions(makeSessions([
-      { name: "alpha", project: "proj-a" },   // $0 running
-      { name: "bravo", project: "proj-a" },    // $1 waiting
-      { name: "charlie", project: "proj-b" },  // $2 idle
-      { name: "delta", project: "proj-b" },    // $3 waiting
+      { name: "alpha", repoName: "proj-a" },   // $0 running
+      { name: "bravo", repoName: "proj-a" },    // $1 waiting
+      { name: "charlie", repoName: "proj-b" },  // $2 idle
+      { name: "delta", repoName: "proj-b" },    // $3 waiting
     ]));
     const now = Date.now();
     sb.setAgentStateRecord("$0", { state: "running", since: now });
@@ -1813,9 +1813,9 @@ describe("Sidebar — sort & filter", () => {
     // proj-b: charlie (idle, hidden) + delta (waiting, shown) → group stays.
     // Make a third project entirely non-waiting to prove it vanishes.
     sb.updateSessions(makeSessions([
-      { name: "alpha", project: "proj-a" },
-      { name: "bravo", project: "proj-a" },
-      { name: "solo", project: "proj-c" },
+      { name: "alpha", repoName: "proj-a" },
+      { name: "bravo", repoName: "proj-a" },
+      { name: "solo", repoName: "proj-c" },
     ]));
     sb.setAgentStateRecord("$1", { state: "waiting", since: Date.now() });
     // proj-c/solo has no waiting → whole group hidden under attention filter.
