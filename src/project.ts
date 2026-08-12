@@ -196,3 +196,53 @@ export const PROJECT_OPTION = "@jmux-project";
 export function isWritableProjectId(id: string): boolean {
   return id.length > 0 && !/\s/.test(id) && !id.includes("'") && !id.includes('"');
 }
+
+/**
+ * The Project a bare directory belongs to, when that is unambiguous.
+ *
+ * Null when none claims it *and* when several do — a shared `dir` is exactly
+ * the case the explicit `@jmux-project` stamp exists for, and guessing one of
+ * two here would resolve settings against a Project the session may not be in.
+ * The honest answer is "no Project", which falls back to the global tier.
+ */
+export function projectForDir(
+  all: readonly ProjectConfig[],
+  dir: string | null | undefined,
+): ProjectConfig | null {
+  if (!dir) return null;
+  const matches = liveProjects(all).filter((p) => p.dir === dir);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+/** A Project by id, ignoring soft-deleted ones. */
+export function projectById(
+  all: readonly ProjectConfig[],
+  id: string | null | undefined,
+): ProjectConfig | null {
+  if (!id) return null;
+  return liveProjects(all).find((p) => p.id === id) ?? null;
+}
+
+/**
+ * Effective settings for a directory, resolved through Projects.
+ *
+ * The one implementation, shared by the TUI and `jmux ctl`. It replaces
+ * `resolveForRepo`, which read `config.repos` — a map the migration removes, so
+ * continuing to call it would silently drop every per-repo setting a user had
+ * the moment they upgraded.
+ *
+ * `projectId` is the session's stamp when the caller has one. Without it the
+ * Project comes from the directory, and a directory claimed by several Projects
+ * resolves to none — the ambiguity the stamp exists to settle, answered
+ * honestly rather than guessed.
+ */
+export function resolveSettingsFor(
+  config: { projects?: ProjectConfig[]; projectDefaults?: ProjectSettings },
+  opts: { dir?: string | null; projectId?: string | null; bare?: boolean },
+): ResolvedProjectSettings {
+  const all = config.projects ?? [];
+  const project = projectById(all, opts.projectId) ?? projectForDir(all, opts.dir);
+  return resolveProjectSettings(config.projectDefaults, project?.settings, {
+    wtmIntegration: opts.bare ?? false,
+  });
+}

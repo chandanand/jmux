@@ -162,7 +162,7 @@ describe("ConfigStore", () => {
     expect(store.config.issueWorkflow?.teamRepoMap?.core).toBe("/c");
     // migration persisted to disk
     const onDisk = JSON.parse(require("fs").readFileSync(cfgPath, "utf-8"));
-    expect(onDisk.claudeCommand).toBeUndefined();
+    expect(onDisk.agentCommand).toBeUndefined();
     expect(onDisk.repoDefaults.claudeCommand).toBe("cc");
   });
 

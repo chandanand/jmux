@@ -10,6 +10,9 @@ import {
   type ProjectSettings,
   PROJECT_OPTION,
   isWritableProjectId,
+  projectForDir,
+  projectById,
+  resolveSettingsFor,
 } from "../project";
 
 function project(over: Partial<ProjectConfig> = {}): ProjectConfig {
@@ -166,5 +169,100 @@ describe("isWritableProjectId", () => {
 
   test("refuses empty", () => {
     expect(isWritableProjectId("")).toBe(false);
+  });
+});
+
+describe("projectForDir", () => {
+  test("resolves the single Project on a directory", () => {
+    const all = [project({ id: "api", dir: "/code/api" }), project({ id: "web", dir: "/code/web" })];
+    expect(projectForDir(all, "/code/api")?.id).toBe("api");
+  });
+
+  // A shared dir is exactly what the explicit stamp exists for. Guessing one of
+  // two here would resolve settings against a Project the session may not be in.
+  test("a shared directory is null, not a guess", () => {
+    const all = [project({ id: "core", dir: "/code/mono" }), project({ id: "web", dir: "/code/mono" })];
+    expect(projectForDir(all, "/code/mono")).toBeNull();
+  });
+
+  test("an unclaimed directory is null", () => {
+    expect(projectForDir([project({ dir: "/code/api" })], "/code/other")).toBeNull();
+  });
+
+  test("a soft-deleted Project does not claim its directory", () => {
+    const all = [project({ id: "gone", dir: "/code/api", deletedAt: "x" })];
+    expect(projectForDir(all, "/code/api")).toBeNull();
+  });
+
+  test("null and undefined are null", () => {
+    expect(projectForDir([project()], null)).toBeNull();
+    expect(projectForDir([project()], undefined)).toBeNull();
+  });
+});
+
+describe("projectById", () => {
+  test("finds a live Project", () => {
+    expect(projectById([project({ id: "api" })], "api")?.id).toBe("api");
+  });
+
+  test("a soft-deleted id resolves to null, so the caller can report orphaned", () => {
+    expect(projectById([project({ id: "api", deletedAt: "x" })], "api")).toBeNull();
+  });
+
+  test("an unknown id is null", () => {
+    expect(projectById([project({ id: "api" })], "nope")).toBeNull();
+  });
+});
+
+describe("resolveSettingsFor — the post-migration path", () => {
+  // The migration deletes `repos` and `repoDefaults`. Anything still resolving
+  // through them would silently drop every per-repo setting a user had the
+  // moment they upgraded — their agent command, their base branch.
+  const config = {
+    projects: [
+      project({ id: "api", dir: "/code/api", settings: { agentCommand: "cc" } }),
+      project({ id: "core", dir: "/code/mono" }),
+      project({ id: "web", dir: "/code/mono" }),
+    ],
+    projectDefaults: { autoLaunchAgent: false },
+  };
+
+  test("a migrated per-repo override still applies", () => {
+    expect(resolveSettingsFor(config, { dir: "/code/api" }).agentCommand).toBe("cc");
+  });
+
+  test("the global tier still applies", () => {
+    expect(resolveSettingsFor(config, { dir: "/code/api" }).autoLaunchAgent).toBe(false);
+  });
+
+  test("an unknown directory gets the global tier, not nothing", () => {
+    const r = resolveSettingsFor(config, { dir: "/code/elsewhere" });
+    expect(r.autoLaunchAgent).toBe(false);
+    expect(r.agentCommand).toBe(PROJECT_SETTING_DEFAULTS.agentCommand);
+  });
+
+  test("a shared directory falls to the global tier rather than guessing", () => {
+    expect(resolveSettingsFor(config, { dir: "/code/mono" }).agentCommand)
+      .toBe(PROJECT_SETTING_DEFAULTS.agentCommand);
+  });
+
+  test("a stamp settles a shared directory", () => {
+    const withSetting = {
+      ...config,
+      projects: config.projects.map((p) =>
+        p.id === "web" ? { ...p, settings: { agentCommand: "codex" } } : p),
+    };
+    expect(resolveSettingsFor(withSetting, { dir: "/code/mono", projectId: "web" }).agentCommand)
+      .toBe("codex");
+  });
+
+  test("runtime bare detection still seeds wtmIntegration", () => {
+    expect(resolveSettingsFor(config, { dir: "/code/api", bare: true }).wtmIntegration).toBe(true);
+    expect(resolveSettingsFor(config, { dir: "/code/api", bare: false }).wtmIntegration).toBe(false);
+  });
+
+  test("a Project override beats runtime detection", () => {
+    const c = { projects: [project({ id: "api", dir: "/code/api", settings: { wtmIntegration: false } })] };
+    expect(resolveSettingsFor(c, { dir: "/code/api", bare: true }).wtmIntegration).toBe(false);
   });
 });

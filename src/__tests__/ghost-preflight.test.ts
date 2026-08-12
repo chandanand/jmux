@@ -5,15 +5,15 @@ import {
   preflightActionLabel,
   type PreflightInput,
 } from "../ghost-preflight";
-import type { ResolvedRepoSettings } from "../repo-settings";
+import type { ResolvedProjectSettings } from "../project";
 import type { DetailLine } from "../issue-detail";
 
-const SETTINGS: ResolvedRepoSettings = {
+const SETTINGS: ResolvedProjectSettings = {
   defaultBaseBranch: "main",
   wtmIntegration: true,
   autoLaunchAgent: true,
   sessionNameTemplate: "{issue}",
-  claudeCommand: "claude",
+  agentCommand: "claude",
   onSessionStartState: null,
   onMrOpenState: null,
   onMrMergedState: null,

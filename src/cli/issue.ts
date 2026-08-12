@@ -9,11 +9,8 @@ import {
   loadUserConfig,
   type JmuxConfig,
 } from "../config";
-import {
-  RepoFactsCache,
-  resolveForRepo,
-  type ResolvedRepoSettings,
-} from "../repo-settings";
+import { RepoFactsCache } from "../repo-settings";
+import { resolveSettingsFor, type ResolvedProjectSettings } from "../project";
 import {
   resolveIssueSessionName,
   issueWorktreePath,
@@ -721,7 +718,7 @@ async function issueStart(
   }
 
   // Settings resolve against the repo this issue routes to, not the CLI's cwd.
-  const repoSettings = resolveForRepo(config, new RepoFactsCache().get(repo));
+  const repoSettings = resolveSettingsFor(config, { dir: repo, bare: new RepoFactsCache().get(repo).bare });
   const sessionName = startSessionName(issueId, issue, repoSettings.sessionNameTemplate);
 
   const reused = decideStartReuse(rows, issueId, sessionName);
@@ -771,7 +768,7 @@ async function issueStart(
     baseBranch,
     wtm: repoSettings.wtmIntegration,
     worktreeExists,
-    agentCommand: launchAgent ? repoSettings.claudeCommand : null,
+    agentCommand: launchAgent ? repoSettings.agentCommand : null,
     promptFile,
   });
 
@@ -916,7 +913,7 @@ function openSetupPane(
 async function applySessionStartTransition(
   adapter: LinearAdapter,
   issue: Issue | null,
-  settings: ResolvedRepoSettings,
+  settings: ResolvedProjectSettings,
 ): Promise<TransitionResult> {
   const target = transitionTarget("session-start", settings);
   // `issue` is only non-null when the adapter authenticated, so reaching the

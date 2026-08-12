@@ -156,10 +156,8 @@ import {
   canonicalizeRepoPath,
   resolveForRepo,
   buildWorktreeCommand,
-  REPO_SETTING_DEFAULTS,
   type RepoSettings,
   type WorkStage,
-  type ResolvedRepoSettings,
 } from "./repo-settings";
 import { buildProvisionPlan, SETUP_PANE_SIZE } from "./issue-provision";
 import {
@@ -171,7 +169,19 @@ import { INTERNAL_SESSION_FILTER, PARK_SESSION } from "./glass/internal-sessions
 import { PinnedPaneTracker } from "./glass/pinned-pane-tracker";
 import { parsePaneStateLines, PANE_STATE_FORMAT } from "./glass/reflect";
 import { US, splitFields } from "./tmux-fields";
-import { PROJECT_OPTION, isWritableProjectId } from "./project";
+import {
+  PROJECT_SETTING_DEFAULTS,
+  PROJECT_OPTION,
+  isWritableProjectId,
+  resolveProjectSettings,
+  resolveSettingsFor,
+  projectById,
+  projectForDir,
+  projectSettingScope,
+  type ProjectSettings,
+  type ProjectConfig,
+  type ResolvedProjectSettings,
+} from "./project";
 import { buildPaneLabel } from "./glass/pane-label";
 import { AGENT_DETECT_FORMAT, parseAgentDetectLines, detectAgentPanes } from "./glass/auto-detect";
 import { GlassView, type GlassTileSpec } from "./glass/view";
@@ -526,9 +536,51 @@ const toolbarHeight = toolbarEnabled ? (windowBranchesEnabled ? 2 : 1) : 0;
 const repoFacts = new RepoFactsCache();
 
 /** Effective workflow settings for a directory. A null dir yields global defaults. */
-function repoSettingsFor(dir: string | null | undefined): ResolvedRepoSettings {
-  if (!dir) return resolveForRepo(configStore.config, { key: null, bare: false });
-  return resolveForRepo(configStore.config, repoFacts.get(dir));
+/**
+ * Effective workflow settings for a directory.
+ *
+ * Resolves through **Projects**, not `repos[key]`: the migration removes that
+ * map, so continuing to read it would silently drop every per-repo setting a
+ * user had — their agent command, their base branch — the moment they upgraded.
+ *
+ * The Project comes from the directory when exactly one claims it. A shared
+ * directory resolves to no Project and falls to the global tier, which is the
+ * honest answer: that ambiguity is precisely what the `@jmux-project` stamp
+ * exists to settle, and callers holding a session should pass its id.
+ *
+ * Runtime bare-repo detection still seeds `wtmIntegration`, exactly as
+ * `resolveForRepo` did.
+ */
+function repoSettingsFor(
+  dir: string | null | undefined,
+  projectId?: string | null,
+): ResolvedProjectSettings {
+  return resolveSettingsFor(configStore.config, {
+    dir,
+    projectId,
+    bare: dir ? repoFacts.get(dir).bare : false,
+  });
+}
+
+/** Settings for a live session, preferring its Project stamp over its path. */
+function sessionSettingsFor(sessionName: string): ResolvedProjectSettings {
+  const session = currentSessions.find((s) => s.name === sessionName);
+  return repoSettingsFor(sessionDir(sessionName), session?.projectId ?? null);
+}
+
+/**
+ * The Project the attached session belongs to, preferring its stamp.
+ *
+ * Falls back to the directory, which is unambiguous for every Project that does
+ * not share a `dir` — and null when it is, since that is exactly what the stamp
+ * is for and guessing would edit settings on the wrong Project.
+ */
+function projectForCurrentSession(): ProjectConfig | null {
+  const session = currentSessions.find((s) => s.id === currentSessionId);
+  if (!session) return null;
+  const all = configStore.config.projects ?? [];
+  return projectById(all, session.projectId ?? null)
+    ?? projectForDir(all, sessionDir(session.name));
 }
 
 /** The directory a live session is rooted in, or null if we don't know it yet. */
@@ -538,14 +590,14 @@ function sessionDir(name: string): string | null {
 }
 
 /** Effective settings for the session the user is currently attached to. */
-function currentRepoSettings(): ResolvedRepoSettings {
+function currentRepoSettings(): ResolvedProjectSettings {
   const name = currentSessions.find((s) => s.id === currentSessionId)?.name;
   return repoSettingsFor(name ? sessionDir(name) : null);
 }
 
 /** The global-default tier alone, with built-in defaults filled in. */
-function repoDefaultsView(): ResolvedRepoSettings {
-  return resolveForRepo({ repoDefaults: configStore.config.repoDefaults }, { key: null, bare: false });
+function repoDefaultsView(): ResolvedProjectSettings {
+  return resolveProjectSettings(configStore.config.projectDefaults, undefined);
 }
 
 let cacheTimersEnabled = configStore.config.cacheTimers !== false;
@@ -1041,7 +1093,7 @@ async function performBoot(opts: {
     clock,
     jmuxVersion: process.env.JMUX_VERSION ?? "dev",
     userShell: process.env.SHELL ?? "/bin/sh",
-    resolveClaudeCommand: (cwd) => repoSettingsFor(cwd).claudeCommand,
+    resolveClaudeCommand: (cwd) => repoSettingsFor(cwd).agentCommand,
     configFile: opts.configFile,
     // If our held lock is reclaimed while running, tell the Snapshotter so it
     // stops capturing and surfaces `error` instead of silently double-writing.
@@ -5963,7 +6015,7 @@ type RepoRowKind = "text" | "boolean" | "multiselect" | "state";
 interface RepoRow {
   id: string;
   label: string;
-  field: keyof RepoSettings;
+  field: keyof ProjectSettings;
   kind: RepoRowKind;
   group: "workflow" | "transitions";
 }
@@ -5971,7 +6023,7 @@ interface RepoRow {
 const REPO_SETTING_ROWS: RepoRow[] = [
   { id: "default-branch", label: "Default base branch", field: "defaultBaseBranch", kind: "text", group: "workflow" },
   { id: "session-template", label: "Session name template", field: "sessionNameTemplate", kind: "text", group: "workflow" },
-  { id: "claude-command", label: "Claude command", field: "claudeCommand", kind: "text", group: "workflow" },
+  { id: "agent-command", label: "Agent command", field: "agentCommand", kind: "text", group: "workflow" },
   { id: "wtm", label: "wtm integration", field: "wtmIntegration", kind: "boolean", group: "workflow" },
   { id: "auto-agent", label: "Auto-launch agent", field: "autoLaunchAgent", kind: "boolean", group: "workflow" },
 
@@ -5990,10 +6042,10 @@ const NEVER_OPTION = "(never)";
  */
 interface RepoTier {
   idPrefix: string;
-  read: (field: keyof RepoSettings) => unknown;
-  write: (field: keyof RepoSettings, value: unknown) => void;
-  scope?: (field: keyof RepoSettings) => "inherited" | "override";
-  clear?: (field: keyof RepoSettings) => void;
+  read: (field: keyof ProjectSettings) => unknown;
+  write: (field: keyof ProjectSettings, value: unknown) => void;
+  scope?: (field: keyof ProjectSettings) => "inherited" | "override";
+  clear?: (field: keyof ProjectSettings) => void;
 }
 
 function buildRepoRows(group: RepoRow["group"], tier: RepoTier): SettingDef[] {
@@ -6045,8 +6097,8 @@ function buildRepoRows(group: RepoRow["group"], tier: RepoTier): SettingDef[] {
 function repoDefaultTier(): RepoTier {
   return {
     idPrefix: "",
-    read: (field) => configStore.config.repoDefaults?.[field] ?? REPO_SETTING_DEFAULTS[field],
-    write: (field, value) => configStore.setRepoDefault(field, value as never),
+    read: (field) => configStore.config.projectDefaults?.[field] ?? PROJECT_SETTING_DEFAULTS[field],
+    write: (field, value) => configStore.setProjectDefault(field, value as never),
   };
 }
 
@@ -6066,14 +6118,17 @@ function currentRepoCategory(): SettingsCategory[] {
   const key = repoFacts.get(dir).key;
   if (!key) return [];
 
-  const label = key.replace(/\/\.git$/, "").split("/").pop() ?? key;
+  // The Project, not the repo key. `repos[key]` no longer exists after the
+  // migration, so a tier reading it would show and write nothing.
+  const project = projectForCurrentSession();
+  if (!project) return [];
+  const label = project.title;
   const tier: RepoTier = {
-    idPrefix: "repo-",
-    read: (field) => repoSettingsFor(dir)[field as keyof ResolvedRepoSettings],
-    write: (field, value) => configStore.setRepoOverride(key, field, value as never),
-    scope: (field) =>
-      configStore.config.repos?.[key]?.[field] !== undefined ? "override" : "inherited",
-    clear: (field) => configStore.clearRepoOverride(key, field),
+    idPrefix: "project-",
+    read: (field) => repoSettingsFor(dir, project.id)[field as keyof ResolvedProjectSettings],
+    write: (field, value) => configStore.setProjectSetting(project.id, field, value as never),
+    scope: (field) => projectSettingScope(project, field, configStore.config.projectDefaults),
+    clear: (field) => configStore.clearProjectSetting(project.id, field),
   };
 
   // Transitions are not here: they moved onto the workflow screen, which shows
@@ -6556,15 +6611,16 @@ function currentRepoTier(): { label: string; tier: RepoTier } | null {
   if (!dir) return null;
   const key = repoFacts.get(dir).key;
   if (!key) return null;
+  const project = projectForCurrentSession();
+  if (!project) return null;
   return {
-    label: key.replace(/\/\.git$/, "").split("/").pop() ?? key,
+    label: project.title,
     tier: {
-      idPrefix: "repo-",
-      read: (field) => repoSettingsFor(dir)[field as keyof ResolvedRepoSettings],
-      write: (field, value) => configStore.setRepoOverride(key, field, value as never),
-      scope: (field) =>
-        configStore.config.repos?.[key]?.[field] !== undefined ? "override" : "inherited",
-      clear: (field) => configStore.clearRepoOverride(key, field),
+      idPrefix: "project-",
+      read: (field) => repoSettingsFor(dir, project.id)[field as keyof ResolvedProjectSettings],
+      write: (field, value) => configStore.setProjectSetting(project.id, field, value as never),
+      scope: (field) => projectSettingScope(project, field, configStore.config.projectDefaults),
+      clear: (field) => configStore.clearProjectSetting(project.id, field),
     },
   };
 }
@@ -6971,7 +7027,7 @@ async function provisionIssueSession(o: {
   issues: import("./adapters/types").Issue[];
   /** Home-expanded. */
   repoDir: string;
-  settings: ReturnType<typeof repoSettingsFor>;
+  settings: ResolvedProjectSettings;
   baseBranch: string;
   worktreeExists: boolean;
   prompt: (tracker: NonNullable<typeof adapters.issueTracker>) => string;
@@ -7009,7 +7065,7 @@ async function provisionIssueSession(o: {
       baseBranch: o.baseBranch,
       wtm: o.settings.wtmIntegration,
       worktreeExists: o.worktreeExists,
-      agentCommand: shouldLaunchAgent ? o.settings.claudeCommand : null,
+      agentCommand: shouldLaunchAgent ? o.settings.agentCommand : null,
       promptFile: promptTmp,
     });
 
@@ -8440,7 +8496,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       const modal = new InputModal({
         header: "Claude Command",
         subheader: "Command to launch Claude Code from toolbar (global default)",
-        value: repoDefaultsView().claudeCommand,
+        value: repoDefaultsView().agentCommand,
       });
       modal.open();
       openModal(modal, async (value) => {
@@ -8951,7 +9007,7 @@ async function handleToolbarAction(id: string): Promise<void> {
       toggleHelp();
       return;
     case "claude":
-      await control.sendCommand(`split-window -t ${ptyClientName} -h -c '#{pane_current_path}' ${currentRepoSettings().claudeCommand}`);
+      await control.sendCommand(`split-window -t ${ptyClientName} -h -c '#{pane_current_path}' ${currentRepoSettings().agentCommand}`);
       return;
     case "settings": {
       const settingsCommands = buildPaletteCommands().filter(c => c.category === "setting");

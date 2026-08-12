@@ -10,7 +10,7 @@
 //     would replay months of history into someone's tracker.
 //   * The default confirmation policy leaves an undo affordance on screen.
 
-import type { ResolvedRepoSettings } from "./repo-settings";
+import type { ResolvedProjectSettings } from "./project";
 
 export type TransitionEvent = "session-start" | "mr-open" | "mr-merged";
 
@@ -56,7 +56,7 @@ export function detectMrTransitions(
 /** The state name configured for an event, or null when it is switched off. */
 export function transitionTarget(
   event: TransitionEvent,
-  settings: ResolvedRepoSettings,
+  settings: ResolvedProjectSettings,
 ): string | null {
   switch (event) {
     case "session-start":

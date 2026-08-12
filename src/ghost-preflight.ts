@@ -13,7 +13,7 @@
 // Kept pure — every fact arrives as an argument — so the whole decision table
 // unit-tests without tmux, a tracker, or a filesystem.
 
-import type { ResolvedRepoSettings } from "./repo-settings";
+import type { ResolvedProjectSettings } from "./project";
 import type { DetailLine } from "./issue-detail";
 import { DETAIL_LABEL, DETAIL_VALUE, DETAIL_DIM } from "./issue-detail";
 
@@ -52,7 +52,7 @@ export interface PreflightInput {
   repoDir: string | null;
   sessionName: string | null;
   team: string | null;
-  settings: ResolvedRepoSettings;
+  settings: ResolvedProjectSettings;
   /** Whether an issue tracker is configured — gates the seeded agent prompt. */
   trackerPresent: boolean;
 }
@@ -80,7 +80,7 @@ export function buildPreflight(input: PreflightInput): Preflight {
   // identical to it.
   const agentCommand =
     input.settings.autoLaunchAgent && input.trackerPresent
-      ? input.settings.claudeCommand
+      ? input.settings.agentCommand
       : null;
 
   return {
