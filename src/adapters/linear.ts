@@ -1,5 +1,5 @@
 // src/adapters/linear.ts
-import { HttpError, type IssueTrackerAdapter, type AdapterAuthState, type Issue, type IssueStateType, type WorkflowState } from "./types";
+import { HttpError, type IssueTrackerAdapter, type AdapterAuthState, type AdapterIdentity, type Issue, type IssueStateType, type WorkflowState } from "./types";
 import { buildLinearPrompt, buildLinearGroupPrompt } from "./linear-prompt";
 import { logError } from "../log";
 import { openUrl } from "../platform";
@@ -24,15 +24,42 @@ export class LinearAdapter implements IssueTrackerAdapter {
   type = "linear";
   authState: AdapterAuthState = "unauthenticated";
   authHint = "$LINEAR_API_KEY or $LINEAR_TOKEN";
+  identity: AdapterIdentity | null = null;
   private token: string | null = null;
 
   constructor(_config: Record<string, unknown>) {}
 
   async authenticate(): Promise<void> {
     const token = process.env.LINEAR_API_KEY ?? process.env.LINEAR_TOKEN ?? null;
-    if (!token) { this.authState = "failed"; return; }
+    if (!token) { this.authState = "failed"; this.identity = null; return; }
     this.token = token;
-    this.authState = "ok";
+    // A real request, not merely a non-empty string. Presence proved nothing:
+    // a revoked, malformed or wrong-workspace token reported `ok`, so every
+    // "connected" the UI showed was a claim about a string existing. It also
+    // makes "swap only on success" mean something — see swapAdapters.
+    try {
+      const resp = await fetch(LINEAR_API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: token },
+        body: JSON.stringify({ query: `query { viewer { id name organization { name urlKey } } }` }),
+      });
+      if (!resp.ok) { this.authState = "failed"; this.identity = null; return; }
+      const json = await resp.json() as {
+        data?: { viewer?: { id?: string; name?: string; organization?: { name?: string } } };
+      };
+      const viewer = json?.data?.viewer;
+      if (!viewer?.id) { this.authState = "failed"; this.identity = null; return; }
+      this.identity = {
+        account: viewer.name ?? viewer.id,
+        organization: viewer.organization?.name ?? null,
+      };
+      this.authState = "ok";
+    } catch {
+      // Network, DNS, timeout — the token may be perfectly good. Latching
+      // `failed` here would block a swap over a blip.
+      this.authState = "unreachable";
+      this.identity = null;
+    }
   }
 
   async getLinkedIssue(mrUrl: string): Promise<Issue | null> {

@@ -5,6 +5,7 @@ import {
   type MergeRequest,
   type PipelineStatus,
   type BranchContext,
+  type AdapterIdentity,
 } from "./types";
 import { openUrl } from "../platform";
 
@@ -26,6 +27,7 @@ export class GitLabAdapter implements CodeHostAdapter {
   type = "gitlab";
   authState: AdapterAuthState = "unauthenticated";
   authHint = "$GITLAB_TOKEN or $GITLAB_PRIVATE_TOKEN";
+  identity: AdapterIdentity | null = null;
   private token: string | null = null;
   private baseUrl: string;
 

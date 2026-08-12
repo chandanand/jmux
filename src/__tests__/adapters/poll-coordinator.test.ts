@@ -13,6 +13,7 @@ function makeMockCodeHost(overrides: Partial<CodeHostAdapter> = {}): CodeHostAda
     type: "gitlab",
     authState: "ok" as AdapterAuthState,
     authHint: "$GITLAB_TOKEN",
+    identity: null,
     authenticate: mock(() => Promise.resolve()),
     getMergeRequest: mock(() => Promise.resolve(null)),
     pollMergeRequest: mock(() => Promise.resolve({

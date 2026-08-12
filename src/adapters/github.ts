@@ -5,6 +5,7 @@ import {
   type MergeRequest,
   type PipelineStatus,
   type BranchContext,
+  type AdapterIdentity,
 } from "./types";
 import { logError } from "../log";
 import { openUrl } from "../platform";
@@ -94,6 +95,7 @@ export class GitHubAdapter implements CodeHostAdapter {
   type = "github";
   authState: AdapterAuthState = "unauthenticated";
   authHint = "$GH_TOKEN or $GITHUB_TOKEN";
+  identity: AdapterIdentity | null = null;
   private token: string | null = null;
   private baseUrl: string;
   private username: string | null = null;

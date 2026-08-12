@@ -1,4 +1,4 @@
-import type { IssueTrackerAdapter, Issue, AdapterAuthState, IssueStateType, WorkflowState } from "../adapters/types";
+import type { IssueTrackerAdapter, Issue, AdapterAuthState, IssueStateType, WorkflowState, AdapterIdentity } from "../adapters/types";
 import { buildLinearPrompt, buildLinearGroupPrompt } from "../adapters/linear-prompt";
 import { DEMO_ISSUES, DEMO_TEAMS } from "./seed-data";
 
@@ -66,6 +66,7 @@ export class DemoIssueTrackerAdapter implements IssueTrackerAdapter {
   authState: AdapterAuthState = "ok";
   authHint = "demo mode — no credentials needed";
 
+  identity: AdapterIdentity | null = null;
   private issues: Map<string, Issue>;
   private byBranch: Map<string, Issue>;
 

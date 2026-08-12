@@ -3,6 +3,7 @@ import type {
   AdapterAuthState,
   MergeRequest,
   BranchContext,
+  AdapterIdentity,
 } from "../adapters/types";
 import { DEMO_MRS, DEMO_REVIEW_MR_IDS } from "./seed-data";
 
@@ -11,6 +12,7 @@ export class DemoCodeHostAdapter implements CodeHostAdapter {
   authState: AdapterAuthState = "ok";
   authHint = "demo mode — no credentials needed";
 
+  identity: AdapterIdentity | null = null;
   private mrs: Map<string, MergeRequest>;
   private byBranch: Map<string, MergeRequest>;
 
