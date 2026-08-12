@@ -634,3 +634,70 @@ describe("ConfigStore projects", () => {
     expect(reloaded.config.routes?.issue?.I1).toBe("api");
   });
 });
+
+describe("ConfigStore project migration", () => {
+  let dir: string;
+  let path: string;
+  const resolver = (d: string) => `${d}/.git`;
+
+  beforeEach(() => {
+    dir = join(tmpdir(), `jmux-pmig-${process.pid}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    path = join(dir, "config.json");
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("migrates teamRepoMap and repos into projects, and removes the legacy keys", async () => {
+    writeFileSync(path, JSON.stringify({
+      issueWorkflow: { teamRepoMap: { Core: "/code/api" } },
+      repos: { "/code/api/.git": { claudeCommand: "cc" } },
+      repoDefaults: { autoLaunchAgent: false },
+    }));
+    const store = new ConfigStore(path);
+    await store.migrateProjects(resolver);
+
+    expect(store.config.projects).toHaveLength(1);
+    expect(store.config.projects?.[0].settings?.agentCommand).toBe("cc");
+    expect(store.config.projectDefaults?.autoLaunchAgent).toBe(false);
+    // Two sources for one answer is how they come to disagree.
+    expect(store.config.issueWorkflow?.teamRepoMap).toBeUndefined();
+    expect(store.config.repos).toBeUndefined();
+    expect(store.config.repoDefaults).toBeUndefined();
+
+    const onDisk = JSON.parse(readFileSync(path, "utf-8"));
+    expect(onDisk.projects).toHaveLength(1);
+    expect(onDisk.teamRepoMap).toBeUndefined();
+  });
+
+  test("is a no-op the second time, and does not re-create a deleted Project", async () => {
+    writeFileSync(path, JSON.stringify({
+      issueWorkflow: { teamRepoMap: { Core: "/code/api" } },
+    }));
+    const store = new ConfigStore(path);
+    await store.migrateProjects(resolver);
+    store.deleteProject(store.config.projects![0].id);
+    await store.migrateProjects(resolver);
+    expect(store.config.projects).toHaveLength(1);
+    expect(store.config.projects?.[0].deletedAt).toBeDefined();
+  });
+
+  test("does not write when there is nothing legacy to migrate", async () => {
+    writeFileSync(path, JSON.stringify({ sidebarWidth: 26 }));
+    const store = new ConfigStore(path);
+    await store.migrateProjects(resolver);
+    expect(store.config.projects).toBeUndefined();
+  });
+
+  test("writes a backup before rewriting the file", async () => {
+    writeFileSync(path, JSON.stringify({
+      issueWorkflow: { teamRepoMap: { Core: "/code/api" } },
+    }));
+    const store = new ConfigStore(path);
+    await store.migrateProjects(resolver);
+    const backups = readdirSync(dir).filter((n) => n.includes(".backup"));
+    expect(backups.length).toBe(1);
+    // The backup must hold the *pre-migration* document.
+    expect(JSON.parse(readFileSync(join(dir, backups[0]), "utf-8")).issueWorkflow).toBeDefined();
+  });
+});

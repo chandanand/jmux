@@ -12,6 +12,7 @@ import type { ProjectRoutes } from "./project-routing";
 import { migrateLegacyConfig } from "./repo-settings";
 import { logError } from "./log";
 import { writeFileAtomicSync } from "./atomic-write";
+import { migrateToProjects } from "./project-migration";
 
 /**
  * Cross-repo routing only. Everything that is a property of a *repo* rather
@@ -646,6 +647,57 @@ export class ConfigStore {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     writeFileSync(this.path, JSON.stringify({}, null, 2) + "\n");
     return true;
+  }
+
+  /**
+   * One-time migration off `teamRepoMap` / `repoDefaults` / `repos`.
+   *
+   * Async and explicit rather than run from the constructor, because resolving
+   * a directory to its git common dir spawns git — and the constructor is
+   * reached from module scope in main.ts before anything can await.
+   *
+   * The complete new document is computed before anything is written, a
+   * timestamped backup lands first, and the legacy keys are removed only after
+   * the new file is durably on disk. Idempotent: `projects` existing is what
+   * suppresses it, so a Project the user has since deleted is not re-created.
+   */
+  async migrateProjects(resolveCommonDir: (dir: string) => string | null | Promise<string | null>): Promise<boolean> {
+    if (this.writesDisabled) return false;
+    if (this.data.projects !== undefined) return false;
+
+    const dirs = new Set<string>(Object.values(this.data.issueWorkflow?.teamRepoMap ?? {}));
+    const resolved = new Map<string, string | null>();
+    for (const d of dirs) resolved.set(d, await resolveCommonDir(d));
+
+    const result = migrateToProjects(
+      {
+        repoDefaults: this.data.repoDefaults,
+        repos: this.data.repos,
+        issueWorkflow: this.data.issueWorkflow,
+      },
+      (d) => resolved.get(d) ?? null,
+    );
+    if (!result.changed) return false;
+
+    // Before the rewrite, not after: the point is to survive a failure during
+    // the write that follows.
+    try {
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      writeFileAtomicSync(`${this.path}.backup-${stamp}`, JSON.stringify(this.data, null, 2) + "\n");
+    } catch (e) {
+      logError("ConfigStore", `migration backup failed, not migrating: ${(e as Error).message}`);
+      return false;
+    }
+
+    this.data.projects = result.projects;
+    if (result.globalDefaults) this.data.projectDefaults = result.globalDefaults;
+    delete this.data.repoDefaults;
+    delete this.data.repos;
+    if (this.data.issueWorkflow) {
+      delete this.data.issueWorkflow.teamRepoMap;
+      if (Object.keys(this.data.issueWorkflow).length === 0) delete this.data.issueWorkflow;
+    }
+    return this.persist();
   }
 
   /** Add or replace a Project by id. */
