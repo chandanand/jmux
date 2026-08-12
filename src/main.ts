@@ -133,6 +133,7 @@ import {
 } from "./issue-session";
 import { createAdapters } from "./adapters/registry";
 import { ActiveAdapters } from "./adapters/active-set";
+import { writeCredential } from "./credentials";
 import { PollCoordinator } from "./adapters/poll-coordinator";
 import { SessionState } from "./session-state";
 import type { SessionContext, WorkflowState, AdapterConfig } from "./adapters/types";
@@ -185,7 +186,7 @@ import { INTERNAL_SESSION_FILTER, PARK_SESSION } from "./glass/internal-sessions
 import { PinnedPaneTracker } from "./glass/pinned-pane-tracker";
 import type { PaneLocation } from "./glass/types";
 import { US, splitFields } from "./tmux-fields";
-import { resolveIssueProject, attachProjectDrift, mayOfferLinearProjectRoute } from "./project-routing";
+import { resolveIssueProject, attachProjectDrift, mayOfferLinearProjectRoute, prunableIssueRoutes } from "./project-routing";
 import {
   PROJECT_SETTING_DEFAULTS,
   PROJECT_OPTION,
@@ -2275,7 +2276,33 @@ const sessionWorkflow = new Map<string, SessionWorkflow>();
  * they are computed in one pass. Splitting them would mean two functions that
  * always have to be called together, from every one of these call sites.
  */
+/**
+ * Drop routes that have done their job.
+ *
+ * A route only has to survive the gap between answering the question and the
+ * session existing — after that `@jmux-project` on the session is the record.
+ * Without this, `prunableIssueRoutes` had no callers and `routes.issue` grew
+ * once per answered question, forever.
+ *
+ * Deliberately never prunes on *absence*: `getMyIssues` filters completed and
+ * canceled issues out, so an issue vanishing from the poll may equally have
+ * been unassigned, moved team, or the tracker may simply be down.
+ */
+function pruneSettledRoutes(): void {
+  const routes = configStore.config.routes;
+  if (!routes?.issue || Object.keys(routes.issue).length === 0) return;
+  const stamped = new Set<string>();
+  for (const sess of currentSessions) {
+    if (!sess.projectId) continue;
+    for (const i of pollCoordinator.getContext(sess.name)?.issues ?? []) stamped.add(i.id);
+  }
+  for (const id of prunableIssueRoutes(routes, { stamped, terminal: new Set() })) {
+    configStore.clearRoute("issue", id);
+  }
+}
+
 function recomputeSessionBands(): void {
+  pruneSettledRoutes();
   const config = parkingConfig();
   const now = Date.now();
   const parked = new Set<string>();
@@ -6162,13 +6189,40 @@ const setupModal = new SetupModal({
       case "agent-skill":
         showToast(installSkill() ? "Skill installed" : "Skill install failed");
         return;
-      case "tracker":
-        // Closes the checklist first: the settings screen is a full-area
-        // surface, and leaving a modal painted over it is the "surface open
-        // but deaf" failure closeModal() exists to avoid.
-        closeModal();
-        toggleSettingsScreen();
+      case "tracker": {
+        // A token, in place. Sending the user to the settings screen only ever
+        // let them pick a *type*; the credential still had to come from a shell
+        // export, so the wizard could not finish in one sitting — which is the
+        // whole reason the resolver reads a file at all. Without this,
+        // writeCredential had no callers and that file tier was never
+        // populated.
+        const tracker = adapters.issueTracker;
+        if (!tracker) {
+          closeModal();
+          toggleSettingsScreen();
+          return;
+        }
+        const prompt = new InputModal({
+          header: `Token for ${tracker.type}`,
+          subheader: `Stored in ~/.config/jmux/credentials.json (0600). Or leave blank and set ${tracker.authHint}.`,
+          value: "",
+        });
+        prompt.open();
+        openModal(prompt, async (value) => {
+          const token = String(value ?? "").trim();
+          if (!token) {
+            toggleSettingsScreen();
+            return;
+          }
+          writeCredential(tracker.type, token);
+          // Verified before it is believed: authenticate() makes a real
+          // identity request now, so a bad paste says so instead of sitting
+          // there looking connected.
+          const ok = await swapAdapters(configStore.config.adapters ?? {});
+          if (!ok) writeCredential(tracker.type, null);
+        });
         return;
+      }
       case "project-dirs":
         closeModal();
         void handlePaletteAction({ commandId: "setting-project-dirs" });
