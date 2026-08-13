@@ -8,6 +8,7 @@ import {
   detectSkill,
   hunkSkillSource,
   installSkillTo,
+  installSkills,
   installedSkillPaths,
   skillTarget,
 } from "../../agent-hooks/skill";
@@ -185,6 +186,58 @@ describe("the hunk-review skill", () => {
     const paths = installedSkillPaths(env);
     expect(paths).toContain(skillTarget(env));
     expect(paths).not.toContain(skillTarget(env, "hunk-review"));
+  });
+});
+
+describe("installSkills", () => {
+  // The defect this exists to prevent: installSkill() prints with console.log,
+  // which is right for the CLI and lands directly on the rendered frame when
+  // the TUI calls it. Nothing reachable from a modal may write to stdout.
+  test("writes nothing to stdout or stderr", () => {
+    const logged: string[] = [];
+    const origLog = console.log;
+    const origWrite = process.stdout.write;
+    const origErr = process.stderr.write;
+    console.log = (...a: unknown[]) => { logged.push(a.join(" ")); };
+    process.stdout.write = ((s: string) => { logged.push(String(s)); return true; }) as typeof process.stdout.write;
+    process.stderr.write = ((s: string) => { logged.push(String(s)); return true; }) as typeof process.stderr.write;
+    try {
+      installSkills(envWith(scratch()));
+    } finally {
+      console.log = origLog;
+      process.stdout.write = origWrite;
+      process.stderr.write = origErr;
+    }
+    expect(logged).toEqual([]);
+  });
+
+  test("reports one entry per skill, in the InstallReport shape", () => {
+    const reports = installSkills(envWith(scratch()));
+    expect(reports.map((r) => r.label)).toEqual(["jmux-control skill", "hunk-review skill"]);
+    for (const report of reports) {
+      expect(["installed", "migrated", "noop", "skipped", "failed"]).toContain(report.kind);
+      expect(Array.isArray(report.notes)).toBe(true);
+    }
+  });
+
+  test("installs jmux's skill into the env it is given", () => {
+    const dir = scratch();
+    const reports = installSkills(envWith(dir));
+    expect(reports[0]!.kind).toBe("installed");
+    expect(readFileSync(skillTarget(envWith(dir)), "utf-8").length).toBeGreaterThan(0);
+  });
+
+  test("a second run is a noop rather than a rewrite", () => {
+    const dir = scratch();
+    installSkills(envWith(dir));
+    expect(installSkills(envWith(dir))[0]!.kind).toBe("noop");
+  });
+
+  test("a missing hunk is skipped, never failed — it is an optional dependency", () => {
+    const reports = installSkills(envWith(scratch()), "definitely-not-a-real-binary-xyz");
+    const hunk = reports.find((r) => r.label === "hunk-review skill")!;
+    expect(hunk.kind).toBe("skipped");
+    expect(hunk.notes.join(" ")).toContain("hunk not installed");
   });
 });
 

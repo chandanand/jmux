@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 
 import { dataHome, materializeAssets, skillIn } from "../assets";
-import { uninstallAllAgents } from "./registry";
+import { uninstallAllAgents, type InstallReport } from "./registry";
 
 /**
  * The jmux agent skill.
@@ -157,42 +157,104 @@ export function installSkillTo(
   };
 }
 
-/** CLI entry point for `jmux --install-skill`. Returns success. */
-export function installSkill(): boolean {
-  let ok = true;
+/**
+ * Install both skills and report what happened, without printing anything.
+ *
+ * `installSkill()` below writes with `console.log`, which is correct for
+ * `jmux --install-skill` and wrong from inside the TUI: on an alt screen those
+ * lines land directly on the rendered frame, over whatever was there. So the
+ * work lives here and presentation belongs to the caller.
+ *
+ * Returns `InstallReport` — the type the *agent* installer already returns —
+ * rather than a parallel one, so a caller renders hooks and skills through a
+ * single path and the two vocabularies cannot drift apart.
+ *
+ * `env` is a parameter for the same reason every other function in this module
+ * takes one: a test that installed into the real `~/.claude` would rewrite the
+ * developer's own config.
+ */
+export function installSkills(
+  env: NodeJS.ProcessEnv = process.env,
+  hunkCommand = "hunk",
+): InstallReport[] {
+  const reports: InstallReport[] = [];
+
   try {
     const shipped = readFileSync(skillIn(materializeAssets()), "utf-8");
-    const outcome = installSkillTo(shipped);
-    console.log(`jmux-control skill: ${outcome.notes[0]}`);
-    for (const note of outcome.notes.slice(1)) console.log(`  ${note}`);
-    if (outcome.wrote) {
-      console.log("");
-      console.log("Agents running inside jmux can now discover `jmux ctl`.");
-    }
+    const outcome = installSkillTo(shipped, env);
+    reports.push({
+      label: "jmux-control skill",
+      kind: outcome.wrote ? "installed" : "noop",
+      notes: outcome.notes,
+    });
   } catch (err) {
-    process.stderr.write(`Could not install the jmux-control skill: ${(err as Error).message}\n`);
-    ok = false;
+    reports.push({
+      label: "jmux-control skill",
+      kind: "failed",
+      notes: [(err as Error).message],
+    });
   }
 
   // hunk's skill is a bonus, never a requirement: no hunk means no Diff panel
-  // to drive, so its absence is reported and shrugged off rather than failing
-  // the command.
-  const hunkShipped = hunkSkillSource();
+  // to drive, so its absence is `skipped` and not `failed`.
+  const hunkShipped = hunkSkillSource(hunkCommand);
   if (hunkShipped === null) {
-    console.log("hunk-review skill: hunk not found — skipped");
-    return ok;
+    reports.push({
+      label: "hunk-review skill",
+      kind: "skipped",
+      notes: ["hunk not installed"],
+    });
+    return reports;
   }
   try {
-    const outcome = installSkillTo(hunkShipped, process.env, HUNK_SKILL_NAME);
-    console.log(`hunk-review skill: ${outcome.notes[0]}`);
-    for (const note of outcome.notes.slice(1)) console.log(`  ${note}`);
-    if (outcome.wrote) {
-      console.log("");
-      console.log("Agents can now drive the Diff panel with `hunk session`.");
-    }
+    const outcome = installSkillTo(hunkShipped, env, HUNK_SKILL_NAME);
+    reports.push({
+      label: "hunk-review skill",
+      kind: outcome.wrote ? "installed" : "noop",
+      notes: outcome.notes,
+    });
   } catch (err) {
-    process.stderr.write(`Could not install the hunk-review skill: ${(err as Error).message}\n`);
-    ok = false;
+    reports.push({
+      label: "hunk-review skill",
+      kind: "failed",
+      notes: [(err as Error).message],
+    });
+  }
+  return reports;
+}
+
+/** What each skill unlocks, printed by the CLI once it has actually landed. */
+const SKILL_PAYOFF: Record<string, string> = {
+  "jmux-control skill": "Agents running inside jmux can now discover `jmux ctl`.",
+  "hunk-review skill": "Agents can now drive the Diff panel with `hunk session`.",
+};
+
+/**
+ * CLI entry point for `jmux --install-skill`. Returns success.
+ *
+ * Printing only — the work is `installSkills()`. Keeping the two as one
+ * implementation is what stops the CLI and the TUI reporting different things
+ * about the same install, which is exactly the drift that let the TUI inherit
+ * this function's `console.log`s onto its own frame.
+ */
+export function installSkill(): boolean {
+  let ok = true;
+  for (const report of installSkills()) {
+    if (report.kind === "failed") {
+      process.stderr.write(`Could not install the ${report.label}: ${report.notes[0]}\n`);
+      ok = false;
+      continue;
+    }
+    if (report.kind === "skipped") {
+      console.log(`${report.label}: hunk not found — skipped`);
+      continue;
+    }
+    console.log(`${report.label}: ${report.notes[0]}`);
+    for (const note of report.notes.slice(1)) console.log(`  ${note}`);
+    if (report.kind === "installed") {
+      console.log("");
+      console.log(SKILL_PAYOFF[report.label] ?? "");
+    }
   }
   return ok;
 }
