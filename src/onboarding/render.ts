@@ -348,9 +348,14 @@ export function renderFlow(
       truncateToCols(extras.busy, Math.max(1, width - INSET * 2)), p.accent);
   }
 
-  // Once the install has run, "set these up" invites a press that would only
-  // repeat work already done. The bar describes what the keys do now.
-  const hints = page.id === "agents" && (extras.reports?.length ?? 0) > 0
+  // The bar describes what the keys do *now*, never what the page is for in
+  // general. "set these up" after installing invites a press that would repeat
+  // finished work, and "use these" with no tracker connected advertises an
+  // action with nothing to act on — a key that silently does nothing being the
+  // failure this codebase names most often.
+  const installed = page.id === "agents" && (extras.reports?.length ?? 0) > 0;
+  const nothingToSeed = page.id === "workflow" && !status.facts.trackerAuthed;
+  const hints = installed || nothingToSeed
     ? "→ next   ← back   esc overview"
     : HINTS[page.id];
   paintActionBar(grid, width, height, hints);

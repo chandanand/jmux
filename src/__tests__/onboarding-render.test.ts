@@ -296,3 +296,46 @@ describe("renderFlow — the map has a visible cursor", () => {
     expect(out).toContain("How your work moves");
   });
 });
+
+describe("no page advertises an action it cannot perform", () => {
+  // A key that silently does nothing is indistinguishable from a key that is
+  // broken. suggestLayout over an empty status list returns its input
+  // untouched, so "use these" with no tracker would look like it worked.
+  test("the workflow page drops its Enter hint when there is no tracker", () => {
+    const f = flow({ trackerAuthed: false });
+    f.chooseIntent("tracker");
+    f.openStep("workflow");
+    const bar = lines(renderFlow(f, 90, 26)).at(-1)!;
+    expect(bar).not.toContain("use these");
+  });
+
+  test("and keeps it once a tracker is connected", () => {
+    const f = flow({ trackerAuthed: true, trackerType: "linear" });
+    f.chooseIntent("tracker");
+    f.openStep("workflow");
+    expect(lines(renderFlow(f, 90, 26)).at(-1)!).toContain("use these");
+  });
+
+  test("the workflow page says why there is nothing to group", () => {
+    const f = flow({ trackerAuthed: false });
+    f.chooseIntent("tracker");
+    f.openStep("workflow");
+    expect(text(renderFlow(f, 90, 26))).toContain("needs a tracker connected first");
+  });
+
+  test("the team page says why there is nothing to route", () => {
+    const f = flow({ trackerAuthed: false });
+    f.chooseIntent("tracker");
+    f.openStep("team");
+    expect(text(renderFlow(f, 90, 26))).toContain("needs a tracker connected first");
+  });
+
+  test("both read normally once a tracker is connected", () => {
+    const f = flow({ trackerAuthed: true, trackerType: "linear" });
+    f.chooseIntent("tracker");
+    f.openStep("team");
+    const out = text(renderFlow(f, 90, 26));
+    expect(out).toContain("An issue has to become a branch");
+    expect(out).not.toContain("needs a tracker connected first");
+  });
+});

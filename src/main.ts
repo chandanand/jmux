@@ -6303,6 +6303,12 @@ function buildOnboardingPort(): OnboardingPort {
     },
 
     seedWorkflow: () => {
+      // suggestLayout over an empty status list returns its input untouched,
+      // so without this the key would look like it worked and change nothing.
+      if (cachedWorkflowStates.length === 0) {
+        showToast("No tracker statuses to group yet — connect a tracker first");
+        return;
+      }
       // Routes to the same seeder the workflow screen offers rather than
       // owning a second copy of it.
       panelViews = suggestLayout(cachedWorkflowStates, panelViews);

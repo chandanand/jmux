@@ -137,10 +137,16 @@ export const PAGES: Record<PageId, PageDef> = {
     title: "Point a project at a team",
     step: "team",
     counts: true,
-    body: () => [
-      "An issue has to become a branch in a repository, and jmux needs to know which.",
-      "Without this, starting work from an issue does nothing at all — the most common way a new setup looks broken.",
-    ],
+    body: (status) =>
+      status.facts.trackerAuthed
+        ? [
+            "An issue has to become a branch in a repository, and jmux needs to know which.",
+            "Without this, starting work from an issue does nothing at all — the most common way a new setup looks broken.",
+          ]
+        : [
+            "Nothing to route yet — this needs a tracker connected first.",
+            "Once one is, this is where an issue learns which repository its branch belongs in. Without it, starting work from an issue does nothing at all.",
+          ],
   },
 
   workflow: {
@@ -148,12 +154,18 @@ export const PAGES: Record<PageId, PageDef> = {
     title: "How your work moves",
     step: "workflow",
     counts: true,
-    body: (status) => [
-      "Your tracker's statuses group into three stages, which drive the sidebar's bands and the info panel's tabs.",
-      status.steps.workflow.state === "satisfied"
-        ? "Change these any time in the workflow screen — Ctrl-a W."
-        : "Accept these to get started. You can change them any time in the workflow screen — Ctrl-a W.",
-    ],
+    body: (status) =>
+      !status.facts.trackerAuthed
+        ? [
+            "Nothing to group yet — this needs a tracker connected first.",
+            "Once one is, jmux sorts its statuses into three stages, which drive the sidebar's bands and the info panel's tabs.",
+          ]
+        : [
+            "Your tracker's statuses group into three stages, which drive the sidebar's bands and the info panel's tabs.",
+            status.steps.workflow.state === "satisfied"
+              ? "Change these any time in the workflow screen — Ctrl-a W."
+              : "Accept these to get started. You can change them any time in the workflow screen — Ctrl-a W.",
+          ],
   },
 
   done: {
