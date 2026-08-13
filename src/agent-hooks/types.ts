@@ -59,6 +59,18 @@ export interface AgentIntegration {
   readonly reports: ReadonlySet<AgentState>;
   /** Absolute path to the config file jmux writes. */
   readonly configPath: string;
+  /**
+   * Every file `install()` may write, resolved now.
+   *
+   * `configPath` names the primary one and under-reports two of the three
+   * agents: Codex also splices a feature flag into `config.toml`, and pi copies
+   * its extension out beside registering it. Asking someone to consent to jmux
+   * editing another tool's config is only honest if it names what will actually
+   * be touched — and since every path resolves from the environment
+   * (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_CONFIG_HOME`), prose in a page
+   * cannot state them without being wrong on a relocated config.
+   */
+  writeTargets(): string[];
   /** True when this agent looks installed on the current machine. */
   isPresent(): boolean;
   /** Inspect the on-disk config without modifying it. */

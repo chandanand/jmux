@@ -61,6 +61,12 @@ export const piIntegration: AgentIntegration = {
     return piSettingsPath();
   },
 
+  // pi has no shell hooks, so installing means copying the extension out and
+  // then registering that path. Two files, one step.
+  writeTargets(): string[] {
+    return [piSettingsPath(), piExtensionTarget()];
+  },
+
   isPresent(): boolean {
     return existsSync(dirname(piSettingsPath())) || Bun.which("pi") !== null;
   },

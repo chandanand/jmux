@@ -46,6 +46,10 @@ export const claudeIntegration: AgentIntegration = {
     return claudeSettingsPath();
   },
 
+  writeTargets(): string[] {
+    return [claudeSettingsPath()];
+  },
+
   isPresent(): boolean {
     return existsSync(dirname(claudeSettingsPath())) || Bun.which("claude") !== null;
   },

@@ -61,6 +61,12 @@ export const codexIntegration: AgentIntegration = {
     return hooksPath();
   },
 
+  // config.toml as well: the hooks document alone does nothing until
+  // `[features] hooks = true` is spliced in beside it.
+  writeTargets(): string[] {
+    return [hooksPath(), configPath()];
+  },
+
   isPresent(): boolean {
     return existsSync(codexHome()) || Bun.which("codex") !== null;
   },
