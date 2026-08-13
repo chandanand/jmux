@@ -20,7 +20,10 @@ import {
   userTmuxConfigPath,
   userTmuxConfigWarning,
 } from "./tmux-user-config";
-import { detectSkill, installSkill, uninstallIntegrations } from "./agent-hooks/skill";
+import { detectSkill, installSkill, installSkills, uninstallIntegrations } from "./agent-hooks/skill";
+import { OnboardingModal, type OnboardingPort } from "./onboarding/modal";
+import { deriveStatus, type SetupFacts } from "./onboarding/status";
+import { applyTrackerCredential } from "./tracker-credential";
 import { ScreenBridge } from "./screen-bridge";
 import { Renderer, getToolbarButtonRanges, getToolbarTabRanges, getModalPosition, buildToolbarButtons, type ToolbarConfig } from "./renderer";
 import { InputRouter } from "./input-router";
@@ -44,7 +47,6 @@ import {
 import { buildFooter, layoutFooter, type FooterModel } from "./footer";
 import { CommandPalette } from "./command-palette";
 import { HelpModal } from "./help-modal";
-import { SetupModal, type SetupRow } from "./setup-modal";
 import { KEYMAP, bindingsBySection, keysFor, shortKeys } from "./keymap";
 import { InputModal } from "./input-modal";
 import { ListModal, type ListItem } from "./list-modal";
@@ -97,7 +99,7 @@ import {
 } from "./hunk/protocol";
 import { DEFAULT_VIEW, parseSupportedFlags, sameView, spawnArgs, viewLabel, viewRequiredFlag, type HunkView } from "./hunk/view";
 import { InfoPanel, rebuildInfoPanelColors } from "./info-panel";
-import { parseViews, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, parkedStages, toggleParkedState, effectiveFilter, stageForState, stageInSidebar, stageShowsUnstarted, type PanelView } from "./panel-view";
+import { parseViews, suggestLayout, cycleGroupBy, cycleSortBy, toggleSortOrder, matchesIssueFilter, pickUpNext, applyFilterPatch, toggleFilterValue, parkedStages, toggleParkedState, effectiveFilter, stageForState, stageInSidebar, stageShowsUnstarted, type PanelView } from "./panel-view";
 import { transformIssues, transformMrs, buildViewNodes, itemsInGroup, checkedItems, renderView, createViewState, moveSelection, filterItems, rebuildPanelViewColors, computeViewLayout, splitRatioForSepRow, previewTabAtCol, previewTabRow, stepPreviewIndex, resolveActiveTab, DEFAULT_PANEL_SPLIT_RATIO, type ViewState, type ViewNode, type IssueSessionInfo } from "./panel-view-renderer";
 import { formatIssueBadge, orderedSessionIssues } from "./session-view";
 import {
@@ -141,7 +143,7 @@ import {
 } from "./issue-session";
 import { createAdapters } from "./adapters/registry";
 import { ActiveAdapters } from "./adapters/active-set";
-import { writeCredential } from "./credentials";
+import { writeCredential, readCredentials } from "./credentials";
 import { PollCoordinator } from "./adapters/poll-coordinator";
 import { SessionState } from "./session-state";
 import type { SessionContext, WorkflowState, AdapterConfig } from "./adapters/types";
@@ -206,6 +208,8 @@ import {
   projectForDir,
   projectSettingScope,
   projectLabel,
+  makeProjectId,
+  liveProjects,
   type ProjectSettings,
   type ProjectConfig,
   type ResolvedProjectSettings,
@@ -1144,7 +1148,7 @@ function setupStepsOutstanding(): boolean {
   }
   let value = false;
   try {
-    value = buildSetupRows().some((r) => r.state === "todo" || r.state === "blocked");
+    value = deriveStatus(buildSetupFacts()).outstanding;
   } catch {
     // A detector throwing must not take the toolbar down with it.
     value = false;
@@ -6168,255 +6172,167 @@ function shippedSkill(): string {
   return shippedSkillCache;
 }
 
-function buildSetupRows(): SetupRow[] {
-  const rows: SetupRow[] = [];
-
-  // Agent state hooks. "Present" is per-agent: an agent that isn't installed
-  // on this machine is not a gap to nag about, so it doesn't count either way.
+/**
+ * Everything the onboarding status is derived from.
+ *
+ * Gathering touches the filesystem, the adapters and config; deciding what it
+ * means is pure and lives in onboarding/status.ts, which is what makes every
+ * state reachable in a test. This replaced a builder that produced finished
+ * rows, so the same facts now feed the flow and the toolbar dot rather than
+ * two derivations that could disagree.
+ */
+function buildSetupFacts(): SetupFacts {
   const present = AGENT_INTEGRATIONS.filter((a) => a.isPresent());
-  const stale = present.filter((a) => a.detect() !== "current");
-  rows.push({
-    id: "agent-hooks",
-    label: "Agent status in the sidebar",
-    detail: present.length === 0
-      ? "Install Claude Code, Codex or pi and this will light up."
-      : "Shows RUNNING / WAITING / COMPLETE per agent pane, so you can see who needs you.",
-    state: present.length === 0
-      ? "unavailable"
-      : stale.length === 0
-        ? "done"
-        : configStore.config.setup?.agentHooks === "never"
-          ? "unavailable"
-          : "todo",
-    note: present.length === 0
-      ? "no agents found"
-      : stale.length === 0
-        ? present.map((a) => a.label).join(", ")
-        : `${stale.length} to set up`,
-  });
-
-  // The jmux ctl skill, so agents can drive sibling sessions.
-  const skill = detectSkill(shippedSkill());
-  rows.push({
-    id: "agent-skill",
-    label: "Teach agents the jmux CLI",
-    detail: "Installs a Claude Code skill so agents inside jmux can manage sessions, windows and panes.",
-    // A symlink is someone's deliberate wiring and not ours to replace, so it
-    // reads as done rather than offering to overwrite it.
-    state: skill === "current" || skill === "symlink" ? "done" : "todo",
-    note: skill === "stale" ? "out of date" : skill === "symlink" ? "linked" : undefined,
-  });
-
-  // Issue tracker. jmux can't supply a token, so this routes to the settings
-  // screen rather than pretending to be able to connect on its own.
+  const projects = liveProjects(configStore.config.projects ?? []);
   const tracker = adapters.issueTracker;
-  const trackerOk = tracker?.authState === "ok";
-  // A declared "never" is a real answer, not an absence — the one thing no
-  // filesystem check can discover. It makes the step inert rather than a
-  // permanent `todo` nagging someone who told us they do not want it.
-  const trackerDeclined = configStore.config.setup?.tracker === "never";
-  rows.push({
-    id: "tracker",
-    label: "Connect an issue tracker",
-    detail: "Puts your issues and merge requests in the info panel, and lets you start work from one.",
-    state: trackerOk ? "done" : trackerDeclined ? "unavailable" : "todo",
-    note: trackerOk
-      ? "connected"
-      : tracker
-        ? "not connected"
-        : "none configured",
-  });
-
-  // Project directories, which is what makes `Ctrl-a n` offer anything.
-  const dirs = configStore.config.projectDirs ?? [];
-  rows.push({
-    id: "project-dirs",
-    label: "Add your project directories",
-    detail: "Where Ctrl-a n looks for projects and worktrees when you make a new session.",
-    state: dirs.length > 0 ? "done" : "todo",
-    note: dirs.length > 0 ? `${dirs.length} dir${dirs.length === 1 ? "" : "s"}` : undefined,
-  });
-
-  // The two steps that only exist once a tracker answers. Both were previously
-  // invisible — a new user had no way to learn that a team has to be attached
-  // before starting work from an issue does anything, which is exactly the
-  // failure this checklist is being sequenced to prevent.
-  if (trackerDeclined) return rows;
-
-  const projects = configStore.config.projects ?? [];
-  const live = projects.filter((p) => p.deletedAt === undefined);
-  const attached = live.filter((p) => p.teamId !== undefined).length;
-  const unresolved = live.filter((p) => p.teamId === undefined && p.legacyTeamName).length;
-  rows.push({
-    id: "attach-team",
-    label: "Attach a team to a project",
-    detail: "Routes an issue to the repo its work happens in. Without it, starting work from an issue does nothing.",
-    dependsOn: ["tracker"],
-    state: trackerOk
-      ? (attached > 0 ? "done" : "todo")
-      : "blocked",
-    note: attached > 0
-      ? `${attached} attached`
-      : unresolved > 0
-        ? `${unresolved} awaiting`
-        : live.length === 0 ? "no projects yet" : undefined,
-  });
-
-  // suggestLayout already exists and the workflow screen already offers it —
-  // this step routes there rather than owning a second copy of the seeding.
-  const issueTabs = panelViews.filter((v) => v.source === "issues" && (v.states?.length ?? 0) > 0);
-  rows.push({
-    id: "workflow",
-    label: "Set up your workflow",
-    detail: "Groups your tracker's statuses into stages, which drives the sidebar bands and the issue tabs.",
-    dependsOn: ["tracker"],
-    state: trackerOk
-      ? (issueTabs.length > 0 ? "done" : "todo")
-      : "blocked",
-    note: issueTabs.length > 0 ? `${issueTabs.length} stages` : undefined,
-  });
-
-  // Last, because it is the one step that answers "does any of this work?"
-  // rather than "is this configured?".
-  const preflight = runSetupPreflight();
-  const failed = preflight.filter((c) => !c.ok);
-  rows.push({
-    id: "preflight",
-    label: "Check it all works",
-    detail: failed.length === 0
-      ? "Everything a new session needs is in place."
-      : failed.map((c) => `${c.label}: ${c.detail}`).join("  ·  "),
-    // Stays `todo` until the subprocess checks have actually run: a row that
-    // reported "done" while two of its checks said "not checked yet" would be
-    // claiming a pass it had not performed. Enter runs them.
-    state: failed.length === 0 && deepPreflight !== null ? "done" : "todo",
-    note: failed.length === 0
-      ? (deepPreflight === null ? "not run" : "passing")
-      : `${failed.length} failing`,
-  });
-
-  // The diff viewer is a separate binary. jmux genuinely cannot install it, so
-  // the row says what to run instead of offering an Enter that would fail.
-  const hunkInstalled = Bun.which(hunkCommand) !== null;
-  rows.push({
-    id: "hunk",
-    label: "Install the diff viewer",
-    detail: "The info panel's Diff tab is powered by hunk, a separate program.",
-    state: hunkInstalled ? "done" : "unavailable",
-    note: hunkInstalled ? "installed" : "npm i -g hunkdiff",
-  });
-
-  return rows;
+  const skill = detectSkill(shippedSkill());
+  return {
+    agentsPresent: present.map((a) => a.label),
+    agentsStale: present.filter((a) => a.detect() !== "current").map((a) => a.label),
+    // A symlink is someone's deliberate wiring and not ours to replace, so it
+    // counts as current rather than as work outstanding.
+    skillCurrent: skill === "current" || skill === "symlink",
+    trackerType: tracker?.type ?? null,
+    trackerAuthed: tracker?.authState === "ok",
+    trackerDeclined: configStore.config.setup?.tracker === "never",
+    projectCount: projects.length,
+    attachedTeamCount: projects.filter((p) => p.teamId !== undefined).length,
+    workflowTabCount: panelViews.filter(
+      (v) => v.source === "issues" && (v.states?.length ?? 0) > 0,
+    ).length,
+    hunkInstalled: Bun.which(hunkCommand) !== null,
+  };
 }
 
-/** Steps a user can decline outright. Others are machine truth, not preference. */
-const DECLINABLE: Record<string, "tracker" | "agentHooks"> = {
-  tracker: "tracker",
-  "agent-hooks": "agentHooks",
-};
+/**
+ * Adopt the repositories under the configured project directories as Projects.
+ *
+ * `projectDirs` are scan roots; attaching a team operates on `ProjectConfig`,
+ * which a scan root cannot supply. A step that wrote only the root therefore
+ * left the next step with nothing to attach to — configured, and still broken.
+ *
+ * Reuses the scanner the new-session flow already uses rather than adding a
+ * second one that could disagree with it. `homedir()` is dropped: the scan
+ * prepends it as the "anywhere" option, which is not a repository.
+ */
+async function adoptProjectsUnder(): Promise<void> {
+  const found = await scanProjectDirsAsync();
+  const existing = configStore.config.projects ?? [];
+  const known = new Set(existing.map((p) => p.dir));
+  const taken = new Set(existing.map((p) => p.id));
+  const home = homedir();
 
-const setupModal = new SetupModal({
-  rows: () => buildSetupRows(),
-  // Writes the preference its consumers already read. Without this half,
-  // `setup.tracker === "never"` was set by nobody and the row it silences
-  // nagged forever — which is the thing it was added to prevent.
-  onDecline: (id) => {
-    const key = DECLINABLE[id];
-    if (!key) return;
-    // A toggle, so it is reversible from the same key that set it. A preference
-    // you cannot take back is worse than the nag it replaced.
-    const declining = configStore.config.setup?.[key] !== "never";
-    configStore.setSetupIntent(key, declining ? "never" : null);
-    showToast(declining ? "Won't ask about this again" : "Asking about this again");
-  },
-  // Async because some steps finish later — see SetupProviders.onActivate.
-  onActivate: async (id) => {
-    switch (id) {
-      case "agent-hooks": {
-        const reports = installAllAgents();
-        const failed = reports.filter((r) => r.kind === "failed");
-        showToast(failed.length > 0
-          ? `Agent hooks: ${failed.length} failed`
-          : "Agent hooks installed");
+  const added: ProjectConfig[] = [];
+  for (const dir of found) {
+    if (dir === home || known.has(dir)) continue;
+    const title = basename(dir);
+    const id = makeProjectId(title, taken);
+    taken.add(id);
+    known.add(dir);
+    added.push({ id, title, dir });
+  }
+  if (added.length > 0) configStore.set("projects", [...existing, ...added]);
+}
+
+/** `a`, `a and b`, `a, b and c` — a join that reads as a sentence. */
+function listPhrase(items: readonly string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+function buildOnboardingPort(): OnboardingPort {
+  return {
+    getStatus: () => deriveStatus(buildSetupFacts()),
+    getProjectDirs: () => configStore.config.projectDirs ?? [],
+    // From installer metadata, never prose: every path resolves from the
+    // environment, and consent that names the wrong file is not consent.
+    // Collapsed to `~`, because the absolute form is long enough to be
+    // truncated on the row that exists to tell you what will be touched.
+    agentWriteTargets: () =>
+      AGENT_INTEGRATIONS.filter((a) => a.isPresent())
+        .flatMap((a) => a.writeTargets())
+        .map((path) => (path.startsWith(homedir()) ? `~${path.slice(homedir().length)}` : path)),
+
+    installAgents: async () => [...installAllAgents(), ...installSkills()],
+
+    addProjectDir: async (raw) => {
+      const dir = raw.trim().replace(/^~(?=\/|$)/, homedir());
+      if (!dir) return;
+      if (!existsSync(dir)) {
+        showToast(`No such directory: ${raw.trim()}`);
         return;
       }
-      case "agent-skill":
-        showToast(installSkill() ? "Skill installed" : "Skill install failed");
-        return;
-      case "tracker": {
-        // A token, in place. Sending the user to the settings screen only ever
-        // let them pick a *type*; the credential still had to come from a shell
-        // export, so the wizard could not finish in one sitting — which is the
-        // whole reason the resolver reads a file at all. Without this,
-        // writeCredential had no callers and that file tier was never
-        // populated.
-        const tracker = adapters.issueTracker;
-        if (!tracker) {
-          closeModal();
-          toggleSettingsScreen();
-          return;
-        }
-        const prompt = new InputModal({
-          header: `Token for ${tracker.type}`,
-          subheader: `Stored in ~/.config/jmux/credentials.json (0600). Or leave blank and set ${tracker.authHint}.`,
-          value: "",
-        });
-        prompt.open();
-        openModal(prompt, async (value) => {
-          const token = String(value ?? "").trim();
-          if (!token) {
-            toggleSettingsScreen();
-            return;
-          }
-          writeCredential(tracker.type, token);
-          // Verified before it is believed: authenticate() makes a real
-          // identity request now, so a bad paste says so instead of sitting
-          // there looking connected.
-          const ok = await swapAdapters(configStore.config.adapters ?? {});
-          if (!ok) writeCredential(tracker.type, null);
-        });
-        return;
+      const dirs = configStore.config.projectDirs ?? [];
+      if (!dirs.includes(dir)) configStore.set("projectDirs", [...dirs, dir]);
+      await adoptProjectsUnder();
+    },
+
+    connectTracker: async (token) => {
+      const type =
+        adapters.issueTracker?.type ??
+        configStore.config.adapters?.issueTracker?.type ??
+        "linear";
+      const result = await applyTrackerCredential({
+        type,
+        token: token.trim(),
+        readCredential: (t) => readCredentials()[t] ?? null,
+        writeCredential: (t, value) => writeCredential(t, value),
+        persistType: (t) => {
+          configStore.set("adapters", {
+            ...configStore.config.adapters,
+            issueTracker: { ...configStore.config.adapters?.issueTracker, type: t },
+          });
+        },
+        verify: () => swapAdapters(configStore.config.adapters ?? {}),
+      });
+      if (!result.ok) showToast("That token was rejected — nothing was changed");
+      return result;
+    },
+
+    seedWorkflow: () => {
+      // Routes to the same seeder the workflow screen offers rather than
+      // owning a second copy of it.
+      panelViews = suggestLayout(cachedWorkflowStates, panelViews);
+      configStore.set("panelViews", panelViews);
+    },
+
+    achievements: () => {
+      const facts = buildSetupFacts();
+      const out: string[] = [];
+      if (facts.projectCount > 0) {
+        out.push(`${facts.projectCount} project${facts.projectCount === 1 ? "" : "s"} ready`);
       }
-      case "project-dirs":
-        closeModal();
-        void handlePaletteAction({ commandId: "setting-project-dirs" });
-        return;
-      case "attach-team":
-        // The Projects screen is where a team is attached. Closing first for
-        // the same reason the tracker row does: a full-area surface with a
-        // modal left painted over it is the "open but deaf" failure.
-        closeModal();
-        toggleSettingsScreen();
-        return;
-      case "workflow":
-        // Routes to the workflow screen's own seed row rather than owning a
-        // second copy of suggestLayout.
-        closeModal();
-        openWorkflowScreen();
-        return;
-      case "preflight": {
-        // The subprocess checks first, so the notice reports what was actually
-        // verified rather than "not checked yet" twice.
-        await runDeepPreflight();
-        const results = runSetupPreflight();
-        showNotice({
-          title: results.every((c) => c.ok) ? "Ready" : "Not ready yet",
-          message: results
-            .map((c) => `${c.ok ? "✓" : "✗"} ${c.label} — ${c.detail}`)
-            .join("\n"),
-          tone: results.every((c) => c.ok) ? "plain" : "error",
-        });
-        return;
+      if (facts.agentsPresent.length > 0 && facts.agentsStale.length === 0) {
+        out.push(`${listPhrase(facts.agentsPresent)} report their state`);
       }
-    }
-  },
-});
+      if (facts.trackerAuthed) out.push(`${facts.trackerType ?? "Tracker"} connected`);
+      if (!facts.hunkInstalled) {
+        out.push("Diff viewer not installed — npm i -g hunkdiff, then Ctrl-a g");
+      }
+      return out;
+    },
+
+    // The flow does not provision anything itself: creating a session needs a
+    // directory, a worktree choice, a base branch and a name, and that flow
+    // already exists and is good at it. Handing off is one keystroke and no
+    // second implementation.
+    finish: () => {
+      closeModal();
+      void handlePaletteAction({ commandId: "new-session" });
+    },
+
+    onChange: () => { scheduleRender(); },
+  };
+}
+
+const onboarding = new OnboardingModal(buildOnboardingPort());
 
 function openSetup(): void {
   if (activeModal) closeModal();
-  setupModal.setTermRows(process.stdout.rows || 24);
-  setupModal.open();
-  openModal(setupModal, () => {});
+  onboarding.onResize(process.stdout.columns || 80, process.stdout.rows || 24);
+  onboarding.open();
+  openModal(onboarding, () => {});
 }
 
 /**

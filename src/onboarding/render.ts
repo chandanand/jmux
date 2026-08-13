@@ -34,6 +34,13 @@ export const BOTTOM_RESERVED_ROWS = 2;
 
 const RAIL_COLS = 16;
 
+/** The three keys the finish page teaches. `Ctrl-a ?` carries every other. */
+const WORTH_KNOWING: ReadonlyArray<readonly [string, string]> = [
+  ["Ctrl-a n", "start a new piece of work"],
+  ["Ctrl-a p", "the command palette — everything is in here"],
+  ["Ctrl-a ?", "every key jmux binds"],
+];
+
 /**
  * Wrap to the prose measure.
  *
@@ -303,6 +310,21 @@ export function renderFlow(
         truncateToCols(line, Math.max(1, width - INSET * 2 - 3)), p.body);
       y += 1;
     }
+    // The keys, because a finish that only ticks boxes has said nothing about
+    // what to actually do next — and this is the last moment anyone is
+    // reading. Ctrl-a ? carries the rest, so this stays three.
+    if (y + 2 < height - BOTTOM_RESERVED_ROWS) {
+      y += 1;
+      writeString(grid, y, INSET, "Three things worth knowing", p.dim);
+      y += 2;
+      for (const [key, what] of WORTH_KNOWING) {
+        if (y >= height - BOTTOM_RESERVED_ROWS) break;
+        writeString(grid, y, INSET + 3, key, p.accent);
+        writeString(grid, y, INSET + 17,
+          truncateToCols(what, Math.max(1, width - INSET - 18)), p.body);
+        y += 1;
+      }
+    }
   }
 
   if (extras.busy && height - BOTTOM_RESERVED_ROWS - 1 > 0) {
@@ -310,6 +332,11 @@ export function renderFlow(
       truncateToCols(extras.busy, Math.max(1, width - INSET * 2)), p.accent);
   }
 
-  paintActionBar(grid, width, height, HINTS[page.id]);
+  // Once the install has run, "set these up" invites a press that would only
+  // repeat work already done. The bar describes what the keys do now.
+  const hints = page.id === "agents" && (extras.reports?.length ?? 0) > 0
+    ? "→ next   ← back   esc overview"
+    : HINTS[page.id];
+  paintActionBar(grid, width, height, hints);
   return grid;
 }
