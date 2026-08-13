@@ -234,7 +234,27 @@ answers, the same distinction `TitleGenerator.request`'s `explicit` flag draws.
 
 ### Modals
 
-Modals implement the `Modal` interface in `src/modal.ts` and are rendered as an overlay by the main renderer. When a modal is open, `InputRouter` routes input to `onModalInput` instead of the PTY. Existing modals: `CommandPalette`, `InputModal`, `ListModal`, `ContentModal`, `NewSessionModal`. Each returns `{type: "consumed" | "closed" | "result"}` from `handleInput`.
+Modals implement the `Modal` interface in `src/modal.ts` and are rendered as an overlay by the main renderer. When a modal is open, `InputRouter` routes input to `onModalInput` instead of the PTY. Existing modals: `CommandPalette`, `InputModal`, `ListModal`, `ContentModal`, `NewSessionModal`, `OnboardingModal`. Each returns `{type: "consumed" | "closed" | "result"}` from `handleInput`.
+
+**`activeModal` is a single slot**, so a modal that opens another modal is *evicted* by it. A multi-step flow therefore owns its children directly rather than calling `openModal()` — `NewSessionModal` established this and `OnboardingModal` follows it. Getting this wrong is not a routing bug that shows up in tests; it shows up as a wizard that abandons the user in whatever screen it opened last.
+
+**`Modal.onResize` is opt-in, and SIGWINCH's default is still to close.** Every modal sizes itself at open, so closing on resize is right when there is nothing to preserve. A flow has steps behind it and possibly a half-typed credential, so it re-lays out instead. `resizeOrClose` (`modal.ts`) holds the rule, because the handler lives in `main.ts` where no test can reach it.
+
+### First-run onboarding (`src/onboarding/`)
+
+The wizard that opens when `configStore.ensureExists()` reports an absent `config.json`, and from the palette's **Setup** forever after. It replaced a checklist that called `installSkill()` — a `console.log` CLI entry point — from inside the TUI, putting `jmux-control skill: installed to …` directly onto the rendered frame.
+
+`status.ts` (facts → state, pure) · `pages.ts` (the page table, pure) · `flow.ts` (the state machine, pure) · `render.ts` (the painter) · `modal.ts` (the `Modal` impl and its child stack). `main.ts` holds wiring only.
+
+Five rules are easy to undo:
+
+- **Intent selects which pages *exist*, which is what deletes the `blocked` state.** "Something else must happen first" is what a sequence is; a page needing the tracker comes after the tracker page. What remains is `satisfied | pending | unavailable`, and `unavailable` is prose on a page you are standing on rather than a glyph needing a legend. It must never raise the toolbar dot: a machine with no agent installed has nothing to be nagged about.
+- **Intent is never persisted.** A stored route is a second source of truth that can disagree with what is actually configured, and `config.ts` casts its parsed document rather than validating it. On re-entry the map derives what is in play from what is true — the same "derived, never stored" rule the checklist stated for machine truth.
+- **`next()` never requires completion and `esc` always zooms out** (page → map → closed). Blocking advance is what would make "no tracker account today" unrecoverable.
+- **The painter never asks the port.** `getGrid` runs every frame; `agentWriteTargets` stats each agent's config and `achievements` re-reads the skill file and probes PATH. The port's answers are cached and recomputed at three moments — open, an action resolving, and a **config-watcher reload**, because a reload can add projects while the flow is open.
+- **Nothing may advertise an action it cannot perform.** `suggestLayout` over an empty status list returns its input untouched, so the workflow page's "use these" with no tracker looked like it worked; the hint is dropped and the action refuses out loud. The same rule made the map's cursor visible — it moved a cursor nobody could see, then opened whichever row it had silently landed on. The map lists *every* step, including ones outside the current arm, so choosing one adopts the arm that has it: a row that is drawn and refuses to open is worse than one never drawn.
+
+Session creation is deliberately **not** in the flow. The generic path launches no agent and failed provisioning leaves debris by design, so the finish page hands off to `NewSessionModal` rather than growing a second implementation of it. `onboarding-integration.test.ts` drives a real pty and asserts no installer output reaches the frame — the regression that caused the rebuild is invisible to every unit test either side of it.
 
 ### Agent control CLI
 
