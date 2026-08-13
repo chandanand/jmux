@@ -2,7 +2,7 @@ import type { CellGrid } from "../types";
 import { createGrid, writeString, textCols, truncateToCols, type CellAttrs } from "../cell-grid";
 import { tokens, space, frame } from "../chrome-tokens";
 import type { OnboardingFlow } from "./flow";
-import { INTENT_CHOICES, type PageId } from "./pages";
+import { INTENT_CHOICES, MAP_STEPS, type PageId } from "./pages";
 import type { StepId } from "./status";
 import type { InstallReport } from "../agent-hooks/registry";
 
@@ -121,14 +121,18 @@ function paintRail(grid: CellGrid, width: number, label: string | null): void {
   writeString(grid, 0, barX + filled, RAIL_AHEAD.repeat(RAIL_COLS - filled), p.ahead);
 }
 
-/** The step rows on the map, and the labels they carry. */
-const MAP_ROWS: ReadonlyArray<[StepId, string]> = [
-  ["projects", "Where your code lives"],
-  ["agents", "Letting jmux see your agents"],
-  ["tracker", "Connect an issue tracker"],
-  ["team", "Point a project at a team"],
-  ["workflow", "How your work moves"],
-];
+/**
+ * The labels the map rows carry. Order comes from `MAP_STEPS`, which the
+ * navigator reads too — two orderings is how a cursor ends up on a different
+ * row than the one drawn.
+ */
+const MAP_LABELS: Record<StepId, string> = {
+  projects: "Where your code lives",
+  agents: "Letting jmux see your agents",
+  tracker: "Connect an issue tracker",
+  team: "Point a project at a team",
+  workflow: "How your work moves",
+};
 
 const HINTS: Record<PageId | "map", string> = {
   map: "↑↓ move   ↵ open   esc close",
@@ -198,6 +202,14 @@ export interface RenderExtras {
   achievements?: string[];
   /** Busy message, shown while an async action runs. */
   busy?: string;
+  /**
+   * Which map row the cursor is on.
+   *
+   * Without it the map's ↑↓ move a cursor nobody can see and ↵ opens a step
+   * the user did not knowingly choose — a key with no visible effect being
+   * indistinguishable from a key that is broken.
+   */
+  mapIndex?: number;
 }
 
 /**
@@ -220,10 +232,14 @@ export function renderFlow(
     writeString(grid, 0, rightX(width, "overview", INSET + 12), "overview", p.dim);
 
     const status = flow.getStatus();
+    const cursor = extras.mapIndex ?? 0;
     let y = 2;
-    for (const [id, label] of MAP_ROWS) {
+    for (let i = 0; i < MAP_STEPS.length; i++) {
+      const id = MAP_STEPS[i]!;
+      const label = MAP_LABELS[id];
       if (y >= height - BOTTOM_RESERVED_ROWS) break;
       const step = status.steps[id];
+      if (i === cursor) writeString(grid, y, INSET - 2, CURSOR, p.accent);
       // One glyph, one meaning: a tick is done, its absence is not done, and
       // the right-hand column says what that amounts to in words.
       if (step.state === "satisfied") writeString(grid, y, INSET, CHECK, p.ok);

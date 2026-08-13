@@ -66,6 +66,18 @@ export interface PageDef {
   body: (status: SetupStatus) => string[];
 }
 
+/**
+ * The steps the overview lists, in order.
+ *
+ * Every arm's steps, not just the current one — the map is an overview, and a
+ * solo user seeing "Connect an issue tracker — not yet" learns something the
+ * sequence never told them. Shared with the renderer so the row the cursor is
+ * on and the row that is drawn cannot be different rows.
+ */
+export const MAP_STEPS: readonly StepId[] = [
+  "projects", "agents", "tracker", "team", "workflow",
+];
+
 const SOLO_STEPS: PageId[] = ["projects", "agents"];
 const TRACKER_STEPS: PageId[] = ["projects", "agents", "tracker", "team", "workflow"];
 

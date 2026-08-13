@@ -4,8 +4,18 @@ import type { InstallReport } from "../agent-hooks/registry";
 import { InputModal } from "../input-modal";
 import { OnboardingFlow } from "./flow";
 import { renderFlow, type RenderExtras } from "./render";
-import { INTENT_CHOICES } from "./pages";
-import type { SetupStatus } from "./status";
+import { INTENT_CHOICES, MAP_STEPS } from "./pages";
+import { deriveStatus, type SetupStatus } from "./status";
+
+/**
+ * A status describing a machine with nothing on it, used only between
+ * construction and the first `open()`. Never rendered: `open()` replaces it.
+ */
+const EMPTY_STATUS: SetupStatus = deriveStatus({
+  agentsPresent: [], agentsStale: [], skillCurrent: false,
+  trackerType: null, trackerAuthed: false, trackerDeclined: false,
+  projectCount: 0, attachedTeamCount: 0, workflowTabCount: 0, hunkInstalled: false,
+});
 
 /**
  * Everything the flow needs from the world.
@@ -53,10 +63,29 @@ export class OnboardingModal implements Modal {
   private reports: InstallReport[] = [];
   private busy: string | undefined;
   private mapIndex = 0;
+  /**
+   * The port's answers, cached.
+   *
+   * `getGrid` runs on every frame, and `agentWriteTargets` stats each agent's
+   * config while `achievements` re-reads the skill file and probes PATH. Asking
+   * the port from inside the painter meant doing all of that at the render
+   * loop's cadence — the exact cost the checklist this replaced documented
+   * avoiding, for the same reason. Recomputed when something could have
+   * changed it: open, an action resolving, and a config reload.
+   */
+  private cached: RenderExtras = {};
 
+  /**
+   * Deliberately does not ask the port for anything.
+   *
+   * Every getter on it touches the filesystem, and this is constructed whether
+   * or not onboarding is ever opened — so asking here would put a handful of
+   * stats and a file read on the boot path of every single start. `open()` is
+   * where the world is first read.
+   */
   constructor(port: OnboardingPort) {
     this.port = port;
-    this.flow = new OnboardingFlow(port.getStatus());
+    this.flow = new OnboardingFlow(EMPTY_STATUS);
   }
 
   open(): void {
@@ -66,6 +95,7 @@ export class OnboardingModal implements Modal {
     this.reports = [];
     this.busy = undefined;
     this.mapIndex = 0;
+    this.recomputeExtras();
   }
 
   close(): void {
@@ -75,8 +105,17 @@ export class OnboardingModal implements Modal {
 
   isOpen(): boolean { return this._open; }
 
-  /** Re-read the world without moving the cursor off its page. */
-  refresh(): void { this.flow.setStatus(this.port.getStatus()); }
+  /**
+   * Re-read the world without moving the cursor off its page.
+   *
+   * Called after an action resolves and from the config watcher: a reload can
+   * add projects or workflow views while the flow is open, and a snapshot only
+   * the flow refreshed would go stale under the user's own edit.
+   */
+  refresh(): void {
+    this.flow.setStatus(this.port.getStatus());
+    this.recomputeExtras();
+  }
 
   preferredWidth(termCols: number): number {
     return Math.min(Math.max(56, Math.round(termCols * 0.72)), 88);
@@ -106,13 +145,22 @@ export class OnboardingModal implements Modal {
     return renderFlow(this.flow, width, this.getHeight(), this.extras());
   }
 
-  private extras(): RenderExtras {
-    return {
-      reports: this.reports.length > 0 ? this.reports : undefined,
+  /** Re-ask the port. Never called from the painter — see `cached`. */
+  private recomputeExtras(): void {
+    this.cached = {
       projectDirs: this.port.getProjectDirs(),
       writeTargets: this.port.agentWriteTargets(),
       achievements: this.port.achievements(),
+    };
+  }
+
+  /** The cached answers plus the two things that change without the world. */
+  private extras(): RenderExtras {
+    return {
+      ...this.cached,
+      reports: this.reports.length > 0 ? this.reports : undefined,
       busy: this.busy,
+      mapIndex: this.mapIndex,
     };
   }
 
@@ -171,19 +219,22 @@ export class OnboardingModal implements Modal {
   }
 
   private handleMapInput(data: string): ModalAction {
-    const pages = this.flow.pages().filter((p) => p.step !== undefined);
     if (data === "\x1b") { this.close(); return { type: "closed" }; }
+    // Bounded by the rows the map actually draws, not by the current arm's
+    // page set: the map lists every step, so filtering here would leave rows
+    // on screen the cursor could never reach.
+    const last = MAP_STEPS.length - 1;
     if (data === "\x1b[A" || data === "k") {
       this.mapIndex = Math.max(0, this.mapIndex - 1);
       return { type: "consumed" };
     }
     if (data === "\x1b[B" || data === "j") {
-      this.mapIndex = Math.min(Math.max(0, pages.length - 1), this.mapIndex + 1);
+      this.mapIndex = Math.min(last, this.mapIndex + 1);
       return { type: "consumed" };
     }
     if (data === "\r") {
-      const page = pages[this.mapIndex];
-      if (page) this.flow.openStep(page.id);
+      const id = MAP_STEPS[this.mapIndex];
+      if (id) this.flow.openStep(id);
       return { type: "consumed" };
     }
     return { type: "consumed" };

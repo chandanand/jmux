@@ -236,6 +236,53 @@ describe("OnboardingModal — async actions", () => {
   });
 });
 
+describe("OnboardingModal — the painter never asks the world", () => {
+  // getGrid runs on every frame. agentWriteTargets stats each agent's config
+  // and achievements re-reads the skill file and probes PATH, so asking the
+  // port from inside the painter put all of that on the render loop's cadence
+  // — the exact cost the checklist this replaced documented avoiding.
+  test("repainting does not re-ask the port", () => {
+    let asks = 0;
+    const { port } = makePort({
+      agentWriteTargets: () => { asks += 1; return []; },
+      achievements: () => { asks += 1; return []; },
+      getProjectDirs: () => { asks += 1; return []; },
+    });
+    const modal = new OnboardingModal(port);
+    modal.open();
+    const afterOpen = asks;
+
+    for (let i = 0; i < 60; i++) modal.getGrid(90);
+    expect(asks).toBe(afterOpen);
+  });
+
+  test("but an action resolving does", async () => {
+    let asks = 0;
+    const { port } = makePort({ achievements: () => { asks += 1; return []; } });
+    const modal = new OnboardingModal(port);
+    modal.open();
+    modal.handleInput("\r");
+    const before = asks;
+    modal.handleInput("\x1b[C");
+    modal.handleInput("\r");
+    await Bun.sleep(2);
+    expect(asks).toBeGreaterThan(before);
+  });
+
+  // It is constructed on every boot; most boots never open it.
+  test("constructing asks the port for nothing at all", () => {
+    let asks = 0;
+    const { port } = makePort({
+      getStatus: () => { asks += 1; return deriveStatus(facts); },
+      agentWriteTargets: () => { asks += 1; return []; },
+      achievements: () => { asks += 1; return []; },
+      getProjectDirs: () => { asks += 1; return []; },
+    });
+    new OnboardingModal(port);
+    expect(asks).toBe(0);
+  });
+});
+
 describe("OnboardingModal — finish", () => {
   test("Enter on the done page hands off and closes", () => {
     const { modal, calls } = onProjects();

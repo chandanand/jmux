@@ -6239,6 +6239,12 @@ async function adoptProjectsUnder(): Promise<void> {
   if (added.length > 0) configStore.set("projects", [...existing, ...added]);
 }
 
+/** `/Users/x/Code` → `~/Code`. The row exists to be read, not to be exact. */
+function collapseHome(path: string): string {
+  const home = homedir();
+  return path.startsWith(home) ? `~${path.slice(home.length)}` : path;
+}
+
 /** `a`, `a and b`, `a, b and c` — a join that reads as a sentence. */
 function listPhrase(items: readonly string[]): string {
   if (items.length <= 1) return items[0] ?? "";
@@ -6249,7 +6255,8 @@ function listPhrase(items: readonly string[]): string {
 function buildOnboardingPort(): OnboardingPort {
   return {
     getStatus: () => deriveStatus(buildSetupFacts()),
-    getProjectDirs: () => configStore.config.projectDirs ?? [],
+    getProjectDirs: () =>
+      (configStore.config.projectDirs ?? []).map((d) => collapseHome(d)),
     // From installer metadata, never prose: every path resolves from the
     // environment, and consent that names the wrong file is not consent.
     // Collapsed to `~`, because the absolute form is long enough to be
@@ -6257,7 +6264,7 @@ function buildOnboardingPort(): OnboardingPort {
     agentWriteTargets: () =>
       AGENT_INTEGRATIONS.filter((a) => a.isPresent())
         .flatMap((a) => a.writeTargets())
-        .map((path) => (path.startsWith(homedir()) ? `~${path.slice(homedir().length)}` : path)),
+        .map(collapseHome),
 
     installAgents: async () => [...installAllAgents(), ...installSkills()],
 
@@ -6331,10 +6338,15 @@ function buildOnboardingPort(): OnboardingPort {
   };
 }
 
-const onboarding = new OnboardingModal(buildOnboardingPort());
+/**
+ * Built on open rather than at module scope: every getter on its port touches
+ * the filesystem, and most starts never open onboarding at all.
+ */
+let onboarding: OnboardingModal | null = null;
 
 function openSetup(): void {
   if (activeModal) closeModal();
+  onboarding = new OnboardingModal(buildOnboardingPort());
   onboarding.onResize(process.stdout.columns || 80, process.stdout.rows || 24);
   onboarding.open();
   openModal(onboarding, () => {});
@@ -10437,6 +10449,15 @@ try {
       } else if (!newCacheTimers) {
         stopCacheTimerTick();
       }
+      scheduleRender();
+    }
+
+    // An open onboarding flow reads a snapshot, and a reload can add projects,
+    // change workflow views or flip declared intent underneath it. Without
+    // this the flow would keep asserting what was true when it opened —
+    // the failure the snapshot is owned outside the modal to prevent.
+    if (onboarding?.isOpen()) {
+      onboarding.refresh();
       scheduleRender();
     }
 

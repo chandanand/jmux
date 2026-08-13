@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { deriveStatus, type SetupFacts } from "../onboarding/status";
 import { OnboardingFlow } from "../onboarding/flow";
-import { pagesFor, INTENT_CHOICES } from "../onboarding/pages";
+import { pagesFor, INTENT_CHOICES, MAP_STEPS } from "../onboarding/pages";
 
 const facts: SetupFacts = {
   agentsPresent: ["Claude Code"], agentsStale: ["Claude Code"], skillCurrent: false,
@@ -156,11 +156,15 @@ describe("OnboardingFlow — zoom out", () => {
     expect(f.currentPage().id).toBe("agents");
   });
 
-  test("openStep for a page not in this intent is ignored", () => {
+  // This asserted the opposite until the map grew a visible cursor: a row was
+  // drawn for every step, and choosing one outside the current arm silently
+  // did nothing. Refusing to open a row you have drawn is the worse half of
+  // that bug, so the rule is now that the map's rows all open.
+  test("openStep for a page outside this intent adopts the arm that has it", () => {
     const f = flow();
     f.chooseIntent("solo");
     f.openStep("tracker");
-    expect(f.currentPage().id).toBe("projects");
+    expect(f.currentPage().id).toBe("tracker");
   });
 });
 
@@ -219,5 +223,41 @@ describe("OnboardingFlow — restatus", () => {
     const f = flow(deriveStatus({ ...facts, trackerDeclined: true }));
     f.chooseIntent("solo");
     expect(ids(f)).not.toContain("tracker");
+  });
+});
+
+describe("the map lists every step, and every listed step opens", () => {
+  // The map is an overview, not a second copy of the sequence: a solo user
+  // seeing "Connect an issue tracker — not yet" learns something the sequence
+  // never told them. But a row that is drawn and refuses to open is worse than
+  // one that was never drawn.
+  test("opening a step outside the current arm adopts the arm that has it", () => {
+    const f = flow();
+    f.chooseIntent("solo");
+    expect(ids(f)).not.toContain("tracker");
+
+    f.zoomOut();
+    f.openStep("tracker");
+    expect(f.view()).toBe("page");
+    expect(f.currentPage().id).toBe("tracker");
+    expect(ids(f)).toContain("tracker");
+  });
+
+  test("every row the map lists is reachable", () => {
+    for (const step of MAP_STEPS) {
+      const f = flow();
+      f.chooseIntent("solo");
+      f.zoomOut();
+      f.openStep(step);
+      expect([step, f.currentPage().id]).toEqual([step, step]);
+    }
+  });
+
+  test("adopting an arm keeps the step count honest", () => {
+    const f = flow();
+    f.chooseIntent("solo");
+    f.zoomOut();
+    f.openStep("workflow");
+    expect(f.stepLabel()).toBe("Step 5 of 5");
   });
 });

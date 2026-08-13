@@ -102,7 +102,19 @@ export class OnboardingFlow {
     return "close";
   }
 
+  /**
+   * Open a step from the map.
+   *
+   * The map lists every step, including ones outside the current arm — that is
+   * what makes it an overview rather than a second copy of the sequence. So
+   * choosing one the current intent does not contain adopts the arm that does,
+   * because picking "Connect an issue tracker" off the overview is a statement
+   * that you want it. Anything else would draw a row that refuses to open.
+   */
   openStep(id: PageId): void {
+    if (!this.pages().some((p) => p.id === id)) {
+      this.intent = "tracker";
+    }
     const at = this.pages().findIndex((p) => p.id === id);
     if (at < 0) return;
     this.index = at;

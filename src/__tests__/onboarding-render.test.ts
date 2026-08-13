@@ -263,3 +263,36 @@ describe("renderFlow — the action bar follows the page's state", () => {
     expect(after).toContain("next");
   });
 });
+
+describe("renderFlow — the map has a visible cursor", () => {
+  const onMap = () => {
+    const f = flow();
+    f.chooseIntent("solo");
+    f.zoomOut();
+    return f;
+  };
+
+  // ↑↓ that move a cursor nobody can see, and an Enter that then opens a step
+  // the user did not knowingly choose.
+  test("marks the row the cursor is on", () => {
+    const first = lines(renderFlow(onMap(), 90, 26, { mapIndex: 0 }))
+      .findIndex((l) => l.includes("▸"));
+    const third = lines(renderFlow(onMap(), 90, 26, { mapIndex: 2 }))
+      .findIndex((l) => l.includes("▸"));
+    expect(first).toBeGreaterThan(0);
+    expect(third).toBe(first + 2);
+  });
+
+  test("the marked row is the one the label sits on", () => {
+    const painted = lines(renderFlow(onMap(), 90, 26, { mapIndex: 1 }));
+    const marked = painted.find((l) => l.includes("▸"))!;
+    expect(marked).toContain("Letting jmux see your agents");
+  });
+
+  test("lists all five steps, including ones outside the current arm", () => {
+    const out = text(renderFlow(onMap(), 90, 26, { mapIndex: 0 }));
+    expect(out).toContain("Connect an issue tracker");
+    expect(out).toContain("Point a project at a team");
+    expect(out).toContain("How your work moves");
+  });
+});
