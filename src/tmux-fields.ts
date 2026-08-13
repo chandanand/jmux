@@ -1,36 +1,51 @@
 /**
- * Field separator for structured tmux `-F` output, plus an escape-tolerant
- * splitter for parsing it back.
+ * Field separator for structured tmux `-F` output, plus a splitter that
+ * tolerates every form tmux has emitted it in.
  *
- * We build `-F` format strings by joining field expansions with the ASCII Unit
- * Separator (US, 0x1F): tmux session names cannot contain it, and
- * `pane_current_path` / option values realistically never do, so the parse side
- * can split on an exact field count with no rejoin gymnastics.
+ * We build `-F` format strings by joining field expansions with a separator,
+ * then split on an exact field count with no rejoin gymnastics. The catch —
+ * and the reason this lives in one shared module — is that **tmux does not
+ * round-trip a separator uniformly across versions**, and it has now done
+ * three different things with the ASCII Unit Separator (0x1F) this module
+ * originally used:
  *
- * The catch — and the reason this lives in one shared module — is that tmux does
- * not round-trip a literal non-printable byte through `-F` uniformly across
- * versions. tmux 3.6 passes the raw 0x1F through untouched, but tmux 3.4 (the
- * Ubuntu 24.04 build, among others) escapes it to the 4-character octal text
- * `\037`. A parser that splits on the raw byte alone therefore finds no
- * separator on 3.4 output and silently drops every row — which broke
- * `ctl status`, `ctl agent state`, and the Command Center's pane detection
- * (GitHub issue #7). {@link splitFields} splits on either form so every parse
- * site works on both tmux versions.
+ *  - **3.6+** passes the raw 0x1F through untouched.
+ *  - **3.4** (Ubuntu 24.04) escapes it to the 4-character octal text `\037`.
+ *    A parser splitting on the raw byte alone found no separator and silently
+ *    dropped every row — GitHub issue #7.
+ *  - **3.3a** (Debian 12, Ubuntu 22.04) rewrites *any* non-printable byte to a
+ *    single `_`. Measured: 0x1F, 0x01, and even `␟` (U+241F — printable, but
+ *    multi-byte) all come back as `_`, while printable ASCII passes through.
+ *    Nothing survives to split on, so a whole row parsed as one field, the
+ *    session name came back `undefined`, and jmux died during boot inside
+ *    `tq(undefined)` — exiting 0 with nothing on stderr.
+ *
+ * So the separator is **printable ASCII**, which is the only class all three
+ * agree to leave alone. `:|:` rather than a single character because it has to
+ * be absent from arbitrary user data: `pane_current_path`, a model-generated
+ * session title, an issue identifier. The `:` is load-bearing — tmux rejects
+ * `:` in session names and `sanitizeTmuxSessionName` strips it, so the token
+ * cannot occur in the one field that is raw user input. It carries no `#`, `{`
+ * or `}`, which would be read as format expansion rather than literal text.
+ *
+ * {@link splitFields} still accepts both legacy forms, so a control client
+ * talking to a server started by an older jmux keeps parsing.
  *
  * Note this only normalises the *separator*; field values are passed through
- * verbatim. A value containing a literal backslash-`037` is as unrealistic as
- * one containing a raw 0x1F, so we do not attempt general octal un-escaping
- * (which would corrupt paths that legitimately contain backslashes).
+ * verbatim. A value containing a literal `:|:` is as unrealistic as one
+ * containing a raw 0x1F, so we do not attempt general un-escaping (which would
+ * corrupt paths that legitimately contain backslashes).
  */
-export const US = "\x1f";
-
-/** The raw US byte, or the octal-escaped text tmux 3.4 emits in its place. */
-const FIELD_SEP = /\x1f|\\037/;
+export const US = ":|:";
 
 /**
- * Split one tmux `-F` output line into its fields, tolerant of whether tmux
- * passed the US separator through raw (3.6) or octal-escaped it (3.4).
+ * The current separator, plus the raw US byte (3.6+) and the octal-escaped text
+ * (3.4) that earlier jmux builds emitted. `\|` is escaped — bare `|` is regex
+ * alternation, which would split on every colon and pipe in the line.
  */
+const FIELD_SEP = /:\|:|\x1f|\\037/;
+
+/** Split one tmux `-F` output line into its fields, on any separator jmux has used. */
 export function splitFields(line: string): string[] {
   return line.split(FIELD_SEP);
 }

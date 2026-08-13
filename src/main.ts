@@ -1873,6 +1873,19 @@ let commandCenterDensity: Density = normalizeDensity(configStore.config.commandC
 let gridHiddenSessionIds: Set<string> = new Set();
 
 /**
+ * The pane fields a grid reconcile reads. Declared here for the same reason
+ * `gridReconciler` is, and it is not merely tidiness: `readGridState()` is a
+ * hoisted function, so it is callable long before the `const` it reads is
+ * initialised. Left beside its one use site it sat ~9000 lines below the
+ * scheduler that drives it, and a reconcile reaching it during module
+ * evaluation died in the temporal dead zone — surfacing only as a
+ * `reconcileGrid` line in jmux.log, with the Command Center simply never
+ * populating. A pure join over two imported values, so it can live anywhere
+ * above its readers.
+ */
+const GRID_PANE_FORMAT = [PANE_ROW_FORMAT, "#{session_id}", "#{window_id}"].join(US);
+
+/**
  * The grid's reconcile scheduler. Declared here, above every caller, because
  * `invalidateGrid` is reachable from listeners registered at module scope —
  * the temporal-dead-zone hazard `boot-smoke.test.ts` exists to catch. The two
@@ -2131,13 +2144,30 @@ async function commonDirForMigration(dir: string): Promise<string | null> {
   return out ? canonicalizeRepoPath(out) : null;
 }
 
-initAdapters().then(() => {
-  pollCoordinator.start();
-  pollCoordinator.pollGlobal();
-  refreshTeams();
-  scheduleRender();
-}).catch((e) => {
-  logError("jmux", `adapter init failed, panel running without adapters: ${(e as Error).message}`);
+// Deferred one microtask off module scope, because `initAdapters()` reaches
+// `refreshPanelViews()`, which reads `currentSessions` — a `let` declared ~800
+// lines below this call.
+//
+// It is async, so with an adapter configured the first `await` yields, module
+// evaluation runs past the declaration, and by the time it resumes the binding
+// exists. With *no* adapters configured there is no await at all:
+// refreshPanelViews() runs during module evaluation and dies in the temporal
+// dead zone. That is precisely a fresh install — so on the one boot where
+// onboarding matters, polling, teams and every issue view silently never
+// started, and the `.catch` below turned it into a single log line.
+//
+// This is the hazard boot-smoke.test.ts exists for, and the reason it could not
+// catch this one: jmux stays alive and draws, just with nothing behind it.
+// Module top-level code completes before any microtask, so this is enough.
+queueMicrotask(() => {
+  initAdapters().then(() => {
+    pollCoordinator.start();
+    pollCoordinator.pollGlobal();
+    refreshTeams();
+    scheduleRender();
+  }).catch((e) => {
+    logError("jmux", `adapter init failed, panel running without adapters: ${(e as Error).message}`);
+  });
 });
 
 let cachedTeams: Array<{ id: string; name: string }> = [];
@@ -4177,11 +4207,22 @@ async function fetchSessions(): Promise<void> {
     const lines = await control.sendCommand(
       `list-sessions -f "${INTERNAL_SESSION_FILTER}" -F '${SESSION_LIST_FORMAT}'`,
     );
+    // A row that yields no id or name is not a session, and must not become
+    // one: `name` is the key for config, links, worktrees and every tmux
+    // command jmux sends, so a nameless entry took the whole boot down inside
+    // `tq(undefined)`. This is what an unsplittable line looks like — the
+    // separator not surviving the tmux build (see tmux-fields.ts) — so it is
+    // reported rather than quietly skipped.
+    const malformed: string[] = [];
     const sessions: SessionInfo[] = lines
       .filter((l) => l.length > 0)
-      .map((line) => {
+      .map((line): SessionInfo | null => {
         const [id, name, activity, attached, windows, issueLink, title, titleSig, projectId] =
           splitFields(line);
+        if (!id || !name) {
+          malformed.push(line);
+          return null;
+        }
         const cached = sessionDetailsCache.get(id);
         const issueLinks = parseIssueLinkOption(issueLink);
         return {
@@ -4198,7 +4239,21 @@ async function fetchSessions(): Promise<void> {
           ...(titleSig ? { titleSignature: titleSig } : {}),
           ...(projectId ? { projectId } : {}),
         };
-      });
+      })
+      .filter((x): x is SessionInfo => x !== null);
+
+    // Loud, because the only way to get here is a tmux build whose `-F` output
+    // jmux cannot parse, and every downstream symptom of that (an empty
+    // sidebar, no agent state, `ctl status` reporting nothing) looks like a
+    // different bug entirely.
+    if (malformed.length > 0) {
+      logError(
+        "jmux",
+        `list-sessions: ${malformed.length} unparseable row(s) dropped — ` +
+        `field separator did not survive this tmux build (${JSON.stringify(malformed[0]).slice(0, 200)})`,
+      );
+    }
+
     const previousSessions = currentSessions;
     currentSessions = sessions;
     invalidateSessionIssueIndex();
@@ -11110,7 +11165,6 @@ async function ensureParkSession(): Promise<void> {
  * own leading fields and ignores the rest, so one format serves both parses
  * and the election can never be fed a different pass from the placement.
  */
-const GRID_PANE_FORMAT = [PANE_ROW_FORMAT, "#{session_id}", "#{window_id}"].join(US);
 
 const GRID_SESSION_FORMAT = `#{session_id}${US}#{@jmux-grid-hidden}`;
 
@@ -12106,5 +12160,18 @@ process.on("SIGHUP", () => void cleanup());
 
 start().catch((e) => {
   logCrash("boot", e);
-  void cleanup();
+  // Say *something*. logCrash deliberately keeps stderr clear while the alt
+  // screen is up, which is right — but a boot failure then restored the
+  // terminal and exited 0, so jmux "just didn't run" with no output anywhere
+  // the user would look. cleanup() has torn the TUI down by now, so stderr is
+  // safe and is the only channel left.
+  void cleanup().finally(() => {
+    const reason = e instanceof Error ? e.message : String(e);
+    try {
+      process.stderr.write(
+        `\njmux failed to start: ${reason}\n` +
+        `Full stack: ${homedir()}/.config/jmux/crash.log\n`,
+      );
+    } catch {}
+  });
 });

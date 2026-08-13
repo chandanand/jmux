@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test";
+import { US } from "../../tmux-fields";
 import {
   PANE_ROW_FORMAT,
   parsePaneRowLines,
@@ -98,10 +99,16 @@ describe("inherited agent state is not the pane's own", () => {
 });
 
 describe("parsePaneRowLines", () => {
-  test("PANE_ROW_FORMAT requests the ten fields, US-separated", () => {
-    expect(PANE_ROW_FORMAT).toBe(
-      "#{pane_id}\x1f#{@jmux-agent-kind}\x1f#{pane_current_command}\x1f#{@jmux-pinned}\x1f#{window_active}\x1f#{pane_active}\x1f#{@jmux-agent-state}\x1f#{@jmux-agent-state-since}\x1f#{@jmux-agent-pane}\x1f#{pane_title}\x1f#{pane_current_path}",
-    );
+  test("PANE_ROW_FORMAT requests the eleven fields, US-separated", () => {
+    // Joined on US rather than spelled out with the separator inline: a second
+    // copy of that constant here is what made this test fail when the
+    // separator had to change for tmux 3.3a, rather than catching anything.
+    expect(PANE_ROW_FORMAT).toBe([
+      "#{pane_id}", "#{@jmux-agent-kind}", "#{pane_current_command}", "#{@jmux-pinned}",
+      "#{window_active}", "#{pane_active}", "#{@jmux-agent-state}",
+      "#{@jmux-agent-state-since}", "#{@jmux-agent-pane}", "#{pane_title}",
+      "#{pane_current_path}",
+    ].join(US));
   });
 
   test("splits all ten fields", () => {
