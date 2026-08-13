@@ -1,6 +1,60 @@
 import { describe, test, expect } from "bun:test";
 import { InputModal } from "../input-modal";
 
+describe("InputModal secret mode", () => {
+  const rowText = (modal: InputModal, row: number, width = 50): string =>
+    modal.getGrid(width).cells[row]!.map((c) => c.char).join("");
+
+  // A tracker token is pasted on a terminal that may be shared, recorded, or
+  // scrolled back later. Masking is display-only: everything downstream still
+  // sees the real value.
+  test("masks the rendered value", () => {
+    const modal = new InputModal({ header: "Paste your token", secret: true });
+    modal.open();
+    for (const ch of "lin_api_abc123") modal.handleInput(ch);
+
+    const row = rowText(modal, 1);
+    expect(row).toContain("••••••••••••••");
+    expect(row).not.toContain("lin_api_abc123");
+  });
+
+  test("commits the real value, not the mask", () => {
+    const modal = new InputModal({ header: "Token", secret: true });
+    modal.open();
+    for (const ch of "abc123") modal.handleInput(ch);
+    expect(modal.handleInput("\r")).toEqual({ type: "result", value: "abc123" });
+  });
+
+  test("the mask is one column per character, so the cursor stays true", () => {
+    const modal = new InputModal({ header: "Token", secret: true });
+    modal.open();
+    for (const ch of "abcd") modal.handleInput(ch);
+    expect(modal.getCursorPosition()).toEqual({ row: 1, col: 8 });
+  });
+
+  test("backspace shortens the mask", () => {
+    const modal = new InputModal({ header: "Token", secret: true });
+    modal.open();
+    for (const ch of "abc") modal.handleInput(ch);
+    modal.handleInput("\x7f");
+    expect(rowText(modal, 1)).toContain("••");
+    expect(rowText(modal, 1)).not.toContain("•••");
+  });
+
+  test("a placeholder is not masked — it is not the user's value", () => {
+    const modal = new InputModal({ header: "Token", secret: true, placeholder: "lin_api_…" });
+    modal.open();
+    expect(rowText(modal, 1)).toContain("lin_api_…");
+  });
+
+  test("without the flag the value still renders in clear", () => {
+    const modal = new InputModal({ header: "Rename" });
+    modal.open();
+    for (const ch of "hello") modal.handleInput(ch);
+    expect(rowText(modal, 1)).toContain("hello");
+  });
+});
+
 describe("InputModal", () => {
   test("opens with pre-filled value, grid shows header (bold) and input line with value", () => {
     const modal = new InputModal({ header: "Rename Session", value: "my-session" });

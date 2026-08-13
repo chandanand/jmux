@@ -10,6 +10,22 @@ export interface InputModalConfig {
   subheader?: string;
   value?: string;
   placeholder?: string;
+  /**
+   * Render `•` per character instead of the value itself.
+   *
+   * For a credential: it is pasted onto a terminal that may be shared, screen
+   * recorded, or scrolled back to hours later, and a token in the scrollback is
+   * a token that has leaked.
+   *
+   * Display only. The buffer, the committed result and the cursor column are
+   * all unchanged, so nothing downstream has to know a field was masked — and
+   * `•` is width-1, which is what keeps the caret true without a second
+   * calculation that could disagree with the first.
+   *
+   * The placeholder is deliberately *not* masked: it is jmux's own hint text,
+   * not anything the user typed.
+   */
+  secret?: boolean;
 }
 
 export class InputModal {
@@ -79,7 +95,8 @@ export class InputModal {
     const inputRow = hasSubheader ? 2 : 1;
     writeString(grid, inputRow, 2, "\u25b7", PROMPT_ATTRS);
     if (this.value.length > 0) {
-      writeString(grid, inputRow, 4, this.value, INPUT_ATTRS);
+      const shown = this.config.secret ? "•".repeat(this.value.length) : this.value;
+      writeString(grid, inputRow, 4, shown, INPUT_ATTRS);
     } else if (this.config.placeholder) {
       writeString(grid, inputRow, 4, this.config.placeholder, SUBHEADER_ATTRS);
     }
