@@ -334,6 +334,23 @@ export class SettingsScreen {
     this.commitError = null;
   }
 
+  /**
+   * Put the cursor on a row by id, if it is currently emitted.
+   *
+   * For coming back: Projects and the workflow screen replace this screen
+   * rather than layering, so returning reopens it from scratch, and landing at
+   * row 0 of a forty-row list is not "back". An id that resolves to nothing —
+   * a Project deleted from its own screen, a row inside a collapsed category —
+   * leaves the cursor where it is, which is a better answer than jumping to
+   * the top to report a row that no longer exists.
+   */
+  selectSetting(id: string): void {
+    const at = this.buildNodes().findIndex((n) => n.kind === "setting" && n.setting.id === id);
+    if (at < 0) return;
+    this.selectedIndex = at;
+    this.ensureVisible();
+  }
+
   updateCategories(categories: SettingsCategory[]): void {
     for (const cat of categories) {
       const existing = this.categories.find((c) => c.label === cat.label);

@@ -1118,3 +1118,67 @@ describe("SettingsScreen range hint and explain line", () => {
     expect(rowText(grid, 23, 0, 80)).toContain("esc");
   });
 });
+
+// --- Returning to a row ---
+//
+// Projects and the workflow screen replace this one rather than layering, so
+// Escape out of either reopens Settings from scratch. Landing at row 0 of a
+// forty-row list is not "back" — the cursor returns to the row that opened it.
+describe("SettingsScreen selectSetting", () => {
+  function categories(): SettingsCategory[] {
+    return [
+      {
+        label: "Display", collapsed: false,
+        settings: [{ id: "a", label: "Cache timers", type: "boolean", getValue: () => "on" }],
+      },
+      {
+        label: "Repo", collapsed: false,
+        settings: [
+          { id: "open-projects", label: "Projects…", type: "action", getValue: () => "2" },
+          { id: "after", label: "Something else", type: "text", getValue: () => "x" },
+        ],
+      },
+    ];
+  }
+
+  function cursorRow(s: SettingsScreen): number {
+    const grid = s.render(80, 24);
+    for (let r = 0; r < 24; r++) {
+      if (grid.cells[r].some((c) => c.char === "▸")) return r;
+    }
+    return -1;
+  }
+
+  test("puts the cursor on the row with that id", () => {
+    const s = new SettingsScreen();
+    s.open(categories());
+    const atTop = cursorRow(s);
+    s.selectSetting("open-projects");
+    const moved = cursorRow(s);
+    expect(moved).toBeGreaterThan(atTop);
+    expect(rowText(s.render(80, 24), moved, 0, 80)).toContain("Projects…");
+  });
+
+  test("an unknown id leaves the cursor alone rather than resetting it", () => {
+    // A row can legitimately disappear between leaving and coming back — a
+    // Project deleted while its own screen was open. Jumping to row 0 would be
+    // a worse answer than staying put.
+    const s = new SettingsScreen();
+    s.open(categories());
+    s.selectSetting("after");
+    const before = cursorRow(s);
+    s.selectSetting("no-such-row");
+    expect(cursorRow(s)).toBe(before);
+  });
+
+  test("skips rows inside a collapsed category, which have no cursor to take", () => {
+    const s = new SettingsScreen();
+    s.open([{
+      label: "Hidden", collapsed: true,
+      settings: [{ id: "buried", label: "Buried", type: "text", getValue: () => "v" }],
+    }]);
+    const before = cursorRow(s);
+    s.selectSetting("buried");
+    expect(cursorRow(s)).toBe(before);
+  });
+});

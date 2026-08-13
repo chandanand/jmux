@@ -6939,7 +6939,7 @@ function projectCategories(): SettingsCategory[] {
           describe: () => "Marks it removed. Sessions still stamped with it report an orphaned project rather than being re-routed.",
           onActivate: () => {
             configStore.deleteProject(project.id);
-            settingsScreen.updateCategories(buildSettingsCategories());
+            settingsScreen.updateCategories(projectCategories());
             showToast(`Removed project ${project.title}`);
           },
         },
@@ -7615,27 +7615,68 @@ function openProjectsScreen(): void {
     });
     return;
   }
+  surfaceReturn = settingsScreen.isOpen ? () => openSettingsScreen("open-projects") : null;
   settingsScreen.open(categories, "Projects");
   inputRouter.setModalOpen(true);
   applyChromeLayout();
   scheduleRender();
 }
 
-function toggleSettingsScreen(): void {
-  if (settingsScreen.isOpen) {
-    settingsScreen.close();
-    flushPendingPersists();
-    inputRouter.setModalOpen(inputConsumerActive());
-  } else {
-    if (ghostPreview.isOpen) closeGhostPreview();
-    settingsScreen.open(buildSettingsCategories());
-    inputRouter.setModalOpen(true);
-  }
+/**
+ * How to get back when the current full-area surface closes.
+ *
+ * Projects and the workflow screen are opened *from* the settings screen and
+ * **replace** it rather than layering — the settings screen consumes every
+ * keystroke, so there is nothing to layer onto (the reason `closeModal()`
+ * exists). Without this, Escape out of either one dropped straight to the pty,
+ * throwing away the screen the user was reading a moment before and making the
+ * one row that opened it a one-way door.
+ *
+ * Opened directly — `Ctrl-a W`, the command palette — there is nothing to go
+ * back to, so this stays null and Escape closes outright. The slot is set from
+ * `settingsScreen.isOpen` at the moment of opening rather than from which
+ * call site did it, so a new entry point cannot forget to declare itself.
+ *
+ * One slot, not a stack: every surface here is reachable from at most one
+ * other, so a stack would model a nesting that cannot occur.
+ */
+let surfaceReturn: (() => void) | null = null;
+
+/** Reopen whatever the closing surface was opened from. True if it did. */
+function returnFromSurface(): boolean {
+  const back = surfaceReturn;
+  surfaceReturn = null;
+  if (!back) return false;
+  back();
+  return true;
+}
+
+function openSettingsScreen(focusId?: string): void {
+  if (ghostPreview.isOpen) closeGhostPreview();
+  settingsScreen.open(buildSettingsCategories());
+  if (focusId) settingsScreen.selectSetting(focusId);
+  inputRouter.setModalOpen(true);
   // Settings is a frameless full-screen takeover (see fullScreenLayout) —
   // entering/leaving it changes which layout the sidebar/input router
   // should use even though the terminal geometry itself hasn't changed.
   applyChromeLayout();
   scheduleRender();
+}
+
+function toggleSettingsScreen(): void {
+  // An explicit toggle dismisses the whole stack: Ctrl-a i on a Projects
+  // screen means "put this away", not "go up one level" — that is what Escape
+  // is for.
+  surfaceReturn = null;
+  if (settingsScreen.isOpen) {
+    settingsScreen.close();
+    flushPendingPersists();
+    inputRouter.setModalOpen(inputConsumerActive());
+    applyChromeLayout();
+    scheduleRender();
+    return;
+  }
+  openSettingsScreen();
 }
 
 // --- Workflow screen ---
@@ -7850,6 +7891,7 @@ function buildWorkflowPort(): WorkflowPort {
  * while open — two of them at once would leave one painted and deaf.
  */
 function openWorkflowScreen(): void {
+  surfaceReturn = settingsScreen.isOpen ? () => openSettingsScreen("edit-workflow") : null;
   if (settingsScreen.isOpen) settingsScreen.close();
   if (ghostPreview.isOpen) closeGhostPreview();
   closeModal();
@@ -7862,6 +7904,7 @@ function openWorkflowScreen(): void {
 function toggleWorkflowScreen(): void {
   if (workflowScreen.isOpen) {
     workflowScreen.close();
+    surfaceReturn = null;
     inputRouter.setModalOpen(inputConsumerActive());
     applyChromeLayout();
     scheduleRender();
@@ -8022,9 +8065,13 @@ function handleWorkflowInput(data: string): void {
   // The screen closes itself on Escape/q without going through the toggle, so
   // the chrome layout and input routing are re-synced here the same way
   // handleSettingsInput does it.
-  if (wasOpen && !workflowScreen.isOpen) {
-    applyChromeLayout();
-    inputRouter.setModalOpen(inputConsumerActive());
+  // Same guard as handleSettingsInput: a surface opened *from* this one closes
+  // it on the way, and that is not a dismissal.
+  if (wasOpen && !workflowScreen.isOpen && !inputConsumerActive()) {
+    if (!returnFromSurface()) {
+      applyChromeLayout();
+      inputRouter.setModalOpen(false);
+    }
   }
   scheduleRender();
 }
@@ -8048,17 +8095,26 @@ function handleSettingsInput(data: string): void {
   settingsScreen.handleInput(data);
 
   if (wasOpen && !settingsScreen.isOpen) {
+    // A value stepped and immediately dismissed is written rather than
+    // dropped: it was applied on screen the moment the key was pressed, so
+    // forgetting it here would be worse than never applying it.
+    flushPendingPersists();
+
     // Settings can close itself (Escape/q in navigation mode) without going
     // through toggleSettingsScreen(). Re-sync the chrome layout the same way
     // that path does, or the input router keeps classifying clicks against
     // the stale frameless layout until the next resize.
     //
-    // A value stepped and immediately dismissed is written rather than
-    // dropped: it was applied on screen the moment the key was pressed, so
-    // forgetting it here would be worse than never applying it.
-    flushPendingPersists();
-    applyChromeLayout();
-    inputRouter.setModalOpen(inputConsumerActive());
+    // Guarded on `inputConsumerActive()` rather than on `isOpen` alone,
+    // because a row that *replaces* this screen closes it too: Enter on
+    // "Configure workflow…" runs openWorkflowScreen(), which closes settings
+    // before opening the workflow screen. Read as a dismissal, that fired the
+    // return slot and reopened settings straight over the surface the user had
+    // just asked for. A surface that took over owns routing and the slot.
+    if (!inputConsumerActive() && !returnFromSurface()) {
+      applyChromeLayout();
+      inputRouter.setModalOpen(false);
+    }
   }
 
   scheduleRender();
