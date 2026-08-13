@@ -46,6 +46,14 @@ export class InputModal {
   close(): void { this._open = false; }
   isOpen(): boolean { return this._open; }
 
+  /**
+   * The buffer as typed, unmasked.
+   *
+   * For a modal that hosts this one as a child step and needs to inspect the
+   * value without waiting for a commit.
+   */
+  getValue(): string { return this.value; }
+
   preferredWidth(termCols: number): number {
     return Math.min(Math.max(40, Math.round(termCols * 0.45)), 60);
   }

@@ -1,0 +1,255 @@
+import { describe, expect, test } from "bun:test";
+import { deriveStatus, type SetupFacts } from "../onboarding/status";
+import { OnboardingModal, type OnboardingPort } from "../onboarding/modal";
+import type { InstallReport } from "../agent-hooks/registry";
+
+const facts: SetupFacts = {
+  agentsPresent: ["Claude Code"], agentsStale: ["Claude Code"], skillCurrent: false,
+  trackerType: "linear", trackerAuthed: false, trackerDeclined: false,
+  projectCount: 0, attachedTeamCount: 0, workflowTabCount: 0, hunkInstalled: false,
+};
+
+const DOWN = "\x1b[B";
+const RIGHT = "\x1b[C";
+const LEFT = "\x1b[D";
+const ESC = "\x1b";
+
+function makePort(over: Partial<OnboardingPort> = {}) {
+  const calls = {
+    installAgents: 0, addProjectDir: [] as string[], connectTracker: [] as string[],
+    seedWorkflow: 0, finish: 0, changes: 0,
+  };
+  const port: OnboardingPort = {
+    getStatus: () => deriveStatus(facts),
+    getProjectDirs: () => [],
+    agentWriteTargets: () => ["/tmp/claude/settings.json"],
+    installAgents: async () => { calls.installAgents += 1; return []; },
+    addProjectDir: async (d) => { calls.addProjectDir.push(d); },
+    connectTracker: async (t) => { calls.connectTracker.push(t); return { ok: true }; },
+    seedWorkflow: () => { calls.seedWorkflow += 1; },
+    finish: () => { calls.finish += 1; },
+    achievements: () => [],
+    onChange: () => { calls.changes += 1; },
+    ...over,
+  };
+  return { port, calls };
+}
+
+/** Open on the projects page of the solo arm. */
+function onProjects(over: Partial<OnboardingPort> = {}) {
+  const { port, calls } = makePort(over);
+  const modal = new OnboardingModal(port);
+  modal.open();
+  modal.handleInput("\r");   // choose "Just run agents"
+  return { modal, calls };
+}
+
+describe("OnboardingModal — the Modal contract", () => {
+  test("implements every member the renderer and router call", () => {
+    const { port } = makePort();
+    const modal = new OnboardingModal(port);
+    modal.open();
+    expect(modal.isOpen()).toBe(true);
+    expect(typeof modal.preferredWidth(120)).toBe("number");
+    expect(modal.getGrid(80).cols).toBe(80);
+    expect(modal.getCursorPosition()).toBeNull();
+    modal.close();
+    expect(modal.isOpen()).toBe(false);
+  });
+
+  // Every other modal is closed by SIGWINCH. This one has steps behind it and
+  // possibly a half-typed token, so it opts in to re-laying out instead.
+  test("survives resize rather than being closed", () => {
+    const { port } = makePort();
+    const modal = new OnboardingModal(port);
+    modal.open();
+    modal.handleInput("\r");
+    expect(typeof modal.onResize).toBe("function");
+    modal.onResize!(120, 40);
+    expect(modal.isOpen()).toBe(true);
+    expect(modal.currentPageId()).toBe("projects");
+  });
+
+  test("a taller terminal yields a taller grid", () => {
+    const { port } = makePort();
+    const modal = new OnboardingModal(port);
+    modal.open();
+    modal.onResize!(80, 20);
+    const short = modal.getGrid(80).rows;
+    modal.onResize!(80, 44);
+    expect(modal.getGrid(80).rows).toBeGreaterThan(short);
+  });
+});
+
+describe("OnboardingModal — intent", () => {
+  test("Enter on the welcome page commits the highlighted intent", () => {
+    const { modal } = onProjects();
+    expect(modal.currentPageId()).toBe("projects");
+  });
+
+  test("the second intent opens the tracker arm", () => {
+    const { port } = makePort();
+    const modal = new OnboardingModal(port);
+    modal.open();
+    modal.handleInput(DOWN);
+    modal.handleInput("\r");
+    modal.handleInput(RIGHT); modal.handleInput(RIGHT);
+    expect(modal.currentPageId()).toBe("tracker");
+  });
+
+  test("the third intent lands on the map with nothing configured", () => {
+    const { port, calls } = makePort();
+    const modal = new OnboardingModal(port);
+    modal.open();
+    modal.handleInput(DOWN); modal.handleInput(DOWN);
+    modal.handleInput("\r");
+    expect(modal.view()).toBe("map");
+    expect(calls.addProjectDir).toEqual([]);
+    expect(calls.installAgents).toBe(0);
+  });
+});
+
+describe("OnboardingModal — hosted collectors", () => {
+  // The capability the composite exists to buy: a step that needs input does
+  // not have to destroy the flow to ask for it.
+  test("Enter opens a collector, which then receives the keys", () => {
+    const { modal } = onProjects();
+    modal.handleInput("\r");
+    expect(modal.hasChild()).toBe(true);
+    for (const ch of "~/Code") modal.handleInput(ch);
+    expect(modal.childValue()).toBe("~/Code");
+  });
+
+  test("the flow is still open underneath, and the grid is the collector's", () => {
+    const { modal } = onProjects();
+    modal.handleInput("\r");
+    expect(modal.isOpen()).toBe(true);
+    expect(modal.getCursorPosition()).not.toBeNull();
+  });
+
+  test("esc pops the collector, not the flow", () => {
+    const { modal } = onProjects();
+    modal.handleInput("\r");
+    expect(modal.handleInput(ESC)).toEqual({ type: "consumed" });
+    expect(modal.hasChild()).toBe(false);
+    expect(modal.isOpen()).toBe(true);
+    expect(modal.currentPageId()).toBe("projects");
+  });
+
+  test("committing a collector delivers the value to the port", async () => {
+    const { modal, calls } = onProjects();
+    modal.handleInput("\r");
+    for (const ch of "~/Code") modal.handleInput(ch);
+    modal.handleInput("\r");
+    await Bun.sleep(1);
+    expect(calls.addProjectDir).toEqual(["~/Code"]);
+  });
+
+  test("the token collector is masked", () => {
+    const { port } = makePort();
+    const modal = new OnboardingModal(port);
+    modal.open();
+    modal.handleInput(DOWN); modal.handleInput("\r");
+    modal.handleInput(RIGHT); modal.handleInput(RIGHT);
+    expect(modal.currentPageId()).toBe("tracker");
+    modal.handleInput("\r");
+    for (const ch of "lin_secret") modal.handleInput(ch);
+    const row = modal.getGrid(60).cells[2]!.map((c) => c.char).join("");
+    expect(row).not.toContain("lin_secret");
+    expect(row).toContain("••••••••••");
+  });
+});
+
+describe("OnboardingModal — zoom out", () => {
+  test("esc goes to the map, and again closes", () => {
+    const { modal } = onProjects();
+    expect(modal.handleInput(ESC)).toEqual({ type: "consumed" });
+    expect(modal.view()).toBe("map");
+    expect(modal.handleInput(ESC)).toEqual({ type: "closed" });
+    expect(modal.isOpen()).toBe(false);
+  });
+
+  test("Enter on the map reopens that step", () => {
+    const { modal } = onProjects();
+    modal.handleInput(ESC);
+    modal.handleInput(DOWN);
+    modal.handleInput("\r");
+    expect(modal.view()).toBe("page");
+    expect(modal.currentPageId()).toBe("agents");
+  });
+});
+
+describe("OnboardingModal — async actions", () => {
+  test("a duplicate Enter while busy does not run the action twice", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    let started = 0;
+    const { modal } = onProjects({
+      installAgents: async () => { started += 1; await gate; return []; },
+    });
+    modal.handleInput(RIGHT);
+    expect(modal.currentPageId()).toBe("agents");
+    modal.handleInput("\r");
+    modal.handleInput("\r");
+    modal.handleInput("\r");
+    expect(started).toBe(1);
+    release();
+    await Bun.sleep(1);
+  });
+
+  test("navigation is locked while an action runs, then released", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const { modal } = onProjects({
+      installAgents: async () => { await gate; return []; },
+    });
+    modal.handleInput(RIGHT);
+    modal.handleInput("\r");
+    modal.handleInput(RIGHT);
+    expect(modal.currentPageId()).toBe("agents");
+    release();
+    await Bun.sleep(1);
+    modal.handleInput(RIGHT);
+    expect(modal.currentPageId()).toBe("done");
+  });
+
+  test("install results are kept and rendered rather than printed", async () => {
+    const reports: InstallReport[] = [
+      { label: "Claude Code", kind: "installed", notes: [] },
+      { label: "hunk-review skill", kind: "skipped", notes: ["hunk not installed"] },
+    ];
+    const { modal } = onProjects({ installAgents: async () => reports });
+    modal.handleInput(RIGHT);
+    modal.handleInput("\r");
+    await Bun.sleep(1);
+    expect(modal.getReports()).toEqual(reports);
+    const text = modal.getGrid(90).cells.map((r) => r.map((c) => c.char).join("")).join("\n");
+    expect(text).toContain("hunk not installed");
+  });
+
+  test("the port is told to repaint when work lands after the keypress", async () => {
+    const { modal, calls } = onProjects();
+    modal.handleInput(RIGHT);
+    modal.handleInput("\r");
+    await Bun.sleep(1);
+    expect(calls.changes).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("OnboardingModal — finish", () => {
+  test("Enter on the done page hands off and closes", () => {
+    const { modal, calls } = onProjects();
+    modal.handleInput(RIGHT); modal.handleInput(RIGHT);
+    expect(modal.currentPageId()).toBe("done");
+    expect(modal.handleInput("\r")).toEqual({ type: "consumed" });
+    expect(calls.finish).toBe(1);
+    expect(modal.isOpen()).toBe(false);
+  });
+
+  test("back from done returns to the last step", () => {
+    const { modal } = onProjects();
+    modal.handleInput(RIGHT); modal.handleInput(RIGHT);
+    modal.handleInput(LEFT);
+    expect(modal.currentPageId()).toBe("agents");
+  });
+});
