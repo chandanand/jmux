@@ -157,7 +157,7 @@ import {
 import type { DemoContext } from "./demo/setup";
 import type { SessionInfo, WindowTab, PaletteCommand, PaletteResult, AgentState } from "./types";
 import { loadProjectDirsCache, saveProjectDirsCache } from "./project-dirs-cache";
-import { ConfigStore, sanitizeTmuxSessionName, DEFAULT_IMAGE_MAX_ROWS, DEFAULT_BROWSER_PANE_SIZE, DEFAULT_BROWSER_DISPLAY_SCALE, DEFAULT_BROWSER_FPS } from "./config";
+import { ConfigStore, sanitizeTmuxSessionName, DEFAULT_IMAGE_MAX_ROWS, DEFAULT_BROWSER_PANE_SIZE, DEFAULT_BROWSER_DISPLAY_SCALE, DEFAULT_BROWSER_FPS, type JmuxConfig, type PipelineConfig } from "./config";
 import {
   RepoFactsCache,
   resolveForRepo,
@@ -2892,6 +2892,28 @@ function flushPendingPersists(): void {
     clearTimeout(entry.timer);
     entry.write();
   }
+}
+
+/**
+ * Step a config-backed value: apply it in memory now, coalesce the disk write.
+ *
+ * The rows whose live value is a module variable (the two widths) get this for
+ * free — the variable is already the new value, so only the write needs
+ * deferring. A row whose live value *is* the config field does not: it reads
+ * straight back out of config, so `configStore.stage` has to run on the press
+ * or the next one steps from a stale number.
+ */
+function stepConfig<K extends keyof JmuxConfig>(key: K, value: JmuxConfig[K], apply?: () => void): void {
+  configStore.stage(key, value);
+  apply?.();
+  persistSoon(`config.${String(key)}`, () => configStore.flush());
+}
+
+/** As above, for a pipeline field. */
+function stepPipeline<K extends keyof PipelineConfig>(key: K, value: PipelineConfig[K], apply?: () => void): void {
+  configStore.stagePipeline(key, value);
+  apply?.();
+  persistSoon(`pipeline.${String(key)}`, () => configStore.flush());
 }
 
 /** Apply a stepped or typed sidebar width live, and queue the write. */
@@ -6089,6 +6111,10 @@ function titleCommand(): string[] | undefined {
  */
 function setTitleCommand(command: string[] | undefined): void {
   if (command && presetForCommand(command) === TITLE_CUSTOM) lastCustomTitleCommand = command;
+  // The last result belonged to the *old* command. Keeping it would leave the
+  // row asserting an answer that command never produced — the stale-caveat
+  // failure SettingDef.getNote's own contract exists to prevent.
+  titleTestResult = null;
   const rest = { ...configStore.config.sessionTitle };
   if (command) rest.command = command;
   else delete rest.command;
@@ -6143,8 +6169,10 @@ function titleSettings(): SettingDef[] {
       read: () => configStore.config.sessionTitle?.maxChars ?? MAX_CHARS_DEFAULT,
       write: (v) => {
         if (typeof v !== "number") return;
-        configStore.set("sessionTitle", { ...configStore.config.sessionTitle, maxChars: v });
-        titleGenerator = makeTitleGenerator();
+        // The generator is rebuilt from the staged value, so the budget in the
+        // prompt tracks the row on every press rather than on the write.
+        stepConfig("sessionTitle", { ...configStore.config.sessionTitle, maxChars: v },
+          () => { titleGenerator = makeTitleGenerator(); });
       },
       describe: () => "The budget stated in the prompt and the cap applied to the reply. The sidebar shows about 20.",
     }),
@@ -6173,6 +6201,9 @@ let titleTestResult: string | null = null;
  */
 const TITLE_TEST_TIMEOUT_MS = 60_000;
 
+/** Doubles as the in-flight flag, so the row and the guard cannot disagree. */
+const TITLE_TEST_RUNNING = "running…";
+
 const TITLE_TEST_PROMPT = buildTitlePrompt(
   {
     kind: "git",
@@ -6192,6 +6223,10 @@ const TITLE_TEST_PROMPT = buildTitlePrompt(
  * have acted on.
  */
 async function runTitleTest(): Promise<void> {
+  // One at a time. This spawns an agent CLI measured at 6-12s, and nothing
+  // else stops a held Enter forking one process per press — the reason
+  // TitleGenerator carries a concurrency cap in the first place.
+  if (titleTestResult === TITLE_TEST_RUNNING) return;
   const command = titleCommand();
   if (!command) {
     showToast("No naming command configured — set one on the row above");
@@ -6199,7 +6234,7 @@ async function runTitleTest(): Promise<void> {
   }
   // It spawns an agent CLI, measured at 6-12s. A control that looks inert for
   // ten seconds is the problem this screen exists to fix.
-  titleTestResult = "running…";
+  titleTestResult = TITLE_TEST_RUNNING;
   scheduleRender();
   try {
     const maxChars = titleGenerator?.maxChars() ?? MAX_CHARS_DEFAULT;
@@ -6273,8 +6308,7 @@ function buildSettingsCategories(): SettingsCategory[] {
           read: () => configStore.config.images?.maxRows ?? DEFAULT_IMAGE_MAX_ROWS,
           write: (v) => {
             if (typeof v !== "number") return;
-            configStore.set("images", { ...configStore.config.images, maxRows: v });
-            scheduleRender();
+            stepConfig("images", { ...configStore.config.images, maxRows: v }, scheduleRender);
           },
           describe: () => "The tallest an inline image is drawn in an issue preview. Wider images scale to fit.",
         }),
@@ -6588,8 +6622,8 @@ function workflowBands(tier: SettingsTier): WorkflowBand[] {
           spec: { min: 1, max: 365, unit: "days", low: { label: "never", store: null } },
           read: () => configStore.config.pipeline?.autoParkIdleDays ?? null,
           write: (v) => {
-            configStore.setPipeline("autoParkIdleDays", (typeof v === "number" ? v : null) as never);
-            recomputeSessionBands();
+            stepPipeline("autoParkIdleDays", (typeof v === "number" ? v : null) as never,
+              recomputeSessionBands);
           },
           describe: () => "Sessions with a linked issue are governed by their tab instead. Blank or 0 turns this off.",
         }),

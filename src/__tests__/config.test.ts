@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { sanitizeTmuxSessionName, buildOtelResourceAttrs, loadUserConfig, ConfigStore, defaultConfig } from "../config";
-import { writeFileSync, unlinkSync, existsSync, mkdirSync, rmSync } from "fs";
+import { writeFileSync, unlinkSync, existsSync, mkdirSync, rmSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -352,5 +352,78 @@ describe("snapshot config merging", () => {
     expect(reloaded.config.snapshot?.scrollbackIntervalMs).toBe(8000);
     expect(reloaded.config.snapshot?.scrollbackMaxBytes).toBe(3 * 1024 * 1024);
     expect(reloaded.config.snapshot?.dir).toBe("/data");
+  });
+});
+
+// A ◂ ▸ press has to change the value *now* — a stepper row reads its live
+// value straight back out of config, so a deferred write would leave read()
+// returning the old number and the next press would step from it. But nothing
+// debounces the config watcher, so the disk write must not happen per press.
+// Hence memory-now, disk-later.
+function onDisk(path: string): any {
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
+describe("ConfigStore.stage / flush", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = join(tmpdir(), `jmux-stage-${process.pid}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    path = join(dir, "config.json");
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("stage changes the in-memory value immediately", () => {
+    const store = new ConfigStore(path);
+    store.stage("sidebarWidth", 42);
+    expect(store.config.sidebarWidth).toBe(42);
+  });
+
+  test("stage alone writes nothing to disk", () => {
+    const store = new ConfigStore(path);
+    store.stage("sidebarWidth", 42);
+    expect(existsSync(path)).toBe(false);
+  });
+
+  test("flush writes whatever was staged", () => {
+    const store = new ConfigStore(path);
+    store.stage("sidebarWidth", 42);
+    store.flush();
+    expect(onDisk(path).sidebarWidth).toBe(42);
+  });
+
+  test("many stages then one flush persist only the last value", () => {
+    // The point of the whole exercise: holding a key is one write, not sixty.
+    const store = new ConfigStore(path);
+    for (let n = 10; n <= 60; n++) store.stage("sidebarWidth", n);
+    store.flush();
+    expect(onDisk(path).sidebarWidth).toBe(60);
+  });
+
+  test("a staged value survives a later set of a different key", () => {
+    const store = new ConfigStore(path);
+    store.stage("sidebarWidth", 42);
+    store.set("cacheTimers", false);
+    const written = onDisk(path);
+    expect(written.sidebarWidth).toBe(42);
+    expect(written.cacheTimers).toBe(false);
+  });
+
+  test("stagePipeline creates the pipeline object and stays in memory", () => {
+    const store = new ConfigStore(path);
+    store.stagePipeline("autoParkIdleDays", 7);
+    expect(store.config.pipeline?.autoParkIdleDays).toBe(7);
+    expect(existsSync(path)).toBe(false);
+    store.flush();
+    expect(onDisk(path).pipeline.autoParkIdleDays).toBe(7);
+  });
+
+  test("flush with nothing staged is harmless", () => {
+    const store = new ConfigStore(path);
+    store.flush();
+    store.flush();
+    expect(existsSync(path)).toBe(true);
   });
 });

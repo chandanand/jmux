@@ -185,15 +185,28 @@ range is not a loop and 60 → 10 under a held key is a surprise. `stepGhostCap`
 is therefore not migrated — it is tested domain logic with its own reasoning,
 and it started working here for free once ◂ ▸ was wired.
 
-**A stepped value applies live and its write is debounced.** The press assigns
-the module-level variable and relayouts, so the sidebar moves while the key is
-held; `persistSoon` coalesces the write at 250ms and `flushPendingPersists`
+**A stepped value applies live and its write is debounced — every row, not
+just the ones whose value happens to live in a variable.** The press applies
+the change and relayouts, so the sidebar moves while the key is held;
+`persistSoon` coalesces the disk write at 250ms and `flushPendingPersists`
 drains it when the screen closes, so a value stepped and immediately dismissed
 is kept. The order is the drag handle's, and preserves its guarantee: the
 module var is already the new value when the config watcher fires, so it sees no
 change and starts no second resize. Trailing-only, unlike `scheduleDragResize` —
 a drag needs its first movement instant because the pointer is already moving, a
 keypress is discrete and already applied.
+
+The two widths get this for free, since their live value is a module variable
+and only the write needs deferring. A row whose live value **is** the config
+field cannot: it reads straight back out of config, so a deferred write leaves
+`read()` returning the old number and the next press steps from it, going
+nowhere. Hence `ConfigStore.stage`/`flush` and the `stepConfig`/`stepPipeline`
+wrappers — memory now, disk later, with the coalescing owned by `persistSoon`
+so there is **one** debounce rather than a second hidden in the store that could
+disagree with it. This matters because nothing debounces the config *watcher*:
+a write per keypress ran the whole hot-apply block — rebuild the title
+generator, re-send the capture gate, re-check the hunk theme, relayout — sixty
+times for one held key.
 
 **`info` is a real type, and the explain row is always reserved.** Three
 Diagnostics rows were `text` with no `onTextCommit`: Enter did nothing while the

@@ -456,6 +456,36 @@ export class ConfigStore {
     this.persist();
   }
 
+  /**
+   * Update memory without touching disk. Pair with {@link flush}.
+   *
+   * A ◂ ▸ press has to change the value *now* — the row reads its live value
+   * straight back out of config, so a deferred write would leave `read()`
+   * returning the old number and the next press would step from it, going
+   * nowhere. But the disk write must not happen per keypress: nothing
+   * debounces the config watcher, so holding a key ran the whole hot-apply
+   * block (rebuild the title generator, re-send the capture gate, re-check the
+   * hunk theme, relayout) once per press.
+   *
+   * So the split is memory-now, disk-later, with the *caller* owning the
+   * coalescing — `persistSoon` in main.ts is the one debounce, rather than a
+   * second one hidden in here that could disagree with it.
+   */
+  stage<K extends keyof JmuxConfig>(key: K, value: JmuxConfig[K]): void {
+    this.data[key] = value;
+  }
+
+  /** As {@link stage}, for a pipeline field. */
+  stagePipeline<K extends keyof PipelineConfig>(key: K, value: PipelineConfig[K]): void {
+    if (!this.data.pipeline) this.data.pipeline = {};
+    this.data.pipeline[key] = value;
+  }
+
+  /** Write whatever is currently in memory. */
+  flush(): void {
+    this.persist();
+  }
+
   /** Set a global repo-default and persist. */
   setRepoDefault<K extends keyof RepoSettings>(key: K, value: RepoSettings[K]): void {
     if (!this.data.repoDefaults) this.data.repoDefaults = {};
