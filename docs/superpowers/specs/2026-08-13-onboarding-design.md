@@ -3,72 +3,79 @@
 Status: design of record.
 
 Supersedes §12 ("Phase 3 — onboarding") of
-`2026-08-11-projects-and-onboarding-design.md`. That section deferred onboarding
-and sketched it as a better checklist; this replaces the checklist entirely.
+`2026-08-11-projects-and-onboarding-design.md`, which deferred onboarding and
+sketched it as a better checklist. This replaces the checklist.
+
+Revised once after adversarial review. The review killed the first draft's
+central argument and two of its pages; where this deletes something the first
+draft proposed building, §16 records why.
 
 ---
 
 ## 1. The failure this comes from
 
-Six diagnosed defects in the current first-run experience
-(`src/setup-modal.ts`, rows built in `main.ts:6116`):
+Six diagnosed defects in the current first run (`src/setup-modal.ts`, rows built
+at `main.ts:6171`):
 
-1. **Subprocess output corrupts the alt screen.** `installSkill()` writes with
-   `console.log` — correct for `jmux --install-skill`, wrong when the setup
-   modal calls the same function from inside the TUI. `jmux-control skill:
-   installed to …`, `Agents running inside jmux can now discover 'jmux ctl'.`
-   and `hunk-review skill: hunk not found — skipped` land directly on the
-   rendered frame.
+1. **Subprocess output corrupts the alt screen.** `installSkill()`
+   (`skill.ts:161`) writes with `console.log` — correct for
+   `jmux --install-skill`, wrong when the setup modal calls the same function
+   from inside the TUI. `jmux-control skill: installed to …`, `Agents running
+   inside jmux can now discover 'jmux ctl'.` and `hunk-review skill: hunk not
+   found — skipped` land directly on the rendered frame.
 2. **Four of eight steps abandon the user.** `project-dirs`, `attach-team`,
-   `workflow` and `tracker`-with-no-adapter all `closeModal()` and drop the
-   user into the settings or workflow screen with no explanation and no way
-   back.
+   `workflow` and `tracker`-with-no-adapter all `closeModal()` and drop the user
+   into the settings or workflow screen with no explanation and no way back.
 3. **The progress figure contradicts the list** — `1/5 done` above eight visible
    rows, because the denominator counts only "actionable" rows.
-4. **Four unexplained state glyphs** (`✓ ○ · —`) with no legend, two of which
-   mean different kinds of "not yet".
-5. **Steps state raw facts, not consequences** — `5 failing`, `none
-   configured`, `npm i -g hunkdiff`. One row shows a shell command the user is
-   apparently expected to run themselves.
+4. **Four unexplained state glyphs** (`✓ ○ · —`), two of which mean different
+   kinds of "not yet".
+5. **Steps state raw facts, not consequences** — `5 failing`, `none configured`,
+   `npm i -g hunkdiff`. One row shows a shell command the user is apparently
+   expected to go and run themselves.
 6. **No sense of place.** No narrative, no statement of what jmux is, no
    confirmation at the end that anything works.
 
-### 1.1 The mechanical root cause of defect 2
+### 1.1 What actually causes defect 2
 
-`activeModal` is a **single slot** (`main.ts:6046`). A modal that needs to
-collect input must destroy itself to open the collector — which is literally
-what the tracker row does today (`main.ts:6303`: it constructs an `InputModal`
-and calls `openModal` over the setup modal, evicting it).
+`activeModal` is a single slot (`main.ts:6101`), and `SetupModal` reaches for
+input by calling `openModal()` with a *new* modal — which evicts it
+(`main.ts:6359`). So every step needing input destroys the flow.
 
-This is not a copy problem or a routing bug. **Every step needing user input is
-structurally forced to abandon the flow**, and no amount of care inside the
-modal vocabulary fixes it. It is the argument for §3.
+**This is a choice, not a constraint.** `NewSessionModal` (`new-session-modal.ts:41`)
+already solves it: it owns a `stepStack` of `ListModal | InputModal`, delegates
+`handleInput` to `currentInner`, and intercepts Esc to pop back a step — a
+multi-step wizard hosting child collectors inside one modal slot.
+
+An earlier draft of this spec claimed a modal structurally could not do this and
+used that to justify a fifth full-area surface. **The claim was false and the
+surface is not built.** See §16.
 
 ## 2. Non-goals
 
-- Rewriting the settings or workflow screens. The workflow screen keeps its
-  authoring role; onboarding seeds and confirms, it does not re-implement.
-- A pre-TUI renderer. The dependency gate gets copy, not chrome (§9.3).
-- Mouse support. No full-area surface has it (`2026-08-11` §13); this one does
-  not break that tie.
-- Interrupting existing users. Anyone with a `config.json` sees no new screen on
+- Rewriting the settings or workflow screens.
+- A fifth full-area surface (§3).
+- Provisioning sessions from inside onboarding (§7).
+- A pre-TUI renderer. The dependency gate gets copy, not chrome (§11.3).
+- Interrupting existing users: anyone with a `config.json` sees no new screen on
   upgrade.
 
 ---
 
 # Part I — Shape
 
-## 3. A fifth full-area surface, and why it earns it
+## 3. A composite modal, on the NewSessionModal pattern
 
-`CLAUDE.md` requires a new full-area surface to argue for itself. The argument
-is §1.1: onboarding must collect a token, a path and a pick, and a modal cannot
-host a modal.
+`OnboardingModal` implements `Modal` (`modal.ts:15`) and owns its children
+directly, never through `openModal()`. Input flows
+`InputRouter → onModalInput → OnboardingModal.handleInput → currentInner`, which
+is routing that already exists and needs no change.
 
-Settings, workflow, ghost-preview and glass are already this vocabulary. A fifth
-is **not a fifth idiom — it is a fourth instance of the third idiom.**
-`ghost-preview` is the precedent that a full-area surface can host a real
-`ListModal` over itself (`main.ts:4734`, and the `closeModal()` comment at
-`main.ts:6057`, which exists because of it).
+What this buys over the rejected surface: no new term in the four full-area
+disjunctions, no new render branch, no `inputConsumerActive` question, and no
+purpose-specific-predicate refactor. The three surfaces' membership sets
+genuinely differ (glass is in some and not others), so a single
+`fullAreaSurfaceOpen()` was never one concept — that extraction is dropped.
 
 ### 3.1 Module boundaries
 
@@ -76,154 +83,204 @@ is **not a fifth idiom — it is a fourth instance of the third idiom.**
 
 | Module | Owns | Knows nothing about |
 | --- | --- | --- |
-| `src/onboarding/flow.ts` | The state machine: intent → page sequence, cursor, back/next, reachability. **Pure.** | Rendering, tmux, config, adapters |
-| `src/onboarding/pages.ts` | The page table: id, title, prose, status. **Pure over a snapshot.** | The port's implementation |
-| `src/onboarding/render.ts` | `CellGrid` painting: frame, rail, measure, action bar | Flow semantics |
-| `src/onboarding/screen.ts` | `OnboardingScreen`: `open/close/render(cols,rows)/handleInput` | Anything outside `OnboardingPort` |
-| `main.ts` | Wiring only: builds the port, adds the surface to the render and route switches | — |
+| `src/onboarding/flow.ts` | State machine: which pages exist, cursor, back/next, busy state. **Pure.** | Rendering, tmux, config, adapters |
+| `src/onboarding/pages.ts` | Page table: id, title, prose, status. **Pure over a snapshot.** | The port's implementation |
+| `src/onboarding/render.ts` | `CellGrid` painting: rail, measure, action bar | Flow semantics |
+| `src/onboarding/modal.ts` | `OnboardingModal`: the `Modal` impl and the child stack | Anything outside `OnboardingPort` |
+| `src/onboarding/status.ts` | `SetupStatus`: the snapshot and its invalidation (§4) | Rendering |
+| `main.ts` | Wiring: builds the port, owns the status model | — |
 
-`OnboardingPort` follows `GhostPreviewPort`: the screen never touches
-`configStore`, `adapters` or tmux directly. That is what makes `flow.ts` and
-`pages.ts` testable against a fabricated snapshot.
+### 3.2 Resize must not destroy the flow
 
-### 3.2 The snapshot rule
+SIGWINCH unconditionally closes `activeModal` (`main.ts:10473`) — modals size
+themselves at open, so this is right for every existing one. For onboarding it
+would discard the whole flow, including a half-typed token, on a window drag.
 
-`setup-modal` re-derives rows on open and after activation, never per frame,
-because every detector hits the filesystem and `getGrid` runs at ~60fps (its
-comment at `setup-modal.ts:288`). Same rule, tightened.
+**`Modal` gains an optional `onResize(cols, rows): void`.** SIGWINCH calls it
+when present and closes the modal when absent, so every existing modal keeps
+today's behaviour byte for byte and only onboarding opts in. A small, general
+change with one caller — not a speculative abstraction, because the defect it
+fixes is real and reachable by dragging a window.
 
-The screen holds an immutable **`SetupSnapshot`** — agent presence, skill state,
-tracker auth, project dirs, workflow tabs, `hunk` on PATH — rebuilt at exactly
-three moments: **open, after an action resolves, and on adapter-epoch change.**
-`pages.ts` is a pure function of it, so a page's state and its copy cannot
-disagree, and no test touches a filesystem.
+Tested: resize on every input-bearing page preserves the draft.
 
-### 3.3 Integration into main.ts, and the debt cleared
+## 4. The status model lives above the modal
 
-Four sites enumerate the full-area surfaces as a disjunction (`main.ts:3699`,
-`3762`, `5400`, `8089`); three more branch to render them (`4692`, `4715`,
-`4734`). Adding a fourth term to a four-way `||` repeated seven times is how
-these drift.
+The snapshot — agent presence, skill state, tracker auth, Projects, workflow
+tabs, `hunk` on PATH — is owned by `main.ts`, **not** by the modal. Two reasons:
 
-**Extract the predicate only** — `fullAreaSurfaceOpen()` — and leave the render
-and close-all branches alone, since each does genuinely different work. Debt in
-the path of the work; the render switch is deliberately not unified.
+- The **toolbar dot needs it when no modal is open.** `setupStepsOutstanding()`
+  (`main.ts:1140`) runs per frame from `makeToolbar` and today rebuilds rows
+  behind a 5s cache.
+- The **config watcher** (`main.ts:10487`) can reload Projects, project dirs,
+  workflow views and `setup` state while the flow is open. A snapshot owned by
+  the modal and refreshed only on its own actions would go stale under the
+  user's own edit.
 
-### 3.4 Deletions
+Invalidation is explicit and complete: **on open, after any onboarding action
+resolves, on adapter-epoch change, and on config-watcher reload.** `pages.ts` is
+a pure function of the snapshot, so a page's state and its copy cannot disagree,
+and no test touches a filesystem.
 
-- `src/setup-modal.ts`, with `SetupRow` / `SetupState` / `SetupProviders` and
-  the four-glyph vocabulary.
-- `buildSetupRows()` (`main.ts:6116`), replaced by the snapshot builder.
-- `setupStepsOutstanding()` survives in spirit — the toolbar dot still needs an
-  answer — but reads the snapshot rather than rebuilding rows.
+`buildSetupRows()` (`main.ts:6171`) is replaced by the snapshot builder;
+`setupStepsOutstanding()` reads the snapshot rather than rebuilding rows.
 
-`runSetupPreflight()` / `runDeepPreflight()` **survive in substance.** They are
-the honest read-only "does it work" check, and the comment at `main.ts:1166`
-argues correctly against the throwaway-session alternative. They become the data
-behind the finish page rather than a checklist row.
+## 5. Deletions
+
+- `src/setup-modal.ts` with `SetupRow` / `SetupState` / `SetupProviders`.
+- `src/__tests__/setup-modal.test.ts`. Its behavioural coverage — scroll
+  clamping, cursor wrap over painted rows, activation refusing inert rows — is
+  **ported** to `flow.test.ts`, not dropped. Enumerated in the plan so the port
+  is verifiable rather than asserted.
+- `buildSetupRows()`.
+
+`runSetupPreflight()` / `runDeepPreflight()` survive in substance: they are the
+honest read-only "does it work" check, and the comment at `main.ts:1166` argues
+correctly against the throwaway-session alternative. They become the finish
+page's data.
 
 ---
 
 # Part II — The model
 
-## 4. Three states, one of them deleted by geometry
+## 6. Three states, one deleted by geometry
 
-`blocked` and `unavailable`-as-glyph both go:
+- **`blocked` is deleted.** "Something else must happen first" is what a
+  sequence is. A page needing the tracker comes after the tracker page.
+- **`unavailable` stops being a glyph and becomes prose on a page you are
+  standing on.** "Install Claude Code, Codex or pi and this will light up" is a
+  sentence, not a `—`.
 
-- **`blocked` is deleted outright.** "Something else must happen first" is what
-  a *sequence* is. A page needing the tracker comes after the tracker page.
-  Nothing is left for the glyph to say.
-- **`unavailable` becomes prose on a page you are standing on.** "Install Claude
-  Code, Codex or pi and this will light up" is a sentence, not a `—`.
+`satisfied | pending | unavailable` remain, and none ever appears as a bare
+glyph needing a legend: sentences on a page, words in a column on the map.
 
-What remains is `satisfied | pending | unavailable`, and none ever appears as a
-bare glyph needing a legend: sentences on a page, words in a column on the map.
+**The rail carries position only** — a segmented bar plus `Step 2 of 3`. Filled
+is behind you, hollow ahead. It never duplicates state, which is what stops
+defect 3 reappearing in a new costume.
 
-**The rail carries position only** — a segmented bar plus `Step 2 of 4`. Filled
-is behind you, hollow is ahead; both self-evident from where the cursor is. The
-rail never duplicates state, which is what stops defect 3 reappearing in a new
-costume.
-
-## 5. What earns a page
+## 7. What earns a page
 
 A step earns a page when **the user must make a decision jmux cannot make for
-them.**
+them** — and can be *completed* inside the flow.
 
 | Today's row | Verdict |
 | --- | --- |
-| Project directories | **Earns one.** Only they know where their code is. |
-| Agent hooks + `ctl` skill | **Earns one, jointly.** No decision, but it writes into *another tool's config*, so it needs consent — and it is one idea (jmux and your agents seeing each other), so two rows become one page. |
-| Tracker credential | **Earns one**, tracker intent only. |
-| Team ↔ project | **Earns one**, tracker intent only. Nothing on disk implies the mapping. |
-| Workflow stages | **Earns a pre-answered page.** `suggestLayout()` (`panel-view.ts:521`) already guesses well from the tracker's state types, so the page arrives with the answer filled in and `↵` accepts. A page only ever *confirmed* is cheap; authoring four stages by hand on day one is why people quit. |
-| "Check it all works" | **Not a page.** It is the finish (§8). |
-| Install the diff viewer | **Not a page.** jmux cannot do it and it is not needed to work. One line on the finish page under "worth knowing" — never a shell command the user is told to go and run mid-flow. |
+| Project directories | **Earns one**, but it must adopt **Projects**, not scan roots. See §8. |
+| Agent hooks + `ctl` skill | **Earns one, jointly.** No decision, but it writes into another tool's config, so it needs consent — and it is one idea. |
+| Tracker credential | **Earns one**, tracker arm only. |
+| Team ↔ project | **Earns one**, tracker arm only. |
+| Workflow stages | **Earns a pre-answered page.** `suggestLayout()` (`panel-view.ts:521`) already guesses. `↵` accepts. |
+| "Check it all works" | **Not a page.** It is the finish. |
+| Install the diff viewer | **Not a page.** One line on the finish page — never a shell command handed over mid-flow. |
+| *(first draft's)* Start your first session | **Cut. See below.** |
 
-## 6. The intent branch
+### 7.1 Why session provisioning is cut
+
+The first draft ended each arm by provisioning a real session, arguing that a
+real session is safer than a throwaway because nothing needs cleaning up. Three
+facts kill it:
+
+- **The generic creation path does not launch an agent** (`main.ts:9607`), so
+  the promised "an agent already running inside" was undeliverable as specified.
+- **Failed provisioning deliberately leaves debris** — session, setup pane and
+  partial worktree are kept visible for diagnosis (`issue-provision.ts` and its
+  header comment). Making that mandatory during setup manufactures the debris
+  the argument claimed to avoid.
+- **Creating a session needs directory, standard-vs-worktree, base branch and
+  name** (`new-session-modal.ts:144`); the tracker arm additionally needs issue
+  selection, route resolution and prompt construction. Reproducing either inside
+  onboarding is a second copy of a flow that already exists and works.
+
+So the finish page **hands off**: `↵` closes onboarding and opens the existing
+`NewSessionModal`, or the issues panel on the tracker arm. The user's first
+session is created by the machinery that is good at it, one keystroke later.
+
+## 8. Projects, not project dirs
+
+`projectDirs?: string[]` (`config.ts:184`) are **scan roots**. `projects?:
+ProjectConfig[]` (`config.ts:115`) are what team attachment operates on, and
+what `ProjectConfig` requires — id, title, dir — is not derivable from a scan
+root alone.
+
+The first draft's page 1 wrote the former and its team page read the latter, so
+the tracker arm was structurally broken: attach-team would have found no
+Projects to attach to.
+
+**Page 1 therefore does both.** It takes a directory, scans it, and lets the
+user adopt repositories found under it as Projects — id generated once, title
+defaulting to the basename, `dir` the repo directory. The scan root is still
+stored (`Ctrl-a n` reads it), but adoption is what the page is *for*, and the
+copy says so.
+
+## 9. The intent branch is derived, never persisted
 
 ```
-intent = solo      0 Welcome → 1 Code → 2 Agents → 3 First session → 4 Done
-intent = tracker   0 Welcome → 1 Code → 2 Agents → 3 Tracker → 4 Team
-                             → 5 Workflow → 6 First issue → 7 Done
-intent = manual    0 Welcome → Map. Nothing configured, nothing claimed.
+solo      Welcome → Code → Agents → Done
+tracker   Welcome → Code → Agents → Tracker → Team → Workflow → Done
+manual    Welcome → Map. Nothing configured, nothing claimed.
 ```
 
-`intent` persists as `config.setup.intent`, a closed union — the same tier as
-the existing `setup.tracker: "never"`, which is already the file's home for
-**declared preference no filesystem check can discover**. Re-entry after a
-choice lands on the **map**, not page 0. Intent is changeable from the map, which
-re-derives the sequence.
+The first draft persisted `config.setup.intent`. Cut, for the reason
+`setup-modal.ts`'s own header states: **machine truth is derived, never
+stored.** A stored route intent is a second source of truth that can disagree
+with what is actually configured, and `config.ts:570` casts the parsed document
+to `JmuxConfig` without validating it, so a TypeScript union buys nothing
+against a hand-edited file.
 
-The third option exists so that "none of this" is a first-class answer given in
-the flow's own vocabulary, rather than an Escape that reads as failure.
+Intent is in-memory flow state for the current visit. On re-entry the map
+derives which steps are in play from what is true — tracker connected, or
+`setup.tracker === "never"` (`config.ts:128`, which already exists and is
+already the file's home for declared preference no filesystem check can
+discover).
 
-## 7. Navigation
+## 10. Navigation
 
-`←` back · `→` next · `↵` acts on the selected thing *within* the page ·
+`←` back · `→` next · `↵` acts on the selected thing within the page ·
 `esc` zooms out.
 
-Two rules keep it from trapping anyone:
+1. **`→` never requires completion.** Blocking next is how a wizard becomes a
+   hostage situation, and it is what would make "no tracker account today"
+   unrecoverable. The map records what was skipped; the finish page names it.
+2. **`esc` zooms out.** From a page to the map; from the map, close. One
+   gesture, one meaning — and `NewSessionModal` already implements exactly this
+   pop-a-step-then-close behaviour (`new-session-modal.ts:106`).
+3. **An unavailable page is still shown**, with prose and a `→`. Silently
+   dropping it would make `Step 2 of 3` lie. A page the intent did not ask for
+   is never created at all — a different thing, needing no explanation.
 
-1. **`→` never requires completion.** Blocking next on a satisfied page is how a
-   wizard becomes a hostage situation, and it is exactly what would make "no
-   tracker account today" unrecoverable. You may always leave a page unfinished;
-   the map records it and the finish page names it in plain words.
-2. **`esc` is one gesture with one meaning: zoom out.** From a page, to the map;
-   from the map, close. Not two different escapes — and consistent with what
-   `c08da9f` established for the settings and workflow screens.
+## 11. Async actions have a contract
 
-**An unavailable page is still shown.** It explains why and offers `→`. Silently
-dropping it would make `Step 2 of 4` lie and hide a fact the user needs. A page
-the intent did not ask for is never created at all — a different thing, needing
-no explanation.
+Token verification, agent installation and repository scanning all outlive a
+render and can fail or receive a duplicate `↵`. `GhostPreview` needs a `starting`
+guard and typed outcomes for the same reason.
+
+Every async action declares: a **busy** state that locks input on that page and
+renders as such; a **typed outcome** (`ok | failed`, with a message); and
+**idempotence** — a second `↵` while busy is ignored, not queued. Cancellation
+is out of scope; the actions are short and bounded.
 
 ---
 
 # Part III — The pages
 
-## 8. Copy
+## 12. Copy
 
-Widths assume a 26-col sidebar and a ~100-col terminal.
+### 12.1 Typographic rules
 
-### 8.1 Typographic rules
-
-- **Prose measure caps at `space.measure` (64)** even on a 200-col terminal.
-  Ghost-preview caps at 100 for issue bodies; explanatory prose wants narrower.
-  Long lines are the fastest way to make a terminal read as a log.
+- **Prose measure caps at `space.measure` (64)**, whatever the modal's width.
 - **One vertical rhythm:** title · hairline · blank · prose · blank ·
   interactive block · (flex) · hairline · action bar.
 - **The action bar is bottom-pinned via a shared `BOTTOM_RESERVED_ROWS`**, read
-  by both `render()` and `ensureVisible()` — the settings screen's rule, for the
-  reason stated there: a hint line that moves as the cursor travels costs more
-  than the blank row it saves.
+  by both render and scroll-clamp — the settings screen's rule, for the reason
+  stated there.
 - **The accent appears in exactly three places:** page title, cursor row, filled
   rail segment. `tokens.affirmative` for `✓`; `tokens.textTertiary` for keys and
   asides. Nothing else is coloured.
 
-### 8.2 Page 0 — Welcome
+### 12.2 Welcome
 
 ```
-   jmux                                                        first run
+   jmux                                                     first run
 
    Run several coding agents at once, and see what they're all doing.
 
@@ -233,44 +290,45 @@ Widths assume a 26-col sidebar and a ~100-col terminal.
 
    What do you want to set up?
 
-   ▸ Just run agents                              3 steps, about a minute
+   ▸ Just run agents                           3 steps, about a minute
      Somewhere to work, and agent status in the sidebar.
 
-     Agents, wired to my issue tracker                          6 steps
+     Agents, wired to my issue tracker                       6 steps
      All of the above, plus start work straight from a ticket.
 
      I'll do it myself
      Skip all of this. Nothing configured, nothing claimed.
 
-   ──────────────────────────────────────────────────────────────────────
+   ───────────────────────────────────────────────────────────────────
    ↑↓ choose   ↵ start
 ```
 
-Step counts are stated before the commitment — the cheapest thing a wizard can
-do to earn trust.
+Step counts are stated before the commitment.
 
-### 8.3 Page 1 — Where your code lives
+### 12.3 Where your code lives
 
 ```
-   Set up jmux                       ━━━●───────────────────  Step 1 of 3
+   Set up jmux                    ━━━●───────────────  Step 1 of 3
 
    Where your code lives
    ─────────────────────
 
-   When you press Ctrl-a n, jmux offers you the repositories it finds
-   under these directories. Without one, that key has nothing to show
-   you.
+   jmux works one repository at a time — a session, a worktree and an
+   agent per piece of work. Tell it where to look and it will offer
+   these when you press Ctrl-a n.
 
-     ~/Code/personal                                          3 repos
-     ~/work                                                  11 repos
+     ~/Code/personal
+       ✓ jmux                    ✓ hunk                  wtm
+         tracktile-web
 
-   + Add a directory
-
-   ──────────────────────────────────────────────────────────────────────
-   ↑↓ move   ↵ add   ⌫ remove   → next   ← back   esc overview
+   ───────────────────────────────────────────────────────────────────
+   ↑↓ move   space adopt   ↵ add a directory   → next   esc overview
 ```
 
-### 8.4 Page 2 — Agents
+Ticked repositories become Projects (§8). Adding a directory hosts an
+`InputModal`; the scan is async and shows the busy state from §11.
+
+### 12.4 Letting jmux see your agents
 
 ```
    Letting jmux see your agents
@@ -281,30 +339,37 @@ do to earn trust.
    needs a small hook in each agent's own config. It also installs a
    skill, so agents inside jmux can drive sibling sessions themselves.
 
-     Claude Code                            found, not hooked up yet
-     Codex                                  found, hooks out of date
-     pi                                              not installed
+     Claude Code                         found, not hooked up yet
+     Codex                               found, hooks out of date
+     pi                                           not installed
 
-   Writes to ~/.claude/settings.json and ~/.codex/hooks.json.
+   Will write to
+     ~/.claude/settings.json
+     ~/.codex/hooks.json, ~/.codex/config.toml
    Undo any time with  jmux --uninstall-integrations
 
-   ──────────────────────────────────────────────────────────────────────
+   ───────────────────────────────────────────────────────────────────
    ↵ set these up   → skip   ← back   esc overview
 ```
 
-Consent to write into another tool's config is only real if the reversal is
-named at the moment of asking — hence the `--uninstall-integrations` line.
+**The write list is rendered from installer metadata, never hard-coded.** Claude
+honours `CLAUDE_CONFIG_DIR` (`agent-hooks/claude.ts`), Codex touches
+`config.toml` as well as `hooks.json`, and pi writes two files of its own — so
+prose naming `~/.claude/settings.json` unconditionally is wrong on any relocated
+config. `AgentIntegration` gains a `writeTargets(): string[]`, and consent
+displays what will actually be touched. Consent to edit another tool's config is
+only real if it names the true target and the reversal.
 
 **After `↵`** — every line here is text that lands raw on the frame today:
 
 ```
-     Claude Code                                    ✓ hooked up
-     Codex                                          ✓ hooked up
-     jmux ctl skill                                  ✓ installed
-     hunk review skill                    hunk not installed, skipped
+     Claude Code                                 ✓ hooked up
+     Codex                                       ✓ hooked up
+     jmux ctl skill                              ✓ installed
+     hunk review skill                hunk not installed, skipped
 ```
 
-**No agents on this machine** — honest, explicitly not a failure:
+**No agents on this machine** — honest, and not a failure:
 
 ```
      No coding agents found on this machine.
@@ -312,12 +377,9 @@ named at the moment of asking — hence the `--uninstall-integrations` line.
    jmux works fine without one: you drive tmux yourself and the sidebar
    shows sessions rather than agent status. Install Claude Code, Codex
    or pi and this page will have something to do.
-
-   ──────────────────────────────────────────────────────────────────────
-   → next   ← back   esc overview
 ```
 
-### 8.5 Pages 3–5 — the tracker arm
+### 12.5 The tracker arm
 
 ```
    Connect your issue tracker
@@ -327,8 +389,8 @@ named at the moment of asking — hence the `--uninstall-integrations` line.
    you can start a session from one — branch, worktree and agent, all
    named after the ticket.
 
-     Tracker                                              Linear
-     Token                                        checking… ⠋
+     Tracker                                            Linear
+     Token                              ••••••••••••  checking…
 
    Verified before it's saved, so a bad paste says so rather than
    sitting there looking connected. Stored in
@@ -346,7 +408,7 @@ resolving to `✓ connected as jarred@tracktile.com` or
    know which. Without this, starting work from an issue does nothing
    at all — the most common way a new setup looks broken.
 
-     Core Engineering        →   ~/Code/personal/jmux
+     Core Engineering        →   jmux
      Design                  →   not routed
 ```
 
@@ -354,51 +416,40 @@ resolving to `✓ connected as jarred@tracktile.com` or
    How your work moves
    ───────────────────
 
-   Your tracker has 12 statuses. jmux has grouped them into four stages,
-   which drive the sidebar's bands and the info panel's tabs.
+   Your tracker has 12 statuses. jmux has grouped them into three
+   stages, which drive the sidebar's bands and the info panel's tabs.
 
-     To do            Backlog, Todo, Triage
-     In progress      In Progress, In Review
-     Blocked          Blocked
-     Done             Done, Cancelled, Released
+     To do            Triage, Backlog
+     In progress      Todo, In Progress, In Review
+     Done             Done, Cancelled, Duplicate
 
-   ──────────────────────────────────────────────────────────────────────
-   ↵ use these   e edit   → skip   ← back   esc overview
+   Change these any time in the workflow screen — Ctrl-a W.
+
+   ───────────────────────────────────────────────────────────────────
+   ↵ use these   → skip   ← back   esc overview
 ```
 
-### 8.6 The last working page — a real session, not a rehearsal
+**Three stages, not four, and no `e` key.** `SUGGESTED_TABS` (`panel-view.ts:515`)
+is exactly To do / In progress / Done; `unstarted` and `started` both fold into
+In progress and there is no Blocked stage. The first draft's four-stage table
+was fabricated.
 
-```
-   Start your first session
-   ────────────────────────
+The first draft also offered `e` to jump to the workflow screen. Cut:
+`openWorkflowScreen()` (`main.ts:7949`) hard-codes settings as the only possible
+origin, so `surfaceReturn` would be set to `null` and the return path would
+silently not exist — and `returnFromSurface()` runs only when no input consumer
+remains, which an open onboarding modal prevents. Seeding plus a pointer to
+`Ctrl-a W` costs the user one keystroke later and removes the whole hazard.
 
-   This is the thing jmux is for. Pick a repository and jmux will make a
-   session for it with an agent already running inside.
-
-     ~/Code/personal/jmux
-     ~/Code/personal/hunk
-     ~/work/tracktile
-
-   Nothing throwaway here — it's a real session, and it's yours to keep.
-```
-
-The prior spec proposed a dry-run Start that provisions and tears down a
-throwaway session; `main.ts:1166` rejects that correctly, because on a wtm repo
-it means creating and deleting a real worktree and branch to answer a question,
-and it leaves debris exactly when it fails. Provisioning the user's **actual
-first session** sidesteps the objection entirely: nothing is disposable, so
-there is nothing to clean up.
-
-### 8.7 Page N — Done
+### 12.6 Done
 
 ```
    You're set up
    ─────────────
 
-   ✓  Two project directories
+   ✓  Two projects — jmux, hunk
    ✓  Claude Code and Codex report their state
    ✓  Linear connected as jarred@tracktile.com
-   ✓  jmux/TRA-412 is running — look left
 
    Three things worth knowing
 
@@ -410,161 +461,156 @@ there is nothing to clean up.
 
       The diff viewer      npm i -g hunkdiff, then Ctrl-a g
 
-   ──────────────────────────────────────────────────────────────────────
-   ↵ take me to my session
+   ───────────────────────────────────────────────────────────────────
+   ↵ start your first session      esc close
 ```
 
-**The one piece of motion.** The `✓` lines land one at a time, ~70ms apart, on
-first arrival at this page only; any keypress lands them all instantly. One
-deadline and a `scheduleRender()` — no animation framework, no per-frame work
-once settled. It is the only moment in the flow where something is celebrated
-rather than asked, and staggering is the cheapest way a terminal can say so.
+`↵` closes onboarding and opens `NewSessionModal` (§7.1). No animation: the
+first draft staggered the `✓` lines, which buys a moment of delight for timers,
+deadlines, interruption state and a test clock. Rendered immediately.
 
-### 8.8 The map
+### 12.7 The map
 
 ```
-   Set up jmux                                                  overview
+   Set up jmux                                            overview
 
-   Just run agents                                                change
+   ✓   Where your code lives                        2 projects
+   ✓   Letting jmux see your agents         Claude Code, Codex
+       Connect an issue tracker                        not yet
 
-   ✓   Where your code lives                            2 directories
-   ✓   Letting jmux see your agents             Claude Code, Codex
-       Start your first session                              not yet
-
-   Not in this path
-
-       Issue tracker  ·  Team routing  ·  Workflow stages
-
-   ──────────────────────────────────────────────────────────────────────
+   ───────────────────────────────────────────────────────────────────
    ↑↓ move   ↵ open   esc close
 ```
 
 **One glyph, one meaning.** `✓` means done; its absence means not done, with the
-right-hand column saying what that amounts to in words. Nothing here needs a
-legend — defect 4 deleted rather than documented.
+right-hand column saying what that amounts to in words. Defect 4 deleted rather
+than documented.
 
 ---
 
 # Part IV — Engineering
 
-## 9. Installers
-
-### 9.1 The fix
+## 13. Installers
 
 `installSkill()` **keeps its `console.log`s** — it is the `jmux --install-skill`
-entry point and printing is correct there. It stops being the only way to do the
-work:
+entry point (`skill.ts:161`) and printing is correct there. It stops being the
+only way to do the work:
 
 ```ts
-// skill.ts — mirrors installAllAgents()'s InstallReport shape exactly
-export interface SkillReport {
-  label: string;
-  kind: "installed" | "noop" | "skipped" | "failed";
-  notes: string[];
-}
-export function installSkills(): SkillReport[]   // new, silent, both skills
-export function installSkill(): boolean          // unchanged CLI wrapper over it
+export function installSkills(): InstallReport[]   // new, silent, both skills
+export function installSkill(): boolean            // unchanged CLI wrapper
 ```
 
-`installSkillTo()` already returns a structured `SkillOutcome`
-(`skill.ts:126`), so this is assembly, not redesign. The `kind` vocabulary is
-copied from `InstallReport` (`registry.ts:42`) rather than invented, so the
-agents page renders both tables with one function.
+It returns `InstallReport` (`registry.ts:42`) **itself**, not a parallel type —
+including the `"migrated"` member the first draft's `SkillReport` dropped. One
+outcome union, so the agents page renders both tables with one function and the
+two cannot drift.
 
-### 9.2 The guardrail, two-layered
+`installSkillTo()` already returns a structured `SkillOutcome` (`skill.ts:126`),
+so this is assembly, not redesign.
 
-One layer cannot see this failure, so there are two:
+### 13.1 The guardrail, two-layered
+
+One layer cannot see this failure:
 
 1. A unit test spying `console.log` / `process.stdout.write` around
    `installSkills()`, asserting **zero calls**.
-2. The pty integration test asserting the literal strings `jmux-control skill:`
-   and `hunk not found` appear **nowhere in the rendered frame** after the
-   agents page runs.
+2. The pty integration test asserting `jmux-control skill:` and `hunk not found`
+   appear **nowhere in the rendered frame** after the agents page runs.
 
 The audit found no other TUI-reachable offender: `installAllAgents()` already
-returns `InstallReport[]` and `main.ts:6281` already uses them. Everything else
-in the `console.log` sweep is pre-TUI arg parsing and the dependency gate, which
-run before the alt screen exists.
+returns `InstallReport[]` and `main.ts:6336` already uses them. Everything else
+in the sweep is pre-TUI arg parsing and the dependency gate, which run before
+the alt screen exists.
 
-### 9.3 The pre-TUI dependency gate
+## 14. The credential transaction
 
-Copy only, no new renderer. It must stay plain `console.log`: on a clean machine
-it may need to install tmux before jmux can run at all, and there is no alt
-screen yet. The rewrite makes it read as step zero of one flow rather than as an
-error.
+Three defects, all inherited from the current flow:
 
-## 10. Delegation: exactly one, opt-in
+- **The rollback destroys a previously valid token.** `main.ts:6371` writes the
+  candidate, verifies, then writes `null` on failure — so a bad paste over a
+  working Linear setup leaves the user with no credential at all. **Snapshot the
+  previous value and restore it exactly**, never `null`.
+- **The adapter type is never persisted.** `createAdapters`
+  (`adapters/registry.ts:11`) builds nothing without
+  `config.adapters.issueTracker.type`, so a token written against an unset type
+  connects nothing. Type and token are persisted **together**, and only after
+  verification.
+- **In-memory probe verification is not available.** `IssueTrackerAdapter` has
+  no candidate-credential parameter and `LinearAdapter.authenticate()` reads the
+  global resolver, so "verify before write" cannot be done without an interface
+  change this design does not need. **Write-verify-restore is what ships**, and
+  this spec says so plainly rather than claiming a guarantee it does not
+  deliver. The window is one HTTP round trip, and the restore is exact.
 
-**One** step leaves the surface: `e` on the workflow page, into the workflow
-screen. It earns the exception — that screen is a real authoring surface, and
-rebuilding stage editing inside onboarding would be a second copy of it.
+## 15. The token must be masked
 
-Three things make it not an abandonment:
+`InputModal` renders the entered value directly and has no secret mode. Onboarding
+would put a Linear API token in cleartext on a terminal that may be shared,
+screen-recorded or scrolled back.
 
-- It is **`e`, not `→`**. The default path (`↵ use these`) never leaves.
-- The page **says where you are going and that you will come back**, before you
-  go.
-- The return uses `surfaceReturn` (`main.ts:7618`), the mechanism `c08da9f`
-  added for exactly this. No new machinery.
+**`InputModal` gains a `secret` option**: rendering substitutes `•` per
+character, the value itself is unchanged, and `getCursorPosition()` still tracks
+the real column. Tested for masking and for cursor position under multi-byte
+input.
 
-Everything else runs in place by hosting a modal over the surface — the
-capability §3 exists to buy. `InputModal` for a directory path and the tracker
-token; `ListModal` for team→project routing. The render path is
-ghost-preview's: `computeModalOverlay(fullScreenLayout)` composited, never
-`null`, or the picker opens invisibly.
+## 16. What the review changed
 
-## 11. Nothing persisted invalid
+Recorded because the first draft argued the opposite in each case.
 
-- **Project dirs** are added only after `existsSync` confirms the path.
-- **`config.setup.intent`** is a closed union, validated on read like every
-  other config field.
-- **The tracker token.** Today's flow writes the credential, calls
-  `swapAdapters()`, and rolls back on failure (`main.ts:6318`) — leaving a
-  window in which an unverified token is on disk. Verify against an in-memory
-  probe adapter and write only on success **if the adapter interface permits
-  constructing one unregistered**. If it does not, keep write-verify-rollback
-  and say so, rather than claim a guarantee that was not delivered. Settled
-  against the code during planning.
+| First draft | Now | Why |
+| --- | --- | --- |
+| Fifth full-area surface, justified as structurally necessary | Composite modal | The necessity claim was false: `NewSessionModal` already hosts child collectors in one slot |
+| `fullAreaSurfaceOpen()` extraction | Dropped | The membership sets genuinely differ; it was never one concept |
+| Provision a real first session | Hand off to `NewSessionModal` | Generic creation launches no agent; failed provisioning leaves debris by design |
+| Page 1 writes `projectDirs` | Page 1 adopts Projects | Team attachment operates on `ProjectConfig`, which a scan root cannot supply |
+| `config.setup.intent` persisted | Derived per visit | Contradicts "derived, never stored"; config is cast, not validated |
+| `e` to the workflow screen | Seed, and point at `Ctrl-a W` | `openWorkflowScreen()` hard-codes settings as the origin; the return path would not exist |
+| Four workflow stages incl. Blocked | Three | `SUGGESTED_TABS` has no Blocked stage |
+| `SkillReport`, a new union | `InstallReport` reused | The new union silently dropped `"migrated"` |
+| Staggered `✓` animation | Rendered immediately | Timers and a test clock for a moment of delight |
 
-## 12. Hazards
+## 17. Hazards
 
-- **Temporal dead zone.** `openOnboarding()` occupies the exact call site
-  `openSetup()` has today (`main.ts:11981`) — inside the async boot block, not
-  module scope — so it adds no new exposure. The one that does: the toolbar
-  dot's `setupStepsOutstanding()` runs per frame from `makeToolbar`, and its
-  snapshot-backed replacement must be declared above its first call.
-  `boot-smoke.test.ts` is the net.
-- **Glyph width.** The `workflow-drift` lesson is on record: `!` beat `⚠`
-  because `⚠`'s width varies between terminals, and drift against `cellWidth`
-  leaves ghost gaps. **Every glyph in the onboarder must be width-1 under
-  `cellWidth`, asserted by a test enumerating them.** `✓ ▸ ━ ─ ·` and the
-  braille spinner have in-tree precedent; anything without precedent does not
-  ship.
+- **Temporal dead zone.** `openOnboarding()` occupies the site `openSetup()` has
+  today (`main.ts:12035`), inside the async boot block — no new exposure. The
+  one that does: the status model backing `setupStepsOutstanding()`
+  (`main.ts:1140`) runs per frame from `makeToolbar` and must be declared above
+  its first call. `boot-smoke.test.ts` is the net.
+- **Glyph width.** `!` beat `⚠` in `workflow-drift` because `⚠`'s width varies
+  between terminals and drift against `cellWidth` leaves ghost gaps. **Every
+  glyph here must be width-1 under `cellWidth`, asserted by a test enumerating
+  them.** `✓ ▸ ━ ─ · •` need that check; anything failing it does not ship.
 - **Wide characters generally.** Anything written to a `CellGrid` handles
-  width-2 cells with a width-0 continuation, per `CLAUDE.md`.
+  width-2 cells with a width-0 continuation.
+- **Citations.** Every `file:line` in this document was re-verified against
+  `t3code/rebuild-onboarding` at revision `3fb2339`+. The first draft's were
+  taken on a branch one commit behind and were uniformly ~55 lines stale.
 
-## 13. Verification
+## 18. Verification
 
 | Layer | Covers |
 | --- | --- |
-| `flow.test.ts` | Sequence per intent; back/next bounds; `→` on an incomplete page; skips recorded; changing intent re-derives |
-| `pages.test.ts` | Status and prose per fabricated snapshot; the no-agents and no-tracker unavailable states |
+| `flow.test.ts` | Page set per intent; back/next bounds; `→` on an incomplete page; skips recorded; busy-state input lock; duplicate `↵` ignored; **ported `setup-modal.test.ts` coverage** |
+| `pages.test.ts` | Status and prose per fabricated snapshot; no-agents and no-tracker unavailable states |
 | `render.test.ts` | Column bookkeeping; bottom-pinned action bar; measure cap; **glyph widths** |
+| `input-modal.test.ts` | `secret` masking; cursor position under multi-byte input |
 | `skill.test.ts` | `installSkills()` writes nothing to stdout |
-| `onboarding-integration.test.ts` | Boot under a pty with a scratch `HOME`; drive the flow; **assert no subprocess text on the frame** |
+| `credentials` | Failed verification **restores** the previous token; type and token persist together |
+| `modal.test.ts` | `onResize` present → modal survives SIGWINCH; absent → closes as before |
+| `onboarding-integration.test.ts` | Boot under a pty with a scratch `HOME`; drive the flow; resize mid-token; **assert no subprocess text on the frame** |
 | `bun run docker` | The genuinely clean machine, including the dependency gate |
 | Screenshots | Every page from a real client — per `CLAUDE.md`, or it didn't happen |
 
 Escape sequences in the pty harness are written as a **single** write;
 byte-by-byte makes a lone `\x1b` read as Escape.
 
-## 14. Known limits, stated
+## 19. Known limits, stated
 
-- **Existing users never see the wizard naturally.** It opens on
-  `configStore.ensureExists()`, i.e. an absent `config.json`. That is deliberate
-  (§2), but it means the flow's first real audience is reached only through the
-  palette and the toolbar dot.
-- **The map is the only re-entry.** There is no deep link to a single page from
-  outside the surface.
-- **One tracker workspace**, inherited from the credentials file's shape
-  (`2026-08-11` §13).
+- **Existing users never see the flow naturally.** It opens on
+  `configStore.ensureExists()` — an absent `config.json`. Deliberate (§2), but
+  it means the real audience is reached only through the palette and toolbar dot.
+- **Write-verify-restore, not verify-then-write** (§14). Named rather than
+  papered over.
+- **The map is the only re-entry.** No deep link to a single page from outside.
+- **One tracker workspace**, inherited from the credentials file's shape.
