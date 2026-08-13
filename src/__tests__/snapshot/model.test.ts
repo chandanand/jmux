@@ -192,3 +192,35 @@ describe("SnapshotModel.toFile", () => {
     expect(file2.sessions[0].links).toHaveLength(1);
   });
 });
+
+describe("SnapshotModel projectId", () => {
+  // tmux options die with the server, so the snapshot is the durable copy of
+  // the session → Project link. Without it a durable-session restore silently
+  // loses every session's Project and falls back to ambiguous path containment.
+  test("a new session starts with no project", () => {
+    const m = new SnapshotModel("test");
+    m.upsertSession(SnapshotModel.makeEmptySession("s1", "/code/api"));
+    expect(m.getSession("s1")?.projectId).toBeNull();
+  });
+
+  test("setProjectId stores and survives a round trip through the file shape", () => {
+    const m = new SnapshotModel("test");
+    m.upsertSession(SnapshotModel.makeEmptySession("s1", "/code/api"));
+    m.setProjectId("s1", "payments");
+    const file = JSON.parse(JSON.stringify(m.toFile("2026-08-12T00:00:00Z")));
+    expect(file.sessions[0].projectId).toBe("payments");
+  });
+
+  test("setProjectId on an unknown session is a no-op rather than a throw", () => {
+    const m = new SnapshotModel("test");
+    expect(() => m.setProjectId("nope", "x")).not.toThrow();
+  });
+
+  test("clearing the stamp is representable", () => {
+    const m = new SnapshotModel("test");
+    m.upsertSession(SnapshotModel.makeEmptySession("s1", "/code/api"));
+    m.setProjectId("s1", "payments");
+    m.setProjectId("s1", null);
+    expect(m.getSession("s1")?.projectId).toBeNull();
+  });
+});

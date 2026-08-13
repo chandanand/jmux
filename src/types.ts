@@ -75,7 +75,13 @@ export interface SessionInfo {
   gitBranch?: string;
   windowCount: number;
   directory?: string;
-  project?: string; // wtm project name (bare repo basename)
+  /**
+   * The wtm bare-repo basename. Renamed from `project`, which now means the
+   * jmux Project: this one feeds session-title generation as the *repository*
+   * name, so overloading it would make the model's prompt lie about which repo
+   * the work is in.
+   */
+  repoName?: string;
   /**
    * The `@jmux-linear-issue` session option — the issue links `jmux ctl` writes.
    *
@@ -100,6 +106,20 @@ export interface SessionInfo {
    * is what stops jmux generating another over the top of their name.
    */
   titleSignature?: string;
+  /**
+   * The Project this session belongs to (`@jmux-project`).
+   *
+   * An explicit stamp, not a path lookup: two Projects may share a directory,
+   * so containment is ambiguous, and `jmux ctl` needs the answer with no IPC to
+   * the TUI. Absent means the session was not created by a Project-aware path —
+   * which resolves to `orphaned` rather than being guessed at.
+   */
+  projectId?: string;
+  /**
+   * The Project's title, for display. Grouping keys on `projectId`, never this —
+   * two Projects may share a title and must not merge into one band.
+   */
+  projectName?: string;
 }
 
 export type ErrorState = {
@@ -185,8 +205,8 @@ export interface AgentStateRecord {
  *
  * Unlike `@jmux-agent-state`, nothing ever writes this at session scope, so it
  * has no inheritance source — a non-empty value is proof *this* pane hosts an
- * agent. That distinction is load-bearing for pane detection; see
- * `glass/auto-detect.ts`.
+ * agent. That distinction is load-bearing for the representative-pane
+ * election; see `glass/representative.ts`.
  */
 export type AgentKind = "claude" | "codex" | "pi";
 

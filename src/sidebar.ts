@@ -13,14 +13,13 @@ import { theme } from "./theme";
 import { tokens, frame } from "./chrome-tokens";
 import { stateAttrs, type StateColor } from "./state-colors";
 import {
-  matchesFilter,
+  // `matchesFilter` and `sortIndices` moved to session-order.ts with the
+  // membership half of buildRenderPlan; `filterShowsGhosts` stays here because
+  // ghost placement is emission, which did not move.
   filterShowsGhosts,
-  sortIndices,
   cycleGroup,
   cycleSort,
   cycleFilter,
-  statusRank,
-  statusGroupLabel,
   groupModeShort,
   sortModeShort,
   filterModeShort,
@@ -30,22 +29,32 @@ import {
   type SessionStatus,
   type SessionSortInfo,
 } from "./sidebar-sort";
+import { orderSessions, compareGroupBands, type SessionBand } from "./session-order";
 import type { SessionWorkflow } from "./workflow-drift";
 import type { GhostEntry } from "./ghosts";
 import type { NavTarget } from "./nav-order";
 
-export interface PinnedPaneEntry {
-  paneId: string;
-  label: string;
-  homeSessionName: string;
-  /** Agent state of this pane's session, for the Command Center breakdown. */
-  agentState?: AgentState | null;
+/**
+ * What the Overview row says about the Command Center: how many sessions the
+ * grid holds, and their agent states.
+ *
+ * Counted by the reconciler, not here. Membership is derived from the grid's
+ * own axes plus its two exceptions, so a grid can be full while not one pane
+ * carries `@jmux-pinned` — the pinned-pane list this replaced could only ever
+ * report the hand-placed half of that, and reported it as the whole.
+ */
+export interface GridSummary {
+  count: number;
+  tally: Record<AgentState, number>;
+}
+
+function emptyGridSummary(): GridSummary {
+  return { count: 0, tally: { running: 0, waiting: 0, complete: 0 } };
 }
 
 export type SidebarSelection =
   | { type: "overview" }
   | { type: "session"; id: string }
-  | { type: "pinnedPane"; paneId: string }
   /** An unstarted issue in the Up next band. Carries only the id: the caller
    * owns the issue data, and the sidebar deliberately knows nothing about
    * trackers (same boundary as `setSessionWorkflow`). */
@@ -395,20 +404,6 @@ function cacheTimerAttrs(
 
 // --- Grouping logic ---
 
-function getGroupLabel(dir: string): string | null {
-  const segments = dir.split("/").filter((s) => s.length > 0);
-  // For ~/X/Y/... paths, group by X/Y (fixed depth)
-  // ~/X/Y/Z → "X/Y"
-  // ~/X/Y   → "X/Y"
-  if (segments[0] === "~") {
-    if (segments.length < 3) return null; // ~ or ~/Code — too shallow
-    return segments[1] + "/" + segments[2];
-  }
-  // Absolute paths: /X/Y/... → group by X/Y
-  if (segments.length < 2) return null;
-  return segments[0] + "/" + segments[1];
-}
-
 function getSubdirectory(dir: string, groupLabel: string): string | null {
   // dir: "~/X/Y/Z", groupLabel: "X/Y" → "Z"
   // dir: "~/X/Y/Z/sub", groupLabel: "X/Y" → "Z/sub"
@@ -436,7 +431,15 @@ type RenderItem =
   // *placed* rather than re-derived at paint time: a session under group=stage
   // can still land in Pinned or Parked, whose headers name neither, and a rule
   // evaluated twice is a rule that can disagree with itself.
-  | { type: "session"; sessionIndex: number; grouped: boolean; groupLabel?: string; pinnedCount?: number; stageInHeader?: boolean }
+  // `projectInHeader` is the same rule for the Project name: Pinned and Parked
+  // are extracted *before* project grouping, so their headers name no project
+  // and their rows must say which one they belong to. Stamped at placement for
+  // the same reason as `stageInHeader` — a rule evaluated twice can disagree
+  // with itself.
+  | {
+      type: "session"; sessionIndex: number; grouped: boolean; groupLabel?: string;
+      stageInHeader?: boolean; projectInHeader?: boolean;
+    }
   // One issue of an expanded session, drawn directly below that session's own
   // rows. A sub-row, not a peer: it is absent from `displayOrder` and from
   // `navOrder`, because both mean "somewhere to go" and this row's session is
@@ -449,51 +452,42 @@ type RenderItem =
   // row it becomes on activation is the row it was already standing in for.
   | { type: "ghost"; ghostIndex: number }
   | { type: "spacer" }
-  | { type: "overview"; paneCount: number };
+  | { type: "overview"; memberCount: number };
 
-const PINNED_GROUP_KEY = "pinned";
-const PINNED_GROUP_LABEL = "Pinned";
-
-// The mirror of Pinned: pins float to the top, parked sinks to the bottom.
-// Collapsed by default — the whole point is to shrink handed-off work to one
-// row without killing the session behind it.
-const PARKED_GROUP_KEY = "parked";
-const PARKED_GROUP_LABEL = "Parked";
+// Pinned and Parked's keys/labels come from `orderSessions` (session-order.ts)
+// now — the bands it returns already carry them, so buildRenderPlan reads
+// `band.key`/`band.label` off the result rather than repeating the strings.
+//
+// Parked is the mirror of Pinned: pins float to the top, parked sinks to the
+// bottom. Collapsed by default — the whole point is to shrink handed-off work
+// to one row without killing the session behind it. Its collapse polarity is
+// inverted at the emitGroup call site below.
 
 // The other mirror of Parked: parked work has been handed off, up-next work has
 // not been picked up. They bracket the live sessions at the bottom of the list.
 // Expanded by default — unlike Parked, this band exists to *show* rows, and
 // defaulting it collapsed would make enabling the setting look like a no-op.
+// Ghosts never flow through `orderSessions` — it takes sessions only — so this
+// band stays an emission-only concern of buildRenderPlan.
 const GHOST_GROUP_KEY = "upnext";
 const GHOST_GROUP_LABEL = "Up next";
 
-// The project bucket a session belongs to: its wtm project name (preferred) or
-// a directory-derived label, else null (ungrouped).
-function projectLabelOf(session: SessionInfo): string | null {
-  if (session.project) return session.project;
-  const dir = session.directory;
-  return dir ? getGroupLabel(dir) : null;
-}
-
-// A group awaiting emission. `rank` orders status groups (needs-you first) and
-// stage groups (the user's own priority order); project groups ignore it and
-// order alphabetically by label.
-interface GroupBucket {
-  key: string;
-  label: string;
-  rank: number;
-  indices: number[];
+// A group band mid-emission, augmented with the ghost rows `orderSessions`
+// never sees. Built from the `SessionBand`s `orderSessions` returns, plus any
+// ghost-only stage bands it couldn't have produced (a stage holding no
+// session still gets a header when ghosts are its only occupants).
+type EmissionBand = SessionBand & {
   /** Ghost rows in this group, emitted below its sessions. Only ever populated
    * on the stage axis — that is the only grouping an issue without a session
    * can be placed on. */
   ghostIndices: number[];
-}
+};
 
 function buildRenderPlan(
   sessions: SessionInfo[],
   collapsedGroups: Set<string>,
   pinnedNames: Set<string>,
-  pinnedPanes: PinnedPaneEntry[],
+  gridSummary: GridSummary,
   sortInfos: SessionSortInfo[],
   groupMode: GroupMode,
   sortMode: SortMode,
@@ -508,98 +502,53 @@ function buildRenderPlan(
   displayOrder: number[];
   navOrder: NavTarget[];
 } {
-  const pinnedIndices: number[] = [];
-  const parkedIndices: number[] = [];
-  const bucketMap = new Map<string, GroupBucket>();
-  const ungrouped: number[] = [];
+  // Which sessions, and in what order — the shared primitive also the Command
+  // Center grid derives its membership from. Collapse, ghosts, issue rows and
+  // expansion are emission concerns and are layered on below.
+  const bands = orderSessions({
+    sessions,
+    sortInfos,
+    groupMode,
+    sortMode,
+    filterMode,
+    pinnedSessions: pinnedNames,
+    parkedSessions: parkedNames,
+    workflowByName,
+    includeParked: true,
+  });
 
-  // Build a map of homeSessionName → count for pinned panes
-  const pinnedPaneCountBySession = new Map<string, number>();
-  for (const pane of pinnedPanes) {
-    pinnedPaneCountBySession.set(
-      pane.homeSessionName,
-      (pinnedPaneCountBySession.get(pane.homeSessionName) ?? 0) + 1,
-    );
-  }
-
-  const bucketFor = (key: string, label: string, rank: number): GroupBucket => {
-    let existing = bucketMap.get(key);
-    if (!existing) {
-      existing = { key, label, rank, indices: [], ghostIndices: [] };
-      bucketMap.set(key, existing);
-    }
-    return existing;
-  };
-
-  const bucket = (key: string, label: string, rank: number, i: number): void => {
-    bucketFor(key, label, rank).indices.push(i);
-  };
-
-  for (let i = 0; i < sessions.length; i++) {
-    // Filter first — a filtered-out session never buckets, so empty groups and
-    // the Pinned group simply don't emit.
-    if (!matchesFilter(sortInfos[i]!.status, filterMode)) continue;
-
-    // Pins always float into the Pinned group, in every mode — pinning is an
-    // explicit "keep this up top" signal. Members are ordered by sortMode below,
-    // so under sort=status a waiting pin still rises within the group.
-    if (pinnedNames.has(sessions[i].name)) {
-      pinnedIndices.push(i);
-      continue;
-    }
-
-    // Checked after pinning so an explicit "keep this up top" always wins over
-    // a derived "this is handed off" — the two signals can legitimately both
-    // be true, and the user's explicit one should be the visible one.
-    if (parkedNames.has(sessions[i].name)) {
-      parkedIndices.push(i);
-      continue;
-    }
-
-    if (groupMode === "none") {
-      ungrouped.push(i);
-      continue;
-    }
-    if (groupMode === "project") {
-      const label = projectLabelOf(sessions[i]);
-      if (!label) {
-        ungrouped.push(i);
-        continue;
-      }
-      bucket(`project:${label}`, label, 0, i);
-      continue;
-    }
-    if (groupMode === "stage") {
-      // A session has a stage only when it has a linked issue whose status one
-      // of the user's stages claims. Everything else — no issue, or a status
-      // mapped to no stage — falls to the flat remainder, exactly as a
-      // project-less session does under group=project. Making those a "No
-      // stage" group would give the sessions you have *not* classified a
-      // header of their own, above ones you have. A stage hidden from the
-      // sidebar arrives with a null band for the same reason — hiding a stage
-      // hides its header, never its sessions.
-      const stage = workflowByName.get(sessions[i].name)?.band;
-      if (!stage) {
-        ungrouped.push(i);
-        continue;
-      }
-      bucket(`stage:${stage.id}`, stage.label, stage.rank, i);
-      continue;
-    }
-    // groupMode === "status" — every session has a status, so none are ungrouped.
-    const st = sortInfos[i]!.status;
-    bucket(`status:${st}`, statusGroupLabel(st), statusRank(st), i);
-  }
+  const pinnedBand = bands.find((b) => b.kind === "pinned");
+  const ungroupedBand = bands.find((b) => b.kind === "ungrouped");
+  const parkedBand = bands.find((b) => b.kind === "parked");
 
   // Ghosts on the stage axis join their own stage's band, below its sessions.
   // A stage holding only ghosts still gets a band — that is the whole point of
   // the placement, and it is why a ghost carries its stage's label and rank:
   // with no session in that stage, there is nothing else to name the header.
+  // `orderSessions` never sees a ghost, so a stage with no sessions never comes
+  // back from it — the band is built here instead, and merged with whatever
+  // session-bearing bands `orderSessions` did return.
   //
   // Only under groupMode "stage". An issue with no session has no project, no
   // agent status and no activity, so there is no honest bucket for it on any
   // other axis; those modes get the flat band emitted further down instead.
   //
+  // Whether ghosts appear at all is a two-axis question — see
+  // `filterShowsGhosts`, which owns the rule so it can be tested without a grid.
+  const groupMap = new Map<string, EmissionBand>();
+  for (const b of bands) {
+    if (b.kind !== "group") continue;
+    groupMap.set(b.key, { ...b, ghostIndices: [] });
+  }
+  const bucketFor = (key: string, label: string, rank: number): EmissionBand => {
+    let existing = groupMap.get(key);
+    if (!existing) {
+      existing = { kind: "group", key, label, rank, headerless: false, indices: [], ghostIndices: [] };
+      groupMap.set(key, existing);
+    }
+    return existing;
+  };
+
   // Whether ghosts appear at all is a two-axis question — see
   // `filterShowsGhosts`, which owns the rule so it can be tested without a grid.
   const flatGhosts: number[] = [];
@@ -609,29 +558,32 @@ function buildRenderPlan(
       if (groupMode === "stage" && ghost.stageId !== undefined) {
         bucketFor(`stage:${ghost.stageId}`, ghost.stageLabel ?? ghost.stageId, ghost.rank ?? 0)
           .ghostIndices.push(g);
+      } else if (groupMode === "project" && ghost.project !== undefined) {
+        // Keyed on the Project *id*, matching the key sessions band under, so a
+        // ghost lands in the band its session will join after Start rather than
+        // a second one beside it. Two Projects may share a title.
+        //
+        // Work that cannot be routed collects in one band rather than
+        // disappearing: an issue nobody can place is exactly what the user
+        // needs to see, and hiding it is how a misconfigured team map reads as
+        // "there is nothing to do".
+        if (ghost.project.kind === "resolved") {
+          bucketFor(`project:id:${ghost.project.id}`, ghost.project.title, 0).ghostIndices.push(g);
+        } else {
+          bucketFor("project:Unassigned", "Unassigned", Number.MAX_SAFE_INTEGER)
+            .ghostIndices.push(g);
+        }
       } else if (groupMode !== "stage") {
         flatGhosts.push(g);
       }
     }
   }
 
-  const info = (i: number) => sortInfos[i]!;
-
-  // Member order within every bucket + Pinned + the flat list obeys sortMode.
-  const sortedPinned = sortIndices(pinnedIndices, info, sortMode);
-  const sortedParked = sortIndices(parkedIndices, info, sortMode);
-  const sortedUngrouped = sortIndices(ungrouped, info, sortMode);
-
-  // Group-header order is fixed by axis, NOT by sortMode: project → alphabetical,
-  // status → status rank (needs-you group on top), stage → the order the user
-  // arranged their own workflow in.
-  const buckets = [...bucketMap.values()];
-  buckets.sort(
-    groupMode === "status" || groupMode === "stage"
-      ? (a, b) => a.rank - b.rank
-      : (a, b) => a.label.localeCompare(b.label),
-  );
-  for (const b of buckets) b.indices = sortIndices(b.indices, info, sortMode);
+  // Re-sort with the exact comparator `orderSessions` used internally, so a
+  // ghost-only band appended just now and a session-bearing one `orderSessions`
+  // already ordered can never disagree about where they land.
+  const buckets = [...groupMap.values()];
+  buckets.sort((a, b) => compareGroupBands(a, b, groupMode));
 
   const items: RenderItem[] = [];
   const displayOrder: number[] = [];
@@ -664,7 +616,7 @@ function buildRenderPlan(
   };
 
   // Command Center block first — always present (header + counts only).
-  items.push({ type: "overview", paneCount: pinnedPanes.length });
+  items.push({ type: "overview", memberCount: gridSummary.count });
   items.push({ type: "spacer" });
 
   const emitGroup = (
@@ -674,6 +626,7 @@ function buildRenderPlan(
     collapsedByDefault = false,
     ghostIndices: readonly number[] = [],
     stageInHeader = false,
+    projectInHeader = false,
   ): void => {
     // Parked inverts the collapse default: the band exists to hide rows, so an
     // absent entry in `collapsedGroups` means collapsed, and toggling records
@@ -699,8 +652,8 @@ function buildRenderPlan(
         sessionIndex: idx,
         grouped: true,
         groupLabel: label,
-        pinnedCount: pinnedPaneCountBySession.get(sessions[idx].name),
         stageInHeader,
+        projectInHeader,
       });
     }
     // Ghosts last within the band: work someone is on outranks work nobody is.
@@ -711,25 +664,24 @@ function buildRenderPlan(
     }
   };
 
-  // Pinned group, always the top group when any pins exist.
-  if (sortedPinned.length > 0) {
-    emitGroup(PINNED_GROUP_KEY, PINNED_GROUP_LABEL, sortedPinned);
+  // Pinned band, always the top band when any pins exist.
+  if (pinnedBand) {
+    emitGroup(pinnedBand.key, pinnedBand.label, pinnedBand.indices);
   }
 
   // Grouped buckets (none in group=none). On the stage axis — and only there —
   // every bucket is a stage, so its header already carries what row 2 would
   // otherwise say.
   for (const b of buckets) {
-    emitGroup(b.key, b.label, b.indices, false, b.ghostIndices, groupMode === "stage");
+    emitGroup(b.key, b.label, b.indices, false, b.ghostIndices, groupMode === "stage", groupMode === "project");
   }
 
   // Flat list: group=none, or the project-less remainder in group=project.
-  for (const idx of sortedUngrouped) {
+  for (const idx of ungroupedBand?.indices ?? []) {
     emitSession(idx, {
       type: "session",
       sessionIndex: idx,
       grouped: false,
-      pinnedCount: pinnedPaneCountBySession.get(sessions[idx].name),
     });
   }
 
@@ -766,8 +718,8 @@ function buildRenderPlan(
   }
 
   // Parked band last, below everything — the back burner, not a headline.
-  if (sortedParked.length > 0) {
-    emitGroup(PARKED_GROUP_KEY, PARKED_GROUP_LABEL, sortedParked, true);
+  if (parkedBand) {
+    emitGroup(parkedBand.key, parkedBand.label, parkedBand.indices, true);
   }
 
   return { items, displayOrder, navOrder };
@@ -799,8 +751,9 @@ function itemHeight(
   // Identifier row + title row. Fixed at 2: a ghost has no agent to promote,
   // so it never grows the third row a live session can.
   if (item.type === "ghost") return 2;
-  // Command Center: header row + an agent-state breakdown row when panes exist.
-  if (item.type === "overview") return item.paneCount > 0 ? 2 : 1;
+  // Command Center: header row + an agent-state breakdown row when the grid
+  // holds anything.
+  if (item.type === "overview") return item.memberCount > 0 ? 2 : 1;
   return 1; // group-header or spacer
 }
 
@@ -839,8 +792,10 @@ export class Sidebar {
   private pinnedSessions = new Set<string>();
   private parkedSessions = new Set<string>();
   private sessionWorkflow = new Map<string, SessionWorkflow>();
+  /** Session name → Project title, for the bands that do not name one. */
+  private sessionProjects = new Map<string, string>();
   private ghosts: GhostEntry[] = [];
-  private pinnedPanes: PinnedPaneEntry[] = [];
+  private gridSummary: GridSummary = emptyGridSummary();
   private rowToSelection = new Map<number, SidebarSelection>();
   /** Per row, the badge's clickable columns and the session it discloses. */
   private rowToDisclosure = new Map<
@@ -964,6 +919,20 @@ export class Sidebar {
    * depends on the tracker, the stage config and the live session list, none of
    * which the sidebar knows about.
    */
+  /**
+   * Session name → Project title, resolved by the caller.
+   *
+   * Same boundary as `setSessionWorkflow`: the sidebar knows nothing about
+   * config or the `@jmux-project` stamp. Used only where the band header does
+   * *not* already name the Project — Pinned and Parked are extracted before
+   * project grouping, so their rows would otherwise be the only ones on screen
+   * that cannot say which Project they belong to.
+   */
+  setSessionProjects(titles: Map<string, string>): void {
+    this.sessionProjects = new Map(titles);
+    this.rebuildPlan();
+  }
+
   setGhostSessions(ghosts: readonly GhostEntry[]): void {
     this.ghosts = [...ghosts];
     this.rebuildPlan();
@@ -980,9 +949,37 @@ export class Sidebar {
     return { name: s.name, status: this.statusOf(s), lastActivity: this.lastActivityOf(s) };
   }
 
-  setPinnedPanes(panes: PinnedPaneEntry[]): void {
-    this.pinnedPanes = panes;
+  /**
+   * What the Command Center currently holds. Arrives pre-computed from the
+   * reconciler, the same boundary shape as `setSessionWorkflow`: which sessions
+   * the grid shows depends on its own axes, the two tmux-option exceptions and
+   * the live pane inventory, none of which the sidebar knows about.
+   */
+  setGridSummary(summary: GridSummary): void {
+    this.gridSummary = summary;
     this.rebuildPlan();
+  }
+
+  /**
+   * Everything `orderSessions` takes except the axes — read back off the
+   * sidebar so the Command Center derives its membership from exactly the
+   * inputs the sidebar is rendering from, rather than a second copy that can
+   * disagree. `sortInfos` is index-aligned with `sessions` by construction.
+   */
+  getOrderInputs(): {
+    sessions: SessionInfo[];
+    sortInfos: SessionSortInfo[];
+    pinnedSessions: Set<string>;
+    parkedSessions: Set<string>;
+    workflowByName: Map<string, SessionWorkflow>;
+  } {
+    return {
+      sessions: this.sessions,
+      sortInfos: this.buildSortInfos(),
+      pinnedSessions: this.pinnedSessions,
+      parkedSessions: this.parkedSessions,
+      workflowByName: this.sessionWorkflow,
+    };
   }
 
   private groupMode: GroupMode = "project";
@@ -1077,7 +1074,7 @@ export class Sidebar {
       this.sessions,
       this.collapsedGroups,
       this.pinnedSessions,
-      this.pinnedPanes,
+      this.gridSummary,
       this.buildSortInfos(),
       this.groupMode,
       this.sortMode,
@@ -1503,8 +1500,8 @@ export class Sidebar {
 
         // Header row: "\u2318 Command Center \u00b7 N" (bold).
         const headerAttrs: CellAttrs = { ...GROUP_HEADER_ATTRS, bold: true, ...bgPatch };
-        const headerText = item.paneCount > 0
-          ? `\u2318 Command Center \u00b7 ${item.paneCount}`
+        const headerText = item.memberCount > 0
+          ? `\u2318 Command Center \u00b7 ${item.memberCount}`
           : "\u2318 Command Center";
         const maxHeaderLen = this.width - 2;
         const headerDisplay = headerText.length > maxHeaderLen
@@ -1514,14 +1511,9 @@ export class Sidebar {
         this.rowToSelection.set(screenRow, { type: "overview" });
 
         // Breakdown row: colored "n RUN  n WAIT  n DONE" for non-zero states.
-        if (item.paneCount > 0) {
+        if (item.memberCount > 0) {
           const breakdownRow = screenRow + 1;
-          const tally = { running: 0, waiting: 0, complete: 0 };
-          for (const p of this.pinnedPanes) {
-            if (p.agentState === "running") tally.running++;
-            else if (p.agentState === "waiting") tally.waiting++;
-            else if (p.agentState === "complete") tally.complete++;
-          }
+          const tally = this.gridSummary.tally;
           const segs: { text: string; attrs: CellAttrs }[] = [];
           if (tally.running > 0) segs.push({ text: `${tally.running} RUN`, attrs: this.stateAttrs.running });
           if (tally.waiting > 0) segs.push({ text: `${tally.waiting} WAIT`, attrs: this.stateAttrs.waiting });
@@ -2057,16 +2049,6 @@ export class Sidebar {
       }
     }
 
-    // Pinned pane count (right side, before the badge/workflow cluster)
-    if (item.pinnedCount && item.pinnedCount > 0) {
-      const pinnedStr = `(${item.pinnedCount} pinned)`;
-      const pinnedCol = rightEdge - pinnedStr.length + 1;
-      if (pinnedCol > leftCol) {
-        writeString(grid, detailRow, pinnedCol, pinnedStr, { ...DIM_ATTRS, ...bgAttrs });
-        rightEdge = pinnedCol - 2;
-      }
-    }
-
     // Workflow field, after the badge and the right cluster have both staked
     // their columns.
     //
@@ -2125,6 +2107,21 @@ export class Sidebar {
           : isActive || isHovered
             ? detailAttrs
             : { ...WORKFLOW_ATTRS, ...bgAttrs });
+        leftCol = fieldCol + textCols(field.text);
+      }
+    }
+
+    // The Project name, claimed last of everything on row 2 and therefore the
+    // first thing to go as the sidebar narrows — the same degradation order the
+    // workflow field follows, and for the same reason: the identity fields to
+    // its left matter more. Suppressed under group=project, where the band
+    // header already says it.
+    if (!item.projectInHeader && session.projectName) {
+      const sep = leftCol !== detailStart ? " · " : "";
+      const text = `${sep}${session.projectName}`;
+      if (textCols(text) <= rightEdge - leftCol + 1) {
+        writeString(grid, detailRow, leftCol, text,
+          isActive || isHovered ? detailAttrs : { ...WORKFLOW_ATTRS, ...bgAttrs });
       }
     }
 

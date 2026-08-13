@@ -85,6 +85,11 @@ export class SnapshotModel {
     if (s) s.agentState = agentState;
   }
 
+  setProjectId(sessionName: string, projectId: string | null): void {
+    const s = this.sessions.get(sessionName);
+    if (s) s.projectId = projectId;
+  }
+
   setPermissionMode(
     sessionName: string,
     mode: SnapshotPermissionMode,
@@ -167,6 +172,7 @@ export class SnapshotModel {
       links: [],
       windows: [],
       agentState: null,
+      projectId: null,
     };
   }
 }

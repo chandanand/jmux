@@ -9,7 +9,11 @@ import {
 
 function makeProviders(overrides?: Partial<NewSessionProviders>): NewSessionProviders {
   return {
-    scanProjectDirs: () => ["/home/user/project-a", "/home/user/project-b", "/home/user/bare-repo"],
+    scanProjectDirs: () => [
+      { dir: "/home/user/project-a" },
+      { dir: "/home/user/project-b" },
+      { dir: "/home/user/bare-repo" },
+    ],
     isBareRepo: (dir) => dir === "/home/user/bare-repo",
     getWorktrees: () => [
       { name: "main", path: "/home/user/bare-repo/main" },
@@ -266,7 +270,7 @@ describe("NewSessionModal", () => {
   test("updateProjectDirs refreshes the directory picker list when on dir step", () => {
     // Start with 1 initial dir
     const providers = makeProviders({
-      scanProjectDirs: () => ["/tmp/only-one"],
+      scanProjectDirs: () => [{ dir: "/tmp/only-one" }],
     });
     const modal = new NewSessionModal(providers);
     modal.open();
@@ -277,9 +281,9 @@ describe("NewSessionModal", () => {
 
     // Simulate scan completion: update dirs with 3 entries
     modal.updateProjectDirs([
-      "/tmp/alpha",
-      "/tmp/beta",
-      "/tmp/gamma",
+      { dir: "/tmp/alpha" },
+      { dir: "/tmp/beta" },
+      { dir: "/tmp/gamma" },
     ]);
 
     grid = modal.getGrid(60);
@@ -297,7 +301,7 @@ describe("NewSessionModal", () => {
 
     // Now on name input — updateProjectDirs should not affect this
     expect(() => {
-      modal.updateProjectDirs(["/different/dirs"]);
+      modal.updateProjectDirs([{ dir: "/different/dirs" }]);
     }).not.toThrow();
 
     // Still on name input step — verify by checking the grid has the prompt
@@ -308,7 +312,7 @@ describe("NewSessionModal", () => {
   test("updateProjectDirs before modal is opened does not crash", () => {
     const modal = new NewSessionModal(makeProviders());
     expect(() => {
-      modal.updateProjectDirs(["/a", "/b"]);
+      modal.updateProjectDirs([{ dir: "/a" }, { dir: "/b" }]);
     }).not.toThrow();
   });
 
@@ -327,7 +331,7 @@ describe("NewSessionModal", () => {
     // a misleading "can't find pane: X" error. The modal must mirror tmux's
     // sanitization so the user sees (and submits) a name tmux will accept.
     const modal = new NewSessionModal(
-      makeProviders({ scanProjectDirs: () => ["/home/user/mist.fm"] }),
+      makeProviders({ scanProjectDirs: () => [{ dir: "/home/user/mist.fm" }] }),
     );
     modal.open();
     // Select the only directory — advances to the name input.

@@ -66,14 +66,55 @@ describe("GitLabAdapter", () => {
     expect(adapter.authHint).toBe("$GITLAB_TOKEN or $GITLAB_PRIVATE_TOKEN");
   });
 
-  test("authenticate succeeds with env var", async () => {
+  // Rewritten, not removed: this asserted that a non-empty env var means "ok",
+  // which is the bug — a revoked token reported connected, and swapping to one
+  // would replace a working adapter with a dead one. It also reached the real
+  // gitlab.com once authenticate() started probing.
+  test("authenticate succeeds when the API confirms the token", async () => {
     const origToken = process.env.GITLAB_TOKEN;
+    const realFetch = globalThis.fetch;
     process.env.GITLAB_TOKEN = "test-token";
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ username: "ada" }), { status: 200 })) as unknown as typeof fetch;
     try {
       const adapter = new GitLabAdapter({ type: "gitlab" });
       await adapter.authenticate();
       expect(adapter.authState).toBe("ok");
+      expect(adapter.identity?.account).toBe("ada");
     } finally {
+      globalThis.fetch = realFetch;
+      if (origToken === undefined) delete process.env.GITLAB_TOKEN;
+      else process.env.GITLAB_TOKEN = origToken;
+    }
+  });
+
+  test("a rejected token reports failed", async () => {
+    const origToken = process.env.GITLAB_TOKEN;
+    const realFetch = globalThis.fetch;
+    process.env.GITLAB_TOKEN = "revoked";
+    globalThis.fetch = (async () => new Response("{}", { status: 401 })) as unknown as typeof fetch;
+    try {
+      const adapter = new GitLabAdapter({ type: "gitlab" });
+      await adapter.authenticate();
+      expect(adapter.authState).toBe("failed");
+    } finally {
+      globalThis.fetch = realFetch;
+      if (origToken === undefined) delete process.env.GITLAB_TOKEN;
+      else process.env.GITLAB_TOKEN = origToken;
+    }
+  });
+
+  test("a network error reports unreachable, not failed", async () => {
+    const origToken = process.env.GITLAB_TOKEN;
+    const realFetch = globalThis.fetch;
+    process.env.GITLAB_TOKEN = "test-token";
+    globalThis.fetch = (async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch;
+    try {
+      const adapter = new GitLabAdapter({ type: "gitlab" });
+      await adapter.authenticate();
+      expect(adapter.authState).toBe("unreachable");
+    } finally {
+      globalThis.fetch = realFetch;
       if (origToken === undefined) delete process.env.GITLAB_TOKEN;
       else process.env.GITLAB_TOKEN = origToken;
     }

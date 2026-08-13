@@ -11,6 +11,21 @@ export class ProductionTmuxRunner implements TmuxRunner {
     const proc = Bun.spawn(["tmux", ...full], {
       stdout: "pipe",
       stderr: "pipe",
+      // Read live, not inherited. `Bun.spawn` without this passes the
+      // environment as it was when *jmux* started, and both variables the tmux
+      // config expands are assigned at runtime by main.ts: `$JMUX_DIR`, which
+      // `tmux.conf` uses to find defaults.conf and core.conf, and
+      // `$JMUX_USER_CONF`, which gates whether the user's own tmux config is
+      // sourced at all.
+      //
+      // This runner is a server-*starting* path — restore.ts passes `-f` on
+      // "the very first new-session ... (the one that actually starts the
+      // server)" — and `-f` is honored only there. So without this, restoring a
+      // snapshot brings up a server that silently sourced neither jmux's
+      // defaults nor its requirements: `/config/defaults.conf` does not exist,
+      // `status off` never runs, and the tmux status bar comes straight back.
+      // Exactly the failure documented in demo/setup.ts, on a different path.
+      env: { ...process.env },
     });
     const timeoutMs = opts?.timeoutMs ?? 5000;
     const killer = setTimeout(() => {

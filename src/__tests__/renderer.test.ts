@@ -1657,3 +1657,28 @@ describe("toolbar hover hint", () => {
     expect(leftmostButton).toBeGreaterThan(rightmostTab);
   });
 });
+
+describe("toolbar setup marker", () => {
+  test("the help button is accented while setup steps are outstanding", () => {
+    const marked = buildToolbarButtons({ panelActive: false, setupPending: true });
+    const plain = buildToolbarButtons({ panelActive: false, setupPending: false });
+    const helpMarked = marked.find((b) => b.id === "help")!;
+    const helpPlain = plain.find((b) => b.id === "help")!;
+    expect(helpMarked.fg).toBeDefined();
+    expect(helpPlain.fg).toBeUndefined();
+  });
+
+  // Every label must be exactly one display cell: layoutToolbar packs on
+  // textCols and the mouse hit boxes derive from that packing.
+  test("the marker costs no column", () => {
+    const marked = buildToolbarButtons({ panelActive: false, setupPending: true });
+    const plain = buildToolbarButtons({ panelActive: false, setupPending: false });
+    expect(marked.map((b) => b.label)).toEqual(plain.map((b) => b.label));
+    expect(marked).toHaveLength(plain.length);
+  });
+
+  test("omitting the flag behaves as unmarked", () => {
+    const help = buildToolbarButtons({ panelActive: false }).find((b) => b.id === "help")!;
+    expect(help.fg).toBeUndefined();
+  });
+});

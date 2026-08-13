@@ -49,16 +49,79 @@ describe("LinearAdapter", () => {
     expect(adapter.authHint).toBe("$LINEAR_API_KEY or $LINEAR_TOKEN");
   });
 
-  test("authenticate succeeds with env var", async () => {
+  // Rewritten, not removed: this used to assert that a non-empty env var means
+  // "ok", which is the bug being fixed — a revoked or wrong-workspace token
+  // reported connected. The contract is now "the API confirmed who we are".
+  test("authenticate succeeds when the API confirms the token", async () => {
     const orig = process.env.LINEAR_API_KEY;
+    const realFetch = globalThis.fetch;
     process.env.LINEAR_API_KEY = "lin_test_key";
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      data: { viewer: { id: "u1", name: "Ada", organization: { name: "Acme", urlKey: "acme" } } },
+    }))) as unknown as typeof fetch;
     try {
       const adapter = new LinearAdapter({ type: "linear" });
       await adapter.authenticate();
       expect(adapter.authState).toBe("ok");
+      expect(adapter.identity?.account).toBe("Ada");
+      expect(adapter.identity?.organization).toBe("Acme");
     } finally {
+      globalThis.fetch = realFetch;
       if (orig === undefined) delete process.env.LINEAR_API_KEY;
       else process.env.LINEAR_API_KEY = orig;
+    }
+  });
+
+  test("a rejected token reports failed, not ok", async () => {
+    const orig = process.env.LINEAR_API_KEY;
+    const realFetch = globalThis.fetch;
+    process.env.LINEAR_API_KEY = "lin_revoked";
+    globalThis.fetch = (async () => new Response("{}", { status: 401 })) as unknown as typeof fetch;
+    try {
+      const adapter = new LinearAdapter({ type: "linear" });
+      await adapter.authenticate();
+      expect(adapter.authState).toBe("failed");
+      expect(adapter.identity).toBeNull();
+    } finally {
+      globalThis.fetch = realFetch;
+      if (orig === undefined) delete process.env.LINEAR_API_KEY;
+      else process.env.LINEAR_API_KEY = orig;
+    }
+  });
+
+  test("a network error reports unreachable, not failed", async () => {
+    const orig = process.env.LINEAR_API_KEY;
+    const realFetch = globalThis.fetch;
+    process.env.LINEAR_API_KEY = "lin_test_key";
+    globalThis.fetch = (async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch;
+    try {
+      const adapter = new LinearAdapter({ type: "linear" });
+      await adapter.authenticate();
+      expect(adapter.authState).toBe("unreachable");
+    } finally {
+      globalThis.fetch = realFetch;
+      if (orig === undefined) delete process.env.LINEAR_API_KEY;
+      else process.env.LINEAR_API_KEY = orig;
+    }
+  });
+
+  test("no token makes no request at all", async () => {
+    const origKey = process.env.LINEAR_API_KEY;
+    const origToken = process.env.LINEAR_TOKEN;
+    const realFetch = globalThis.fetch;
+    delete process.env.LINEAR_API_KEY;
+    delete process.env.LINEAR_TOKEN;
+    let called = false;
+    globalThis.fetch = (async () => { called = true; return new Response("{}"); }) as unknown as typeof fetch;
+    try {
+      const adapter = new LinearAdapter({ type: "linear" });
+      await adapter.authenticate();
+      expect(adapter.authState).toBe("failed");
+      expect(called).toBe(false);
+    } finally {
+      globalThis.fetch = realFetch;
+      if (origKey !== undefined) process.env.LINEAR_API_KEY = origKey;
+      if (origToken !== undefined) process.env.LINEAR_TOKEN = origToken;
     }
   });
 
@@ -147,7 +210,18 @@ describe("GraphQL error handling", () => {
     delete process.env.LINEAR_API_KEY;
     globalThis.fetch = (async (_url: string, init: any) => {
       const body = JSON.parse(init.body);
-      queries.push(body.query);
+      // authenticate() now makes an identity request of its own. It is not part
+      // of the operation under test, so it stays out of `queries` — otherwise
+      // every assertion on queries[0] would silently be about the probe.
+      const isIdentityProbe = typeof body.query === "string" && body.query.includes("viewer {");
+      if (!isIdentityProbe) queries.push(body.query);
+      if (isIdentityProbe) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { viewer: { id: "u1", name: "Test", organization: { name: "Test Org" } } } }),
+        };
+      }
       return { ok: true, status: 200, json: async () => handler(body) };
     }) as any;
     try {
@@ -204,5 +278,74 @@ describe("GraphQL error handling", () => {
       (a) => a.getIssueByBranch("eng-1234-fix-auth"),
     );
     expect(result).toBeNull();
+  });
+});
+
+describe("LinearAdapter carries team and project ids", () => {
+  // Routing keys on ids, never names. Without these the Issue reaches
+  // resolveIssueProject with teamId undefined, projectsClaimingTeam returns the
+  // empty array for every issue, and group start fails for all of them — which
+  // is exactly what shipped before this test existed.
+  async function fetchIssue(node: Record<string, unknown> | null): Promise<{
+    issue: Awaited<ReturnType<LinearAdapter["getIssueByBranch"]>>;
+    queries: string[];
+  }> {
+    const real = globalThis.fetch;
+    const prev = process.env.LINEAR_TOKEN;
+    process.env.LINEAR_TOKEN = "lin_test";
+    const queries: string[] = [];
+    globalThis.fetch = (async (_u: string, init: { body: string }) => {
+      const body = JSON.parse(init.body);
+      const isProbe = typeof body.query === "string" && body.query.includes("viewer {");
+      if (isProbe) {
+        return new Response(JSON.stringify({
+          data: { viewer: { id: "u1", name: "T", organization: { name: "O" } } },
+        }));
+      }
+      queries.push(body.query);
+      return new Response(JSON.stringify({
+        data: { searchIssues: { nodes: node ? [node] : [] } },
+      }));
+    }) as unknown as typeof fetch;
+    try {
+      const adapter = new LinearAdapter({ type: "linear" });
+      await adapter.authenticate();
+      const issue = await adapter.getIssueByBranch("eng-1-x");
+      return { issue, queries };
+    } finally {
+      globalThis.fetch = real;
+      if (prev === undefined) delete process.env.LINEAR_TOKEN;
+      else process.env.LINEAR_TOKEN = prev;
+    }
+  }
+
+  const BASE = {
+    id: "i1", identifier: "ENG-1", title: "t", url: "u",
+    state: { name: "Todo", type: "unstarted" },
+  };
+
+  test("mapIssue populates teamId and linearProjectId", async () => {
+    const { issue } = await fetchIssue({
+      ...BASE,
+      team: { id: "team-uuid", name: "Core" },
+      project: { id: "proj-uuid", name: "Billing" },
+    });
+    expect(issue?.teamId).toBe("team-uuid");
+    expect(issue?.linearProjectId).toBe("proj-uuid");
+    // The names stay, for display.
+    expect(issue?.team).toBe("Core");
+    expect(issue?.project).toBe("Billing");
+  });
+
+  test("the query asks for both ids, or the mapper has nothing to map", async () => {
+    const { queries } = await fetchIssue(null);
+    expect(queries[0]).toContain("team { id name }");
+    expect(queries[0]).toContain("project { id name }");
+  });
+
+  test("an issue with no team or project leaves both ids undefined", async () => {
+    const { issue } = await fetchIssue({ ...BASE });
+    expect(issue?.teamId).toBeUndefined();
+    expect(issue?.linearProjectId).toBeUndefined();
   });
 });

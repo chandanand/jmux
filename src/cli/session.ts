@@ -5,6 +5,7 @@ import { resolveCurrentSession, tmuxOrThrow, CliError, type CliContext } from ".
 import type { ParsedCtlArgs } from "../cli";
 import { US, splitFields } from "../tmux-fields";
 import { SESSION_TITLE_OPTION, TITLE_SIGNATURE_OPTION, MANUAL_SIGNATURE } from "../session-title/display";
+import { isGridHiddenValue } from "../glass/exceptions";
 
 export interface SessionEntry {
   id: string;
@@ -112,6 +113,55 @@ export function buildAttentionCommands(
   throw new CliError(
     `Unknown attention verb "${verb}". Use: set | clear`,
   );
+}
+
+export interface GridHiddenCommand {
+  args: string[];
+  required: boolean;
+}
+
+/**
+ * Build the tmux command to set/unset the session-scoped `@jmux-grid-hidden`
+ * option — the Command Center's "keep this whole session off the grid"
+ * exception (`glass/exceptions.ts`). Session-scoped because its subject is a
+ * session tile, unlike `@jmux-pinned`'s pane scope. `unhide` deliberately
+ * never touches `@jmux-pinned`: per the design's truth table, a pin left
+ * behind from before the hide is exactly the face the session should come
+ * back showing, not something to clear a second time.
+ */
+export function buildGridHiddenCommands(
+  verb: "hide" | "unhide",
+  target: string,
+): GridHiddenCommand[] {
+  if (verb === "hide") {
+    return [{ args: ["set-option", "-t", target, "@jmux-grid-hidden", "1"], required: true }];
+  }
+  return [{ args: ["set-option", "-t", target, "-u", "@jmux-grid-hidden"], required: true }];
+}
+
+export const HIDDEN_LIST_FORMAT = "#{session_id}:#{session_name}:#{@jmux-grid-hidden}";
+
+export interface HiddenSessionEntry {
+  id: string;
+  name: string;
+}
+
+/** Parse `list-sessions -F HIDDEN_LIST_FORMAT` into the sessions reading as
+ *  hidden under `isGridHiddenValue`'s strict grammar — exactly `"1"`. */
+export function parseHiddenList(lines: string[]): HiddenSessionEntry[] {
+  const out: HiddenSessionEntry[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const first = trimmed.indexOf(":");
+    const second = trimmed.indexOf(":", first + 1);
+    if (first < 0 || second < 0) continue;
+    const id = trimmed.slice(0, first);
+    const name = trimmed.slice(first + 1, second);
+    const hidden = trimmed.slice(second + 1);
+    if (isGridHiddenValue(hidden)) out.push({ id, name });
+  }
+  return out;
 }
 
 export function validateSessionCreate(flags: Record<string, string | boolean>): {
@@ -293,9 +343,31 @@ export function handleSession(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
       return { target, attention: false };
     }
 
+    case "hide":
+    case "unhide": {
+      if (!flags.target || typeof flags.target !== "string") {
+        throw new CliError("--target is required");
+      }
+      const target = flags.target;
+      for (const cmd of buildGridHiddenCommands(action as "hide" | "unhide", target)) {
+        const result = runTmuxDirect(cmd.args, ctx.socket);
+        if (cmd.required) tmuxOrThrow(result);
+      }
+      return { target, hidden: action === "hide" };
+    }
+
+    case "hidden": {
+      const result = runTmuxDirect(
+        ["list-sessions", "-f", INTERNAL_SESSION_FILTER, "-F", HIDDEN_LIST_FORMAT],
+        ctx.socket,
+      );
+      const lines = result.ok ? result.lines : [];
+      return { hidden: parseHiddenList(lines) };
+    }
+
     default:
       throw new CliError(
-        `Unknown session action "${action}". Known actions: list, create, info, switch, kill, rename, attention`,
+        `Unknown session action "${action}". Known actions: list, create, info, switch, kill, rename, attention, hide, unhide, hidden`,
       );
   }
 }

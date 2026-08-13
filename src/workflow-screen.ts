@@ -451,7 +451,7 @@ type Overlay =
       index: number; filter: string; checked: (() => ReadonlySet<string>) | null;
       onPick: (id: string) => void;
     }
-  | { kind: "prompt"; title: string; buffer: string; cursor: number; onCommit: (v: string) => void }
+  | { kind: "prompt"; title: string; buffer: string; cursor: number; error: string | null; onCommit: (v: string) => string | null | void }
   | { kind: "confirm"; message: string; onYes: () => void };
 
 // --- Screen ---
@@ -595,8 +595,15 @@ export class WorkflowScreen {
 
     if (overlay.kind === "prompt") {
       if (data === "\r") {
+        // A returned string is a rejection. Stay open with the reason rather
+        // than closing on a value that was discarded — the same contract the
+        // settings screen enforces, since both consume SettingDef.onTextCommit.
+        const err = overlay.onCommit(overlay.buffer);
+        if (typeof err === "string" && err.length > 0) {
+          overlay.error = err;
+          return;
+        }
         this.overlay = null;
-        overlay.onCommit(overlay.buffer);
         return;
       }
       if (data === "\x7f" || data === "\b") {
@@ -837,8 +844,8 @@ export class WorkflowScreen {
     };
   }
 
-  private openPrompt(title: string, value: string, onCommit: (v: string) => void): void {
-    this.overlay = { kind: "prompt", title, buffer: value, cursor: value.length, onCommit };
+  private openPrompt(title: string, value: string, onCommit: (v: string) => string | null | void): void {
+    this.overlay = { kind: "prompt", title, buffer: value, cursor: value.length, error: null, onCommit };
   }
 
   // --- Selection ---
@@ -1182,6 +1189,11 @@ export class WorkflowScreen {
       : " ";
     writeString(grid, 2, pad + 2 + textCols(overlay.buffer.slice(0, overlay.cursor)),
       under, EDIT_CURSOR);
+    // A rejection, on its own line under the field. The prompt stays open, so
+    // the reason has to be visible while the value is being corrected.
+    if (overlay.error) {
+      writeString(grid, 4, pad, truncateToCols(overlay.error, cols - pad * 2), WARN_ATTRS);
+    }
     writeString(grid, rows - 1, pad, "↵ confirm  ·  esc cancel", DIM_ATTRS);
     return grid;
   }

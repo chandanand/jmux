@@ -6,6 +6,7 @@ import type {
   SessionContext,
   MergeRequest,
   AdapterAuthState,
+  Issue,
 } from "../../adapters/types";
 
 function makeMockCodeHost(overrides: Partial<CodeHostAdapter> = {}): CodeHostAdapter {
@@ -13,6 +14,7 @@ function makeMockCodeHost(overrides: Partial<CodeHostAdapter> = {}): CodeHostAda
     type: "gitlab",
     authState: "ok" as AdapterAuthState,
     authHint: "$GITLAB_TOKEN",
+    identity: null,
     authenticate: mock(() => Promise.resolve()),
     getMergeRequest: mock(() => Promise.resolve(null)),
     pollMergeRequest: mock(() => Promise.resolve({
@@ -471,5 +473,212 @@ describe("PollCoordinator", () => {
         coord.stop();
       });
     });
+  });
+});
+
+describe("PollCoordinator retries unreachable adapters", () => {
+  // `unreachable` only earns its existence if something retries it. Nothing
+  // does otherwise: authenticate() runs once at startup and every poll gates on
+  // authState === "ok", so a network blip during startup would disable the
+  // adapter for the whole session — the exact failure the presence-only auth
+  // check was originally written to avoid.
+  test("re-authenticates an unreachable tracker before polling", async () => {
+    let authCalls = 0;
+    const tracker = {
+      type: "linear",
+      authState: "unreachable" as AdapterAuthState,
+      authHint: "",
+      identity: null,
+      authenticate: async () => { authCalls++; tracker.authState = "ok"; },
+      getMyIssues: async () => [{ id: "recovered" } as unknown as Issue],
+    } as unknown as IssueTrackerAdapter & { authState: AdapterAuthState };
+
+    const coord = new PollCoordinator({
+      codeHost: null,
+      issueTracker: tracker,
+      onUpdate: () => {},
+      getSessionDir: () => null,
+      sessionState: null,
+    });
+
+    await coord.pollGlobal();
+    expect(authCalls).toBe(1);
+    expect(coord.getGlobalIssues()).toHaveLength(1);
+  });
+
+  test("does not re-authenticate an adapter whose credential was rejected", async () => {
+    let authCalls = 0;
+    const tracker = {
+      type: "linear",
+      authState: "failed" as AdapterAuthState,
+      authHint: "",
+      identity: null,
+      authenticate: async () => { authCalls++; },
+      getMyIssues: async () => [],
+    } as unknown as IssueTrackerAdapter;
+
+    const coord = new PollCoordinator({
+      codeHost: null,
+      issueTracker: tracker,
+      onUpdate: () => {},
+      getSessionDir: () => null,
+      sessionState: null,
+    });
+
+    await coord.pollGlobal();
+    expect(authCalls).toBe(0);
+  });
+});
+
+describe("PollCoordinator adapter swap", () => {
+  function tracker(over: Partial<IssueTrackerAdapter> = {}): IssueTrackerAdapter {
+    return {
+      type: "linear", authState: "ok" as AdapterAuthState, authHint: "", identity: null,
+      authenticate: async () => {},
+      getMyIssues: async () => [],
+      ...over,
+    } as unknown as IssueTrackerAdapter;
+  }
+
+  test("setAdapters advances the epoch", () => {
+    const coord = new PollCoordinator({
+      codeHost: null, issueTracker: null,
+      onUpdate: () => {}, getSessionDir: () => null, sessionState: null,
+    });
+    const before = coord.adapterEpoch;
+    coord.setAdapters({ codeHost: null, issueTracker: null });
+    expect(coord.adapterEpoch).toBeGreaterThan(before);
+  });
+
+  test("results from a retired adapter are dropped", async () => {
+    let release: (v: Issue[]) => void = () => {};
+    const slow = new Promise<Issue[]>((r) => { release = r; });
+    const coord = new PollCoordinator({
+      codeHost: null,
+      issueTracker: tracker({ getMyIssues: () => slow } as Partial<IssueTrackerAdapter>),
+      onUpdate: () => {}, getSessionDir: () => null, sessionState: null,
+    });
+
+    const inFlight = coord.pollGlobal();
+    coord.setAdapters({ codeHost: null, issueTracker: null });
+    release([{ id: "from-the-old-workspace" } as Issue]);
+    await inFlight;
+
+    expect(coord.getGlobalIssues()).toEqual([]);
+  });
+
+  test("setAdapters clears provider-derived caches", async () => {
+    const coord = new PollCoordinator({
+      codeHost: null,
+      issueTracker: tracker({ getMyIssues: async () => [{ id: "a" } as Issue] } as Partial<IssueTrackerAdapter>),
+      onUpdate: () => {}, getSessionDir: () => null, sessionState: null,
+    });
+    await coord.pollGlobal();
+    expect(coord.getGlobalIssues()).toHaveLength(1);
+    coord.setAdapters({ codeHost: null, issueTracker: null });
+    expect(coord.getGlobalIssues()).toEqual([]);
+  });
+
+  test("the new adapters are the ones subsequently polled", async () => {
+    const coord = new PollCoordinator({
+      codeHost: null,
+      issueTracker: tracker({ getMyIssues: async () => [{ id: "old" } as Issue] } as Partial<IssueTrackerAdapter>),
+      onUpdate: () => {}, getSessionDir: () => null, sessionState: null,
+    });
+    coord.setAdapters({
+      codeHost: null,
+      issueTracker: tracker({ getMyIssues: async () => [{ id: "new" } as Issue] } as Partial<IssueTrackerAdapter>),
+    });
+    await coord.pollGlobal();
+    expect(coord.getGlobalIssues().map((i) => i.id)).toEqual(["new"]);
+  });
+});
+
+describe("PollCoordinator swap during in-flight resolution", () => {
+  test("a retired resolve does not leave a stale link signature or context", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = () => r(); });
+    const tracker = {
+      type: "linear", authState: "ok" as AdapterAuthState, authHint: "", identity: null,
+      authenticate: async () => {},
+      getMyIssues: async () => [],
+      pollAllIssues: async () => { await gate; return new Map(); },
+    } as unknown as IssueTrackerAdapter;
+
+    const coord = new PollCoordinator({
+      codeHost: null, issueTracker: tracker,
+      onUpdate: () => {}, getSessionDir: () => "/tmp/x", sessionState: null,
+    });
+    coord.addSession("s1", "/tmp/x");
+
+    const inFlight = coord.setActiveSession("s1");
+    coord.setAdapters({ codeHost: null, issueTracker: null });
+    release();
+    await inFlight;
+
+    // The retired resolve must not have published a context into the new world.
+    expect(coord.getContext("s1")).toBeNull();
+  });
+
+  test("a swap drains the in-flight set rather than stranding a marker", async () => {
+    const coord = new PollCoordinator({
+      codeHost: null, issueTracker: null,
+      onUpdate: () => {}, getSessionDir: () => "/tmp/x", sessionState: null,
+    });
+    coord.addSession("s1", "/tmp/x");
+    coord.setAdapters({ codeHost: null, issueTracker: null });
+    expect(coord.inFlightCount).toBe(0);
+  });
+});
+
+describe("PollCoordinator retired-adapter reports", () => {
+  function liveTracker(): IssueTrackerAdapter {
+    return {
+      type: "linear", authState: "ok" as AdapterAuthState, authHint: "", identity: null,
+      authenticate: async () => {}, getMyIssues: async () => [],
+    } as unknown as IssueTrackerAdapter;
+  }
+
+  test("a late auth failure from a retired adapter does not mark the new one failed", () => {
+    const fresh = liveTracker();
+    const coord = new PollCoordinator({
+      codeHost: null, issueTracker: null,
+      onUpdate: () => {}, getSessionDir: () => null, sessionState: null,
+    });
+    const stale = coord.adapterEpoch;
+    coord.setAdapters({ codeHost: null, issueTracker: fresh });
+    coord.reportAuthFailure("issueTracker", stale);
+    expect(fresh.authState).toBe("ok");
+  });
+
+  test("a current auth failure still marks the adapter failed", () => {
+    const live = liveTracker();
+    const coord = new PollCoordinator({
+      codeHost: null, issueTracker: live,
+      onUpdate: () => {}, getSessionDir: () => null, sessionState: null,
+    });
+    coord.reportAuthFailure("issueTracker", coord.adapterEpoch);
+    expect(live.authState).toBe("failed");
+  });
+
+  test("an auth failure with no epoch still applies, for callers that have none", () => {
+    const live = liveTracker();
+    const coord = new PollCoordinator({
+      codeHost: null, issueTracker: live,
+      onUpdate: () => {}, getSessionDir: () => null, sessionState: null,
+    });
+    coord.reportAuthFailure("issueTracker");
+    expect(live.authState).toBe("failed");
+  });
+
+  test("a retired rate-limit report does not throttle the new adapter", () => {
+    const coord = new PollCoordinator({
+      codeHost: null, issueTracker: null,
+      onUpdate: () => {}, getSessionDir: () => null, sessionState: null,
+    });
+    const stale = coord.adapterEpoch;
+    coord.setAdapters({ codeHost: null, issueTracker: null });
+    coord.reportRateLimit("hard_limited", stale);
+    expect(coord.rateLimitState).toBe("normal");
   });
 });

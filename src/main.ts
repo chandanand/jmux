@@ -4,16 +4,32 @@ import { clipboardCopyCommand } from "./platform";
 import { MIN_TMUX_VERSION, tmuxVersionOk } from "./tmux-version";
 import { configFileIn, materializeAssets, skillIn } from "./assets";
 import { currentChannel, upgradeCommand } from "./channel";
-import { compareGeneration, GENERATION_OPTION, stampCommand, staleGenerationNotice } from "./config-generation";
+import {
+  compareGeneration,
+  DETACH_ON_DESTROY_COMMAND,
+  GENERATION_OPTION,
+  stampCommand,
+  staleGenerationNotice,
+  staleGenerationTitle,
+} from "./config-generation";
+import {
+  editableUserTmuxConfig,
+  formatUserTmuxConfig,
+  parseUserTmuxConfig,
+  resolveUserTmuxConfig,
+  userTmuxConfigPath,
+  userTmuxConfigWarning,
+} from "./tmux-user-config";
 import { detectSkill, installSkill, uninstallIntegrations } from "./agent-hooks/skill";
 import { ScreenBridge } from "./screen-bridge";
 import { Renderer, getToolbarButtonRanges, getToolbarTabRanges, getModalPosition, buildToolbarButtons, type ToolbarConfig } from "./renderer";
 import { InputRouter } from "./input-router";
 import { sidebarWidthForCol, panelWidthForCol, type DragHandle } from "./drag";
-import { Sidebar, rebuildSidebarColors, type PinnedPaneEntry } from "./sidebar";
+import { Sidebar, rebuildSidebarColors } from "./sidebar";
 import {
   GROUP_MODES, SORT_MODES, FILTER_MODES,
   groupModeLabel, sortModeLabel, filterModeLabel, migrateLegacySort,
+  cycleGroup, cycleSort, cycleFilter,
   type GroupMode, type SortMode, type FilterMode, type LegacySortMode,
 } from "./sidebar-sort";
 import {
@@ -42,6 +58,7 @@ import {
 } from "./new-session-modal";
 import { CaptureModal, type CaptureResult } from "./capture-modal";
 import { buildPinCommands } from "./cli/pane";
+import { buildGridHiddenCommands } from "./cli/session";
 import type { CellAttrs } from "./cell-grid";
 import { createGrid } from "./cell-grid";
 import type { Modal } from "./modal";
@@ -123,10 +140,12 @@ import {
   resolveIssueSessionName as sharedIssueSessionName,
 } from "./issue-session";
 import { createAdapters } from "./adapters/registry";
+import { ActiveAdapters } from "./adapters/active-set";
+import { writeCredential } from "./credentials";
 import { PollCoordinator } from "./adapters/poll-coordinator";
 import { SessionState } from "./session-state";
-import type { SessionContext, WorkflowState } from "./adapters/types";
-import { stageForIssue, resolveIssueRepoDir, STAGE_ORDER, STAGE_LABELS } from "./work-stage";
+import type { SessionContext, WorkflowState, AdapterConfig } from "./adapters/types";
+import { stageForIssue, STAGE_ORDER, STAGE_LABELS } from "./work-stage";
 import {
   selectGhosts, ghostCapValue, formatGhostCap, editGhostCap, parseGhostCap, stepGhostCap,
   GHOST_CAP_ALL, type GhostQueue, type GhostCap,
@@ -157,15 +176,13 @@ import {
 import type { DemoContext } from "./demo/setup";
 import type { SessionInfo, WindowTab, PaletteCommand, PaletteResult, AgentState } from "./types";
 import { loadProjectDirsCache, saveProjectDirsCache } from "./project-dirs-cache";
-import { ConfigStore, sanitizeTmuxSessionName, DEFAULT_IMAGE_MAX_ROWS, DEFAULT_BROWSER_PANE_SIZE, DEFAULT_BROWSER_DISPLAY_SCALE, DEFAULT_BROWSER_FPS, type JmuxConfig, type PipelineConfig } from "./config";
+import { ConfigStore, ConfigCorruptError, sanitizeTmuxSessionName, DEFAULT_IMAGE_MAX_ROWS, DEFAULT_BROWSER_PANE_SIZE, DEFAULT_BROWSER_DISPLAY_SCALE, DEFAULT_BROWSER_FPS, type JmuxConfig, type PipelineConfig } from "./config";
 import {
   RepoFactsCache,
-  resolveForRepo,
+  canonicalizeRepoPath,
   buildWorktreeCommand,
-  REPO_SETTING_DEFAULTS,
   type RepoSettings,
   type WorkStage,
-  type ResolvedRepoSettings,
 } from "./repo-settings";
 import { buildProvisionPlan, SETUP_PANE_SIZE } from "./issue-provision";
 import {
@@ -175,16 +192,52 @@ import {
 } from "./state-colors";
 import { INTERNAL_SESSION_FILTER, PARK_SESSION } from "./glass/internal-sessions";
 import { PinnedPaneTracker } from "./glass/pinned-pane-tracker";
-import { parsePaneStateLines, PANE_STATE_FORMAT } from "./glass/reflect";
+import type { PaneLocation } from "./glass/types";
 import { US, splitFields } from "./tmux-fields";
-import { buildPaneLabel } from "./glass/pane-label";
-import { AGENT_DETECT_FORMAT, parseAgentDetectLines, detectAgentPanes } from "./glass/auto-detect";
+import { resolveIssueProject, attachProjectDrift, mayOfferLinearProjectRoute, prunableIssueRoutes } from "./project-routing";
+import {
+  PROJECT_SETTING_DEFAULTS,
+  PROJECT_OPTION,
+  isWritableProjectId,
+  resolveProjectSettings,
+  resolveSettingsFor,
+  resolveLegacyTeams,
+  projectById,
+  projectForDir,
+  projectSettingScope,
+  projectLabel,
+  type ProjectSettings,
+  type ProjectConfig,
+  type ResolvedProjectSettings,
+} from "./project";
+import {
+  PANE_ROW_FORMAT,
+  parsePaneRowLines,
+  electRepresentative,
+  type PaneRow,
+} from "./glass/representative";
+import { orderSessions } from "./session-order";
+import { applyGridExceptions, isGridHiddenValue } from "./glass/exceptions";
+import { ReconcileLoop } from "./glass/reconcile-loop";
+import { commitLeaveGlass, leaveGlassWithFallback } from "./glass/leave-glass";
+import {
+  normalizeViews,
+  normalizeAxes,
+  resolveActiveViewId,
+  reloadViews,
+  switchView,
+  deleteView,
+  addView,
+  renameView,
+  axesDiffer,
+  type CommandCenterAxes,
+  type CommandCenterView,
+} from "./glass/views";
 import { GlassView, type GlassTileSpec } from "./glass/view";
-import { normalizeTabs, defaultTabId, resolveTabId, summarizeTabState, addTab, renameTab, deleteTab, moveTab, type TabEntry } from "./glass/tabs";
-import { buildCcCommands, NEW_TAB_OPTION_ID } from "./glass/cc-commands";
-import { stripVisibleFor, renderStrip, layoutStrip, STRIP_ROWS } from "./glass/strip";
+import { buildCcCommands } from "./glass/cc-commands";
+import { renderStrip, layoutStrip, STRIP_ROWS } from "./glass/strip";
+import { DENSITIES, cycleDensity, normalizeDensity, type Density } from "./glass/density";
 import { chipAtCol, type PlacedChip } from "./band-layout";
-import { clampTabSelection } from "./glass/reload";
 import { OtelReceiver } from "./otel-receiver";
 import { computeFrameLayout, sidebarBottomRow, SIDEBAR_MIN_TERM_COLS, type FrameLayout } from "./frame-layout";
 import { AgentStateTracker, coerceStaleAgentState } from "./agent-state";
@@ -288,6 +341,8 @@ Usage:
 
 Options:
   -L, --socket <name>      Use a separate tmux server socket
+  --config <path>          Use a specific config file
+                           (default ~/.config/jmux/config.json)
   --demo                   Run in demo mode with mock data
   --live                   With --demo: run real agents in the demo sessions
                            (needs the claude CLI; spends real tokens)
@@ -310,6 +365,8 @@ Agent Control (JSON output):
   jmux ctl run-claude            Launch Claude Code in a new session
   jmux ctl pane capture          Read pane contents
   jmux ctl workflow board        Your stages, their sessions and unstarted work
+  jmux ctl workflow board --group project
+                                 The same sessions, bucketed by project
   jmux ctl workflow next --start Start the next thing in the queue
   jmux ctl --help                Show all ctl subcommands
 
@@ -423,6 +480,19 @@ process.env.JMUX = "1";
 
 // Check for --demo flag early (before config, before arg loop)
 const demoMode = process.argv.includes("--demo");
+
+// Same reason, and it must be the same shape: the config is built ~40 lines
+// below, and the main arg loop does not run until several hundred lines after
+// that. Without an early scan there is no way to point jmux at a config file
+// other than the real one — which makes the corrupt-config startup path
+// testable only against the developer's own ~/.config/jmux/config.json.
+const configFlagAt = process.argv.indexOf("--config");
+const configPathOverride: string | null =
+  configFlagAt >= 0 ? (process.argv[configFlagAt + 1] ?? null) : null;
+if (configFlagAt >= 0 && configPathOverride === null) {
+  console.error("--config requires a path");
+  process.exit(1);
+}
 let demoCtx: DemoContext | null = null;
 let demoCleanup: ((ctx: DemoContext) => void) | null = null;
 
@@ -457,7 +527,69 @@ if (demoMode) {
   }
 }
 
-const configStore = new ConfigStore(demoCtx?.configPath);
+/**
+ * Config complaints already said, so a hot reload of an unrelated key doesn't
+ * repeat them. Keyed on the message itself: the same bad value stays quiet,
+ * a *newly* bad one still speaks up.
+ */
+const configWarnings = new Set<string>();
+
+function warnConfig(message: string): void {
+  if (configWarnings.has(message)) return;
+  configWarnings.add(message);
+  // Both channels on purpose. stderr is what a user watching their first run
+  // sees; jmux.log is what they can still read after the alt screen has taken
+  // the terminal, which is where a hot-reload complaint lands.
+  process.stderr.write(`${message}\n`);
+  logError("jmux", message);
+}
+
+let configStore: ConfigStore;
+try {
+  configStore = new ConfigStore(demoCtx?.configPath ?? configPathOverride ?? undefined);
+} catch (e) {
+  if (e instanceof ConfigCorruptError) {
+    // Deliberately before the alt screen, the snapshot restore and the tmux
+    // pty — all of which start below this line. Exiting here costs the user
+    // nothing but a message; starting anyway meant the first setting change
+    // overwrote a file they could still have fixed by hand.
+    process.stderr.write(
+      `jmux: ${e.message}\n` +
+      `jmux: refusing to start rather than overwrite it.\n` +
+      `jmux: fix the file, or move it aside and jmux will start with defaults.\n`,
+    );
+    process.exit(1);
+  }
+  throw e;
+}
+
+// --- Which tmux config jmux sources on the user's behalf ---
+//
+// Resolved once, here, and never again: tmux reads `-f` only when it *starts* a
+// server, so this process gets exactly one chance to decide. Everything
+// downstream — the `$JMUX_USER_CONF` export the loader reads, the generation
+// stamp, the settings row's "restart to apply" — has to agree about what that
+// decision was, which is why they all read this binding rather than re-deriving
+// it from config.
+//
+// Demo mode is forced off rather than left to config: it *started* its server
+// above, before this line existed, with no user config in its environment. A
+// resolution that disagreed would stamp the server with a config it never
+// loaded.
+const userTmuxConfig = resolveUserTmuxConfig(
+  demoCtx ? false : configStore.config.userTmuxConfig,
+  { home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME },
+  existsSync,
+);
+const userTmuxConfPath = userTmuxConfigPath(userTmuxConfig);
+const userTmuxConfigNotice = userTmuxConfigWarning(userTmuxConfig);
+if (userTmuxConfigNotice) warnConfig(userTmuxConfigNotice);
+// Empty is meaningful and is the whole off switch — config/tmux.conf gates its
+// step 2 on this being non-empty. Same mechanism as JMUX_DIR and JMUX_COPY: the
+// tmux server inherits this process's environment, and expands the variable
+// when it loads the config.
+process.env.JMUX_USER_CONF = userTmuxConfPath;
+
 let sidebarWidth = configStore.config.sidebarWidth || 26;
 // `Ctrl-a \` — the sidebar hidden by the user, as opposed to by the terminal
 // being too narrow for it. Deliberately not persisted: this is "give the panes
@@ -499,9 +631,125 @@ const toolbarHeight = toolbarEnabled ? (windowBranchesEnabled ? 2 : 1) : 0;
 const repoFacts = new RepoFactsCache();
 
 /** Effective workflow settings for a directory. A null dir yields global defaults. */
-function repoSettingsFor(dir: string | null | undefined): ResolvedRepoSettings {
-  if (!dir) return resolveForRepo(configStore.config, { key: null, bare: false });
-  return resolveForRepo(configStore.config, repoFacts.get(dir));
+/**
+ * Effective workflow settings for a directory.
+ *
+ * Resolves through **Projects**, not `repos[key]`: the migration removes that
+ * map, so continuing to read it would silently drop every per-repo setting a
+ * user had — their agent command, their base branch — the moment they upgraded.
+ *
+ * The Project comes from the directory when exactly one claims it. A shared
+ * directory resolves to no Project and falls to the global tier, which is the
+ * honest answer: that ambiguity is precisely what the `@jmux-project` stamp
+ * exists to settle, and callers holding a session should pass its id.
+ *
+ * Runtime bare-repo detection still seeds `wtmIntegration`, exactly as
+ * `resolveForRepo` did.
+ */
+function repoSettingsFor(
+  dir: string | null | undefined,
+  projectId?: string | null,
+): ResolvedProjectSettings {
+  return resolveSettingsFor(configStore.config, {
+    dir,
+    projectId,
+    bare: dir ? repoFacts.get(dir).bare : false,
+  });
+}
+
+/** Settings for a live session, preferring its Project stamp over its path. */
+function sessionSettingsFor(sessionName: string): ResolvedProjectSettings {
+  const session = currentSessions.find((s) => s.name === sessionName);
+  return repoSettingsFor(sessionDir(sessionName), session?.projectId ?? null);
+}
+
+/**
+ * The Project the attached session belongs to, preferring its stamp.
+ *
+ * Falls back to the directory, which is unambiguous for every Project that does
+ * not share a `dir` — and null when it is, since that is exactly what the stamp
+ * is for and guessing would edit settings on the wrong Project.
+ */
+/**
+ * Route an issue to a Project, with everything this process knows.
+ *
+ * The one call site for `resolveIssueProject` in the TUI, so the sidebar, the
+ * ghost preview and group start cannot answer differently.
+ */
+/**
+ * Cached because the callers are hot and quadratic without it.
+ *
+ * `issueRepoDir` resolves through the router, and `recomputeSessionBands` reaches
+ * it once per issue per drift event on every poll — rebuilding this map each
+ * time is sessions x contexts per call, so the poll became O(n^2) the moment
+ * repo resolution stopped being a plain map lookup.
+ *
+ * Invalidated wherever the session list is replaced or a context updates, which
+ * are the only two things it derives from. Cheap to rebuild, so a missed
+ * invalidation costs a stale answer for one tick rather than a leak — but both
+ * writers are listed below so there is nowhere else to forget.
+ */
+let sessionIssueIndex: Map<string, SessionInfo> | null = null;
+
+function invalidateSessionIssueIndex(): void {
+  sessionIssueIndex = null;
+}
+
+function sessionByIssueId(): Map<string, SessionInfo> {
+  if (sessionIssueIndex) return sessionIssueIndex;
+  const index = new Map<string, SessionInfo>();
+  for (const sess of currentSessions) {
+    for (const i of pollCoordinator.getContext(sess.name)?.issues ?? []) {
+      if (!index.has(i.id)) index.set(i.id, sess);
+    }
+  }
+  sessionIssueIndex = index;
+  return index;
+}
+
+function resolveIssueProjectFor(
+  issue: Pick<import("./adapters/types").Issue, "id" | "team" | "teamId" | "linearProjectId">,
+  index: Map<string, SessionInfo> = sessionByIssueId(),
+): import("./project-routing").RoutingOutcome {
+  const linked = index.get(issue.id);
+  return resolveIssueProject(
+    {
+      id: issue.id,
+      teamId: issue.teamId,
+      teamName: issue.team ?? undefined,
+      linearProjectId: issue.linearProjectId,
+    },
+    configStore.config.projects ?? [],
+    configStore.config.routes ?? {},
+    { hasSession: !!linked, sessionProjectId: linked?.projectId ?? null },
+  );
+}
+
+/** One sentence naming what went wrong, for a notice or a preflight line. */
+function describeRoutingOutcome(
+  issue: import("./adapters/types").Issue,
+  outcome: import("./project-routing").RoutingOutcome,
+): string {
+  switch (outcome.kind) {
+    case "resolved":
+      return `${issue.identifier} → ${outcome.project.title} (${outcome.via})`;
+    case "unclaimed":
+      return `${issue.identifier} belongs to team "${outcome.teamName ?? "?"}", which no project claims.`;
+    case "ambiguous":
+      return `${issue.identifier} could go to ${outcome.candidates.map((c) => c.title).join(" or ")}.`;
+    case "conflict":
+      return `${issue.identifier} has conflicting routes — ${outcome.evidence.join("; ")}.`;
+    case "orphaned":
+      return `${issue.identifier}'s session names a project that no longer exists.`;
+  }
+}
+
+function projectForCurrentSession(): ProjectConfig | null {
+  const session = currentSessions.find((s) => s.id === currentSessionId);
+  if (!session) return null;
+  const all = configStore.config.projects ?? [];
+  return projectById(all, session.projectId ?? null)
+    ?? projectForDir(all, sessionDir(session.name));
 }
 
 /** The directory a live session is rooted in, or null if we don't know it yet. */
@@ -511,40 +759,22 @@ function sessionDir(name: string): string | null {
 }
 
 /** Effective settings for the session the user is currently attached to. */
-function currentRepoSettings(): ResolvedRepoSettings {
+function currentRepoSettings(): ResolvedProjectSettings {
   const name = currentSessions.find((s) => s.id === currentSessionId)?.name;
   return repoSettingsFor(name ? sessionDir(name) : null);
 }
 
 /** The global-default tier alone, with built-in defaults filled in. */
-function repoDefaultsView(): ResolvedRepoSettings {
-  return resolveForRepo({ repoDefaults: configStore.config.repoDefaults }, { key: null, bare: false });
+function repoDefaultsView(): ResolvedProjectSettings {
+  return resolveProjectSettings(configStore.config.projectDefaults, undefined);
 }
 
 let cacheTimersEnabled = configStore.config.cacheTimers !== false;
-let autoPinAgentPanes = configStore.config.autoPinAgentPanes === true;
 let agentPaneRegex = configStore.config.agentPaneCommandRegex ?? "codex";
 let pinnedSessions = new Set<string>(configStore.config.pinnedSessions ?? []);
 let infoPanelWidth: number | null = configStore.config.infoPanelWidth ?? null;
 let diffPanelSplitRatio = configStore.config.diffPanel?.splitRatio ?? 0.4;
 let hunkCommand = configStore.config.diffPanel?.hunkCommand ?? "hunk";
-
-/**
- * Config complaints already said, so a hot reload of an unrelated key doesn't
- * repeat them. Keyed on the message itself: the same bad value stays quiet,
- * a *newly* bad one still speaks up.
- */
-const titleConfigWarnings = new Set<string>();
-
-function warnTitleConfig(message: string): void {
-  if (titleConfigWarnings.has(message)) return;
-  titleConfigWarnings.add(message);
-  // Both channels on purpose. stderr is what a user watching their first run
-  // sees; jmux.log is what they can still read after the alt screen has taken
-  // the terminal, which is where a hot-reload complaint lands.
-  process.stderr.write(`${message}\n`);
-  logError("jmux", message);
-}
 
 /**
  * The session-title generator, or null when titling is off.
@@ -556,13 +786,13 @@ function warnTitleConfig(message: string): void {
  * is indistinguishable from the off state and therefore unusable.
  *
  * Everything this touches *at call time* is declared above it (`configStore`,
- * `warnTitleConfig`). `currentSessions`, `control` and `showToast` are only
+ * `warnConfig`). `currentSessions`, `control` and `showToast` are only
  * reached from inside the callbacks, which cannot run before the first title
  * comes back — see boot-smoke.test.ts for why that distinction is load-bearing
  * at module scope in this file.
  */
 function makeTitleGenerator(): TitleGenerator | null {
-  const cfg = resolveTitleConfig(configStore.config.sessionTitle ?? null, warnTitleConfig);
+  const cfg = resolveTitleConfig(configStore.config.sessionTitle ?? null, warnConfig);
   if (!cfg) return null;
   return new TitleGenerator(
     cfg,
@@ -611,6 +841,9 @@ for (let i = 2; i < process.argv.length; i++) {
       console.error("--live requires --demo");
       process.exit(1);
     }
+    continue;
+  } else if (arg === "--config") {
+    i++; // already read above, before the config store was built
     continue;
   } else if (arg === "--socket" || arg === "-L") {
     if (demoMode) {
@@ -896,6 +1129,162 @@ function forgetBrowserInstalled(): void {
   browserInstalled = null;
 }
 
+/**
+ * Whether the checklist still has work the user has not declined.
+ *
+ * Cached per frame's worth of time: every row's detector touches the
+ * filesystem, and this runs from makeToolbar, which runs on every frame.
+ */
+let setupOutstandingCache: { at: number; value: boolean } | null = null;
+const SETUP_OUTSTANDING_TTL_MS = 5000;
+function setupStepsOutstanding(): boolean {
+  const now = Date.now();
+  if (setupOutstandingCache && now - setupOutstandingCache.at < SETUP_OUTSTANDING_TTL_MS) {
+    return setupOutstandingCache.value;
+  }
+  let value = false;
+  try {
+    value = buildSetupRows().some((r) => r.state === "todo" || r.state === "blocked");
+  } catch {
+    // A detector throwing must not take the toolbar down with it.
+    value = false;
+  }
+  setupOutstandingCache = { at: now, value };
+  return value;
+}
+
+/**
+ * The checklist's last step: prove the configuration actually works.
+ *
+ * Green configuration rows prove configuration. This proves *function* — the
+ * same reason `--wait` polls for the setup pane exiting rather than trusting
+ * that a directory exists.
+ *
+ * Deliberately read-only. An earlier shape provisioned a throwaway session and
+ * tore it down, which on a wtm repo means creating and deleting a real worktree
+ * and branch on somebody's machine to answer a question — and leaves debris if
+ * it fails halfway, which is exactly when it would fail. Every gate below is
+ * the same fact the real path reads, checked without writing anything.
+ */
+interface PreflightCheck {
+  label: string;
+  ok: boolean;
+  detail: string;
+}
+
+/**
+ * The checks that need a subprocess, run on demand rather than derived.
+ *
+ * `runSetupPreflight` proves *configuration* — a directory exists, a binary is
+ * on PATH. These prove *function*: that the directory is a git repo at all, and
+ * that the base branch Start would fork from actually resolves. Both are
+ * ordinary reasons a Start fails with everything above it green.
+ *
+ * Deliberately read-only. The spec called for a throwaway session provisioned
+ * and torn down, and that is a destructive act — it creates a branch and a
+ * worktree in the user's repo — which is not something a checklist row should
+ * fire without asking. These catch the same failures without touching anything.
+ */
+let deepPreflight: { dir: string; isRepo: boolean; base: string | null } | null = null;
+
+async function runDeepPreflight(): Promise<void> {
+  const projects = (configStore.config.projects ?? []).filter((p) => p.deletedAt === undefined);
+  const project = projectForCurrentSession() ?? (projects.length === 1 ? projects[0] : null);
+  if (!project) { deepPreflight = null; return; }
+  const isRepo = (await gitOutput(project.dir, ["rev-parse", "--git-dir"])) !== null;
+  const base = isRepo ? await resolveBaseBranch(project.dir) : null;
+  deepPreflight = { dir: project.dir, isRepo, base };
+  scheduleRender();
+}
+
+function runSetupPreflight(): PreflightCheck[] {
+  const checks: PreflightCheck[] = [];
+  const projects = (configStore.config.projects ?? []).filter((p) => p.deletedAt === undefined);
+
+  // Only the Project actually in play, or the sole one when there is exactly
+  // one. Falling back to projects[0] reported on a Project the user has nothing
+  // to do with — and a preflight that passes for the wrong thing is worse than
+  // one that fails.
+  const project = projectForCurrentSession() ?? (projects.length === 1 ? projects[0] : null);
+  checks.push({
+    label: "A project to work in",
+    ok: project !== null,
+    detail: project
+      ? project.title
+      : projects.length === 0
+        ? "none configured — add one in Settings"
+        : "not in a project session — switch to one, or open this from its session",
+  });
+
+  const dirOk = project !== null && existsSync(project.dir);
+  checks.push({
+    label: "Its repository exists",
+    ok: dirOk,
+    detail: project ? project.dir.replace(homedir(), "~") : "—",
+  });
+
+  const settings = project ? repoSettingsFor(project.dir, project.id) : null;
+
+  const agent = settings?.agentCommand ?? "";
+  const agentBin = agent.trim().split(/\s+/)[0] ?? "";
+  const agentOk = agentBin.length > 0 && Bun.which(agentBin) !== null;
+  checks.push({
+    label: "The agent command runs",
+    ok: agentOk,
+    detail: agentOk ? agent : `${agentBin || "unset"} is not on PATH`,
+  });
+
+  const wtm = settings?.wtmIntegration === true;
+  const toolOk = !wtm || Bun.which("wtm") !== null;
+  checks.push({
+    label: "The worktree tool is available",
+    ok: toolOk,
+    detail: wtm ? (toolOk ? "wtm" : "wtm is not on PATH") : "git worktree",
+  });
+
+  const present = AGENT_INTEGRATIONS.filter((a) => a.isPresent());
+  const hooksOk = present.length === 0 || present.every((a) => a.detect() === "current");
+  checks.push({
+    label: "Agent state reaches the sidebar",
+    ok: hooksOk,
+    detail: present.length === 0
+      ? "no agents installed"
+      : hooksOk ? present.map((a) => a.label).join(", ") : "hooks out of date",
+  });
+
+  // Only reported once actually run, and only for the Project it was run
+  // against — a stale answer about a different repo is worse than none.
+  const deep = project && deepPreflight?.dir === project.dir ? deepPreflight : null;
+  checks.push({
+    label: "It is a git repository",
+    ok: deep === null || deep.isRepo,
+    detail: deep === null
+      ? "not checked yet — press Enter"
+      : deep.isRepo ? "yes" : "no git repository at that path",
+  });
+  checks.push({
+    label: "The base branch resolves",
+    ok: deep === null || deep.base !== null,
+    detail: deep === null
+      ? "not checked yet — press Enter"
+      : deep.base ?? "no main, master or configured branch exists",
+  });
+
+  const tracker = adapters.issueTracker;
+  const declined = configStore.config.setup?.tracker === "never";
+  checks.push({
+    label: "The tracker answers",
+    ok: declined || tracker?.authState === "ok",
+    detail: declined
+      ? "not using one"
+      : tracker?.authState === "ok"
+        ? (tracker.identity?.organization ?? "connected")
+        : `not connected — check ${tracker?.authHint ?? "the tracker settings"}`,
+  });
+
+  return checks;
+}
+
 function makeToolbar(): ToolbarConfig {
   return {
     buttons: buildToolbarButtons({
@@ -904,6 +1293,7 @@ function makeToolbar(): ToolbarConfig {
       // both — openBrowserPane refuses on either, and a button that opens a
       // notice is not a button.
       browserAvailable: isBrowserInstalled() && imagesOn(),
+      setupPending: setupStepsOutstanding(),
     }),
     mainCols,
     hoveredButton: hoveredToolbarButton,
@@ -1011,12 +1401,21 @@ async function performBoot(opts: {
     clock,
     jmuxVersion: process.env.JMUX_VERSION ?? "dev",
     userShell: process.env.SHELL ?? "/bin/sh",
-    resolveClaudeCommand: (cwd) => repoSettingsFor(cwd).claudeCommand,
+    resolveClaudeCommand: (cwd) => repoSettingsFor(cwd).agentCommand,
     configFile: opts.configFile,
     // If our held lock is reclaimed while running, tell the Snapshotter so it
     // stops capturing and surfaces `error` instead of silently double-writing.
     onLockCompromised: (e) => snapshotter?.handleCompromised(e),
     sessionLinksSink: (name, links) => opts.sessionState.upsertLinksForSession(name, links),
+    // Re-stamp @jmux-project before anything resolves Project-scoped settings
+    // or polls: tmux options die with the server, so without this every
+    // restored session reads as unstamped and falls back to the global tier.
+    projectIdSink: (name, projectId) => {
+      if (!projectId || !isWritableProjectId(projectId)) return;
+      void control
+        .sendCommand(`set-option -t ${tq(name)} ${PROJECT_OPTION} ${tq(projectId)}`)
+        .catch(() => {});
+    },
     pinnedSink: (name, pinned) => {
       if (pinned && !opts.pinnedSessions.has(name)) {
         opts.pinnedSessions.add(name);
@@ -1432,10 +1831,6 @@ agentStateTracker.onChange((sessionId) => {
     snapshotter?.onAgentState(sessionName, snapState);
   }
 
-  // Keep the Command Center live as agents change state — refresh both the
-  // breakdown (manual pins) and auto-detected agent panes.
-  if (pinnedTracker.size > 0 || autoPinAgentPanes) refreshPinnedPanes();
-
   scheduleRender();
 });
 // --- Pane-of-glass wiring ---
@@ -1447,12 +1842,56 @@ let inGlass = false;
 /** The real session the interactive client was on before glass parked it. */
 let preGlassSessionId: string | null = null;
 let glassView: GlassView | null = null;
-
-let commandCenterTabs: TabEntry[] = normalizeTabs(configStore.config.commandCenterTabs);
-let activeTabId: string = defaultTabId(commandCenterTabs);
-let lastActiveTabId: string = activeTabId;
 let currentStripChips: PlacedChip[] = [];
-let summaryByTab = new Map<string, AgentState | null>();
+
+// The Command Center's saved views and its live (possibly dirty) axes. The
+// axes are what `reconcileGrid` derives membership from; the registry is what
+// phase 7's keys select between.
+let commandCenterViews: CommandCenterView[] = normalizeViews(
+  configStore.config.commandCenterViews,
+);
+let activeViewId: string = resolveActiveViewId(
+  configStore.config.commandCenterActiveViewId,
+  commandCenterViews,
+);
+let gridAxes: CommandCenterAxes = normalizeAxes(
+  configStore.config.commandCenterAxes,
+  commandCenterViews.find((v) => v.id === activeViewId) ?? commandCenterViews[0],
+);
+/**
+ * The grid's tile-size floor, named. Unlike `commandCenter.maxTiles` this is
+ * hot-applied (`GlassView.setDensity` only resizes existing clients, never
+ * spawns or tears one down) — both from `Ctrl-a D` and from a config-file
+ * edit, in the config watcher below.
+ */
+let commandCenterDensity: Density = normalizeDensity(configStore.config.commandCenter?.density);
+
+/** Sessions currently kept off the grid by `@jmux-grid-hidden`, refreshed by
+ *  every `applyGridSnapshot` — the palette's "Show hidden sessions" needs this
+ *  synchronously, and the grid reconciler already re-reads it on every tick
+ *  regardless of whether the grid is on screen. */
+let gridHiddenSessionIds: Set<string> = new Set();
+
+/**
+ * The grid's reconcile scheduler. Declared here, above every caller, because
+ * `invalidateGrid` is reachable from listeners registered at module scope —
+ * the temporal-dead-zone hazard `boot-smoke.test.ts` exists to catch. The two
+ * halves it drives (`readGridState` / `applyGridSnapshot`) are hoisted function
+ * declarations further down and only run when a reconcile does.
+ */
+const gridReconciler = new ReconcileLoop({
+  run: async () => applyGridSnapshot(await readGridState()),
+  onError: (error) => logError("reconcileGrid", String(error)),
+});
+
+/**
+ * Something that can change the grid happened: membership, order, labels,
+ * faces or the exceptions. Coalesced onto the trailing edge of the tick — see
+ * `ReconcileLoop` for why this is a state machine and not a debounce.
+ */
+function invalidateGrid(): void {
+  gridReconciler.invalidate();
+}
 
 /**
  * Run one tmux command with argv rather than a command string.
@@ -1551,9 +1990,14 @@ import { GhostPreview, rebuildGhostPreviewColors, type GhostPreviewPort, type St
 import { buildPreflight, type Preflight } from "./ghost-preflight";
 import { resolveNavStep, type NavFocus } from "./nav-order";
 
-const adapters = demoCtx
-  ? { codeHost: demoCtx.codeHost, issueTracker: demoCtx.issueTracker }
-  : createAdapters(configStore.config.adapters);
+// Mutable behind an epoch, so a tracker change applies without a restart. Every
+// existing `adapters.issueTracker` / `adapters.codeHost` read still works —
+// they are getters. See src/adapters/active-set.ts for why the epoch exists.
+const adapters = new ActiveAdapters(
+  demoCtx
+    ? { codeHost: demoCtx.codeHost, issueTracker: demoCtx.issueTracker }
+    : createAdapters(configStore.config.adapters),
+);
 const infoPanel = new InfoPanel({ viewIds: [], viewLabels: new Map() });
 let panelViews = parseViews(configStore.config.panelViews);
 const viewStates = new Map<string, ViewState>();
@@ -1593,6 +2037,47 @@ function panelViewCounts(views: PanelView[]): Map<string, number> {
   return counts;
 }
 
+/**
+ * Apply an adapter configuration change without a restart.
+ *
+ * Builds and *verifies* the replacement before publishing it: a bad token must
+ * never displace a working adapter, and `authenticate()` now makes a real
+ * identity request, so "verified" means something. `unreachable` is refused
+ * too — jmux cannot tell a good token on a dead network from a bad one, so it
+ * keeps what works and says which case it could not distinguish.
+ */
+async function swapAdapters(next: AdapterConfig): Promise<boolean> {
+  const candidate = createAdapters(next);
+  if (candidate.issueTracker) await candidate.issueTracker.authenticate();
+  if (candidate.codeHost) await candidate.codeHost.authenticate();
+
+  const bad =
+    (candidate.issueTracker && candidate.issueTracker.authState !== "ok" ? candidate.issueTracker : null) ??
+    (candidate.codeHost && candidate.codeHost.authState !== "ok" ? candidate.codeHost : null);
+  if (bad) {
+    showToast(
+      bad.authState === "unreachable"
+        ? `${bad.type}: could not reach it — keeping the current connection`
+        : `${bad.type}: not connected — check ${bad.authHint}`,
+    );
+    return false;
+  }
+
+  adapters.swap(candidate);
+  pollCoordinator.setAdapters(candidate);
+  // Provider-scoped and outside the coordinator, so they are cleared here.
+  cachedTeams = [];
+  cachedWorkflowStates = [];
+  lastTeamFetchMs = 0;
+  refreshPanelViews();
+  void refreshTeams();
+  void pollCoordinator.pollGlobal();
+  scheduleRender();
+  const org = candidate.issueTracker?.identity?.organization;
+  showToast(org ? `Connected to ${org}` : "Connection updated");
+  return true;
+}
+
 /** Re-publish the visible tab set to the panel (after auth, or a saved view). */
 function refreshPanelViews(): void {
   const visibleViews = panelViews.filter((v) => {
@@ -1611,6 +2096,9 @@ const pollCoordinator = new PollCoordinator({
   codeHost: adapters.codeHost,
   issueTracker: adapters.issueTracker,
   onUpdate: (sessionName) => {
+    // Contexts are the index's other input, so a poll that changed one must not
+    // leave a stale answer behind for recomputeSessionBands to read below.
+    invalidateSessionIssueIndex();
     sidebar.setSessionContexts(pollCoordinator.getAllContexts());
     // A poll is the main way a stage changes (and the only way an unpark
     // signal arrives), so both bands are re-derived on every one.
@@ -1631,6 +2119,18 @@ const pollCoordinator = new PollCoordinator({
   sessionState,
 });
 
+/**
+ * Resolve a repo directory to its git common dir, for the Projects migration.
+ *
+ * Async and bounded via `gitOutput` rather than the synchronous
+ * `resolveRepoRoot`: this runs once per configured repo at startup, and a
+ * worktree on a stalled mount would otherwise freeze the first frame.
+ */
+async function commonDirForMigration(dir: string): Promise<string | null> {
+  const out = await gitOutput(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  return out ? canonicalizeRepoPath(out) : null;
+}
+
 initAdapters().then(() => {
   pollCoordinator.start();
   pollCoordinator.pollGlobal();
@@ -1646,19 +2146,59 @@ const TEAM_REFRESH_INTERVAL_MS = 300_000; // 5 minutes
 
 async function refreshTeams(): Promise<void> {
   if (adapters.issueTracker?.authState !== "ok") return;
+  // Before the TTL guard, not after it. The migration runs in late startup and
+  // races the first team fetch: with a warm cache and freshly migrated Projects,
+  // a resolver behind the guard would not run for five minutes — and until it
+  // does, group start fails and the checklist says "awaiting" with nothing on
+  // screen explaining why. Cheap and idempotent, so calling it every time costs
+  // nothing when there is nothing to resolve.
+  resolveLegacyTeamNames();
   if (Date.now() - lastTeamFetchMs < TEAM_REFRESH_INTERVAL_MS && cachedTeams.length > 0) return;
+  // These caches live outside PollCoordinator, so its epoch does not protect
+  // them: a swap during either await would land one workspace's teams and
+  // statuses in the caches the pickers and the workflow screen read.
+  const epoch = adapters.epoch;
   try {
-    cachedTeams = await adapters.issueTracker.getTeams();
+    const teams = await adapters.issueTracker.getTeams();
+    if (!adapters.isCurrent(epoch)) return;
+    cachedTeams = teams;
     lastTeamFetchMs = Date.now();
   } catch (e) {
+    if (!adapters.isCurrent(epoch)) return;
     logError("jmux", `team fetch failed: ${(e as Error).message}`);
   }
   try {
-    cachedWorkflowStates = await adapters.issueTracker.listWorkflowStates();
+    const states = await adapters.issueTracker.listWorkflowStates();
+    if (!adapters.isCurrent(epoch)) return;
+    cachedWorkflowStates = states;
   } catch (e) {
+    if (!adapters.isCurrent(epoch)) return;
     logError("jmux", `workflow state fetch failed: ${(e as Error).message}`);
   }
+  resolveLegacyTeamNames();
 }
+
+/**
+ * Turn a migrated `legacyTeamName` into a real `teamId`.
+ *
+ * The migration can only carry the *name*, because `teamRepoMap` was keyed on
+ * one and ids need an authenticated tracker. Without this step nothing ever
+ * assigns `teamId`, so `projectsClaimingTeam` returns the empty array forever
+ * and every issue routes to `unclaimed` — which silently killed group start and
+ * left the "attach a team" checklist step permanently unsatisfiable.
+ *
+ * Runs after every team fetch. A name that matches nothing is *kept*, not
+ * cleared: the team may have been renamed in the tracker, and dropping the only
+ * record of what the user configured would make the misconfiguration
+ * unrecoverable rather than merely visible.
+ */
+function resolveLegacyTeamNames(): void {
+  const changed = resolveLegacyTeams(configStore.config.projects ?? [], cachedTeams);
+  if (changed.length === 0) return;
+  configStore.upsertProjects(changed);
+  scheduleRender();
+}
+
 
 /**
  * Every workflow state the tracker offers, for the stage/transition pickers.
@@ -1724,7 +2264,7 @@ function workflowInputs(): WorkflowInputs {
     },
     targetFor: (issue, event) => transitionTarget(
       event,
-      repoSettingsFor(resolveIssueRepoDir(issue, configStore.config, homedir())),
+      repoSettingsFor(issueRepoDir(issue)),
     ),
   };
 }
@@ -1745,7 +2285,33 @@ const sessionWorkflow = new Map<string, SessionWorkflow>();
  * they are computed in one pass. Splitting them would mean two functions that
  * always have to be called together, from every one of these call sites.
  */
+/**
+ * Drop routes that have done their job.
+ *
+ * A route only has to survive the gap between answering the question and the
+ * session existing — after that `@jmux-project` on the session is the record.
+ * Without this, `prunableIssueRoutes` had no callers and `routes.issue` grew
+ * once per answered question, forever.
+ *
+ * Deliberately never prunes on *absence*: `getMyIssues` filters completed and
+ * canceled issues out, so an issue vanishing from the poll may equally have
+ * been unassigned, moved team, or the tracker may simply be down.
+ */
+function pruneSettledRoutes(): void {
+  const routes = configStore.config.routes;
+  if (!routes?.issue || Object.keys(routes.issue).length === 0) return;
+  const stamped = new Set<string>();
+  for (const sess of currentSessions) {
+    if (!sess.projectId) continue;
+    for (const i of pollCoordinator.getContext(sess.name)?.issues ?? []) stamped.add(i.id);
+  }
+  for (const id of prunableIssueRoutes(routes, { stamped, terminal: new Set() })) {
+    configStore.clearRoute("issue", id);
+  }
+}
+
 function recomputeSessionBands(): void {
+  pruneSettledRoutes();
   const config = parkingConfig();
   const now = Date.now();
   const parked = new Set<string>();
@@ -1812,6 +2378,11 @@ function recomputeSessionBands(): void {
   sidebar.setParkedSessions(parked);
   sidebar.setSessionWorkflow(sessionWorkflow);
   recomputeGhosts();
+  // Parking is membership (`includeParked: false`) and the stage is a band on
+  // the `groupBy: "stage"` axis, so every signal that lands here can move the
+  // grid. This is also the funnel every session-list change already routes
+  // through, which is why `fetchSessions` needs no invalidation of its own.
+  invalidateGrid();
 }
 
 /** The stored ghost-row cap. Conversions all live in ghosts.ts. */
@@ -2027,10 +2598,15 @@ async function applyStatusPick(
   if (issue.status === target) return null;
 
   const from = issue.status;
+  const epoch = adapters.epoch;
   pollCoordinator.optimisticIssueStatus(issue.id, target);
   try {
     await tracker.updateStatus(issue.id, target);
   } catch (e) {
+    // Only roll back into the world this write started in. After a swap the
+    // coordinator's caches belong to a different workspace, and restoring a
+    // status there would invent an issue state nobody asked for.
+    if (!adapters.isCurrent(epoch)) return null;
     // Put the optimistic change back: leaving it would show a status the
     // tracker never accepted until the next global poll overwrote it.
     pollCoordinator.optimisticIssueStatus(issue.id, from);
@@ -2229,7 +2805,7 @@ async function requestTransitions(
       issue,
       target: transitionTarget(
         event,
-        repoSettingsFor(resolveIssueRepoDir(issue, configStore.config, homedir())),
+        repoSettingsFor(issueRepoDir(issue)),
       ),
     }))
     .filter((m): m is { issue: import("./adapters/types").Issue; target: string } =>
@@ -3096,6 +3672,16 @@ function relayout(): void {
     diffBridge.resize(layout.panel.w, layout.ptyRows);
   }
 
+  // The grid's tiles are real attached clients, so they have to be resized like
+  // the main pty above rather than merely re-composited. Here rather than at
+  // each caller because this is where `fullScreenLayout` — the layout
+  // `resizeGlass` reads — is recomputed, so every geometry change reaches it by
+  // construction: hiding the sidebar, opening or zooming the panel, dragging
+  // the sidebar border, SIGWINCH. Hooking the callers instead is how the
+  // sidebar toggle came to relayout the frame around tiles that stayed the old
+  // width.
+  if (inGlass) resizeGlass();
+
   applyChromeLayout();
 
   scheduleRender();
@@ -3232,26 +3818,21 @@ async function setDiffView(view: HunkView): Promise<void> {
 // those hunks. Neither can close the loop alone.
 
 /**
- * The pane to type at for a session.
- *
- * `@jmux-agent-pane` is the protocol's own answer and is preferred. The
- * fallback reads `@jmux-agent-kind` per pane, which is the only trustworthy
- * pane-level identity: `@jmux-agent-state` *inherits* from the session, so
- * "has state" is true of every pane including editors and shells, while
- * nothing writes `kind` at session scope. Order matters — an explicit pane
- * beats a guess.
+ * The pane to type at for a session — "which pane wrote this diff", so it
+ * wants the live answer. Delegates to the stateless `electRepresentative`:
+ * `@jmux-agent-pane` (the protocol's own answer) beats a live urgency-ranked
+ * guess among the session's panes when it names one still present. This is
+ * deliberately the *stateless* election, not the sticky one `GlassView` shows
+ * on the grid — pasting a review must go to the pane that is actually most
+ * urgent right now, not wherever a tile happened to be parked.
  */
 function resolveAgentPane(sessionId: string): string | null {
   const explicit = runTmux(["show-options", "-v", "-t", sessionId, "@jmux-agent-pane"]);
-  if (explicit.ok && explicit.lines[0]) return explicit.lines[0];
+  const explicitPane = explicit.ok && explicit.lines[0] ? explicit.lines[0] : null;
 
-  const panes = runTmux(["list-panes", "-s", "-t", sessionId, "-F", "#{pane_id} #{@jmux-agent-kind}"]);
+  const panes = runTmux(["list-panes", "-s", "-t", sessionId, "-F", PANE_ROW_FORMAT]);
   if (!panes.ok) return null;
-  for (const line of panes.lines) {
-    const [paneId, kind] = line.split(" ");
-    if (paneId && kind) return paneId;
-  }
-  return null;
+  return electRepresentative(parsePaneRowLines(panes.lines), explicitPane, agentPaneRegex);
 }
 
 /**
@@ -3588,6 +4169,7 @@ const SESSION_LIST_FORMAT = [
   `#{${ISSUE_LINK_OPTION}}`,
   `#{${SESSION_TITLE_OPTION}}`,
   `#{${TITLE_SIGNATURE_OPTION}}`,
+  `#{${PROJECT_OPTION}}`,
 ].join(US);
 
 async function fetchSessions(): Promise<void> {
@@ -3598,7 +4180,7 @@ async function fetchSessions(): Promise<void> {
     const sessions: SessionInfo[] = lines
       .filter((l) => l.length > 0)
       .map((line) => {
-        const [id, name, activity, attached, windows, issueLink, title, titleSig] =
+        const [id, name, activity, attached, windows, issueLink, title, titleSig, projectId] =
           splitFields(line);
         const cached = sessionDetailsCache.get(id);
         const issueLinks = parseIssueLinkOption(issueLink);
@@ -3610,14 +4192,16 @@ async function fetchSessions(): Promise<void> {
           windowCount: parseInt(windows, 10) || 1,
           directory: cached?.directory,
           gitBranch: cached?.gitBranch,
-          project: cached?.project,
+          repoName: cached?.project,
           ...(issueLinks.length > 0 ? { issueLinks } : {}),
           ...(title ? { title } : {}),
           ...(titleSig ? { titleSignature: titleSig } : {}),
+          ...(projectId ? { projectId } : {}),
         };
       });
     const previousSessions = currentSessions;
     currentSessions = sessions;
+    invalidateSessionIssueIndex();
 
     // Mark sessions with activity since last viewed
     for (const session of sessions) {
@@ -3625,6 +4209,13 @@ async function fetchSessions(): Promise<void> {
       if (session.activity > lastViewed && session.id !== currentSessionId) {
         sidebar.setActivity(session.id, true);
       }
+    }
+
+    // Keep the snapshot's copy of the Project stamp current. tmux options die
+    // with the server, so this is the durable half of the session → Project
+    // link; without it a restore reads every session as unstamped.
+    for (const session of sessions) {
+      snapshotter?.onProjectId(session.name, session.projectId ?? null);
     }
 
     sidebar.updateSessions(sessions);
@@ -3639,6 +4230,27 @@ async function fetchSessions(): Promise<void> {
       if (!knownSessions.has(name)) pollCoordinator.removeSession(name);
     }
     sidebar.setSessionContexts(pollCoordinator.getAllContexts());
+    // Resolved here, not in the sidebar: it knows nothing about config or the
+    // @jmux-project stamp. Same boundary as setSessionWorkflow.
+    const allProjects = configStore.config.projects ?? [];
+    const liveProjectList = allProjects.filter((p) => p.deletedAt === undefined);
+    const titles = new Map<string, string>();
+    for (const sess of sessions) {
+      const project = projectById(allProjects, sess.projectId ?? null)
+        ?? projectForDir(allProjects, sessionDir(sess.name));
+      if (!project) continue;
+      // projectLabel, not project.title: two Projects on one repo is the
+      // intended shape, and both migrate titled from the directory basename —
+      // so the bare title produced two identical sidebar bands, exactly as it
+      // produced two identical settings headers.
+      const label = projectLabel(project, liveProjectList,
+        (id) => cachedTeams.find((t) => t.id === id)?.name ?? null);
+      titles.set(sess.name, label);
+      // Stamped on the session too, so session-order's grouping and the
+      // sidebar's bands read one resolution rather than two.
+      sess.projectName = label;
+    }
+    sidebar.setSessionProjects(titles);
     recomputeSessionBands();
 
     // Prune state for dead sessions
@@ -3778,7 +4390,7 @@ async function resolveGitTitleInput(session: SessionInfo): Promise<TitleInput | 
   const entry =
     cached && cached.branch === branch && !expired
       ? cached
-      : startGitTierRead(dir, branch, session.project);
+      : startGitTierRead(dir, branch, session.repoName);
   gitTitleInputs.set(session.id, entry);
 
   return (await entry.pending).input;
@@ -3994,7 +4606,14 @@ async function syncControlClient(): Promise<void> {
   }
 }
 
-async function switchSession(sessionId: string): Promise<void> {
+/**
+ * Returns whether the pty client actually landed on `sessionId` — `false`
+ * covers both "couldn't even try" (no client name) and "tmux rejected the
+ * target" (the session died before `switch-client` reached it). `leaveGlass`
+ * depends on this being honest: it only tears the grid's chrome down once
+ * this reports `true`.
+ */
+async function switchSession(sessionId: string): Promise<boolean> {
   // Choosing a session is choosing to stop previewing. Central so sidebar
   // clicks, keyboard navigation and the palette all get it for free. Guarded
   // against the unpark in closeGhostPreview, which calls back into here.
@@ -4007,7 +4626,7 @@ async function switchSession(sessionId: string): Promise<void> {
   }
 
   if (!ptyClientName) await resolveClientName();
-  if (!ptyClientName) return;
+  if (!ptyClientName) return false;
 
   try {
     await control.sendCommand(
@@ -4025,8 +4644,10 @@ async function switchSession(sessionId: string): Promise<void> {
     }
     fetchWindows();
     renderFrame();
+    return true;
   } catch {
     // Session may have been killed
+    return false;
   }
 }
 
@@ -4136,29 +4757,33 @@ function renderFrame(): void {
   if (inGlass && glassView) {
     const sidebarGrid = sidebarShown ? sidebar.getGrid() : null;
     const overlay = computeModalOverlay(fullScreenLayout);
-    const stripVisible = stripVisibleFor(commandCenterTabs);
     const totalCols = fullScreenLayout.termCols;
     const contentCols = sidebarShown ? totalCols - fullScreenLayout.main.x : totalCols;
 
     let content = glassView.getGrid();
     let cursor = glassView.getFocusedCursor() ?? { x: 0, y: 0 };
 
-    if (stripVisible) {
-      const palette = resolveStateColors(configStore.config.stateColors);
-      const stripInput = { tabs: commandCenterTabs, activeTabId, summaryByTab, width: contentCols, palette };
-      currentStripChips = layoutStrip(stripInput);
-      const strip = renderStrip(stripInput, currentStripChips);
-      const combined = createGrid(contentCols, fullScreenLayout.contentRows);
-      // Blit strip on top rows, glass content below.
-      for (let r = 0; r < STRIP_ROWS && r < combined.rows; r++)
-        for (let c = 0; c < contentCols; c++) combined.cells[r][c] = strip.cells[r][c];
-      for (let r = 0; r < content.rows && r + STRIP_ROWS < combined.rows; r++)
-        for (let c = 0; c < content.cols && c < contentCols; c++) combined.cells[r + STRIP_ROWS][c] = content.cells[r][c];
-      content = combined;
-      cursor = { x: cursor.x, y: cursor.y + STRIP_ROWS };
-    } else {
-      currentStripChips = [];
-    }
+    // The strip is always visible in the grid — it's the only chrome that
+    // says a view exists at all, let alone that others are a keystroke away.
+    const activeView = commandCenterViews.find((v) => v.id === activeViewId) ?? commandCenterViews[0];
+    const stripInput = {
+      views: commandCenterViews,
+      activeViewId,
+      dirty: axesDiffer(activeView, gridAxes),
+      droppedActive: glassView.getDroppedActive(),
+      densityLabel: DENSITIES[commandCenterDensity].label,
+      width: contentCols,
+    };
+    currentStripChips = layoutStrip(stripInput);
+    const strip = renderStrip(stripInput, currentStripChips);
+    const combined = createGrid(contentCols, fullScreenLayout.contentRows);
+    // Blit strip on top rows, glass content below.
+    for (let r = 0; r < STRIP_ROWS && r < combined.rows; r++)
+      for (let c = 0; c < contentCols; c++) combined.cells[r][c] = strip.cells[r][c];
+    for (let r = 0; r < content.rows && r + STRIP_ROWS < combined.rows; r++)
+      for (let c = 0; c < content.cols && c < contentCols; c++) combined.cells[r + STRIP_ROWS][c] = content.cells[r][c];
+    content = combined;
+    cursor = { x: cursor.x, y: cursor.y + STRIP_ROWS };
 
     renderer.render(fullScreenLayout, content, cursor, sidebarGrid, null, overlay?.grid ?? null, overlay?.cursor ?? null, undefined, undefined, dragChrome());
     return;
@@ -4234,12 +4859,7 @@ function renderFrame(): void {
       }
     }
 
-    // A lone unlabelled tab is pure chrome, which is why the strip hides for
-    // it. A lone tab *carrying live diff stats* is not — it's the panel's
-    // header. Without this the badge is invisible to exactly the users who
-    // have no tracker configured, which is every user on their first run.
-    const showTabBar = infoPanel.hasMultipleTabs || infoPanel.hasDiffBadge;
-    const tabBar = showTabBar ? infoPanel.getTabBarGrid(dpCols, hoveredPanelTabId) : undefined;
+    const tabBar = infoPanel.tabBarShown ? infoPanel.getTabBarGrid(dpCols, hoveredPanelTabId) : undefined;
     diffPanelArg = {
       grid: contentGrid,
       mode: diffPanel.state as "split" | "full",
@@ -4306,17 +4926,17 @@ function clearSessionIndicators(): void {
 }
 
 function resolvePreselectedTeamId(): string | null {
-  const workflow = configStore.config.issueWorkflow;
-  if (!workflow?.teamRepoMap) return null;
-  // Absolute, so it is comparable to the expanded teamRepoMap paths below.
+  // The attached session's Project is the direct answer where it has one;
+  // otherwise fall back to whichever Project contains this directory.
+  const attached = projectForCurrentSession();
+  if (attached?.teamId) return attached.teamId;
+
   const sessionDir = sessionDetailsCache.get(currentSessionId ?? "")?.path ?? null;
   if (!sessionDir) return null;
-
-  for (const [teamName, repoDir] of Object.entries(workflow.teamRepoMap)) {
-    const expandedDir = repoDir.replace("~", homedir());
-    if (sessionDir === expandedDir || sessionDir.startsWith(expandedDir + "/")) {
-      const team = cachedTeams.find((t) => t.name === teamName);
-      if (team) return team.id;
+  for (const project of configStore.config.projects ?? []) {
+    if (project.deletedAt !== undefined || !project.teamId) continue;
+    if (sessionDir === project.dir || sessionDir.startsWith(project.dir + "/")) {
+      return project.teamId;
     }
   }
   return null;
@@ -4636,7 +5256,7 @@ const inputRouter = new InputRouter(
         return;
       }
       const sel = sidebar.getSelectionByRow(row);
-      if (sel?.type === "overview" || sel?.type === "pinnedPane") {
+      if (sel?.type === "overview") {
         void enterGlass();
         return;
       }
@@ -4902,11 +5522,21 @@ const inputRouter = new InputRouter(
       glassView?.moveFocus(dir);
       scheduleRender();
     },
-    glassStripRows: () => (inGlass && stripVisibleFor(commandCenterTabs) ? STRIP_ROWS : 0),
-    onGlassTabClick: (x) => { const id = chipAtCol(currentStripChips, x); if (id) switchCommandCenterTab(id); },
-    onGlassTabSwitch: (n) => { const tab = commandCenterTabs[n - 1]; if (tab) switchCommandCenterTab(tab.id); },
-    onGlassTabRelative: (delta) => switchCommandCenterTabRelative(delta),
+    // The strip is always visible in the grid now — no view count to gate on.
+    glassStripRows: () => (inGlass ? STRIP_ROWS : 0),
+    onGlassViewClick: (x) => { const id = chipAtCol(currentStripChips, x); if (id) switchGlassView(id); },
+    onGlassViewSwitch: (n) => { const view = commandCenterViews[n - 1]; if (view) switchGlassView(view.id); },
+    onGlassViewRelative: (delta) => switchGlassViewRelative(delta),
     onGlassDetach: () => detachClient(),
+    onGlassToggle: () => { void toggleCommandCenter(); },
+    onGlassPinToggle: () => { void toggleGridMembership(); },
+    onGlassOpenFocused: () => { void openFocusedGlassTile(); },
+    onGlassCycleFace: () => glassView?.cycleFace(),
+    onGlassZoom: () => glassView?.toggleZoom(),
+    onGlassGroupCycle: () => cycleGridGroup(),
+    onGlassSortCycle: () => cycleGridSort(),
+    onGlassFilterCycle: () => cycleGridFilter(),
+    onGlassCycleDensity: () => cycleGridDensity(),
     onDiffToggle: () => requestDiffPanel(),
     onDiffZoom: () => zoomDiffPanel(),
     onDiffSendReview: () => void sendReviewToAgent(),
@@ -5270,6 +5900,7 @@ const inputRouter = new InputRouter(
       }
       scheduleRender();
     },
+    panelTabBarShown: () => infoPanel.tabBarShown,
     onPanelTabHover: (col) => {
       const ranges = infoPanel.getTabRanges();
       let found: string | null = null;
@@ -5495,7 +6126,13 @@ function buildSetupRows(): SetupRow[] {
     detail: present.length === 0
       ? "Install Claude Code, Codex or pi and this will light up."
       : "Shows RUNNING / WAITING / COMPLETE per agent pane, so you can see who needs you.",
-    state: present.length === 0 ? "unavailable" : stale.length === 0 ? "done" : "todo",
+    state: present.length === 0
+      ? "unavailable"
+      : stale.length === 0
+        ? "done"
+        : configStore.config.setup?.agentHooks === "never"
+          ? "unavailable"
+          : "todo",
     note: present.length === 0
       ? "no agents found"
       : stale.length === 0
@@ -5518,12 +6155,17 @@ function buildSetupRows(): SetupRow[] {
   // Issue tracker. jmux can't supply a token, so this routes to the settings
   // screen rather than pretending to be able to connect on its own.
   const tracker = adapters.issueTracker;
+  const trackerOk = tracker?.authState === "ok";
+  // A declared "never" is a real answer, not an absence — the one thing no
+  // filesystem check can discover. It makes the step inert rather than a
+  // permanent `todo` nagging someone who told us they do not want it.
+  const trackerDeclined = configStore.config.setup?.tracker === "never";
   rows.push({
     id: "tracker",
     label: "Connect an issue tracker",
     detail: "Puts your issues and merge requests in the info panel, and lets you start work from one.",
-    state: tracker?.authState === "ok" ? "done" : "todo",
-    note: tracker?.authState === "ok"
+    state: trackerOk ? "done" : trackerDeclined ? "unavailable" : "todo",
+    note: trackerOk
       ? "connected"
       : tracker
         ? "not connected"
@@ -5540,6 +6182,64 @@ function buildSetupRows(): SetupRow[] {
     note: dirs.length > 0 ? `${dirs.length} dir${dirs.length === 1 ? "" : "s"}` : undefined,
   });
 
+  // The two steps that only exist once a tracker answers. Both were previously
+  // invisible — a new user had no way to learn that a team has to be attached
+  // before starting work from an issue does anything, which is exactly the
+  // failure this checklist is being sequenced to prevent.
+  if (trackerDeclined) return rows;
+
+  const projects = configStore.config.projects ?? [];
+  const live = projects.filter((p) => p.deletedAt === undefined);
+  const attached = live.filter((p) => p.teamId !== undefined).length;
+  const unresolved = live.filter((p) => p.teamId === undefined && p.legacyTeamName).length;
+  rows.push({
+    id: "attach-team",
+    label: "Attach a team to a project",
+    detail: "Routes an issue to the repo its work happens in. Without it, starting work from an issue does nothing.",
+    dependsOn: ["tracker"],
+    state: trackerOk
+      ? (attached > 0 ? "done" : "todo")
+      : "blocked",
+    note: attached > 0
+      ? `${attached} attached`
+      : unresolved > 0
+        ? `${unresolved} awaiting`
+        : live.length === 0 ? "no projects yet" : undefined,
+  });
+
+  // suggestLayout already exists and the workflow screen already offers it —
+  // this step routes there rather than owning a second copy of the seeding.
+  const issueTabs = panelViews.filter((v) => v.source === "issues" && (v.states?.length ?? 0) > 0);
+  rows.push({
+    id: "workflow",
+    label: "Set up your workflow",
+    detail: "Groups your tracker's statuses into stages, which drives the sidebar bands and the issue tabs.",
+    dependsOn: ["tracker"],
+    state: trackerOk
+      ? (issueTabs.length > 0 ? "done" : "todo")
+      : "blocked",
+    note: issueTabs.length > 0 ? `${issueTabs.length} stages` : undefined,
+  });
+
+  // Last, because it is the one step that answers "does any of this work?"
+  // rather than "is this configured?".
+  const preflight = runSetupPreflight();
+  const failed = preflight.filter((c) => !c.ok);
+  rows.push({
+    id: "preflight",
+    label: "Check it all works",
+    detail: failed.length === 0
+      ? "Everything a new session needs is in place."
+      : failed.map((c) => `${c.label}: ${c.detail}`).join("  ·  "),
+    // Stays `todo` until the subprocess checks have actually run: a row that
+    // reported "done" while two of its checks said "not checked yet" would be
+    // claiming a pass it had not performed. Enter runs them.
+    state: failed.length === 0 && deepPreflight !== null ? "done" : "todo",
+    note: failed.length === 0
+      ? (deepPreflight === null ? "not run" : "passing")
+      : `${failed.length} failing`,
+  });
+
   // The diff viewer is a separate binary. jmux genuinely cannot install it, so
   // the row says what to run instead of offering an Enter that would fail.
   const hunkInstalled = Bun.which(hunkCommand) !== null;
@@ -5554,9 +6254,28 @@ function buildSetupRows(): SetupRow[] {
   return rows;
 }
 
+/** Steps a user can decline outright. Others are machine truth, not preference. */
+const DECLINABLE: Record<string, "tracker" | "agentHooks"> = {
+  tracker: "tracker",
+  "agent-hooks": "agentHooks",
+};
+
 const setupModal = new SetupModal({
   rows: () => buildSetupRows(),
-  onActivate: (id) => {
+  // Writes the preference its consumers already read. Without this half,
+  // `setup.tracker === "never"` was set by nobody and the row it silences
+  // nagged forever — which is the thing it was added to prevent.
+  onDecline: (id) => {
+    const key = DECLINABLE[id];
+    if (!key) return;
+    // A toggle, so it is reversible from the same key that set it. A preference
+    // you cannot take back is worse than the nag it replaced.
+    const declining = configStore.config.setup?.[key] !== "never";
+    configStore.setSetupIntent(key, declining ? "never" : null);
+    showToast(declining ? "Won't ask about this again" : "Asking about this again");
+  },
+  // Async because some steps finish later — see SetupProviders.onActivate.
+  onActivate: async (id) => {
     switch (id) {
       case "agent-hooks": {
         const reports = installAllAgents();
@@ -5569,17 +6288,71 @@ const setupModal = new SetupModal({
       case "agent-skill":
         showToast(installSkill() ? "Skill installed" : "Skill install failed");
         return;
-      case "tracker":
-        // Closes the checklist first: the settings screen is a full-area
-        // surface, and leaving a modal painted over it is the "surface open
-        // but deaf" failure closeModal() exists to avoid.
-        closeModal();
-        toggleSettingsScreen();
+      case "tracker": {
+        // A token, in place. Sending the user to the settings screen only ever
+        // let them pick a *type*; the credential still had to come from a shell
+        // export, so the wizard could not finish in one sitting — which is the
+        // whole reason the resolver reads a file at all. Without this,
+        // writeCredential had no callers and that file tier was never
+        // populated.
+        const tracker = adapters.issueTracker;
+        if (!tracker) {
+          closeModal();
+          toggleSettingsScreen();
+          return;
+        }
+        const prompt = new InputModal({
+          header: `Token for ${tracker.type}`,
+          subheader: `Stored in ~/.config/jmux/credentials.json (0600). Or leave blank and set ${tracker.authHint}.`,
+          value: "",
+        });
+        prompt.open();
+        openModal(prompt, async (value) => {
+          const token = String(value ?? "").trim();
+          if (!token) {
+            toggleSettingsScreen();
+            return;
+          }
+          writeCredential(tracker.type, token);
+          // Verified before it is believed: authenticate() makes a real
+          // identity request now, so a bad paste says so instead of sitting
+          // there looking connected.
+          const ok = await swapAdapters(configStore.config.adapters ?? {});
+          if (!ok) writeCredential(tracker.type, null);
+        });
         return;
+      }
       case "project-dirs":
         closeModal();
         void handlePaletteAction({ commandId: "setting-project-dirs" });
         return;
+      case "attach-team":
+        // The Projects screen is where a team is attached. Closing first for
+        // the same reason the tracker row does: a full-area surface with a
+        // modal left painted over it is the "open but deaf" failure.
+        closeModal();
+        toggleSettingsScreen();
+        return;
+      case "workflow":
+        // Routes to the workflow screen's own seed row rather than owning a
+        // second copy of suggestLayout.
+        closeModal();
+        openWorkflowScreen();
+        return;
+      case "preflight": {
+        // The subprocess checks first, so the notice reports what was actually
+        // verified rather than "not checked yet" twice.
+        await runDeepPreflight();
+        const results = runSetupPreflight();
+        showNotice({
+          title: results.every((c) => c.ok) ? "Ready" : "Not ready yet",
+          message: results
+            .map((c) => `${c.ok ? "✓" : "✗"} ${c.label} — ${c.detail}`)
+            .join("\n"),
+          tone: results.every((c) => c.ok) ? "plain" : "error",
+        });
+        return;
+      }
     }
   },
 });
@@ -5719,25 +6492,19 @@ function buildPaletteCommands(): PaletteCommand[] {
 
   // Command Center commands (context-aware: in-glass vs session).
   {
-    const focusedPaneId = inGlass ? (glassView?.focusedPaneId() ?? null) : null;
-    const focusedTabId = focusedPaneId
-      ? resolveTabId(pinnedTracker.getValue(focusedPaneId) ?? null, commandCenterTabs)
-      : null;
-    const focusedIsAuto = focusedPaneId ? !pinnedTracker.has(focusedPaneId) : false;
-    let sessionActivePinned = false;
-    if (!inGlass && currentSessionId) {
-      const activePane = glassRunner.run(["display-message", "-p", "-t", currentSessionId, "#{pane_id}"]).lines[0];
-      sessionActivePinned = activePane ? pinnedTracker.has(activePane) : false;
-    }
-    const tabCounts = new Map<string, number>();
-    for (const tab of commandCenterTabs) tabCounts.set(tab.id, 0);
-    for (const paneId of pinnedTracker.all()) {
-      const tid = resolveTabId(pinnedTracker.getValue(paneId) ?? null, commandCenterTabs);
-      tabCounts.set(tid, (tabCounts.get(tid) ?? 0) + 1);
-    }
+    const targetPaneId = resolveCcTargetPaneId();
+    const activeView = commandCenterViews.find((v) => v.id === activeViewId) ?? commandCenterViews[0];
+    const hiddenSessions = currentSessions
+      .filter((s) => gridHiddenSessionIds.has(s.id))
+      .map((s) => ({ id: s.id, name: displaySessionName(s) }));
     commands.push(...buildCcCommands({
-      inGlass, tabs: commandCenterTabs, activeTabId, tabCounts,
-      focusedPaneId, focusedTabId, focusedIsAuto, sessionActivePinned,
+      inGlass,
+      views: commandCenterViews,
+      activeViewId,
+      dirty: axesDiffer(activeView, gridAxes),
+      hiddenSessions,
+      targetPaneId,
+      targetPinned: targetPaneId ? pinnedTracker.has(targetPaneId) : false,
     }));
   }
 
@@ -5795,6 +6562,11 @@ function buildPaletteCommands(): PaletteCommand[] {
   commands.push({
     id: "setting-claude-command",
     label: "Claude command",
+    category: "setting",
+  });
+  commands.push({
+    id: "setting-attach-team",
+    label: "Attach a team to a project",
     category: "setting",
   });
   commands.push({
@@ -5856,11 +6628,6 @@ function buildPaletteCommands(): PaletteCommand[] {
   commands.push({
     id: "setting-default-branch",
     label: `Default base branch: ${repoNow.defaultBaseBranch}`,
-    category: "setting",
-  });
-  commands.push({
-    id: "setting-team-repo-map",
-    label: `Team → repo mappings (${Object.keys(wf?.teamRepoMap ?? {}).length})`,
     category: "setting",
   });
   commands.push({
@@ -5933,7 +6700,7 @@ type RepoRowKind = "text" | "boolean" | "multiselect" | "state";
 interface RepoRow {
   id: string;
   label: string;
-  field: keyof RepoSettings;
+  field: keyof ProjectSettings;
   kind: RepoRowKind;
   group: "workflow" | "transitions";
   /** One sentence for the explain line. Described once, shown in both tiers. */
@@ -5945,7 +6712,7 @@ const REPO_SETTING_ROWS: RepoRow[] = [
     describe: "The branch a new worktree is cut from." },
   { id: "session-template", label: "Session name template", field: "sessionNameTemplate", kind: "text", group: "workflow",
     describe: "Names the session, the branch and the worktree directory. {identifier} is the ticket's id." },
-  { id: "claude-command", label: "Claude command", field: "claudeCommand", kind: "text", group: "workflow",
+  { id: "agent-command", label: "Agent command", field: "agentCommand", kind: "text", group: "workflow",
     describe: "What runs in a new session's first pane when an agent is launched for you." },
   { id: "wtm", label: "wtm integration", field: "wtmIntegration", kind: "boolean", group: "workflow",
     describe: "On uses `wtm create`, which manages the bare repo. Off uses plain `git worktree add`." },
@@ -5970,10 +6737,10 @@ const NEVER_OPTION = "(never)";
  */
 interface RepoTier {
   idPrefix: string;
-  read: (field: keyof RepoSettings) => unknown;
-  write: (field: keyof RepoSettings, value: unknown) => void;
-  scope?: (field: keyof RepoSettings) => "inherited" | "override";
-  clear?: (field: keyof RepoSettings) => void;
+  read: (field: keyof ProjectSettings) => unknown;
+  write: (field: keyof ProjectSettings, value: unknown) => void;
+  scope?: (field: keyof ProjectSettings) => "inherited" | "override";
+  clear?: (field: keyof ProjectSettings) => void;
 }
 
 function buildRepoRows(group: RepoRow["group"], tier: RepoTier): SettingDef[] {
@@ -6026,8 +6793,8 @@ function buildRepoRows(group: RepoRow["group"], tier: RepoTier): SettingDef[] {
 function repoDefaultTier(): RepoTier {
   return {
     idPrefix: "",
-    read: (field) => configStore.config.repoDefaults?.[field] ?? REPO_SETTING_DEFAULTS[field],
-    write: (field, value) => configStore.setRepoDefault(field, value as never),
+    read: (field) => configStore.config.projectDefaults?.[field] ?? PROJECT_SETTING_DEFAULTS[field],
+    write: (field, value) => configStore.setProjectDefault(field, value as never),
   };
 }
 
@@ -6040,6 +6807,147 @@ function repoDefaultSettings(group: RepoRow["group"] = "workflow"): SettingDef[]
  * there is no repo-backed session — an override category with nothing to
  * override would just be a second, confusing copy of the defaults.
  */
+/**
+ * One category per configured Project.
+ *
+ * Deliberately categories on the settings screen rather than a fifth full-area
+ * surface. The screen already has `/` search, explain lines, provenance markers
+ * and the shared row dialect; a separate screen would be a second copy of all
+ * of it, and the workflow screen is the precedent for how much that costs.
+ *
+ * Health is stated on the header row rather than left to be discovered at
+ * provisioning time: a Project whose directory has gone says so here, and one
+ * whose team never resolved says that too — both are silent failures otherwise.
+ */
+/** Every route pointing at this Project, as removable entries. */
+function routesToProject(projectId: string): Array<{ kind: "issue" | "linearProject"; key: string }> {
+  const routes = configStore.config.routes ?? {};
+  const out: Array<{ kind: "issue" | "linearProject"; key: string }> = [];
+  for (const [key, id] of Object.entries(routes.issue ?? {})) {
+    if (id === projectId) out.push({ kind: "issue", key });
+  }
+  for (const [key, id] of Object.entries(routes.linearProject ?? {})) {
+    if (id === projectId) out.push({ kind: "linearProject", key });
+  }
+  return out;
+}
+
+/**
+ * Review and remove the routes pointing at a Project.
+ *
+ * Names each by what a human would recognise — the issue identifier or the
+ * Linear project name — rather than the id it is keyed on, which is what the
+ * user would actually have to match it against.
+ */
+function openRouteReview(project: ProjectConfig): void {
+  const entries = routesToProject(project.id);
+  if (entries.length === 0) {
+    showToast(`${project.title}: no remembered routes`);
+    return;
+  }
+  const issues = pollCoordinator.getGlobalIssues();
+  const label = (e: { kind: "issue" | "linearProject"; key: string }): string => {
+    if (e.kind === "issue") {
+      const found = issues.find((i) => i.id === e.key);
+      return `Issue ${found?.identifier ?? e.key}`;
+    }
+    const named = issues.find((i) => i.linearProjectId === e.key)?.project;
+    return `Linear project ${named ?? e.key}`;
+  };
+  const picker = new ListModal({
+    header: `Remove a route to ${project.title}?`,
+    items: entries.map((e, i) => ({ id: String(i), label: label(e) })),
+  });
+  picker.open();
+  openModal(picker, (value) => {
+    const at = Number((value as ListItem | undefined)?.id ?? -1);
+    const entry = entries[at];
+    if (!entry) return;
+    configStore.clearRoute(entry.kind, entry.key);
+    showToast(`Forgot ${label(entry)}`);
+  });
+}
+
+function projectCategories(): SettingsCategory[] {
+  const all = configStore.config.projects ?? [];
+  const live = all.filter((p) => p.deletedAt === undefined);
+  if (live.length === 0) return [];
+
+  return live.map((project) => {
+    // Read once per category build, not inside the closures: describe() and
+    // getNote() run per frame per visible row, and a stat on the render path is
+    // the stall gitOutput exists to avoid.
+    const dirExists = existsSync(project.dir);
+    const tier: RepoTier = {
+      idPrefix: `project-${project.id}-`,
+      read: (field) => repoSettingsFor(project.dir, project.id)[field as keyof ResolvedProjectSettings],
+      write: (field, value) => configStore.setProjectSetting(project.id, field, value as never),
+      scope: (field) => projectSettingScope(project, field, configStore.config.projectDefaults),
+      clear: (field) => configStore.clearProjectSetting(project.id, field),
+    };
+    return {
+      // Through projectLabel, not project.title: two Projects on one repo is
+      // the intended shape (a monorepo serving two teams), and both migrate
+      // titled from the same directory basename — so the bare title rendered
+      // two identical headers with nothing to tell them apart.
+      label: `Project · ${projectLabel(project, live, (id) => cachedTeams.find((t) => t.id === id)?.name ?? null)}`,
+      collapsed: true,
+      settings: [
+        {
+          // Routes are written as a side effect of answering a question at
+          // Start, so a rule can exist that the user does not remember making.
+          // The spec requires it be inspectable and deletable; without this
+          // clearRoute had no callers and a wrong answer was permanent.
+          id: `project-${project.id}-routes`,
+          label: "Remembered routes",
+          type: "action" as const,
+          getValue: () => {
+            const n = routesToProject(project.id).length;
+            return n === 0 ? "none" : `${n}`;
+          },
+          describe: () => "Answers you gave when an issue could have gone to more than one project. Enter to review and remove.",
+          onActivate: () => openRouteReview(project),
+        },
+        {
+          id: `project-${project.id}-status`,
+          label: "Repository",
+          type: "text" as const,
+          getValue: () => project.dir.replace(homedir(), "~"),
+          describe: () => dirExists
+            ? "Where worktree creation runs for this project."
+            : "This directory no longer exists — starting work here will fail.",
+          getNote: () => (dirExists ? null : "missing"),
+        },
+        {
+          id: `project-${project.id}-team`,
+          label: "Tracker team",
+          type: "text" as const,
+          getValue: () =>
+            project.teamId
+              ? (cachedTeams.find((t) => t.id === project.teamId)?.name ?? project.teamId)
+              : project.legacyTeamName
+                ? `${project.legacyTeamName} (unresolved)`
+                : "none",
+          describe: () => "Issues from this team route to this project. Without it, starting work from an issue does nothing.",
+        },
+        ...buildRepoRows("workflow", tier),
+        {
+          id: `project-${project.id}-delete`,
+          label: "Remove this project",
+          type: "action" as const,
+          getValue: () => "",
+          describe: () => "Marks it removed. Sessions still stamped with it report an orphaned project rather than being re-routed.",
+          onActivate: () => {
+            configStore.deleteProject(project.id);
+            settingsScreen.updateCategories(buildSettingsCategories());
+            showToast(`Removed project ${project.title}`);
+          },
+        },
+      ],
+    };
+  });
+}
+
 function currentRepoCategory(): SettingsCategory[] {
   const name = currentSessions.find((s) => s.id === currentSessionId)?.name;
   const dir = name ? sessionDir(name) : null;
@@ -6047,14 +6955,17 @@ function currentRepoCategory(): SettingsCategory[] {
   const key = repoFacts.get(dir).key;
   if (!key) return [];
 
-  const label = key.replace(/\/\.git$/, "").split("/").pop() ?? key;
+  // The Project, not the repo key. `repos[key]` no longer exists after the
+  // migration, so a tier reading it would show and write nothing.
+  const project = projectForCurrentSession();
+  if (!project) return [];
+  const label = project.title;
   const tier: RepoTier = {
-    idPrefix: "repo-",
-    read: (field) => repoSettingsFor(dir)[field as keyof ResolvedRepoSettings],
-    write: (field, value) => configStore.setRepoOverride(key, field, value as never),
-    scope: (field) =>
-      configStore.config.repos?.[key]?.[field] !== undefined ? "override" : "inherited",
-    clear: (field) => configStore.clearRepoOverride(key, field),
+    idPrefix: "project-",
+    read: (field) => repoSettingsFor(dir, project.id)[field as keyof ResolvedProjectSettings],
+    write: (field, value) => configStore.setProjectSetting(project.id, field, value as never),
+    scope: (field) => projectSettingScope(project, field, configStore.config.projectDefaults),
+    clear: (field) => configStore.clearProjectSetting(project.id, field),
   };
 
   // Transitions are not here: they moved onto the workflow screen, which shows
@@ -6067,22 +6978,49 @@ function currentRepoCategory(): SettingsCategory[] {
   }];
 }
 
+/** What `userTmuxConfig` says right now — re-read per render, so an edit shows. */
+function liveUserTmuxConfig() {
+  return resolveUserTmuxConfig(
+    demoCtx ? false : configStore.config.userTmuxConfig,
+    { home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME },
+    existsSync,
+  );
+}
+
 /**
- * "restart to apply" for an adapter row whose config no longer matches the
- * adapter this process is running.
+ * The disclosure that keeps that row from being a control that visibly does
+ * nothing: tmux reads `-f` only when it *starts* a server, so a change here
+ * cannot reach the one already running.
  *
- * `adapters` is built once at startup (see `createAdapters` above) and the
- * config watcher deliberately doesn't rebuild it — a live adapter owns polling
- * state and in-flight requests. So changing the row here writes config that
- * does nothing until the next launch, and the row has to say so rather than
- * reading as applied. It clears itself: after a restart the two agree.
- *
- * Demo mode reports `demo` for both adapters against a config that names
- * neither, which is not a pending change — hence the guard.
+ * Compared against what *this process* resolved at boot rather than against the
+ * server's stamp, which this process has already overwritten. The gap that
+ * leaves — attaching to a server some other jmux started — is covered by the
+ * startup modal, and returns null here rather than being guessed at.
  */
-function adapterRestartNote(configured: string | undefined, live: string | undefined): string | null {
+function userTmuxConfigRestartNote(): string | null {
   if (demoCtx) return null;
-  return (configured ?? "none") === (live ?? "none") ? null : "restart to apply";
+  return userTmuxConfigPath(liveUserTmuxConfig()) === userTmuxConfPath ? null : "restart to apply";
+}
+
+/**
+ * What the row says after its value: the organization when connected, the
+ * reason when not.
+ *
+ * Replaces `adapterRestartNote`. That existed because changing an adapter wrote
+ * config that did nothing until relaunch; swapAdapters applies it immediately,
+ * so the concept is gone. The note now reports something the user cannot
+ * otherwise see — "connected" used to be a claim about a string existing.
+ */
+function adapterConnectionNote(
+  adapter: { authState: string; authHint: string; identity: { organization: string | null } | null } | null,
+): string | null {
+  if (demoCtx || !adapter) return null;
+  switch (adapter.authState) {
+    case "ok": return adapter.identity?.organization ?? "connected";
+    case "unreachable": return "unreachable";
+    case "failed": return `not connected — check ${adapter.authHint}`;
+    default: return null;
+  }
 }
 
 // --- Session title settings ---
@@ -6157,7 +7095,15 @@ function titleSettings(): SettingDef[] {
         const next = options[((from + delta) % options.length + options.length) % options.length];
         setTitleCommand(next === TITLE_CUSTOM ? lastCustomTitleCommand : commandForPreset(next));
       },
-      onTextCommit: (v: string) => setTitleCommand(parseTitleCommand(v)),
+      onTextCommit: (v: string) => {
+        const argv = parseTitleCommand(v);
+        // A command that isn't on PATH fails as ENOENT inside the silent-failure
+        // rule, so the row would look configured and never name anything. This
+        // is the one moment the user is here to be told.
+        if (argv && Bun.which(argv[0]) === null) return `${argv[0]} is not on PATH`;
+        setTitleCommand(argv);
+        return null;
+      },
     },
     numberSetting({
       id: "title-max-chars", label: "Title length",
@@ -6275,8 +7221,8 @@ function buildSettingsCategories(): SettingsCategory[] {
         }),
         {
           id: "cache-timers", label: "Cache timers", type: "boolean" as const,
+          describe: () => "Show how long each agent's prompt cache has been warm, beside its state.",
           getValue: () => cacheTimersEnabled ? "on" : "off",
-          describe: () => "Show how long each agent's last prompt-cache read took, beside its session.",
           onToggle: () => {
             cacheTimersEnabled = !cacheTimersEnabled;
             sidebar.cacheTimersEnabled = cacheTimersEnabled;
@@ -6297,7 +7243,6 @@ function buildSettingsCategories(): SettingsCategory[] {
             if (imagesSupported === false) return "off (terminal can't draw)";
             return "off (detecting…)";
           },
-          describe: () => "Draw pictures for images in issue text. Needs a terminal that speaks the kitty graphics protocol.",
           onToggle: () => {
             configStore.set("images", { ...configStore.config.images, enabled: !imagesOn() });
             applyImageSupport();
@@ -6313,49 +7258,90 @@ function buildSettingsCategories(): SettingsCategory[] {
           describe: () => "The tallest an inline image is drawn in an issue preview. Wider images scale to fit.",
         }),
         {
-          id: "auto-pin-agents",
-          label: "Auto-pin agent panes to Command Center",
-          type: "boolean" as const,
-          getValue: () => autoPinAgentPanes ? "on" : "off",
-          describe: () => "Whether a pane running an agent joins the Command Center on its own.",
-          onToggle: () => {
-            autoPinAgentPanes = !autoPinAgentPanes;
-            configStore.set("autoPinAgentPanes", autoPinAgentPanes);
-            refreshPinnedPanes();
-          },
-        },
-        {
+          // Not an auto-pin switch any more: derived membership IS the
+          // baseline, so there is nothing to turn on. This pattern decides
+          // which panes are worth *electing* as a session's face when no agent
+          // integration has declared a kind.
           id: "agent-pane-regex",
-          label: "Auto-pin command match (regex)",
+          describe: () => "Case-insensitive regex over a pane's command, for agents that declare no kind of their own.",
+          label: "Agent command match (regex)",
           type: "text" as const,
           getValue: () => agentPaneRegex,
-          describe: () => "A pane whose command matches this is treated as an agent pane.",
           onTextCommit: (v) => {
             agentPaneRegex = v;
             configStore.set("agentPaneCommandRegex", v);
-            refreshPinnedPanes();
+            glassView?.setAgentPaneRegex(v);
+            invalidateGrid();
           },
         },
         {
           id: "running-color", label: "Running state color", type: "list" as const,
+          describe: () => "Indicator colour while an agent is working. \"neutral\" lets the row recede instead.",
           getValue: () => currentStateColorName("running"),
-          describe: () => "The colour of the RUNNING badge and its dot in the sidebar.",
           options: [...STATE_COLOR_NAMES],
           onOptionSelect: (v) => persistStateColor("running", v),
         },
         {
           id: "waiting-color", label: "Waiting state color", type: "list" as const,
+          describe: () => "Indicator colour while an agent needs you. \"neutral\" lets the row recede instead.",
           getValue: () => currentStateColorName("waiting"),
-          describe: () => "The colour of the WAITING badge and its dot in the sidebar.",
           options: [...STATE_COLOR_NAMES],
           onOptionSelect: (v) => persistStateColor("waiting", v),
         },
         {
           id: "complete-color", label: "Complete state color", type: "list" as const,
+          describe: () => "Indicator colour once an agent has finished. \"neutral\" lets the row recede instead.",
           getValue: () => currentStateColorName("complete"),
-          describe: () => "The colour of the COMPLETE badge and its dot in the sidebar.",
           options: [...STATE_COLOR_NAMES],
           onOptionSelect: (v) => persistStateColor("complete", v),
+        },
+      ],
+    },
+    // Its own category rather than a row in Display, because discoverability is
+    // the only reason this row exists at all — the setting is a once-per-machine
+    // decision that could have lived in config.json alone. A user whose tmux
+    // config is bleeding chrome into the jmux UI scans for "tmux"; they do not
+    // scan the gap between "Max image height" and "Auto-pin agent panes".
+    {
+      label: "tmux",
+      collapsed: false,
+      settings: [
+        {
+          id: "user-tmux-config",
+          label: "Source tmux config",
+          type: "text" as const,
+          // Modelled on the `panel-width` row's `auto`, not on a boolean: a
+          // boolean cannot express a path, and toggling off then on would
+          // silently destroy a configured one. The value discloses *why* it
+          // reads as it does — the construction the `inline-images` row uses —
+          // so the row can never claim a config is in force on a machine that
+          // has none.
+          getValue: () => formatUserTmuxConfig(liveUserTmuxConfig(), homedir()),
+          getEditValue: () => editableUserTmuxConfig(configStore.config.userTmuxConfig),
+          getNote: userTmuxConfigRestartNote,
+          // The explain line exists now (it did not when this row was written),
+          // so the accepted forms are stated where the user is looking rather
+          // than only in docs/configuration.md. A bare text box for a setting
+          // whose two common answers are words is the wrong control.
+          describe: () => "◂ ▸ switches between auto-detect and none. Enter to type a path instead.",
+          // ◂ ▸ walks the two answers almost everyone wants; Enter still takes a
+          // path, so the escape hatch costs nothing and the common case costs
+          // one keypress. Same construction as the ghost-cap row.
+          onStep: (delta: number) => {
+            const current = configStore.config.userTmuxConfig;
+            // Only two rungs: a path is a destination you type, not one you
+            // step onto, and cycling through it would be a value nobody chose.
+            const next = current === false ? undefined : false;
+            void delta;
+            if (next === undefined) configStore.delete("userTmuxConfig");
+            else configStore.set("userTmuxConfig", next);
+          },
+          onTextCommit: (v) => {
+            const parsed = parseUserTmuxConfig(v);
+            if (parsed === undefined) configStore.delete("userTmuxConfig");
+            else configStore.set("userTmuxConfig", parsed);
+            return null;
+          },
         },
       ],
     },
@@ -6364,12 +7350,23 @@ function buildSettingsCategories(): SettingsCategory[] {
       collapsed: false,
       settings: [
         {
+          id: "agent-screen-detection", label: "Detect agent state from pane text", type: "boolean" as const,
+          getValue: () => configStore.config.agentScreenDetection ? "on" : "off",
+          describe: () => "Last resort for agents with no hook integration. Off by default: a screen guess can be confidently wrong where a hook cannot.",
+          onToggle: () => {
+            configStore.set("agentScreenDetection", !configStore.config.agentScreenDetection);
+          },
+        },
+        {
           id: "code-host", label: "Code host", type: "list" as const,
           describe: () => "Where merge requests come from. Drives the MR badge and the MR-open and MR-merged transitions.",
           getValue: () => adapterCfg()?.codeHost?.type ?? "none",
           options: ["gitlab", "github", "none"],
-          onOptionSelect: (v) => configStore.setAdapter("codeHost", v === "none" ? null : { type: v }),
-          getNote: () => adapterRestartNote(adapterCfg()?.codeHost?.type, adapters.codeHost?.type),
+          onOptionSelect: (v) => {
+            configStore.setAdapter("codeHost", v === "none" ? null : { type: v });
+            void swapAdapters(configStore.config.adapters ?? {});
+          },
+          getNote: () => adapterConnectionNote(adapters.codeHost),
         },
         {
           // Only the trackers `createAdapters` can actually build. GitHub is a
@@ -6380,49 +7377,43 @@ function buildSettingsCategories(): SettingsCategory[] {
           describe: () => "Where issues come from. With none configured the queues, ghosts and stage bands have nothing to show.",
           getValue: () => adapterCfg()?.issueTracker?.type ?? "none",
           options: ["linear", "none"],
-          onOptionSelect: (v) => configStore.setAdapter("issueTracker", v === "none" ? null : { type: v }),
-          getNote: () => adapterRestartNote(adapterCfg()?.issueTracker?.type, adapters.issueTracker?.type),
+          onOptionSelect: (v) => {
+            configStore.setAdapter("issueTracker", v === "none" ? null : { type: v });
+            void swapAdapters(configStore.config.adapters ?? {});
+          },
+          getNote: () => adapterConnectionNote(adapters.issueTracker),
         },
       ],
     },
     {
-      label: "Repo",
+      // "Repo" and "Project" were two headers for one idea, sitting above N
+      // more headers per Project — three overlapping ways to say the same
+      // thing. This is the tier every Project inherits from, so it says so,
+      // and where the scan for new ones happens lives with it.
+      label: "Project defaults",
       collapsed: false,
       settings: [
+        {
+          // One row rather than N inline categories, the precedent
+          // "Configure workflow…" already sets: a screen of settings should not
+          // grow a header per Project, and the per-Project rows are the same
+          // fields as the defaults above them — read in a different tier.
+          id: "open-projects", label: "Projects…", type: "action" as const,
+          getValue: () => {
+            const live = (configStore.config.projects ?? []).filter((p) => p.deletedAt === undefined);
+            if (live.length === 0) return "none yet";
+            const unattached = live.filter((p) => p.teamId === undefined).length;
+            return unattached > 0
+              ? `${live.length} · ${unattached} without a team`
+              : `${live.length} configured`;
+          },
+          describe: () => "One repo and at most one tracker team each. Enter to open.",
+          onActivate: () => openProjectsScreen(),
+        },
         ...repoDefaultSettings(),
         {
-          id: "team-repo-map", label: "Team → repo mappings", type: "map" as const,
-          describe: () => "Which repo an issue's worktree is created in, decided by the team that owns it.",
-          getValue: () => {
-            const entries = Object.entries(wf()?.teamRepoMap ?? {});
-            return entries.length > 0 ? `${entries.length} mapped` : "none";
-          },
-          getMapEntries: () => Object.entries(wf()?.teamRepoMap ?? {}).map(([k, v]) => ({ key: k, value: v })),
-          getMapKeyOptions: () => {
-            // Provide Linear teams if available, otherwise manual entry
-            // Teams are fetched async in pollGlobal — use cached global issues' teams as proxy
-            const teams = new Set<string>();
-            for (const issue of pollCoordinator.getGlobalIssues()) {
-              if (issue.team) teams.add(issue.team);
-            }
-            return [...teams].sort().map((t) => ({ id: t, label: t }));
-          },
-          getMapValueOptions: () => {
-            const dirs = cachedProjectDirs.length > 0 ? cachedProjectDirs : [homedir()];
-            return dirs.map((d) => ({ id: d, label: d.replace(homedir(), "~") }));
-          },
-          onMapSave: (key, value) => configStore.setTeamRepo(key, value),
-          onMapRemove: (key) => configStore.setTeamRepo(key, null),
-        },
-      ],
-    },
-    {
-      label: "Project",
-      collapsed: false,
-      settings: [
-        {
           id: "project-dirs", label: "Project directories", type: "text" as const,
-          describe: () => "Comma-separated roots jmux looks in for repos. Blank scans the usual places.",
+          describe: () => "Comma-separated. Where Ctrl-a n looks for repos, and where adding a project scans.",
           getValue: () => {
             const dirs = configStore.config.projectDirs ?? [];
             return dirs.length > 0 ? dirs.join(", ") : "auto-detect";
@@ -6435,9 +7426,102 @@ function buildSettingsCategories(): SettingsCategory[] {
       ],
     },
     {
+      // Not an "Advanced" bucket: these differ in kind — a naming subprocess, a
+      // diff viewer, browser resource use — and filing them together by how
+      // rarely they are touched is a junk drawer. Collapsed, because most
+      // people never need them; findable, because `/` searches every category.
       label: "Session titles",
-      collapsed: false,
+      collapsed: true,
       settings: titleSettings(),
+    },
+    {
+      label: "Diff panel",
+      collapsed: true,
+      settings: [
+        {
+          id: "diff-watch", label: "Follow the working tree", type: "boolean" as const,
+          getValue: () => configStore.config.diffPanel?.watch !== false ? "on" : "off",
+          describe: () => "Launches hunk with --watch so the panel follows edits instead of being a snapshot from when it opened.",
+          onToggle: () => configStore.set("diffPanel", {
+            ...configStore.config.diffPanel,
+            watch: configStore.config.diffPanel?.watch === false,
+          }),
+        },
+        {
+          id: "diff-control-plane", label: "Diff stats and review notes", type: "boolean" as const,
+          getValue: () => configStore.config.diffPanel?.controlPlane !== false ? "on" : "off",
+          describe: () => "Talks to hunk's session daemon. Off falls back to exactly the behaviour jmux had before the daemon existed.",
+          onToggle: () => configStore.set("diffPanel", {
+            ...configStore.config.diffPanel,
+            controlPlane: configStore.config.diffPanel?.controlPlane === false,
+          }),
+        },
+        {
+          id: "diff-clear-notes", label: "Clear notes once sent", type: "boolean" as const,
+          getValue: () => configStore.config.diffPanel?.clearNotesOnSend ? "on" : "off",
+          describe: () => "Keeps the note badge meaning \"written but not yet sent\". Off keeps them as a record, and every send re-sends everything.",
+          onToggle: () => configStore.set("diffPanel", {
+            ...configStore.config.diffPanel,
+            clearNotesOnSend: !configStore.config.diffPanel?.clearNotesOnSend,
+          }),
+        },
+      ],
+    },
+    {
+      label: "Browser panes",
+      collapsed: true,
+      settings: [
+        {
+          id: "browser-isolate", label: "One daemon per pane", type: "boolean" as const,
+          getValue: () => configStore.config.browser?.isolate !== false ? "on" : "off",
+          describe: () => "Off makes every browser pane share one daemon, which makes them all draw the same page.",
+          onToggle: () => configStore.set("browser", {
+            ...configStore.config.browser,
+            isolate: configStore.config.browser?.isolate === false,
+          }),
+        },
+        {
+          id: "browser-pane-size", label: "Pane size", type: "text" as const,
+          getValue: () => String(configStore.config.browser?.paneSize ?? DEFAULT_BROWSER_PANE_SIZE),
+          describe: () => "Fraction of the current pane a browser pane takes. 0.2–0.95.",
+          onTextCommit: (v: string) => {
+            const n = parseFloat(v);
+            if (isNaN(n) || n < 0.2 || n > 0.95) return "must be between 0.2 and 0.95";
+            configStore.set("browser", { ...configStore.config.browser, paneSize: n });
+            return null;
+          },
+        },
+        {
+          id: "browser-display-scale", label: "Display scale", type: "text" as const,
+          getValue: () => String(configStore.config.browser?.displayScale ?? "auto"),
+          describe: () => "Chooses which layout a page picks. \"auto\" follows the terminal.",
+          onTextCommit: (v: string) => {
+            if (v.trim() === "auto" || v.trim() === "") {
+              configStore.set("browser", { ...configStore.config.browser, displayScale: "auto" });
+              return null;
+            }
+            const n = parseFloat(v);
+            if (isNaN(n) || n <= 0) return "a positive number, or \"auto\"";
+            configStore.set("browser", { ...configStore.config.browser, displayScale: n });
+            return null;
+          },
+        },
+        {
+          id: "browser-fps", label: "Frame rate", type: "text" as const,
+          getValue: () => String(configStore.config.browser?.fps ?? "auto"),
+          describe: () => "Frames per second a browser pane redraws at. \"auto\" lets jmux choose.",
+          onTextCommit: (v: string) => {
+            if (v.trim() === "auto" || v.trim() === "") {
+              configStore.set("browser", { ...configStore.config.browser, fps: "auto" });
+              return null;
+            }
+            const n = parseInt(v, 10);
+            if (isNaN(n) || n < 1 || n > 120) return "1–120, or \"auto\"";
+            configStore.set("browser", { ...configStore.config.browser, fps: n });
+            return null;
+          },
+        },
+      ],
     },
     {
       // One row, because the whole chain — tabs, which statuses land in each,
@@ -6472,14 +7556,14 @@ function buildSettingsCategories(): SettingsCategory[] {
       settings: [
         {
           id: "park-status", label: "Parking status", type: "info" as const,
-          describe: () => "Read-only. Configure which statuses park on the workflow screen.",
+          describe: () => "Whether any tab is configured to park its sessions, and how many are parked now.",
           getValue: () =>
             parkingSetupWarning(derivedStages().parked.length)
             ?? `active — ${currentSessions.filter((x) => sidebar.isParked(x.name)).length} parked`,
         },
         {
           id: "drift-status", label: "Drift detection", type: "info" as const,
-          describe: () => "Read-only. An issue drifts when its status sits behind where a transition would have put it.",
+          describe: () => "Whether any transition target is configured, and how many issues sit behind theirs.",
           getValue: () => {
             const inputs = workflowInputs();
             // The issues actually examined, not just whether one had a target:
@@ -6498,7 +7582,7 @@ function buildSettingsCategories(): SettingsCategory[] {
         },
         {
           id: "stage-source", label: "Tracker states available", type: "info" as const,
-          describe: () => "Read-only. The statuses your tracker reports, which the workflow screen maps into stages.",
+          describe: () => "How many workflow statuses the tracker reported. Empty means it is not connected.",
           getValue: () => {
             if (adapters.issueTracker?.authState !== "ok") return "tracker not connected";
             return cachedWorkflowStates.length > 0
@@ -6508,8 +7592,33 @@ function buildSettingsCategories(): SettingsCategory[] {
         },
       ],
     },
-    ...currentRepoCategory(),
   ];
+}
+
+/**
+ * The Projects surface.
+ *
+ * Reuses SettingsScreen rather than adding a fifth full-area surface: it is the
+ * same list, search, explain line and validation over a different set of
+ * categories, and a bespoke screen would be a copy of all four. Replaces the
+ * open screen rather than layering, for the reason closeModal() exists — the
+ * settings screen consumes every keystroke while it is open.
+ */
+function openProjectsScreen(): void {
+  const categories = projectCategories();
+  if (categories.length === 0) {
+    showNotice({
+      title: "No Projects",
+      message: "Nothing has been migrated or added yet.",
+      hint: "Open a session in a repo, or add a directory under Project defaults.",
+      tone: "plain",
+    });
+    return;
+  }
+  settingsScreen.open(categories, "Projects");
+  inputRouter.setModalOpen(true);
+  applyChromeLayout();
+  scheduleRender();
 }
 
 function toggleSettingsScreen(): void {
@@ -6568,15 +7677,16 @@ function currentRepoTier(): { label: string; tier: RepoTier } | null {
   if (!dir) return null;
   const key = repoFacts.get(dir).key;
   if (!key) return null;
+  const project = projectForCurrentSession();
+  if (!project) return null;
   return {
-    label: key.replace(/\/\.git$/, "").split("/").pop() ?? key,
+    label: project.title,
     tier: {
-      idPrefix: "repo-",
-      read: (field) => repoSettingsFor(dir)[field as keyof ResolvedRepoSettings],
-      write: (field, value) => configStore.setRepoOverride(key, field, value as never),
-      scope: (field) =>
-        configStore.config.repos?.[key]?.[field] !== undefined ? "override" : "inherited",
-      clear: (field) => configStore.clearRepoOverride(key, field),
+      idPrefix: "project-",
+      read: (field) => repoSettingsFor(dir, project.id)[field as keyof ResolvedProjectSettings],
+      write: (field, value) => configStore.setProjectSetting(project.id, field, value as never),
+      scope: (field) => projectSettingScope(project, field, configStore.config.projectDefaults),
+      clear: (field) => configStore.clearProjectSetting(project.id, field),
     },
   };
 }
@@ -6769,7 +7879,7 @@ function buildGhostPreviewPort(): GhostPreviewPort {
       const issue = pollCoordinator.getGlobalIssues().find((i) => i.id === issueId);
       if (!issue) return null;
       const state = issueSessionStateFor(issue);
-      const repoDir = resolveIssueRepoDir(issue, configStore.config, homedir());
+      const repoDir = issueRepoDir(issue);
       return buildPreflight({
         issueState: state?.state ?? "none",
         linkedSessionName: state?.sessionName,
@@ -6954,10 +8064,18 @@ function handleSettingsInput(data: string): void {
   scheduleRender();
 }
 
-/** The repo an issue routes to, home-expanded, or null when its team is unmapped. */
-function issueRepoDir(issue: Pick<import("./adapters/types").Issue, "team">): string | null {
-  const repoDir = configStore.config.issueWorkflow?.teamRepoMap?.[issue.team ?? ""];
-  return repoDir ? repoDir.replace("~", homedir()) : null;
+/**
+ * The repo an issue routes to, or null when routing cannot answer.
+ *
+ * Through Projects, not `teamRepoMap` — the migration deletes that map, so this
+ * returned null for every issue afterwards, and it feeds
+ * `resolveIssueSessionName` and therefore the whole ghost and start flow.
+ */
+function issueRepoDir(
+  issue: Pick<import("./adapters/types").Issue, "id" | "team" | "teamId" | "linearProjectId">,
+): string | null {
+  const outcome = resolveIssueProjectFor(issue);
+  return outcome.kind === "resolved" ? outcome.project.dir : null;
 }
 
 function resolveIssueSessionName(issue: import("./adapters/types").Issue): string | null {
@@ -6983,12 +8101,14 @@ async function provisionIssueSession(o: {
   issues: import("./adapters/types").Issue[];
   /** Home-expanded. */
   repoDir: string;
-  settings: ReturnType<typeof repoSettingsFor>;
+  settings: ResolvedProjectSettings;
   baseBranch: string;
   worktreeExists: boolean;
   prompt: (tracker: NonNullable<typeof adapters.issueTracker>) => string;
   /** What the error modal names when creation fails. */
   failureSubject: string;
+  /** The Project this work belongs to, stamped on the session. */
+  projectId?: string;
 }): Promise<StartOutcome> {
   try {
     // Seed the first user message for Claude by writing the prompt to a temp
@@ -7019,7 +8139,7 @@ async function provisionIssueSession(o: {
       baseBranch: o.baseBranch,
       wtm: o.settings.wtmIntegration,
       worktreeExists: o.worktreeExists,
-      agentCommand: shouldLaunchAgent ? o.settings.claudeCommand : null,
+      agentCommand: shouldLaunchAgent ? o.settings.agentCommand : null,
       promptFile: promptTmp,
     });
 
@@ -7035,6 +8155,15 @@ async function provisionIssueSession(o: {
       );
       // The new worktree changes what git reports for these paths.
       repoFacts.clear();
+    }
+
+    // Stamp the Project before anything reads the session. Path containment
+    // cannot substitute: two Projects may share a directory, so a session in
+    // one is indistinguishable from a session in the other without this.
+    if (o.projectId && isWritableProjectId(o.projectId)) {
+      await control
+        .sendCommand(`set-option -t ${tq(o.session)} ${PROJECT_OPTION} ${tq(o.projectId)}`)
+        .catch(() => {});
     }
 
     await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(o.session)}`);
@@ -7065,6 +8194,67 @@ async function provisionIssueSession(o: {
  * key and the capture composer's "capture & start", so both go through exactly
  * one implementation of the three-state flow.
  */
+/**
+ * Ask which Project an ambiguous issue belongs to, and remember the answer.
+ *
+ * This is the write half of `routes`. Without it `setRoute` had no callers at
+ * all: the resolver read a table nothing ever filled, so a team claimed by two
+ * Projects stayed `ambiguous` forever and every start fell through to the
+ * manual picker having learned nothing — the "asked forever" outcome routes
+ * exist to prevent.
+ *
+ * The correction writes the *rule*, not an exception — but only when a rule is
+ * honest. "Always" is withheld when the Linear project has already resolved to
+ * two different Projects (`mayOfferLinearProjectRoute`), and when the issue has
+ * no Linear project there is no durable key for one, so only the exact
+ * issue-level answer is offered.
+ */
+function pickProjectForIssue(
+  issue: import("./adapters/types").Issue,
+  candidates: readonly ProjectConfig[],
+  then: (project: ProjectConfig) => void,
+): void {
+  const picker = new ListModal({
+    header: `Which project for ${issue.identifier}?`,
+    items: candidates.map((c) => ({ id: c.id, label: c.title })),
+  });
+  picker.open();
+  openModal(picker, (value) => {
+    const chosen = candidates.find((c) => c.id === (value as ListItem | undefined)?.id);
+    if (!chosen) return;
+
+    // What the sidebar has actually seen, so "always" is only offered when the
+    // Linear project has behaved like a 1:1 so far.
+    const observed = currentSessions
+      .flatMap((sess) => (pollCoordinator.getContext(sess.name)?.issues ?? [])
+        .map((i) => ({ linearProjectId: i.linearProjectId, projectId: sess.projectId })))
+      .flatMap((o) => (o.projectId ? [{ linearProjectId: o.linearProjectId, projectId: o.projectId }] : []));
+
+    const lp = issue.linearProjectId;
+    const lpName = issue.project;
+    if (lp && mayOfferLinearProjectRoute(observed, lp)) {
+      const scope = new ListModal({
+        header: "Remember this choice?",
+        items: [
+          { id: "issue", label: `Just ${issue.identifier}` },
+          { id: "always", label: `Always for "${lpName ?? lp}"` },
+        ],
+      });
+      scope.open();
+      openModal(scope, (scopeValue) => {
+        const how = (scopeValue as ListItem | undefined)?.id;
+        if (how === "always") configStore.setRoute("linearProject", lp, chosen.id);
+        else if (how === "issue") configStore.setRoute("issue", issue.id, chosen.id);
+        if (how) then(chosen);
+      });
+      return;
+    }
+    // No durable key for a rule, so the exact answer is the only honest one.
+    configStore.setRoute("issue", issue.id, chosen.id);
+    then(chosen);
+  });
+}
+
 async function startWorkOnIssue(
   issue: import("./adapters/types").Issue,
   issueState: "none" | "worktree" | "session",
@@ -7072,8 +8262,8 @@ async function startWorkOnIssue(
 ): Promise<StartOutcome> {
       // STATE 3: a live session already exists for this issue (either via an
       // explicit L-key link or a workflow-derived name match). Switch to it.
-      // Done before the workflow/repoDir check so explicit links work even
-      // when the issue's team has no teamRepoMap entry.
+      // Done before the routing check so explicit links work even when the
+      // issue's team routes to no project.
       if (issueState === "session" && linkedSessionName) {
         if (!ptyClientName) await resolveClientName();
         if (!ptyClientName) return "failed";
@@ -7081,10 +8271,24 @@ async function startWorkOnIssue(
         return "switched";
       }
 
-      const workflow = configStore.config.issueWorkflow;
-      const repoDir = workflow?.teamRepoMap?.[issue.team ?? ""];
+      // Through Projects. The migration deletes teamRepoMap, so this read was
+      // undefined for every issue afterwards and every start fell through to
+      // the manual picker.
+      const startOutcome = resolveIssueProjectFor(issue);
+      // Ambiguity is answerable, so ask rather than falling through to the
+      // manual picker having learned nothing. The answer is written as a route,
+      // which is what stops the same question being asked again.
+      if (startOutcome.kind === "ambiguous") {
+        pickProjectForIssue(issue, startOutcome.candidates, () => {
+          // Re-entered with the same state: the route is written, so the
+          // resolver now answers and this pass takes the automated path.
+          void startWorkOnIssue(issue, issueState, linkedSessionName);
+        });
+        return "failed";
+      }
+      const repoDir = startOutcome.kind === "resolved" ? startOutcome.project.dir : undefined;
 
-      // Automated path: config maps this issue's team to a repo
+      // Automated path: routing resolved this issue to a project
       if (repoDir) {
         if (!ptyClientName) await resolveClientName();
         if (!ptyClientName) return "failed";
@@ -7111,11 +8315,13 @@ async function startWorkOnIssue(
       }
 
       // Fallback: no config mapping — open manual modal
-      const initialDirs = cachedProjectDirs.length > 0 ? cachedProjectDirs : [homedir()];
-      const modal = new NewSessionModal(getNewSessionProviders(initialDirs));
+      const modal = new NewSessionModal(getNewSessionProviders(newSessionDirs()));
       modal.open();
-      refreshProjectDirsInBackground((dirs) => {
-        modal.updateProjectDirs(dirs);
+      refreshProjectDirsInBackground(() => {
+        // Re-derived, not passed through: the scan yields bare paths, and
+        // handing those straight to the modal would replace the named Project
+        // rows with anonymous ones the moment it finished.
+        modal.updateProjectDirs(newSessionDirs());
         scheduleRender();
       });
       openModal(modal, async (value) => {
@@ -7470,34 +8676,45 @@ async function startIssueGroup(
     return;
   }
 
-  const repos = new Map<string, string[]>();
+  // Grouped by **Project**, not by directory. Two Projects can share a
+  // directory, so a path-keyed check would happily merge a set that belongs to
+  // two different teams' work — and the session it created would carry one
+  // stamp for issues routed to both.
+  const byProject = new Map<string, { title: string; ids: string[] }>();
+  // Built once: the loop below is per issue, and rebuilding this inside it is
+  // sessions x contexts x issues to answer one question per issue.
+  const sessionIndex = sessionByIssueId();
   for (const issue of fresh) {
-    const dir = issueRepoDir(issue);
-    if (!dir) {
+    const outcome = resolveIssueProjectFor(issue, sessionIndex);
+    if (outcome.kind !== "resolved") {
       showNotice({
-        title: "No Repo Mapped",
-        message: `${issue.identifier} belongs to team "${issue.team ?? "?"}", which maps to no repository.`,
-        hint: "Set one in Settings → Issue workflow, then try again.",
+        title: outcome.kind === "unclaimed" ? "No Project For This Team" : "Project Not Resolved",
+        message: describeRoutingOutcome(issue, outcome),
+        hint: outcome.kind === "unclaimed"
+          ? "Create a project for the team in Settings, then try again."
+          : "Start one of these on its own first, and jmux will remember the choice.",
         tone: "error",
       });
       return;
     }
-    const seen = repos.get(dir);
-    if (seen) seen.push(issue.identifier);
-    else repos.set(dir, [issue.identifier]);
+    const seen = byProject.get(outcome.project.id);
+    if (seen) seen.ids.push(issue.identifier);
+    else byProject.set(outcome.project.id, { title: outcome.project.title, ids: [issue.identifier] });
   }
-  if (repos.size > 1) {
+  if (byProject.size > 1) {
     showNotice({
-      title: "Group Spans Several Repos",
-      message: `${label || "This group"} covers ${repos.size} repositories, and a session has one worktree.`,
-      hint: [...repos.entries()].map(([dir, ids]) => `${dir.replace(homedir(), "~")}: ${ids.join(", ")}`).join("  ·  "),
+      title: "Group Spans Several Projects",
+      message: `${label || "This group"} covers ${byProject.size} projects, and a session has one worktree.`,
+      hint: [...byProject.values()].map((p) => `${p.title}: ${p.ids.join(", ")}`).join("  ·  "),
       tone: "error",
     });
     return;
   }
 
-  const repoDir = [...repos.keys()][0]!;
-  const settings = repoSettingsFor(repoDir);
+  const groupProjectId = [...byProject.keys()][0]!;
+  const groupProject = (configStore.config.projects ?? []).find((p) => p.id === groupProjectId)!;
+  const repoDir = groupProject.dir;
+  const settings = repoSettingsFor(repoDir, groupProjectId);
   const skipped = taken.length > 0 ? `  (${taken.length} already started)` : "";
 
   const nameModal = new InputModal({
@@ -7576,6 +8793,29 @@ function attachIssueTo(
   }
   sessionState.addLink(sessionName, { type: "issue", id: issue.id });
   pollCoordinator.addLinkedIssue(sessionName, issue);
+  invalidateSessionIssueIndex();
+
+  // Crossing a Project boundary is reported, not refused and not acted on. The
+  // user linked *this issue* to *this session*, which is a statement about one
+  // issue — writing a route from it would be inventing a rule they did not
+  // make, and refusing would reject the ordinary case of a feature filed under
+  // two teams.
+  const target = currentSessions.find((x) => x.name === sessionName);
+  // Resolved with an *empty* session index, deliberately. The question is where
+  // this issue routes by configuration — not where it sits now. Consulting
+  // sessions would find the link made two lines above, return `via: "existing
+  // session"` naming this very session's Project, and make the comparison below
+  // always equal: a disclosure that could never fire.
+  const drift = attachProjectDrift(
+    target?.projectId ?? null,
+    resolveIssueProjectFor(issue, new Map()),
+  );
+  if (drift) {
+    const mine = projectById(configStore.config.projects ?? [], drift.sessionProjectId);
+    showToast(
+      `${issue.identifier} routes to ${drift.issueProject.title}, not ${mine?.title ?? drift.sessionProjectId}`,
+    );
+  }
   return { movedFrom };
 }
 
@@ -7772,7 +9012,10 @@ function removeIssueLinkFrom(
     removed = writeOptionIssueLinks(sessionName, remaining) || removed;
   }
 
-  if (removed) pollCoordinator.removeLinkedIssue(sessionName, issue.id);
+  if (removed) {
+    pollCoordinator.removeLinkedIssue(sessionName, issue.id);
+    invalidateSessionIssueIndex();
+  }
   return removed;
 }
 
@@ -7950,16 +9193,43 @@ function focusPanelOnIssue(issueId: string): void {
   focusPanelWhere(byIssueId(issueId), linkedIds);
 }
 
-function pickRepoForTeam(teamName: string): void {
-  const dirs = cachedProjectDirs.length > 0 ? cachedProjectDirs : [homedir()];
-  const dirItems = dirs.map((d) => ({ id: d, label: d.replace(homedir(), "~") }));
-  const dirPicker = new ListModal({ items: dirItems, header: `Repository for ${teamName}` });
-  dirPicker.open();
-  openModal(dirPicker, (dirValue) => {
-    const dirSel = dirValue as ListItem;
-    configStore.setTeamRepo(teamName, dirSel.id);
-  });
+/**
+ * Directories `Ctrl-a n` offers, Projects first.
+ *
+ * A configured Project is a repo the user has already adopted, so it leads —
+ * and this is what stops `projectDirs` being load-bearing for making a session
+ * at all, which was one of the three reported failures. A repo that belongs to
+ * no Project still appears, from the scan cache, so Projects never become
+ * mandatory before jmux is usable.
+ *
+ * Deduplicated by path: several Projects may share a directory, and offering it
+ * twice would ask the user to choose between two identical rows.
+ */
+function newSessionDirs(): Array<{ dir: string; label?: string }> {
+  const live = (configStore.config.projects ?? []).filter((p) => p.deletedAt === undefined);
+  const out: Array<{ dir: string; label?: string }> = [];
+  // Projects first, and each is its own row even when two share a directory:
+  // that is the monorepo-serving-two-teams shape, and collapsing them to one
+  // path makes them indistinguishable at the moment the user has to choose.
+  // projectLabel is what stops the two rows reading identically.
+  for (const p of live) {
+    out.push({
+      dir: p.dir,
+      label: projectLabel(p, live, (id) => cachedTeams.find((t) => t.id === id)?.name ?? null),
+    });
+  }
+  // Then whatever the scan found, minus anything a Project already offered —
+  // a bare path below a named row is the same destination said twice.
+  const claimed = new Set(live.map((p) => p.dir));
+  const scanned = cachedProjectDirs.length > 0 ? cachedProjectDirs : [homedir()];
+  for (const d of scanned) {
+    if (claimed.has(d)) continue;
+    claimed.add(d);
+    out.push({ dir: d });
+  }
+  return out;
 }
+
 
 let viewSaveTimer: ReturnType<typeof setTimeout> | null = null;
 function debouncedViewSave(view: PanelView): void {
@@ -8020,7 +9290,7 @@ function refreshProjectDirsInBackground(onUpdate?: (dirs: string[]) => void): vo
     });
 }
 
-function getNewSessionProviders(preScannedDirs: string[]): NewSessionProviders {
+function getNewSessionProviders(preScannedDirs: Array<{ dir: string; label?: string }>): NewSessionProviders {
   return {
     scanProjectDirs: () => preScannedDirs,
     isBareRepo: (dir) => {
@@ -8150,34 +9420,25 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
     return;
   }
 
-  // Pin the current session's active pane (or move the focused tile) to a
-  // chosen/created tab. Writers only set/unset `@jmux-pinned`; the TUI reflects
-  // it into Command Center live-mirror tiles — no pane is ever moved or broken.
-  if (commandId === "pin-pane" || commandId === "move-tile") {
-    const paneId = commandId === "pin-pane"
-      ? glassRunner.run(["display-message", "-p", "-t", currentSessionId!, "#{pane_id}"]).lines[0]
-      : (glassView?.focusedPaneId() ?? null);
+  // Pin/unpin the pane a Command Center command acts on — the glass tile's
+  // displayed pane in the grid, the current session's active pane otherwise
+  // (`resolveCcTargetPaneId`, shared with buildPaletteCommands so the row
+  // offered and the pane acted on can't disagree). Pin no longer takes a tab:
+  // it keeps this pane's session on the grid and prefers this pane as its
+  // face; unpin drops that preference.
+  if (commandId === "pin-pane") {
+    const paneId = resolveCcTargetPaneId();
     if (!paneId) return;
-    const applyTab = (tabId: string) => {
-      for (const cmd of buildPinCommands("pin", paneId, tabId)) glassRunner.run(cmd.args);
-      if (commandId === "move-tile") switchCommandCenterTab(tabId); // follow the moved tile
-      refreshPinnedPanes();
-    };
-    if (sublistOptionId === NEW_TAB_OPTION_ID) {
-      openInputModalForNewTab((newTabId) => applyTab(newTabId));
-    } else if (sublistOptionId) {
-      applyTab(sublistOptionId);
-    }
+    for (const cmd of buildPinCommands("pin", paneId)) glassRunner.run(cmd.args);
+    invalidateGrid();
     return;
   }
 
-  if (commandId === "unpin-pane" || commandId === "unpin-tile") {
-    const paneId = commandId === "unpin-tile"
-      ? (glassView?.focusedPaneId() ?? null)
-      : glassRunner.run(["display-message", "-p", "-t", currentSessionId!, "#{pane_id}"]).lines[0];
+  if (commandId === "unpin-pane") {
+    const paneId = resolveCcTargetPaneId();
     if (!paneId) return;
     for (const cmd of buildPinCommands("unpin", paneId)) glassRunner.run(cmd.args);
-    refreshPinnedPanes();
+    invalidateGrid();
     return;
   }
 
@@ -8197,18 +9458,29 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
     return;
   }
 
-  if (commandId === "switch-cc-tab" && sublistOptionId) {
+  if (commandId === "switch-cc-view" && sublistOptionId) {
     if (!inGlass) { await enterGlass(); }
-    switchCommandCenterTab(sublistOptionId);
+    switchGlassView(sublistOptionId);
     return;
   }
 
-  if (commandId === "new-cc-tab") { openInputModalForNewTab((id) => switchCommandCenterTab(id)); return; }
-  if (commandId === "rename-cc-tab") { openInputModalForRenameTab(); return; }
-  if (commandId === "delete-cc-tab") { tryDeleteActiveTab(); return; }
-  if (commandId === "move-tab-left" || commandId === "move-tab-right") {
-    persistTabs(moveTab(commandCenterTabs, activeTabId, commandId === "move-tab-left" ? "left" : "right"));
-    scheduleRender();
+  if (commandId === "save-cc-view") { openInputModalForSaveView(); return; }
+  if (commandId === "rename-cc-view") { openInputModalForRenameView(); return; }
+  if (commandId === "delete-cc-view") { deleteCcView(); return; }
+
+  if (commandId === "show-hidden-sessions" && sublistOptionId) {
+    for (const cmd of buildGridHiddenCommands("unhide", sublistOptionId)) glassRunner.run(cmd.args);
+    invalidateGrid();
+    // Clearing the hide is not the same as the session appearing: the active
+    // view's filter still has to select it, and a session hidden while idle
+    // usually still is. Without this the row simply leaves the palette — which
+    // reads as "done" while the grid is unchanged, the same silent-no-op the
+    // hide list exists to prevent.
+    const name = currentSessions.find((s) => s.id === sublistOptionId)?.name ?? sublistOptionId;
+    showNotice({
+      title: "Command Center",
+      message: `${name} is no longer hidden. It joins the grid when the current view selects it — ⌃a f widens the filter.`,
+    });
     return;
   }
 
@@ -8225,13 +9497,13 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       // Open modal immediately with whatever is in the cache (could be empty
       // on a cold first start). Kick off a background rescan and update the
       // modal live when it completes.
-      const initialDirs = cachedProjectDirs.length > 0
-        ? cachedProjectDirs
-        : [homedir()];
-      const modal = new NewSessionModal(getNewSessionProviders(initialDirs));
+      const modal = new NewSessionModal(getNewSessionProviders(newSessionDirs()));
       modal.open();
-      refreshProjectDirsInBackground((dirs) => {
-        modal.updateProjectDirs(dirs);
+      refreshProjectDirsInBackground(() => {
+        // Re-derived, not passed through: the scan yields bare paths, and
+        // handing those straight to the modal would replace the named Project
+        // rows with anonymous ones the moment it finished.
+        modal.updateProjectDirs(newSessionDirs());
         scheduleRender();
       });
       openModal(modal, async (value) => {
@@ -8434,7 +9706,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       const modal = new InputModal({
         header: "Claude Command",
         subheader: "Command to launch Claude Code from toolbar (global default)",
-        value: repoDefaultsView().claudeCommand,
+        value: repoDefaultsView().agentCommand,
       });
       modal.open();
       openModal(modal, async (value) => {
@@ -8538,59 +9810,55 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       });
       return;
     }
-    case "setting-team-repo-map": {
-      const current = configStore.config.issueWorkflow?.teamRepoMap ?? {};
-      const entries = Object.entries(current);
-      const items: Array<{ id: string; label: string }> = entries.map(([team, repo]) => ({
-        id: `edit:${team}`,
-        label: `${team} → ${repo}`,
-      }));
-      items.push({ id: "add", label: "➕ Add new mapping" });
-      const modal = new ListModal({ items, header: "Team → Repo Mappings" });
-      modal.open();
-      openModal(modal, async (value) => {
-        const sel = value as ListItem;
-        if (sel.id === "add") {
-          // Step 2: pick team from Linear
-          let teamItems: Array<{ id: string; label: string }> = [];
-          if (adapters.issueTracker?.authState === "ok") {
-            try {
-              const teams = await adapters.issueTracker.getTeams();
-              teamItems = teams.map((t) => ({ id: t.name, label: t.name }));
-            } catch {}
-          }
-          if (teamItems.length === 0) {
-            // Fallback: manual team name input
-            const teamModal = new InputModal({ header: "Team Name", subheader: "Enter the Linear team name", value: "" });
-            teamModal.open();
-            openModal(teamModal, (teamName) => {
-              pickRepoForTeam(teamName as string);
-            });
-            return;
-          }
-          const teamPicker = new ListModal({ items: teamItems, header: "Select Team" });
-          teamPicker.open();
-          openModal(teamPicker, (teamValue) => {
-            const teamSel = teamValue as ListItem;
-            pickRepoForTeam(teamSel.label);
-          });
-        } else if (sel.id.startsWith("edit:")) {
-          const teamName = sel.id.slice(5);
-          const editItems = [
-            { id: "change", label: "Change repository path" },
-            { id: "remove", label: "Remove mapping" },
-          ];
-          const editModal = new ListModal({ items: editItems, header: `${teamName} mapping` });
-          editModal.open();
-          openModal(editModal, async (editValue) => {
-            const editSel = editValue as ListItem;
-            if (editSel.id === "remove") {
-              configStore.setTeamRepo(teamName, null);
-            } else {
-              pickRepoForTeam(teamName);
-            }
-          });
-        }
+    // Replaces the old team → repo map, which the Projects migration deleted
+    // the readers of — leaving a command that wrote into a void.
+    case "setting-attach-team": {
+      const live = (configStore.config.projects ?? []).filter((p) => p.deletedAt === undefined);
+      if (live.length === 0) {
+        showNotice({
+          title: "No Projects",
+          message: "There is no project to attach a team to yet.",
+          hint: "Open a session in a repo, or add one in Settings.",
+          tone: "plain",
+        });
+        return;
+      }
+      if (cachedTeams.length === 0) {
+        showNotice({
+          title: "No Teams",
+          message: "The tracker has not reported any teams.",
+          hint: adapters.issueTracker?.authState === "ok"
+            ? "Wait for the next poll, or check the tracker has teams you can see."
+            : `Connect the tracker first — check ${adapters.issueTracker?.authHint ?? "its settings"}.`,
+          tone: "plain",
+        });
+        return;
+      }
+      const projectPicker = new ListModal({
+        header: "Attach a team to which project?",
+        items: live.map((p) => ({ id: p.id, label: p.title })),
+      });
+      projectPicker.open();
+      openModal(projectPicker, (projectValue) => {
+        const chosen = (projectValue as ListItem | undefined)?.id;
+        if (!chosen) return;
+        const teamPicker = new ListModal({
+          header: "Which team?",
+          items: cachedTeams.map((t) => ({ id: t.id, label: t.name })),
+        });
+        teamPicker.open();
+        openModal(teamPicker, (teamValue) => {
+          const teamId = (teamValue as ListItem | undefined)?.id;
+          if (!teamId) return;
+          const project = (configStore.config.projects ?? []).find((p) => p.id === chosen);
+          if (!project) return;
+          // legacyTeamName is dropped here and only here: an explicit choice
+          // supersedes the migrated name, and keeping both would leave two
+          // answers to one question.
+          const { legacyTeamName: _dropped, ...rest } = project;
+          configStore.upsertProject({ ...rest, teamId });
+          showToast(`${cachedTeams.find((t) => t.id === teamId)?.name ?? teamId} → ${project.title}`);
+        });
       });
       return;
     }
@@ -8945,7 +10213,7 @@ async function handleToolbarAction(id: string): Promise<void> {
       toggleHelp();
       return;
     case "claude":
-      await control.sendCommand(`split-window -t ${ptyClientName} -h -c '#{pane_current_path}' ${currentRepoSettings().claudeCommand}`);
+      await control.sendCommand(`split-window -t ${ptyClientName} -h -c '#{pane_current_path}' ${currentRepoSettings().agentCommand}`);
       return;
     case "settings": {
       const settingsCommands = buildPaletteCommands().filter(c => c.category === "setting");
@@ -9099,8 +10367,7 @@ process.on("SIGWINCH", () => {
   // and any live resize it had queued.
   clearPendingDragResize();
   inputRouter.cancelDrag();
-  relayout();
-  if (inGlass) resizeGlass();
+  relayout(); // resizes the grid's tiles too — see the note in relayout()
   maybeReprobeCellSize();
 });
 
@@ -9109,7 +10376,18 @@ process.on("SIGWINCH", () => {
 let configWatcher: ReturnType<typeof import("fs").watch> | null = null;
 try {
   const { watch } = await import("fs");
-  configWatcher = watch(configStore.configPath, () => {
+  const { dirname: dirOf, basename: baseOf } = await import("path");
+  // Watch the *directory*, not the file. persist() replaces the config with an
+  // atomic rename (src/atomic-write.ts), which swaps the inode — and fs.watch
+  // on a path follows the inode, so a file watcher goes deaf after the first
+  // write jmux itself makes, and every later external edit is missed. The
+  // rename surfaces here as an event naming the basename.
+  const configDir = dirOf(configStore.configPath);
+  const configBase = baseOf(configStore.configPath);
+  configWatcher = watch(configDir, (_event, filename) => {
+    // A null filename means the OS reported a change without saying what, so
+    // it has to fall through rather than be filtered out.
+    if (filename !== null && filename !== configBase) return;
     const updated = configStore.reload();
     const newWidth = updated.sidebarWidth || 26;
     // No claudeCommand to refresh here: it is resolved per repo at each use
@@ -9153,20 +10431,33 @@ try {
     glassView?.setStateColors(newStateColors);
     scheduleRender();
 
-    // Reload the Command Center tab registry (palette CRUD + hand-edits land here).
+    // Reload the view registry. A hand-edit to the file is the one thing that
+    // can move the active view under a dirty set of axes, which is why this
+    // goes through `reloadViews` rather than re-reading the three fields: the
+    // in-flight narrowing survives if the view it belongs to did.
     {
-      const before = stripVisibleFor(commandCenterTabs);
-      commandCenterTabs = normalizeTabs(updated.commandCenterTabs);
-      const clamped = clampTabSelection(commandCenterTabs, activeTabId, lastActiveTabId);
-      activeTabId = clamped.activeTabId;
-      lastActiveTabId = clamped.lastActiveTabId;
-      if (inGlass) {
-        refreshPinnedPanes();         // re-fold vanished tab ids; rebuild specs + summary
-        glassView?.setActiveTab(activeTabId);
+      const next = reloadViews(updated.commandCenterViews, activeViewId, gridAxes);
+      commandCenterViews = next.views;
+      activeViewId = next.activeViewId;
+      gridAxes = next.axes;
+      // The election's command pattern is a grid input the file can change
+      // under us. `commandCenter.maxTiles` deliberately is not hot-applied:
+      // `GlassView` reads it once, and lowering it live would tear down
+      // clients mid-session.
+      agentPaneRegex = updated.agentPaneCommandRegex ?? "codex";
+      glassView?.setAgentPaneRegex(agentPaneRegex);
+      invalidateGrid();
+    }
+
+    // Hot-apply the tile-size floor, unlike maxTiles above: setDensity only
+    // resizes existing clients, so a hand-edit takes effect immediately
+    // rather than on next restart.
+    {
+      const newDensity = normalizeDensity(updated.commandCenter?.density);
+      if (newDensity !== commandCenterDensity) {
+        commandCenterDensity = newDensity;
+        glassView?.setDensity(commandCenterDensity);
       }
-      const after = stripVisibleFor(commandCenterTabs);
-      if (before !== after) { resizeGlass(); }  // strip appeared/disappeared → glass height changed
-      scheduleRender();
     }
 
     const needsResize = newWidth !== sidebarWidth;
@@ -9374,17 +10665,30 @@ control.onEvent((event: ControlEvent) => {
     case "window-close":
       if (startupComplete) {
         fetchWindows();
-        // A closed window may have hosted a pinned or auto-detected pane (e.g. the
-        // user exited a Claude agent). Reconcile Command Center membership so the
-        // dead pane's tile is torn down rather than left drifting onto a surviving
-        // sibling window. When the last tile goes, the glass shows its empty state.
-        if (inGlass || pinnedTracker.size > 0 || autoPinAgentPanes) refreshPinnedPanes();
+        // A closed window took its panes with it: a session that had only that
+        // window loses its tile, and one that kept a sibling re-elects a face.
+        invalidateGrid();
       }
       break;
     case "window-add":
     case "window-renamed":
     case "session-window-changed":
       if (startupComplete) fetchWindows();
+      break;
+    // Pane inventory and active pane. Nothing else on this channel reports a
+    // split or a kill, so without these a new agent pane is invisible to the
+    // grid until an unrelated event happens to move.
+    //
+    // Both, because they cover different halves. Measured against tmux 3.7b:
+    // `%layout-change` fires only for windows in the *control client's own
+    // session*, so a split in any other session produces none — but a split or
+    // a kill always changes that window's active pane, and
+    // `%window-pane-changed` goes to every control client regardless of
+    // session. The first is the precise signal where it applies; the second is
+    // what makes the rest of the server visible at all.
+    case "layout-change":
+    case "window-pane-changed":
+      if (startupComplete) invalidateGrid();
       break;
     case "subscription-changed":
       if (!startupComplete) break;
@@ -9394,8 +10698,10 @@ control.onEvent((event: ControlEvent) => {
         fetchWindows();
       } else if (event.name === "session-titles") {
         fetchSessions();
-      } else if (event.name === "pinned-panes") {
-        refreshPinnedPanes();
+      } else if (event.name === "grid-exceptions" || event.name === "grid-hidden") {
+        // `@jmux-pinned` (pane) and `@jmux-grid-hidden` (session) — the two
+        // exceptions. Both are triggers only; the reconciler re-reads them.
+        invalidateGrid();
       }
       break;
   }
@@ -9444,7 +10750,7 @@ async function lookupSessionDetails(sessions: SessionInfo[]): Promise<void> {
       sessionDetailsCache.set(session.id, { directory, path: cwd, gitBranch, project });
       session.directory = directory;
       session.gitBranch = gitBranch;
-      session.project = project;
+      session.repoName = project;
     } catch {
       // Session may not exist or no git repo
     }
@@ -9455,6 +10761,10 @@ async function lookupSessionDetails(sessions: SessionInfo[]): Promise<void> {
     return cached ? { ...s, ...cached } : s;
   });
   sidebar.updateSessions(currentSessions);
+  // Project resolution is async and lands well after the session list did, so
+  // the grid has to be told: `groupBy: "project"` buckets on exactly the field
+  // this loop just filled in, and until now it only repainted the sidebar.
+  invalidateGrid();
   // Paths are known only now, so this is where sessions that existed at
   // startup first become resolvable.
   registerSessionsWithPoller(currentSessions);
@@ -9728,107 +11038,183 @@ async function ensureParkSession(): Promise<void> {
   await control.sendCommand(`new-session -d -s ${PARK_SESSION}`).catch(() => {});
 }
 
+// ─── The reconciler ──────────────────────────────────────────────────────────
+//
+// One entry point for "what is on the grid": `orderSessions` on the grid's own
+// axes, the two tmux-option exceptions on top, one tile per surviving session,
+// a face elected per tile. Nothing is hand-placed and nothing is written back —
+// panes are never moved, broken or joined; the grid mirrors them.
+//
+// It reads exactly two things: one `list-panes -a` pass (the pin flag, the
+// location, and everything the election needs — the old AGENT_DETECT_FORMAT
+// folded into it) and one `list-sessions -F` for the session-scoped hide.
+
 /**
- * Reflect the per-pane `@jmux-pinned` option into the tracker and the sidebar's
- * Overview list. Non-destructive: panes are never moved — the glass renders live
- * mirrors of them (see GlassView). Runs on the pinned-panes subscription, on
- * pin/unpin, and once at startup.
+ * `PANE_ROW_FORMAT` plus the location fields. `parsePaneRowLines` reads its
+ * own leading fields and ignores the rest, so one format serves both parses
+ * and the election can never be fed a different pass from the placement.
  */
-const PIN_LABEL_FORMAT = [
-  "#{pane_id}",
-  "#{session_name}",
-  "#{pane_title}",
-  "#{pane_current_command}",
-  "#{pane_current_path}",
-  `#{${SESSION_TITLE_OPTION}}`,
-].join(US);
+const GRID_PANE_FORMAT = [PANE_ROW_FORMAT, "#{session_id}", "#{window_id}"].join(US);
 
-function refreshPinnedPanes(): void {
-  const state = parsePaneStateLines(
-    glassRunner.run(["list-panes", "-a", "-F", PANE_STATE_FORMAT]).lines,
-  );
-  // Reflect raw @jmux-pinned values into the tracker (value, not just presence).
-  for (const paneId of state.live.keys()) {
-    pinnedTracker.apply(paneId, state.pins.get(paneId) ?? null);
-  }
-  pinnedTracker.pruneExcept([...state.live.keys()]);
+const GRID_SESSION_FORMAT = `#{session_id}${US}#{@jmux-grid-hidden}`;
 
-  // Per-pane labels + home session names for building entries/specs.
-  const labelByPane = new Map<string, { label: string; sessionName: string }>();
-  for (const row of glassRunner.run(["list-panes", "-a", "-F", PIN_LABEL_FORMAT]).lines) {
-    const [paneId, sessionName, paneTitle, cmd, path, sessionTitle] = splitFields(row);
+interface GridSnapshot {
+  /** Election input for every pane on the server, in tmux's order. */
+  paneRows: PaneRow[];
+  /** paneId → where it lives. Same keys as `paneRows`. */
+  locationByPane: Map<string, PaneLocation>;
+  /** paneId → raw non-empty `@jmux-pinned`. */
+  pinByPane: Map<string, string>;
+  /** Sessions carrying `@jmux-grid-hidden`. */
+  hiddenSessionIds: Set<string>;
+}
+
+async function readGridState(): Promise<GridSnapshot> {
+  // Sequential, not concurrent: control-mode replies are matched FIFO, and two
+  // in-flight commands would be two ways to read the same instant.
+  const paneLines = await control.sendCommand(`list-panes -a -F '${GRID_PANE_FORMAT}'`);
+  const sessionLines = await control.sendCommand(`list-sessions -F '${GRID_SESSION_FORMAT}'`);
+
+  const paneRows = parsePaneRowLines(paneLines);
+  const locationByPane = new Map<string, PaneLocation>();
+  const pinByPane = new Map<string, string>();
+  for (const line of paneLines) {
+    if (!line.trim()) continue;
+    const fields = splitFields(line);
+    const paneId = fields[0];
     if (!paneId) continue;
-    const shown = displaySessionName({ name: sessionName ?? "", title: sessionTitle });
-    labelByPane.set(paneId, {
-      // The real name — it addresses a tmux session and must not become a phrase.
-      sessionName: sessionName ?? "",
-      label: buildPaneLabel({
-        sessionName: shown,
-        paneTitle: paneTitle ?? "",
-        paneCurrentCommand: cmd ?? "",
-        paneCurrentPath: path ?? "",
-      }),
+    const pin = fields[3];
+    if (pin) pinByPane.set(paneId, pin);
+    // Indices 9 and 10 are PANE_ROW_FORMAT's own trailing pane_title /
+    // pane_current_path fields (the tile label's pane suffix); the location
+    // fields GRID_PANE_FORMAT appends come after those, at 11 and 12.
+    locationByPane.set(paneId, {
+      sessionId: fields[11] ?? "",
+      windowId: fields[12] ?? "",
     });
   }
 
-  // Effective Command Center membership = manual pins ∪ auto-detected agent
-  // panes (when the setting is on). Auto panes are derived each refresh and are
-  // NOT written to @jmux-pinned.
-  const effective = new Set(pinnedTracker.all());
-  if (autoPinAgentPanes) {
-    const rows = parseAgentDetectLines(
-      glassRunner.run(["list-panes", "-a", "-F", AGENT_DETECT_FORMAT]).lines,
-    );
-    for (const id of detectAgentPanes(rows, agentPaneRegex)) effective.add(id);
+  const hiddenSessionIds = new Set<string>();
+  for (const line of sessionLines) {
+    if (!line.trim()) continue;
+    const [sessionId, hidden] = splitFields(line);
+    if (sessionId && isGridHiddenValue(hidden)) hiddenSessionIds.add(sessionId);
   }
 
-  // Deterministic order (by session name, then pane id) so tiles/counts keep a
-  // stable arrangement across detach/reattach and restarts — set iteration
-  // order reflects tmux's arbitrary list-panes order otherwise.
-  const paneNum = (id: string): number => parseInt(id.replace(/^%/, ""), 10) || 0;
-  const orderedPaneIds = [...effective]
-    .filter((id) => state.live.has(id) && labelByPane.has(id))
-    .sort((a, b) => {
-      const sa = labelByPane.get(a)!.sessionName;
-      const sb = labelByPane.get(b)!.sessionName;
-      if (sa !== sb) return sa < sb ? -1 : 1;
-      return paneNum(a) - paneNum(b);
-    });
+  return { paneRows, locationByPane, pinByPane, hiddenSessionIds };
+}
 
-  const entries: PinnedPaneEntry[] = [];
+function applyGridSnapshot(snap: GridSnapshot): void {
+  const livePaneIds = [...snap.locationByPane.keys()];
+  // The pin mirror stays: `@jmux-pinned` is still what the palette and the CLI
+  // write, and pruning it here is what retires a pin whose pane has died.
+  for (const paneId of livePaneIds) {
+    pinnedTracker.apply(paneId, snap.pinByPane.get(paneId) ?? null);
+  }
+  pinnedTracker.pruneExcept(livePaneIds);
+  gridHiddenSessionIds = snap.hiddenSessionIds;
+
+  // Membership: the sidebar's own ordering on the grid's axes, then the two
+  // exceptions. Read back off the sidebar rather than re-derived, so the grid
+  // and the list can differ only in the axes the user chose.
+  const shared = sidebar.getOrderInputs();
+  const bands = orderSessions({
+    ...shared,
+    filterMode: gridAxes.filter,
+    groupMode: gridAxes.groupBy,
+    sortMode: gridAxes.sortBy,
+    includeParked: false,
+  });
+  const members = applyGridExceptions({
+    sessions: shared.sessions,
+    bands,
+    hiddenSessionIds: snap.hiddenSessionIds,
+    panes: livePaneIds.map((paneId) => ({
+      sessionId: snap.locationByPane.get(paneId)!.sessionId,
+      pinnedRaw: snap.pinByPane.get(paneId) ?? null,
+    })),
+  });
+
+  const panesBySession = new Map<string, PaneRow[]>();
+  for (const row of snap.paneRows) {
+    const sessionId = snap.locationByPane.get(row.paneId)?.sessionId;
+    if (!sessionId) continue;
+    const list = panesBySession.get(sessionId);
+    if (list) list.push(row);
+    else panesBySession.set(sessionId, [row]);
+  }
+
   const specs: GlassTileSpec[] = [];
-  const stateByTab = new Map<string, (AgentState | null)[]>();
-  for (const paneId of orderedPaneIds) {
-    const loc = state.live.get(paneId)!;
-    const meta = labelByPane.get(paneId)!;
-    // Per-pane, not the session rollup: each tile mirrors one agent, so a
-    // sibling agent blocked in another pane must not paint this tile WAITING.
-    // Falls back to the session value automatically for session-scoped writers,
-    // because the pane-context read inherits.
-    const agentState = agentStateTracker.getPaneState(paneId);
-    const tabId = resolveTabId(pinnedTracker.getValue(paneId) ?? null, commandCenterTabs);
-    entries.push({
-      paneId,
-      homeSessionName: meta.sessionName,
-      label: meta.label,
+  const tally: Record<AgentState, number> = { running: 0, waiting: 0, complete: 0 };
+  for (const member of members) {
+    const session = shared.sessions[member.index]!;
+    const panes = panesBySession.get(session.id) ?? [];
+    if (panes.length === 0) continue; // a session with no pane has nothing to mirror
+    // The election is run again inside GlassView against the same rows — this
+    // one only supplies the spawn-time hint for which window to select, so the
+    // first frame lands on the pane the tile is about to settle on.
+    // `@jmux-agent-pane` is the hooks' own answer to "which pane is the agent",
+    // and it is the election's first tier. Passing null here made that tier
+    // unreachable from the grid, so a session whose agent had declared itself
+    // was still resolved by heuristics — which is how a plain shell came to be
+    // a session's face. Every row carries the same value (it is session-scoped).
+    const explicitPane = panes.find((row) => row.agentPane)?.agentPane ?? null;
+    const elected = electRepresentative(panes, explicitPane, agentPaneRegex) ?? panes[0]!.paneId;
+    // The session rollup, not the elected pane's own state: a tile is a session
+    // now, so its border says what the sidebar's row for that session says.
+    // `outranks` picks the most urgent pane and so does the election, which is
+    // what keeps the two answers together in the ordinary case.
+    const agentState = agentStateTracker.getRecord(session.id)?.state ?? null;
+    if (agentState) tally[agentState]++;
+    // The sidebar row's own identity: displaySessionName plus the issue
+    // badge (`TRA-412 +2`), the same two facts row 1 and the badge column
+    // show, folded into one string because the tile label is a single chip.
+    // The pane suffix — which pane this is, when it isn't the session's
+    // natural choice — is appended at draw time (`tileLabel`), not here: it
+    // can change (a live `Ctrl-a x` cycle) without a new spec arriving.
+    const identity = displaySessionName(session);
+    const badge = formatIssueBadge(pollCoordinator.getContext(session.name)?.issues ?? []);
+    specs.push({
+      sessionId: session.id,
+      paneId: elected,
+      windowId: snap.locationByPane.get(elected)?.windowId ?? "",
+      label: badge ? `${identity} ${badge}` : identity,
       agentState,
+      // Force-on survives the client cap ahead of a derived member. Same
+      // predicate `applyGridExceptions` used to put an `added` member here in
+      // the first place, so the two can't disagree about what is forced.
+      forced: panes.some((p) => p.forcedOn),
+      panes,
     });
-    specs.push({ paneId, sessionId: loc.sessionId, windowId: loc.windowId, label: meta.label, agentState, tabId });
-    const arr = stateByTab.get(tabId) ?? [];
-    arr.push(agentState);
-    stateByTab.set(tabId, arr);
-  }
-  sidebar.setPinnedPanes(entries);
-
-  // Per-tab summary for the strip dots.
-  summaryByTab = new Map<string, AgentState | null>();
-  for (const tab of commandCenterTabs) {
-    summaryByTab.set(tab.id, summarizeTabState(stateByTab.get(tab.id) ?? []));
   }
 
-  if (inGlass) glassView?.setTiles(specs, activeTabId);
+  sidebar.setGridSummary({ count: specs.length, tally });
+
+  if (inGlass) {
+    const activeView = commandCenterViews.find((v) => v.id === activeViewId) ?? commandCenterViews[0];
+    glassView?.setTiles(specs, {
+      viewName: activeView.name,
+      // Two numbers, disjoint, because they have two remedies. `excludedCount`
+      // is every session that exists but is not tiled for a reason other than
+      // an explicit hide — filtered, parked or paneless. (`⌃a f` reaches only
+      // the filtered part of that: parking is undone by unparking, and a
+      // paneless session has nothing to mirror at any filter.)
+      // `hiddenCount` is the `@jmux-grid-hidden`
+      // exception, which no filter recovers; only the palette's "Show hidden
+      // sessions" undoes it. Hidden sessions are subtracted out of the first so
+      // each session is reported once, under the clause whose key actually
+      // works on it: counting them in both rendered "3 not shown  3 hidden" for
+      // the same three sessions and sent the user to `⌃a f` for nothing.
+      excludedCount: Math.max(
+        0,
+        shared.sessions.length - specs.length - gridHiddenSessionIds.size,
+      ),
+      hiddenCount: gridHiddenSessionIds.size,
+    });
+  }
   scheduleRender();
 }
+
 
 function ensureGlassView(): GlassView {
   if (!glassView) {
@@ -9837,10 +11223,16 @@ function ensureGlassView(): GlassView {
       configFile,
       jmuxDir,
       runner: (args) => glassRunner.run(args),
-      minTileWidth: 80,
-      minTileHeight: 10,
+      minTileWidth: DENSITIES[commandCenterDensity].minTileWidth,
+      minTileHeight: DENSITIES[commandCenterDensity].minTileHeight,
       onFrame: scheduleRender,
       stateColors: resolveStateColors(configStore.config.stateColors),
+      // The grid's own cap, and the pattern that decides which panes are worth
+      // electing as a session's face. Both are read here rather than at each
+      // reconcile: the view owns the election now that it is handed whole pane
+      // sets, and `planTiles` floors the cap at 1 whatever is stored.
+      maxClients: configStore.config.commandCenter?.maxTiles,
+      agentPaneRegex,
     });
   }
   return glassView;
@@ -9854,8 +11246,7 @@ function resizeGlass(): void {
   // tiles would leave a gap where the toolbar/footer chrome used to be.
   const totalCols = fullScreenLayout.termCols;
   const contentCols = sidebarShown ? totalCols - fullScreenLayout.main.x : totalCols;
-  const stripRows = stripVisibleFor(commandCenterTabs) ? STRIP_ROWS : 0;
-  const contentRows = Math.max(1, fullScreenLayout.contentRows - stripRows);
+  const contentRows = Math.max(1, fullScreenLayout.contentRows - STRIP_ROWS);
   glassView.resize(contentCols, contentRows);
 }
 
@@ -9869,10 +11260,6 @@ async function enterGlass(): Promise<void> {
   ensureGlassView();
   inGlass = true;
   applyChromeLayout(); // frameless layout now governs the sidebar/input router
-  // Restore last-active tab; fall back to default if it no longer exists.
-  activeTabId = commandCenterTabs.some((t) => t.id === lastActiveTabId)
-    ? lastActiveTabId
-    : defaultTabId(commandCenterTabs);
   sidebar.setActiveSession(""); // clear the session highlight while in the glass
   sidebar.setOverviewActive(true);
   // Park the main client so it doesn't constrain the pinned sessions' sizes.
@@ -9883,78 +11270,103 @@ async function enterGlass(): Promise<void> {
       .catch(() => {});
   }
   resizeGlass();
-  refreshPinnedPanes(); // builds + applies tile specs (inGlass is true)
+  // Awaited, not merely queued: the first read is what spawns the tiles, and
+  // rendering ahead of it would flash the empty state on every open.
+  await gridReconciler.flush();
   scheduleRender();
-}
-
-function switchCommandCenterTab(tabId: string): void {
-  if (!commandCenterTabs.some((t) => t.id === tabId)) return;
-  activeTabId = tabId;
-  lastActiveTabId = tabId;
-  glassView?.setActiveTab(tabId);
-  scheduleRender();
-}
-
-/** Switch to the prev/next tab relative to the active one, wrapping around. */
-function switchCommandCenterTabRelative(delta: number): void {
-  const n = commandCenterTabs.length;
-  if (n === 0) return;
-  const cur = commandCenterTabs.findIndex((t) => t.id === activeTabId);
-  const base = cur < 0 ? 0 : cur;
-  const next = ((base + delta) % n + n) % n; // wrap in both directions
-  switchCommandCenterTab(commandCenterTabs[next].id);
 }
 
 /**
- * Surface a Command-Center validation error (empty/duplicate/too-long tab name,
- * non-empty/default tab delete) using the same short-lived ContentModal pattern
- * as session-creation failures — jmux has no toast system.
+ * Switch the Command Center's active view — what the strip's chips, `Ctrl-a
+ * 1…9` and `Ctrl-a [ / ]` now drive. The incoming view's axes win over any
+ * dirty (unsaved) live axes: selecting a view means adopting it (transition 1
+ * of `views.ts`'s three), not carrying an in-flight narrowing across.
+ */
+function switchGlassView(id: string): void {
+  const result = switchView(commandCenterViews, activeViewId, id);
+  activeViewId = result.activeViewId;
+  gridAxes = result.axes;
+  configStore.set("commandCenterActiveViewId", activeViewId);
+  configStore.set("commandCenterAxes", gridAxes);
+  invalidateGrid();
+}
+
+/** Switch to the prev/next view relative to the active one, wrapping around. */
+function switchGlassViewRelative(delta: number): void {
+  const n = commandCenterViews.length;
+  if (n === 0) return;
+  const cur = commandCenterViews.findIndex((v) => v.id === activeViewId);
+  const base = cur < 0 ? 0 : cur;
+  const next = ((base + delta) % n + n) % n; // wrap in both directions
+  switchGlassView(commandCenterViews[next].id);
+}
+
+/**
+ * Surface a Command-Center validation error (empty/duplicate/too-long view
+ * name) using the same short-lived ContentModal pattern as session-creation
+ * failures — jmux has no toast system.
  */
 function showCcError(message: string): void {
   showNotice({ title: "Command Center", message, tone: "error" });
 }
 
-function persistTabs(next: TabEntry[]): void {
-  commandCenterTabs = next;
-  configStore.set("commandCenterTabs", next);
-  // Clamp active/last-active if they vanished.
-  if (!next.some((t) => t.id === activeTabId)) activeTabId = defaultTabId(next);
-  if (!next.some((t) => t.id === lastActiveTabId)) lastActiveTabId = defaultTabId(next);
-  if (inGlass) refreshPinnedPanes();
+/**
+ * The pane a Command Center pin/unpin command acts on: the glass tile's
+ * currently displayed pane while in the grid, the current session's active
+ * pane otherwise. Shared by `buildPaletteCommands` and its handler so the row
+ * offered and the pane it acts on can never disagree.
+ */
+function resolveCcTargetPaneId(): string | null {
+  if (inGlass) return glassView?.focusedPaneId() ?? null;
+  if (!currentSessionId) return null;
+  return glassRunner.run(["display-message", "-p", "-t", currentSessionId, "#{pane_id}"]).lines[0] ?? null;
 }
 
-function openInputModalForNewTab(then: (tabId: string) => void): void {
-  const modal = new InputModal({ header: "New tab name", placeholder: "e.g. Backend" });
+/** "Save current axes as view…" — clones the live (possibly dirty) axes into
+ *  a newly named view and adopts it as active. Adopting is what clears the
+ *  dirty marker: the new view's axes are the live axes by construction, so
+ *  leaving a different view active would still read as unsaved the moment
+ *  after saving. */
+function openInputModalForSaveView(): void {
+  const modal = new InputModal({ header: "Save view", placeholder: "e.g. Backend" });
   modal.open();
   openModal(modal, (value) => {
-    const result = addTab(commandCenterTabs, String(value));
+    const result = addView(commandCenterViews, String(value), gridAxes);
     if (!result.ok) { showCcError(result.error); return; }
-    const created = result.tabs[result.tabs.length - 1];
-    persistTabs(result.tabs);
-    then(created.id);
+    commandCenterViews = result.views;
+    activeViewId = result.views[result.views.length - 1]!.id;
+    configStore.set("commandCenterViews", commandCenterViews);
+    configStore.set("commandCenterActiveViewId", activeViewId);
+    scheduleRender();
   });
 }
 
-function openInputModalForRenameTab(): void {
-  const current = commandCenterTabs.find((t) => t.id === activeTabId);
+/** "Rename view…" — renames the active view in place. */
+function openInputModalForRenameView(): void {
+  const current = commandCenterViews.find((v) => v.id === activeViewId);
   if (!current) return;
-  const modal = new InputModal({ header: "Rename tab", value: current.name });
+  const modal = new InputModal({ header: "Rename view", value: current.name });
   modal.open();
   openModal(modal, (value) => {
-    const result = renameTab(commandCenterTabs, activeTabId, String(value));
+    const result = renameView(commandCenterViews, activeViewId, String(value));
     if (!result.ok) { showCcError(result.error); return; }
-    persistTabs(result.tabs);
+    commandCenterViews = result.views;
+    configStore.set("commandCenterViews", commandCenterViews);
+    scheduleRender();
   });
 }
 
-function tryDeleteActiveTab(): void {
-  const memberCount = pinnedTracker.all().filter(
-    (p) => resolveTabId(pinnedTracker.getValue(p) ?? null, commandCenterTabs) === activeTabId,
-  ).length;
-  const result = deleteTab(commandCenterTabs, activeTabId, memberCount);
-  if (!result.ok) { showCcError(result.error); return; }
-  persistTabs(result.tabs);
-  switchCommandCenterTab(defaultTabId(commandCenterTabs));
+/** "Delete view" — never fails (no protected default, no member count to
+ *  strand); `deleteView` picks the next active view and its axes for us. */
+function deleteCcView(): void {
+  const result = deleteView(commandCenterViews, activeViewId, activeViewId);
+  commandCenterViews = result.views;
+  activeViewId = result.activeViewId;
+  gridAxes = result.axes;
+  configStore.set("commandCenterViews", commandCenterViews);
+  configStore.set("commandCenterActiveViewId", activeViewId);
+  configStore.set("commandCenterAxes", gridAxes);
+  invalidateGrid();
 }
 
 /**
@@ -9971,13 +11383,152 @@ function exitGlass(): void {
   sidebar.setOverviewActive(false);
 }
 
-async function leaveGlass(sessionId: string): Promise<void> {
+/**
+ * Leave the grid for `sessionId`, or just switch if it wasn't up. Returns
+ * whether the client actually landed on a real session — `false` means
+ * nothing changed: the grid (if it was up) is still up, exactly as it was.
+ *
+ * Delegates the switch-then-teardown ordering to `commitLeaveGlass`
+ * (`glass/leave-glass.ts`) rather than doing it inline: `exitGlass` used to
+ * run unconditionally *before* the switch was attempted, so a target that
+ * died between the caller's liveness check and the `switch-client` command
+ * actually landing left `inGlass = false` with the client still parked on
+ * `__jmux_park` — the grid's chrome gone and nothing useful in its place.
+ * Switching first means a failed switch leaves the grid untouched.
+ */
+async function leaveGlass(sessionId: string): Promise<boolean> {
+  if (!inGlass) return switchSession(sessionId);
+  return commitLeaveGlass(sessionId, { switchTo: switchSession, teardown: exitGlass });
+}
+
+/**
+ * Ctrl-a C. Enters the grid exactly like clicking the Overview row; leaving is
+ * the harder half, because `exitGlass` deliberately does not choose a session
+ * (see its doc comment) and a switch can fail. So this picks a target itself
+ * — `preGlassSessionId` if it's still alive, else the first session in the
+ * sidebar's own current order — and retries against the *live* outcome via
+ * `leaveGlassWithFallback`: a single liveness check picks a candidate off a
+ * cached list, but that list can already be stale, so if the preferred target
+ * has died since, the fallback candidate still gets a real attempt instead of
+ * the whole action just giving up. Only once every candidate has failed does
+ * the grid stay open and say so.
+ */
+async function toggleCommandCenter(): Promise<void> {
   if (!inGlass) {
-    switchSession(sessionId);
+    await enterGlass();
     return;
   }
-  exitGlass();
-  await switchSession(sessionId); // unparks the main client onto the session
+  const live = new Set(currentSessions.map((s) => s.id));
+  const candidates = [
+    preGlassSessionId && live.has(preGlassSessionId) ? preGlassSessionId : null,
+    sidebar.getDisplayOrderIds()[0] ?? null,
+  ];
+  const landed = await leaveGlassWithFallback(candidates, {
+    switchTo: switchSession,
+    teardown: exitGlass,
+  });
+  if (!landed) {
+    showNotice({
+      title: "Command Center",
+      message: "No session to switch to — every session is gone.",
+      tone: "warn",
+    });
+  }
+}
+
+/**
+ * Ctrl-a Enter. Re-resolves the tile's pane at press time (via GlassView's own
+ * live face, not a cached one) so a face cycled a moment ago is honored.
+ *
+ * Session gone: notice, stay in the grid — `leaveGlass` must never run against
+ * a session tmux no longer has. Pane gone: still leave, landing on the
+ * session's own active pane, the closest honest answer to "its displayed
+ * pane" once that specific pane no longer exists. The pre-check is a liveness
+ * snapshot, not a guarantee: the session can still die in the window before
+ * `leaveGlass` actually lands, which is why its result is checked too rather
+ * than assumed — the same race `toggleCommandCenter` guards against.
+ */
+async function openFocusedGlassTile(): Promise<void> {
+  const sessionId = glassView?.focusedSessionId() ?? null;
+  if (!sessionId) return;
+  if (!currentSessions.some((s) => s.id === sessionId)) {
+    showNotice({ title: "Command Center", message: "That session is gone.", tone: "warn" });
+    return;
+  }
+  const paneId = glassView?.focusedPaneId() ?? null;
+  const landed = await leaveGlass(sessionId);
+  if (!landed) {
+    showNotice({ title: "Command Center", message: "That session is gone.", tone: "warn" });
+    return;
+  }
+  if (!paneId) return;
+  const info = glassRunner.run(["display-message", "-p", "-t", paneId, "#{window_id}"]);
+  const windowId = info.ok ? info.lines[0] : undefined;
+  if (!windowId) return; // the pane died between the press and now
+  await control.sendCommand(`select-window -t ${tq(`${sessionId}:${windowId}`)}`).catch(() => {});
+  await control.sendCommand(`select-pane -t ${tq(paneId)}`).catch(() => {});
+}
+
+/**
+ * Ctrl-a P. In the grid it removes the focused session — hide the session AND
+ * clear every one of its panes' force-on pins, as one action, so unhiding it
+ * later doesn't silently readmit it through a pin that was never cleared.
+ * Outside the grid it's the opposite: force-on the pane you're looking at and
+ * clear the session's own hide, so pinning a pane in a session you'd
+ * previously removed actually shows it.
+ */
+async function toggleGridMembership(): Promise<void> {
+  if (inGlass) {
+    const sessionId = glassView?.focusedSessionId();
+    if (!sessionId) return;
+    glassRunner.run(["set-option", "-t", sessionId, "@jmux-grid-hidden", "1"]);
+    // -s: every pane in the session, not just its current window's — a pin in
+    // a background window must not survive the hide.
+    const panes = glassRunner.run(["list-panes", "-s", "-t", sessionId, "-F", "#{pane_id}"]);
+    for (const paneId of panes.lines) {
+      if (!paneId.trim()) continue;
+      for (const cmd of buildPinCommands("unpin", paneId.trim())) glassRunner.run(cmd.args);
+    }
+    invalidateGrid();
+    return;
+  }
+  if (!currentSessionId) return;
+  const paneId = glassRunner.run(["display-message", "-p", "-t", currentSessionId, "#{pane_id}"]).lines[0];
+  if (paneId) {
+    for (const cmd of buildPinCommands("pin", paneId)) glassRunner.run(cmd.args);
+  }
+  glassRunner.run(["set-option", "-t", currentSessionId, "-u", "@jmux-grid-hidden"]);
+  invalidateGrid();
+}
+
+/** Cycle the Command Center's own grouping axis — independent of the sidebar's. */
+function cycleGridGroup(): void {
+  gridAxes = { ...gridAxes, groupBy: cycleGroup(gridAxes.groupBy) };
+  configStore.set("commandCenterAxes", gridAxes);
+  invalidateGrid();
+}
+/** Cycle the Command Center's own member-sort axis. */
+function cycleGridSort(): void {
+  gridAxes = { ...gridAxes, sortBy: cycleSort(gridAxes.sortBy) };
+  configStore.set("commandCenterAxes", gridAxes);
+  invalidateGrid();
+}
+/** Cycle the Command Center's own filter axis. */
+function cycleGridFilter(): void {
+  gridAxes = { ...gridAxes, filter: cycleFilter(gridAxes.filter) };
+  configStore.set("commandCenterAxes", gridAxes);
+  invalidateGrid();
+}
+
+/**
+ * Cycle the Command Center's tile-size floor. Unlike the axes above, this
+ * doesn't touch membership — it re-lays out the same tiles at a new size
+ * (`GlassView.setDensity`), so there's no `invalidateGrid()` here.
+ */
+function cycleGridDensity(): void {
+  commandCenterDensity = cycleDensity(commandCenterDensity);
+  configStore.set("commandCenter", { ...configStore.config.commandCenter, density: commandCenterDensity });
+  glassView?.setDensity(commandCenterDensity);
 }
 
 /**
@@ -10037,28 +11588,41 @@ async function start(): Promise<void> {
   // pending-queue matching and corrupts subsequent command responses.
   await control.sendCommand("set-environment -g JMUX 1");
 
+  // A server jmux did not start never ran `core.conf`, and one of its settings
+  // is what keeps closing a pane from quitting jmux outright — so that one is
+  // written again here instead of being reported as stale below. See
+  // DETACH_ON_DESTROY_COMMAND for why it alone gets that treatment.
+  await control.sendCommand(DETACH_ON_DESTROY_COMMAND).catch((err) => {
+    logError("core-options", `detach-on-destroy: ${(err as Error).message}`);
+  });
+
   // Config generation. `-f` is honored only when tmux *starts* a server, so
   // attaching to a server left running by an older jmux silently keeps that
-  // version's bindings. Read the stamp before writing ours, or every server
-  // looks current.
+  // version's bindings — and one started under a different `userTmuxConfig`
+  // silently keeps sourcing what it sourced then. Read the stamp before writing
+  // ours, or every server looks current.
   try {
     const running = await control.sendCommand(`show-option -gqv ${GENERATION_OPTION}`);
-    const verdict = compareGeneration(Array.isArray(running) ? running.join("") : String(running ?? ""), jmuxDir);
+    const verdict = compareGeneration(
+      Array.isArray(running) ? running.join("") : String(running ?? ""),
+      jmuxDir,
+      userTmuxConfPath,
+    );
     if (verdict.kind === "stale") {
       const notice = staleGenerationNotice(verdict);
-      logError("config-generation", `server ${verdict.running} != assets ${verdict.expected}`);
+      logError("config-generation", `server ${verdict.running} != ${verdict.expected} (${verdict.cause})`);
       // Shown once, on the surface the user is already looking at. Silently
       // logging it would reproduce the original bug: the upgrade appears to
       // have worked and none of the new bindings do anything.
       const lines: StyledLine[] = notice.map((text) => [
         { text, attrs: { bg: theme.surface, bgMode: 2 } },
       ]);
-      const modal = new ContentModal({ lines, title: "tmux is running an older config" });
+      const modal = new ContentModal({ lines, title: staleGenerationTitle(verdict) });
       modal.setTermRows(process.stdout.rows || 24);
       modal.open();
       openModal(modal, () => {});
     }
-    await control.sendCommand(stampCommand(jmuxDir));
+    await control.sendCommand(stampCommand(jmuxDir, userTmuxConfPath));
   } catch (err) {
     // A server that won't answer about its generation is not a reason to fail
     // startup — the check is a courtesy, not a dependency. But swallowing the
@@ -10142,7 +11706,7 @@ async function start(): Promise<void> {
   await fetchWindows();
   await fetchAgentState();
   await ensureParkSession();
-  refreshPinnedPanes();
+  invalidateGrid();
 
   // One-time legacy migration: previous jmux versions wrote @jmux-attention=1
   // via a Stop hook. That option is now an orchestrator/human-gate signal owned
@@ -10331,6 +11895,29 @@ async function start(): Promise<void> {
 
   renderFrame();
 
+  // The Projects migration, deliberately here and not beside the config store.
+  // It reaches `gitOutput`, which closes over a `const` declared thousands of
+  // lines below the store — running it at module scope hit that binding's
+  // temporal dead zone, and `gitOutput`'s own catch swallowed the error into a
+  // null, so the migration silently failed to match any per-repo override and
+  // doubled every repo. Exactly the hazard boot-smoke exists for, except it
+  // produced wrong data instead of a crash, so nothing caught it but a
+  // end-to-end run.
+  //
+  // A failure is logged and left: the legacy keys are still in place, so jmux
+  // keeps working exactly as it did.
+  try {
+    if (await configStore.migrateProjects(commonDirForMigration)) {
+      logError("jmux", `migrated ${configStore.config.projects?.length ?? 0} project(s) from legacy config`);
+      // Teams may already be cached by now — resolve straight away rather than
+      // waiting for the next fetch.
+      resolveLegacyTeamNames();
+      scheduleRender();
+    }
+  } catch (e) {
+    logError("jmux", `project migration failed, legacy config left in place: ${(e as Error).message}`);
+  }
+
   // First run opens the setup checklist rather than a wall of keybindings.
   // The chords it used to list now live in `Ctrl-a ?` (and the `?` button),
   // where they can be re-read at any point instead of only in the thirty
@@ -10382,11 +11969,22 @@ async function start(): Promise<void> {
     "#{session_windows} #{window_index} #{window_name} #{window_zoomed_flag}",
   );
 
-  // Subscribe to per-pane pin flag — fires whenever any pane's @jmux-pinned changes.
+  // The grid's two exceptions. Nested for the same reason as agent-state
+  // above: `#{P:}` alone walks only the *current window's* panes, so the flat
+  // form this replaces never fired for a `ctl pane pin` issued from an
+  // unfocused window — the pin sat in tmux unread until something unrelated
+  // triggered a refresh. `#{S:#{W:#{P:}}}` enumerates the whole server.
   await control.registerSubscription(
-    "pinned-panes",
+    "grid-exceptions",
     1,
-    "#{P:#{pane_id}=#{@jmux-pinned} }",
+    "#{S:#{W:#{P:#{pane_id}=#{@jmux-pinned} }}}",
+  );
+  // Force-off is session-scoped — its subject is a whole session tile — so it
+  // needs no nesting, only its own session loop.
+  await control.registerSubscription(
+    "grid-hidden",
+    1,
+    "#{S:#{session_id}=#{@jmux-grid-hidden} }",
   );
 }
 

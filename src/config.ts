@@ -3,12 +3,19 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { homedir } from "os";
 import type { AdapterConfig } from "./adapters/types";
 import type { PanelView } from "./panel-view";
-import type { TabEntry } from "./glass/tabs";
 import type { RepoSettings } from "./repo-settings";
 import type { UnparkTrigger } from "./parking";
 import type { ScreenSignature } from "./agent-screen";
-import { migrateLegacyConfig } from "./repo-settings";
+import type { ProjectConfig, ProjectSettings } from "./project";
+import type { ProjectRoutes } from "./project-routing";
+import { migrateLegacyConfig, canonicalizeRepoPath } from "./repo-settings";
 import { logError } from "./log";
+import { writeFileAtomicSync } from "./atomic-write";
+import { migrateToProjects } from "./project-migration";
+import type { CommandCenterAxes, CommandCenterView } from "./glass/views";
+import { normalizeViews, normalizeAxes, resolveActiveViewId } from "./glass/views";
+import { DEFAULT_MAX_CLIENTS } from "./glass/view";
+import { normalizeDensity, DEFAULT_DENSITY, type Density } from "./glass/density";
 
 /**
  * Cross-repo routing only. Everything that is a property of a *repo* rather
@@ -98,6 +105,56 @@ export interface SessionTitleConfig {
 }
 
 export interface JmuxConfig {
+  /** See CONFIG_SCHEMA_VERSION. Absent on files written before it existed. */
+  schemaVersion?: number;
+  /**
+   * One repo and at most one tracker team, each. Written by the migration off
+   * `teamRepoMap`/`repos`, and by the Projects screen. Its presence is what
+   * suppresses the migration, so a Project the user deleted stays deleted.
+   */
+  projects?: ProjectConfig[];
+  /** The global settings tier that per-Project overrides sit on top of. */
+  projectDefaults?: ProjectSettings;
+  /** Learned routes. One table — two could disagree. */
+  routes?: ProjectRoutes;
+  /**
+   * Declared intent about optional capabilities.
+   *
+   * "Derived, never stored" is right for machine truth — *is hunk installed* —
+   * and wrong for preference, which no amount of filesystem inspection can
+   * discover. Without this a user who will never connect a tracker is nagged by
+   * a `todo` row and a toolbar dot forever.
+   */
+  setup?: {
+    /**
+     * `never` makes the step inert and drops it from the toolbar dot.
+     *
+     * Only the steps that can actually nag are here. The diff viewer is
+     * reported `unavailable` whenever it is missing — jmux cannot install it —
+     * so it never asks twice and a preference for it would be written and read
+     * by nothing.
+     */
+    tracker?: "never";
+    agentHooks?: "never";
+  };
+  /**
+   * Which tmux config jmux sources on the user's behalf, between its own
+   * `defaults.conf` and the `core.conf` it will not negotiate.
+   *
+   * Unset auto-detects the two locations tmux itself documents (`~/.tmux.conf`,
+   * then `$XDG_CONFIG_HOME/tmux/tmux.conf`); `false` sources nothing; a string
+   * sources that file instead. **The value is the switch** — there is no
+   * companion boolean that could disagree with it.
+   *
+   * A path exists because the interesting middle case does: a user who wants
+   * their own tmux setup everywhere except inside jmux points jmux at a second
+   * file, rather than choosing between their whole config and none of it.
+   *
+   * Resolution lives in tmux-user-config.ts, and takes effect only when tmux
+   * *starts* a server — see config-generation.ts for how a change against a
+   * running one is reported instead of silently doing nothing.
+   */
+  userTmuxConfig?: string | false;
   sidebarWidth?: number;
   infoPanelWidth?: number;
   /** Info panel list/detail split, as a fraction of the splittable rows. */
@@ -105,9 +162,12 @@ export interface JmuxConfig {
   cacheTimers?: boolean;
   windowBranches?: boolean;
   pinnedSessions?: string[];
-  /** Auto-surface every detected Claude/Codex pane on the Command Center. */
-  autoPinAgentPanes?: boolean;
-  /** Case-insensitive regex matched against pane_current_command for auto-pin (e.g. Codex). */
+  /**
+   * Case-insensitive regex matched against `pane_current_command` to decide
+   * which panes are worth *electing* as a session's Command Center face
+   * (`eligiblePanes`, `glass/representative.ts`) — the last-resort signal for
+   * an agent that declares no `@jmux-agent-kind`.
+   */
   agentPaneCommandRegex?: string;
   /**
    * Derive agent state by reading pane text, for agents with no hook or
@@ -180,8 +240,21 @@ export interface JmuxConfig {
   /** @deprecated Pre-split single sort axis; read once to migrate onto
    * sidebarGroupBy + sidebarSortBy, then never written again. */
   sidebarSort?: "project" | "status" | "activity" | "name";
-  /** Ordered Command Center tab registry; index 0 is the protected default. */
-  commandCenterTabs?: TabEntry[];
+  /** Ordered Command Center view registry; never empty after normalize. */
+  commandCenterViews?: CommandCenterView[];
+  /** The active view id, clamped to an existing view. */
+  commandCenterActiveViewId?: string;
+  /**
+   * The live, possibly-dirty grid axes — filter, groupBy, sortBy. Unlike the
+   * sidebar's own filter, which is a transient narrowing of a list that is
+   * always on screen and deliberately does not persist (see `sidebarGroupBy`
+   * just above — "filter deliberately does not"), the grid's filter *is* its
+   * membership rule and half of what a saved view means, so the whole axes
+   * struct persists here.
+   */
+  commandCenterAxes?: CommandCenterAxes;
+  /** Command Center grid settings not part of a view. */
+  commandCenter?: CommandCenterConfig;
   /** Global defaults for per-repo workflow settings. */
   repoDefaults?: RepoSettings;
   /** Per-repo overrides, keyed by canonical repo root (git common dir). */
@@ -192,6 +265,24 @@ export interface JmuxConfig {
   images?: ImagesConfig;
   /** Browser panes (Ctrl-a b), powered by terminal-browser. */
   browser?: BrowserConfig;
+}
+
+/** Command Center grid settings that belong to the grid itself, not to any one view. */
+export interface CommandCenterConfig {
+  /**
+   * Cap on live tmux mirror clients the grid keeps attached at once
+   * (`GlassViewOptions.maxClients`, `glass/tile-plan.ts`). `planTiles` floors
+   * this at 1 regardless of what's stored here, so a mistyped 0 can't blank
+   * the grid.
+   */
+  maxTiles?: number;
+  /**
+   * The tile-size floor (`glass/density.ts`) — how many tiles the grid packs
+   * in versus how much of each one is legible. Unlike `maxTiles`, this is
+   * hot-applied: switching it only resizes existing clients, never spawns or
+   * tears one down (`GlassView.setDensity`).
+   */
+  density?: Density;
 }
 
 export interface BrowserConfig {
@@ -318,6 +409,15 @@ export function buildOtelResourceAttrs(sessionName: string): string {
 
 const DEFAULT_CONFIG_PATH = resolve(homedir(), ".config", "jmux", "config.json");
 
+/**
+ * Stamped on every write, read for diagnostics and by migrations. Deliberately
+ * NOT a gate: a multiplexer that refuses to attach because of a config file is
+ * holding running work hostage, and unknown-key preservation (see
+ * mergeConfigWithDefaults) already means a newer file survives an older jmux
+ * intact rather than being destroyed by it.
+ */
+export const CONFIG_SCHEMA_VERSION = 1;
+
 export const defaultConfig: JmuxConfig = {
   snapshot: {
     enabled: true,
@@ -360,21 +460,143 @@ function mergeConfigWithDefaults(userConfig: JmuxConfig, defaults: JmuxConfig): 
 }
 
 /**
+ * One-time, idempotent Command Center migration: seeds `commandCenterViews` /
+ * `commandCenterActiveViewId` / `commandCenterAxes` / `commandCenter.maxTiles`
+ * / `commandCenter.density` when the on-disk shape predates views. Pure:
+ * returns the new object plus whether anything changed (the caller persists
+ * only when changed), the same contract as `migrateLegacyConfig`.
+ *
+ * Also drops `commandCenterTabs` and `autoPinAgentPanes` from disk. Both were
+ * kept on a previous pass because `main.ts` and `cli/cc.ts` still read them —
+ * deleting the key before they moved off it would have silently folded every
+ * named tab back to the default. Now that neither reader exists, the key
+ * itself is dead weight: `persist()` writes the whole loaded object back
+ * (`config.ts:551`), so a dropped TS field alone would never stop either key
+ * from re-appearing on the next save.
+ */
+export function migrateCommandCenterConfig(raw: any): { config: any; changed: boolean } {
+  const config = { ...(raw ?? {}) };
+  let changed = false;
+
+  if ("commandCenterTabs" in config) {
+    delete config.commandCenterTabs;
+    changed = true;
+  }
+  if ("autoPinAgentPanes" in config) {
+    delete config.autoPinAgentPanes;
+    changed = true;
+  }
+
+  // Absence alone is never a reason to flip `changed`: a config with no
+  // Command Center history at all (the common case — a brand-new install, or
+  // a long-time user who never touched the grid) must not force a disk write
+  // the instant `ConfigStore` is constructed. `main.ts` builds it at module
+  // scope and only checks `ensureExists()` much later, at first-run — an
+  // eager write here would create the file before that check ever runs and
+  // permanently hide the setup checklist. So the seeded value always lands in
+  // the *returned* config (every consumer sees it), but only a field that was
+  // PRESENT and wrong earns a rewrite, the same bar `migrateLegacyConfig`
+  // already holds for `{}`.
+  const hadViews = config.commandCenterViews !== undefined;
+  const rawViews = config.commandCenterViews;
+  const views = normalizeViews(rawViews);
+  config.commandCenterViews = views;
+  if (hadViews && JSON.stringify(rawViews) !== JSON.stringify(views)) changed = true;
+
+  const hadActiveId = config.commandCenterActiveViewId !== undefined;
+  const rawActiveId = config.commandCenterActiveViewId;
+  const activeViewId = resolveActiveViewId(rawActiveId, views);
+  config.commandCenterActiveViewId = activeViewId;
+  if (hadActiveId && rawActiveId !== activeViewId) changed = true;
+
+  const activeView = views.find((v) => v.id === activeViewId)!;
+  const hadAxes = config.commandCenterAxes !== undefined;
+  const rawAxes = config.commandCenterAxes;
+  const axes = normalizeAxes(rawAxes, activeView);
+  config.commandCenterAxes = axes;
+  if (hadAxes && JSON.stringify(rawAxes) !== JSON.stringify(axes)) changed = true;
+
+  const rawMaxTiles = config.commandCenter?.maxTiles;
+  const hadMaxTiles = rawMaxTiles !== undefined;
+  const maxTilesValid = typeof rawMaxTiles === "number" && Number.isFinite(rawMaxTiles) && rawMaxTiles >= 1;
+
+  const rawDensity = config.commandCenter?.density;
+  const hadDensity = rawDensity !== undefined;
+  const density = normalizeDensity(rawDensity);
+
+  config.commandCenter = {
+    ...(config.commandCenter ?? {}),
+    maxTiles: maxTilesValid ? rawMaxTiles : DEFAULT_MAX_CLIENTS,
+    density,
+  };
+  if (hadMaxTiles && !maxTilesValid) changed = true;
+  if (hadDensity && rawDensity !== density) changed = true;
+
+  return { config, changed };
+}
+
+/** Compose every one-time top-level config migration into a single pass. */
+function migrateAll(raw: JmuxConfig): { config: JmuxConfig; changed: boolean } {
+  const legacy = migrateLegacyConfig(raw);
+  const cc = migrateCommandCenterConfig(legacy.config);
+  return { config: cc.config, changed: legacy.changed || cc.changed };
+}
+
+/**
  * Load jmux user config from ~/.config/jmux/config.json.
  * Merges with defaults to ensure all required fields are present.
  * Returns merged config, or just defaults if the file is missing or unparseable.
  */
+export class ConfigCorruptError extends Error {
+  constructor(readonly path: string, readonly reason: string) {
+    super(`config at ${path} is not valid JSON: ${reason}`);
+    this.name = "ConfigCorruptError";
+  }
+}
+
+export type ConfigRead =
+  | { kind: "ok"; raw: JmuxConfig }
+  | { kind: "missing" }
+  | { kind: "corrupt"; error: string };
+
+/**
+ * Read the config file, distinguishing "absent" from "unparseable".
+ *
+ * These were one case for as long as the loader used `catch {}` and fell back
+ * to defaults, which is what made a truncated file destructive: the next
+ * setting change wrote defaults over a file that was only damaged. Absent is
+ * normal and means defaults; corrupt means touch nothing.
+ *
+ * A non-object (array, scalar, null) is corrupt rather than ok. `JSON.parse`
+ * accepts all of them and the spread in mergeConfigWithDefaults would silently
+ * produce a config with none of the user's keys.
+ */
+export function readConfigFile(path: string): ConfigRead {
+  if (!existsSync(path)) return { kind: "missing" };
+  let text: string;
+  try {
+    text = readFileSync(path, "utf-8");
+  } catch (e) {
+    return { kind: "corrupt", error: (e as Error).message };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    return { kind: "corrupt", error: (e as Error).message };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { kind: "corrupt", error: "expected a JSON object" };
+  }
+  return { kind: "ok", raw: parsed as JmuxConfig };
+}
+
 export function loadUserConfig(configPath?: string): JmuxConfig {
   const path = configPath ?? DEFAULT_CONFIG_PATH;
-  let raw: JmuxConfig = {};
-  try {
-    if (existsSync(path)) {
-      raw = JSON.parse(readFileSync(path, "utf-8")) as JmuxConfig;
-    }
-  } catch {
-    // Invalid config — use defaults
-  }
-  const { config } = migrateLegacyConfig(raw);
+  const read = readConfigFile(path);
+  if (read.kind === "corrupt") throw new ConfigCorruptError(path, read.error);
+  const raw = read.kind === "ok" ? read.raw : {};
+  const { config } = migrateAll(raw);
   return mergeConfigWithDefaults(config, defaultConfig);
 }
 
@@ -386,20 +608,21 @@ export function loadUserConfig(configPath?: string): JmuxConfig {
 export class ConfigStore {
   private data: JmuxConfig;
   private readonly path: string;
+  private _lastWriteError: string | null = null;
+  private _loadError: string | null = null;
 
   constructor(configPath?: string) {
     this.path = configPath ?? DEFAULT_CONFIG_PATH;
-    let raw: JmuxConfig = {};
-    try {
-      if (existsSync(this.path)) {
-        raw = JSON.parse(readFileSync(this.path, "utf-8")) as JmuxConfig;
-      }
-    } catch {
-      // Invalid config — use defaults
-    }
-    // Rewrite the file once when the on-disk shape predates repoDefaults/repos,
-    // so no consumption site ever has to check two locations for a field.
-    const { config, changed } = migrateLegacyConfig(raw);
+    const read = readConfigFile(this.path);
+    // Throws rather than falling back: a corrupt file that loads as defaults is
+    // one setting change away from being overwritten with them. main.ts catches
+    // this above the alt screen and the tmux pty, so it can exit cleanly.
+    if (read.kind === "corrupt") throw new ConfigCorruptError(this.path, read.error);
+    const raw: JmuxConfig = read.kind === "ok" ? read.raw : {};
+    // Rewrite the file once when the on-disk shape predates repoDefaults/repos
+    // or Command Center views, so no consumption site ever has to check two
+    // locations for a field.
+    const { config, changed } = migrateAll(raw);
     this.data = mergeConfigWithDefaults(config, defaultConfig);
     if (changed) this.persist();
   }
@@ -412,6 +635,32 @@ export class ConfigStore {
   /** Path to the config file on disk. */
   get configPath(): string {
     return this.path;
+  }
+
+  /**
+   * Why the last write failed, or null if it succeeded. Exposed so the UI can
+   * say so: a persist that fails silently is how a user's setting change looks
+   * applied on screen and is gone on the next launch.
+   */
+  get lastWriteError(): string | null {
+    return this._lastWriteError;
+  }
+
+  /**
+   * Why the last reload failed, or null. Non-null means the file on disk is
+   * unparseable and memory holds the last version that wasn't.
+   */
+  get loadError(): string | null {
+    return this._loadError;
+  }
+
+  /**
+   * True while the on-disk file is corrupt. Writes are refused rather than
+   * queued: persisting now would replace a file the user may still be able to
+   * fix by hand with whatever jmux happens to hold in memory.
+   */
+  get writesDisabled(): boolean {
+    return this._loadError !== null;
   }
 
   /**
@@ -511,19 +760,6 @@ export class ConfigStore {
     this.persist();
   }
 
-  /**
-   * Set or remove a team → repo mapping and persist.
-   */
-  setTeamRepo(team: string, repoDir: string | null): void {
-    if (!this.data.issueWorkflow) this.data.issueWorkflow = {};
-    if (!this.data.issueWorkflow.teamRepoMap) this.data.issueWorkflow.teamRepoMap = {};
-    if (repoDir === null) {
-      delete this.data.issueWorkflow.teamRepoMap[team];
-    } else {
-      this.data.issueWorkflow.teamRepoMap[team] = repoDir;
-    }
-    this.persist();
-  }
 
   /**
    * Set an adapter config entry (codeHost or issueTracker) and persist.
@@ -562,7 +798,18 @@ export class ConfigStore {
    * external changes. Returns the new config.
    */
   reload(): JmuxConfig {
-    this.data = loadUserConfig(this.path);
+    const read = readConfigFile(this.path);
+    if (read.kind === "corrupt") {
+      // Deliberately does not throw: this runs from the fs.watch callback in a
+      // live TUI, where a throw is an unhandled rejection. Startup can exit
+      // cleanly (see the constructor); a running process has to degrade.
+      this._loadError = read.error;
+      return this.data;
+    }
+    const raw: JmuxConfig = read.kind === "ok" ? read.raw : {};
+    const { config } = migrateLegacyConfig(raw);
+    this.data = mergeConfigWithDefaults(config, defaultConfig);
+    this._loadError = null;
     return this.data;
   }
 
@@ -578,13 +825,183 @@ export class ConfigStore {
     return true;
   }
 
-  private persist(): void {
+  /**
+   * One-time migration off `teamRepoMap` / `repoDefaults` / `repos`.
+   *
+   * Async and explicit rather than run from the constructor, because resolving
+   * a directory to its git common dir spawns git — and the constructor is
+   * reached from module scope in main.ts before anything can await.
+   *
+   * The complete new document is computed before anything is written, a
+   * timestamped backup lands first, and the legacy keys are removed only after
+   * the new file is durably on disk. Idempotent: `projects` existing is what
+   * suppresses it, so a Project the user has since deleted is not re-created.
+   */
+  async migrateProjects(resolveCommonDir: (dir: string) => string | null | Promise<string | null>): Promise<boolean> {
+    if (this.writesDisabled) return false;
+    if (this.data.projects !== undefined) return false;
+
+    const dirs = new Set<string>(Object.values(this.data.issueWorkflow?.teamRepoMap ?? {}));
+    const resolved = new Map<string, string | null>();
+    for (const d of dirs) resolved.set(d, await resolveCommonDir(d));
+
+    const result = migrateToProjects(
+      {
+        repoDefaults: this.data.repoDefaults,
+        repos: this.data.repos,
+        issueWorkflow: this.data.issueWorkflow,
+      },
+      (d) => resolved.get(d) ?? null,
+      canonicalizeRepoPath,
+    );
+    if (!result.changed) return false;
+
+    // Before the rewrite, not after: the point is to survive a failure during
+    // the write that follows.
     try {
-      const dir = dirname(this.path);
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      writeFileSync(this.path, JSON.stringify(this.data, null, 2) + "\n");
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      writeFileAtomicSync(`${this.path}.backup-${stamp}`, JSON.stringify(this.data, null, 2) + "\n");
     } catch (e) {
-      logError("ConfigStore", `persist failed: ${(e as Error).message}`);
+      logError("ConfigStore", `migration backup failed, not migrating: ${(e as Error).message}`);
+      return false;
+    }
+
+    this.data.projects = result.projects;
+    if (result.globalDefaults) this.data.projectDefaults = result.globalDefaults;
+    delete this.data.repoDefaults;
+    delete this.data.repos;
+    if (this.data.issueWorkflow) {
+      delete this.data.issueWorkflow.teamRepoMap;
+      if (Object.keys(this.data.issueWorkflow).length === 0) delete this.data.issueWorkflow;
+    }
+    return this.persist();
+  }
+
+  /**
+   * Add or replace several Projects in one write.
+   *
+   * One `persist()` per Project means one temp file, two fsyncs and a rename
+   * each — fine for a keystroke, wasteful for a resolver that may touch every
+   * Project at once.
+   */
+  upsertProjects(projects: readonly ProjectConfig[]): void {
+    if (projects.length === 0) return;
+    const list = [...(this.data.projects ?? [])];
+    for (const project of projects) {
+      const at = list.findIndex((p) => p.id === project.id);
+      if (at >= 0) list[at] = project;
+      else list.push(project);
+    }
+    this.data.projects = list;
+    this.persist();
+  }
+
+  /** Add or replace a Project by id. */
+  upsertProject(project: ProjectConfig): void {
+    const list = [...(this.data.projects ?? [])];
+    const at = list.findIndex((p) => p.id === project.id);
+    if (at >= 0) list[at] = project;
+    else list.push(project);
+    this.data.projects = list;
+    this.persist();
+  }
+
+  /**
+   * Soft delete, following t3code's `deleted_at`. A session still stamped with
+   * this id must be able to report `orphaned` rather than silently re-routing
+   * to whatever else claims its team.
+   */
+  deleteProject(id: string): void {
+    const list = [...(this.data.projects ?? [])];
+    const at = list.findIndex((p) => p.id === id);
+    if (at < 0) return;
+    list[at] = { ...list[at], deletedAt: new Date().toISOString() };
+    this.data.projects = list;
+    this.persist();
+  }
+
+  /**
+   * Write one setting on one Project.
+   *
+   * Stored by key *presence*: `null` and values equal to the global default are
+   * real overrides, and dropping either would erase intent the user cannot
+   * express any other way.
+   */
+  setProjectSetting<K extends keyof ProjectSettings>(
+    id: string,
+    field: K,
+    value: ProjectSettings[K],
+  ): void {
+    const list = [...(this.data.projects ?? [])];
+    const at = list.findIndex((p) => p.id === id);
+    if (at < 0) return;
+    list[at] = { ...list[at], settings: { ...list[at].settings, [field]: value } };
+    this.data.projects = list;
+    this.persist();
+  }
+
+  /** Remove the key entirely, so the row falls back to the global tier. */
+  clearProjectSetting(id: string, field: keyof ProjectSettings): void {
+    const list = [...(this.data.projects ?? [])];
+    const at = list.findIndex((p) => p.id === id);
+    if (at < 0) return;
+    const settings = { ...list[at].settings };
+    delete settings[field];
+    list[at] = { ...list[at], settings };
+    this.data.projects = list;
+    this.persist();
+  }
+
+  setProjectDefault<K extends keyof ProjectSettings>(field: K, value: ProjectSettings[K]): void {
+    this.data.projectDefaults = { ...this.data.projectDefaults, [field]: value };
+    this.persist();
+  }
+
+  /**
+   * Record — or clear — a declared preference about an optional capability.
+   *
+   * `null` is how it is taken back. A preference you cannot reverse from the
+   * same place you set it is worse than the nag it replaced.
+   */
+  setSetupIntent(key: "tracker" | "agentHooks", value: "never" | null): void {
+    const setup = { ...this.data.setup };
+    if (value === null) delete setup[key];
+    else setup[key] = value;
+    this.data.setup = setup;
+    this.persist();
+  }
+
+  setRoute(kind: "issue" | "linearProject", key: string, projectId: string): void {
+    const routes = { ...this.data.routes };
+    routes[kind] = { ...routes[kind], [key]: projectId };
+    this.data.routes = routes;
+    this.persist();
+  }
+
+  clearRoute(kind: "issue" | "linearProject", key: string): void {
+    const routes = { ...this.data.routes };
+    const table = { ...routes[kind] };
+    delete table[key];
+    routes[kind] = table;
+    this.data.routes = routes;
+    this.persist();
+  }
+
+  private persist(): boolean {
+    if (this.writesDisabled) return false;
+    // Never lower a higher stamp: a newer jmux wrote it, this one migrated
+    // nothing, and claiming its own version would misdescribe the contents.
+    if ((this.data.schemaVersion ?? 0) < CONFIG_SCHEMA_VERSION) {
+      this.data.schemaVersion = CONFIG_SCHEMA_VERSION;
+    }
+    try {
+      writeFileAtomicSync(this.path, JSON.stringify(this.data, null, 2) + "\n");
+      this._lastWriteError = null;
+      return true;
+    } catch (e) {
+      this._lastWriteError = (e as Error).message;
+      logError("ConfigStore", `persist failed: ${this._lastWriteError}`);
+      return false;
     }
   }
 }

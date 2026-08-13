@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { DETACH_ON_DESTROY_COMMAND } from "../config-generation";
 
 // The .conf files are the one part of jmux tmux executes directly, so nothing
 // in the type system or the render pipeline can catch a reference to a file
@@ -79,6 +80,31 @@ describe("tmux config files", () => {
     });
   });
 
+  // Sourcing the user's tmux config is opt-out (`userTmuxConfig` in
+  // config.json), and the entire mechanism is one line of tmux.conf: jmux
+  // resolves the path in TypeScript — where the XDG fallback and the `false`
+  // case are testable — and exports it as $JMUX_USER_CONF, empty meaning
+  // "source nothing". An edit that reinstated an unconditional `source-file
+  // ~/.tmux.conf` would silently restore the old behaviour for every user who
+  // had turned it off, and nothing in the type system can see a .conf file.
+  describe("the user's tmux config is gated", () => {
+    test("tmux.conf reaches it only through $JMUX_USER_CONF", () => {
+      const text = confText("tmux.conf");
+      expect(text).toContain("$JMUX_USER_CONF");
+      expect(text).not.toMatch(/source-file\s+(?:-\S+\s+)*["']?~\/\.tmux\.conf/);
+    });
+
+    // `if-shell` without -b stops the command queue until its shell exits
+    // (man tmux), so step 2 cannot outlive step 3. If the gate ever moves to a
+    // backgrounded form, the user's config would land *after* core.conf and
+    // win on the six settings jmux is not willing to negotiate.
+    test("core.conf is still sourced last", () => {
+      const text = confText("tmux.conf");
+      expect(text).not.toMatch(/if-shell\s+-\S*b/);
+      expect(text.indexOf("core.conf")).toBeGreaterThan(text.indexOf("JMUX_USER_CONF"));
+    });
+  });
+
   // core.conf is sourced last and overrides ~/.tmux.conf, so anything in it is
   // a setting the user is not allowed to have an opinion about. That is only
   // defensible for things jmux genuinely cannot run without — it held an
@@ -100,5 +126,24 @@ describe("tmux config files", () => {
     ];
     const unexpected = settings.filter((line) => !allowed.some((s) => line.includes(s)));
     expect(unexpected).toEqual([]);
+  });
+
+  // One of those settings is also written from TypeScript, because a server
+  // jmux did not start never ran core.conf and losing this one quits the
+  // process (see DETACH_ON_DESTROY_COMMAND). Two sources for one setting drift,
+  // and the way it drifts is silent: core.conf changes, the second copy is left
+  // behind, and the bug returns on inherited servers alone — the one case the
+  // fresh-server tests never see.
+  test("the option written twice says the same thing in both places", () => {
+    const value = confText("core.conf")
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => l.includes("detach-on-destroy"));
+
+    expect(value).toBeDefined();
+    // `set -g detach-on-destroy off` in the conf, `set-option -g …` on the
+    // control channel: same command, and only the operand has to agree.
+    expect(DETACH_ON_DESTROY_COMMAND.endsWith(value!.replace(/^set(-option)? -g /, "")))
+      .toBe(true);
   });
 });

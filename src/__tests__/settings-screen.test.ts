@@ -550,6 +550,352 @@ describe("SettingsScreen action rows", () => {
   });
 });
 
+// --- Explain line ---
+//
+// `SettingDef.describe` has existed since the workflow screen shipped and this
+// screen explicitly ignored it, so every row was a label and a value with
+// nothing saying what it did.
+
+function describedCategory(describe_?: () => string): SettingsCategory[] {
+  return [{
+    label: "General",
+    collapsed: false,
+    settings: [
+      { id: "a", label: "Cache timers", type: "boolean", getValue: () => "on", onToggle: () => {}, describe: describe_ },
+    ],
+  }];
+}
+
+function fullRow(grid: CellGrid, row: number): string {
+  return grid.cells[row].map((c) => c.char).join("").trimEnd();
+}
+
+describe("SettingsScreen explain line", () => {
+  test("shows the selected row's description", () => {
+    const s = new SettingsScreen();
+    s.open(describedCategory(() => "Shows how long the cache has been warm."));
+    s.handleInput("\x1b[B");
+    const grid = s.render(80, 24);
+    expect(fullRow(grid, 22)).toContain("Shows how long the cache has been warm.");
+  });
+
+  test("is blank for a row with no description", () => {
+    const s = new SettingsScreen();
+    s.open(describedCategory());
+    s.handleInput("\x1b[B");
+    expect(fullRow(s.render(80, 24), 22)).toBe("");
+  });
+
+  test("does not overlap the hint row", () => {
+    const s = new SettingsScreen();
+    s.open(describedCategory(() => "A description."));
+    s.handleInput("\x1b[B");
+    const grid = s.render(80, 24);
+    expect(fullRow(grid, 23)).toContain("navigate");
+    expect(fullRow(grid, 23)).not.toContain("A description.");
+  });
+
+  test("truncates a long description rather than wrapping onto the rows above", () => {
+    const s = new SettingsScreen();
+    s.open(describedCategory(() => "x".repeat(500)));
+    s.handleInput("\x1b[B");
+    const grid = s.render(80, 24);
+    expect(fullRow(grid, 22).length).toBeLessThanOrEqual(80);
+    expect(fullRow(grid, 21)).not.toContain("x");
+  });
+
+  test("a category header shows no description of its own", () => {
+    const s = new SettingsScreen();
+    s.open(describedCategory(() => "Only for the setting."));
+    // selectedIndex 0 is the category header
+    expect(fullRow(s.render(80, 24), 22)).toBe("");
+  });
+});
+
+// --- Navigation parity ---
+//
+// j/k work in the setup modal and the workflow screen; ◂ ▸ drive onStep on the
+// workflow screen. This screen took neither, so muscle memory from either did
+// nothing here.
+describe("SettingsScreen navigation parity", () => {
+  test("j moves down and k moves up", () => {
+    const s = new SettingsScreen();
+    s.open(twoCategories());
+    s.handleInput("j");
+    const afterOne = s.render(80, 24);
+    s.handleInput("j");
+    const afterTwo = s.render(80, 24);
+    s.handleInput("k");
+    const backToOne = s.render(80, 24);
+    // The ▸ cursor marks the selected row; comparing frames avoids hard-coding
+    // row arithmetic that the blank-spacer plan owns.
+    expect(fullRow(afterTwo, 4)).not.toBe(fullRow(afterOne, 4));
+    expect(fullRow(backToOne, 4)).toBe(fullRow(afterOne, 4));
+  });
+
+  test("right and left arrows call onStep with +1 and -1", () => {
+    const deltas: number[] = [];
+    const s = new SettingsScreen();
+    s.open([{
+      label: "General", collapsed: false,
+      settings: [{
+        id: "n", label: "Count", type: "text",
+        getValue: () => "3", onTextCommit: () => {},
+        onStep: (d: number) => deltas.push(d),
+      }],
+    }]);
+    s.handleInput("\x1b[B");
+    s.handleInput("\x1b[C");
+    s.handleInput("\x1b[D");
+    expect(deltas).toEqual([1, -1]);
+  });
+
+  test("arrows do nothing on a row with no onStep", () => {
+    const s = new SettingsScreen();
+    s.open(twoCategories());
+    s.handleInput("\x1b[B");
+    expect(() => s.handleInput("\x1b[C")).not.toThrow();
+  });
+
+  test("j and k are typed into the buffer while editing, not treated as navigation", () => {
+    let committed = "";
+    const s = new SettingsScreen();
+    s.open([{
+      label: "General", collapsed: false,
+      settings: [{
+        id: "t", label: "Command", type: "text",
+        getValue: () => "", onTextCommit: (v: string) => { committed = v; },
+      }],
+    }]);
+    s.handleInput("\x1b[B");
+    s.handleInput("\r");
+    s.handleInput("j");
+    s.handleInput("k");
+    s.handleInput("\r");
+    expect(committed).toBe("jk");
+  });
+
+  test("q still closes and is not swallowed by navigation", () => {
+    const s = new SettingsScreen();
+    s.open(twoCategories());
+    s.handleInput("q");
+    expect(s.isOpen).toBe(false);
+  });
+});
+
+// --- Search ---
+//
+// An explicit `/` mode rather than type-to-filter: bare typing collides with
+// the keys this screen already binds — `q` closes and `d` clears an override,
+// so "query" would close the screen on its first keystroke.
+function searchable(): SettingsCategory[] {
+  return [
+    {
+      label: "Display", collapsed: false,
+      settings: [
+        { id: "a", label: "Cache timers", type: "boolean", getValue: () => "on" },
+        { id: "b", label: "Inline images in issue previews", type: "boolean", getValue: () => "on" },
+      ],
+    },
+    {
+      label: "Integrations", collapsed: false,
+      settings: [
+        { id: "c", label: "Issue tracker", type: "text", getValue: () => "linear" },
+      ],
+    },
+  ];
+}
+
+function painted(s: SettingsScreen, cols = 80, rows = 24): string {
+  const grid = s.render(cols, rows);
+  return Array.from({ length: rows }, (_, r) => fullRow(grid, r)).join("\n");
+}
+
+function type(s: SettingsScreen, text: string): void {
+  for (const ch of text) s.handleInput(ch);
+}
+
+// The editor opens seeded with the current value and the cursor at its end, so
+// a test that just types would be appending to it.
+function clearField(s: SettingsScreen, n = 16): void {
+  for (let i = 0; i < n; i++) s.handleInput("\x7f");
+}
+
+describe("SettingsScreen search", () => {
+  test("slash opens a filter that narrows the visible rows", () => {
+    const s = new SettingsScreen();
+    s.open(searchable());
+    s.handleInput("/");
+    type(s, "image");
+    const out = painted(s);
+    expect(out).toContain("Inline images");
+    expect(out).not.toContain("Cache timers");
+    expect(out).not.toContain("Issue tracker");
+  });
+
+  test("the filter is case-insensitive", () => {
+    const s = new SettingsScreen();
+    s.open(searchable());
+    s.handleInput("/");
+    type(s, "CACHE");
+    expect(painted(s)).toContain("Cache timers");
+  });
+
+  test("escape clears the filter and shows everything again", () => {
+    const s = new SettingsScreen();
+    s.open(searchable());
+    s.handleInput("/");
+    type(s, "cache");
+    s.handleInput("\x1b");
+    expect(painted(s)).toContain("Issue tracker");
+  });
+
+  test("q and d are typed into the filter, not treated as close and clear", () => {
+    const s = new SettingsScreen();
+    s.open(searchable());
+    s.handleInput("/");
+    s.handleInput("q");
+    s.handleInput("d");
+    expect(s.isOpen).toBe(true);
+  });
+
+  test("a filter matching nothing says so", () => {
+    const s = new SettingsScreen();
+    s.open(searchable());
+    s.handleInput("/");
+    type(s, "zzzz");
+    expect(painted(s)).toContain("No matches");
+  });
+
+  test("a category with no matching settings is hidden entirely", () => {
+    const s = new SettingsScreen();
+    s.open(searchable());
+    s.handleInput("/");
+    type(s, "tracker");
+    const out = painted(s);
+    expect(out).toContain("Integrations");
+    expect(out).not.toContain("Display");
+  });
+
+  test("a filter reaches into a collapsed category", () => {
+    const s = new SettingsScreen();
+    s.open([{
+      label: "Hidden Section", collapsed: true,
+      settings: [{ id: "x", label: "Buried setting", type: "text", getValue: () => "v" }],
+    }]);
+    expect(painted(s)).not.toContain("Buried setting");
+    s.handleInput("/");
+    type(s, "buried");
+    expect(painted(s)).toContain("Buried setting");
+  });
+
+  test("backspace widens the filter again", () => {
+    const s = new SettingsScreen();
+    s.open(searchable());
+    s.handleInput("/");
+    type(s, "cachez");
+    expect(painted(s)).toContain("No matches");
+    s.handleInput("\x7f");
+    expect(painted(s)).toContain("Cache timers");
+  });
+});
+
+// --- Validation feedback ---
+//
+// `sidebar width: 200` was parsed, found out of range, and discarded in
+// silence, leaving the old value on screen looking applied — the same defect
+// the explain line and search exist to remove, inside the screen meant to
+// surface it.
+function widthCategory(): SettingsCategory[] {
+  return [{
+    label: "Display", collapsed: false,
+    settings: [{
+      id: "w", label: "Sidebar width", type: "text",
+      getValue: () => "26",
+      onTextCommit: (v: string) => {
+        const n = parseInt(v, 10);
+        if (isNaN(n) || n < 10 || n > 60) return "must be between 10 and 60";
+        return null;
+      },
+    }],
+  }];
+}
+
+describe("SettingsScreen validation feedback", () => {
+  test("a rejected value shows the message", () => {
+    const s = new SettingsScreen();
+    s.open(widthCategory());
+    s.handleInput("\x1b[B");
+    s.handleInput("\r");
+    clearField(s);
+    type(s, "200");
+    s.handleInput("\r");
+    expect(painted(s)).toContain("must be between 10 and 60");
+  });
+
+  test("a rejected value keeps the editor open so it can be corrected", () => {
+    const s = new SettingsScreen();
+    s.open(widthCategory());
+    s.handleInput("\x1b[B");
+    s.handleInput("\r");
+    clearField(s);
+    type(s, "200");
+    s.handleInput("\r");
+    expect(s.isEditing).toBe(true);
+  });
+
+  test("an accepted value closes the editor and shows no message", () => {
+    const s = new SettingsScreen();
+    s.open(widthCategory());
+    s.handleInput("\x1b[B");
+    s.handleInput("\r");
+    clearField(s);
+    type(s, "30");
+    s.handleInput("\r");
+    expect(s.isEditing).toBe(false);
+    expect(painted(s)).not.toContain("must be between");
+  });
+
+  test("a row whose commit returns nothing still closes the editor", () => {
+    const s = new SettingsScreen();
+    s.open([{
+      label: "Display", collapsed: false,
+      settings: [{ id: "t", label: "Command", type: "text", getValue: () => "", onTextCommit: () => {} }],
+    }]);
+    s.handleInput("\x1b[B");
+    s.handleInput("\r");
+    s.handleInput("x");
+    s.handleInput("\r");
+    expect(s.isEditing).toBe(false);
+  });
+
+  test("escaping a rejected edit clears the message", () => {
+    const s = new SettingsScreen();
+    s.open(widthCategory());
+    s.handleInput("\x1b[B");
+    s.handleInput("\r");
+    clearField(s);
+    type(s, "200");
+    s.handleInput("\r");
+    s.handleInput("\x1b");
+    expect(painted(s)).not.toContain("must be between");
+  });
+
+  test("correcting a rejected value after the message accepts it", () => {
+    const s = new SettingsScreen();
+    s.open(widthCategory());
+    s.handleInput("\x1b[B");
+    s.handleInput("\r");
+    clearField(s);
+    type(s, "200");
+    s.handleInput("\r");
+    expect(s.isEditing).toBe(true);   // rejected
+    s.handleInput("\x7f");            // 200 -> 20
+    s.handleInput("\r");
+    expect(s.isEditing).toBe(false);
+  });
+});
+
 // --- Stepper controls ---
 //
 // The rule these pin: ◂ ▸ always changes the selected row's value, and Enter

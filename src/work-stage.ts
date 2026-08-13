@@ -77,23 +77,8 @@ export function projectStage(
 
 /** The config slice stage resolution needs. */
 export interface StageConfig {
-  issueWorkflow?: { teamRepoMap?: Record<string, string> };
 }
 
-/**
- * The repo an issue routes to, via the (global, cross-repo) team→repo index.
- * Returns null when the team is unknown or unmapped — the caller then falls
- * back to global defaults rather than guessing at the current session's repo.
- */
-export function resolveIssueRepoDir(
-  issue: Pick<Issue, "team">,
-  config: StageConfig,
-  home: string,
-): string | null {
-  const dir = config.issueWorkflow?.teamRepoMap?.[issue.team ?? ""];
-  if (!dir) return null;
-  return dir.startsWith("~") ? home + dir.slice(1) : dir;
-}
 
 /**
  * Stage for an issue. Stage lists are derived from the queue tabs (see

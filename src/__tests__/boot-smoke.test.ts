@@ -1,6 +1,6 @@
 import { describe, expect, test, afterAll } from "bun:test";
 import { Terminal } from "bun-pty";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -93,4 +93,32 @@ describe("jmux boots", () => {
     },
     20_000,
   );
+});
+
+// A corrupt config must stop jmux *before* it reaches the pty. This is the one
+// startup behaviour no unit test can assert: ConfigStore's throw is covered in
+// config.test.ts, but whether main.ts turns it into a diagnostic and a clean
+// exit — rather than an unhandled stack and a half-started terminal — is only
+// observable by running the thing.
+//
+// Deliberately not skipped when tmux is absent: the whole point is that jmux
+// exits before it would need tmux at all.
+describe("jmux refuses a corrupt config", () => {
+  test("exits nonzero with a diagnostic naming the file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "jmux-corrupt-boot-"));
+    const cfg = join(dir, "config.json");
+    writeFileSync(cfg, "{ this is not json");
+    try {
+      const proc = Bun.spawnSync(
+        ["bun", "run", join(import.meta.dir, "..", "main.ts"), "--config", cfg],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      expect(proc.exitCode).not.toBe(0);
+      const err = new TextDecoder().decode(proc.stderr);
+      expect(err).toContain("config.json");
+      expect(err).toContain("not valid JSON");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

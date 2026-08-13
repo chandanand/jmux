@@ -6,6 +6,7 @@ import { INTERNAL_SESSION_FILTER } from "../glass/internal-sessions";
 import { SessionState, type SessionLink } from "../session-state";
 import { type CtlAgentState } from "./agent";
 import { US, splitFields } from "../tmux-fields";
+import { PROJECT_OPTION, type ProjectConfig } from "../project";
 import { ISSUE_LINK_OPTION, parseIssueLinkOption } from "../issue-session";
 import { outranks } from "../agent-state-rollup";
 import type { CliContext } from "./context";
@@ -29,6 +30,8 @@ export interface StatusSessionRow {
   path: string;
   /** True for the session's active pane, whose path represents the session. */
   active: boolean;
+  /** The `@jmux-project` stamp, or "" when the session carries none. */
+  projectId: string;
 }
 
 /**
@@ -47,10 +50,13 @@ const STATUS_FORMAT = [
   `#{${ISSUE_LINK_OPTION}}`,
   "#{pane_current_path}",
   "#{pane_active}",
+  `#{${PROJECT_OPTION}}`,
 ].join(US);
 
 export function parseStatusLine(line: string): StatusSessionRow | null {
   const p = splitFields(line);
+  // Nine, not ten: the project field was added after this shipped, and a
+  // session-list line from an older server simply carries no stamp.
   if (p.length < 9) return null;
   return {
     id: p[0],
@@ -62,6 +68,7 @@ export function parseStatusLine(line: string): StatusSessionRow | null {
     linearIssues: parseIssueLinkOption(p[6]),
     path: p[7],
     active: p[8] === "1",
+    projectId: p[9] ?? "",
   };
 }
 
@@ -122,6 +129,11 @@ export interface StatusSession {
     ageSeconds: number | null;
   } | null;
   links: StatusLink[];
+  /**
+   * `null` and `deleted` are deliberately different: the first is a session
+   * nobody adopted, the second a dangling reference an agent can report.
+   */
+  project: { id: string; title: string } | { id: string; state: "deleted" } | null;
   attention: boolean;
   attentionReason: string | null;
   pinned: boolean;
@@ -132,6 +144,10 @@ export interface StatusInputs {
   /** Links from the existing SessionState store (state.json), keyed by name. */
   linksByName: (name: string) => SessionLink[];
   pinnedNames: ReadonlySet<string>;
+  /** Every configured Project, including soft-deleted ones — a dangling stamp
+   *  has to be reportable as `deleted` rather than indistinguishable from
+   *  a session nobody adopted. */
+  projects?: readonly ProjectConfig[];
   branchByPath: (path: string) => string | null;
   nowSeconds: number;
 }
@@ -190,6 +206,7 @@ export function buildStatusSnapshot(inp: StatusInputs): {
       branch: row.path ? inp.branchByPath(row.path) : null,
       agent,
       links: mergeLinks(inp.linksByName(row.name), row.linearIssues),
+      project: resolveStatusProject(row.projectId, inp.projects ?? []),
       attention,
       attentionReason,
       pinned: inp.pinnedNames.has(row.name),
@@ -197,6 +214,24 @@ export function buildStatusSnapshot(inp: StatusInputs): {
   });
 
   return { sessions };
+}
+
+/**
+ * The Project a status row reports.
+ *
+ * Three answers, not two. `null` is a session nobody adopted; `deleted` is a
+ * stamp naming a Project that has been removed — a dangling reference an agent
+ * can act on, and one that must not be silently flattened into "no project".
+ */
+function resolveStatusProject(
+  stampedId: string,
+  projects: readonly ProjectConfig[],
+): StatusSession["project"] {
+  if (!stampedId) return null;
+  const match = projects.find((p) => p.id === stampedId);
+  if (!match) return null;
+  if (match.deletedAt !== undefined) return { id: match.id, state: "deleted" };
+  return { id: match.id, title: match.title };
 }
 
 function gitBranch(path: string): string | null {
@@ -242,6 +277,10 @@ export function handleStatus(ctx: CliContext, _parsed: ParsedCtlArgs): unknown {
   return buildStatusSnapshot({
     rows,
     linksByName: (name) => sessionState.getLinks(name),
+    // Soft-deleted ones included on purpose: a stamp naming a removed Project
+    // must report `deleted` rather than being indistinguishable from a session
+    // nobody adopted.
+    projects: config.projects ?? [],
     pinnedNames,
     branchByPath,
     nowSeconds: Math.floor(Date.now() / 1000),

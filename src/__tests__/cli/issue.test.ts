@@ -222,22 +222,34 @@ describe("expandTilde", () => {
 });
 
 describe("resolveRepoForIssue", () => {
+  // Rewritten from "falls back to teamRepoMap". That map is deleted by the
+  // Projects migration, so reading it answered null for every issue and
+  // `ctl issue start` refused work the sidebar would have started — the exact
+  // "the CLI disagrees with my sidebar" failure the shared-module rule exists
+  // to prevent. Resolution now goes through the router the TUI uses, which
+  // keys on the team *id*.
   const config: JmuxConfig = {
-    issueWorkflow: { teamRepoMap: { Platform: "/repos/backend" } },
+    projects: [{ id: "backend", title: "Backend", dir: "/repos/backend", teamId: "T1" }],
   };
 
   test("prefers an explicit --repo flag", () => {
-    expect(resolveRepoForIssue({ repo: "/explicit" }, issue({ team: "Platform" }), config)).toBe(
-      "/explicit",
-    );
+    expect(
+      resolveRepoForIssue({ repo: "/explicit" }, issue({ team: "Platform", teamId: "T1" }), config),
+    ).toBe("/explicit");
   });
 
-  test("falls back to teamRepoMap by the issue's team", () => {
-    expect(resolveRepoForIssue({}, issue({ team: "Platform" }), config)).toBe("/repos/backend");
+  test("resolves through the issue's team id", () => {
+    expect(resolveRepoForIssue({}, issue({ team: "Platform", teamId: "T1" }), config))
+      .toBe("/repos/backend");
+  });
+
+  // A name is not unique across workspaces; routing must not fall back to it.
+  test("a matching team name with no id does not resolve", () => {
+    expect(resolveRepoForIssue({}, issue({ team: "Backend" }), config)).toBeNull();
   });
 
   test("returns null when nothing resolves", () => {
-    expect(resolveRepoForIssue({}, issue({ team: "Unknown" }), config)).toBeNull();
+    expect(resolveRepoForIssue({}, issue({ team: "Unknown", teamId: "T9" }), config)).toBeNull();
     expect(resolveRepoForIssue({}, null, config)).toBeNull();
   });
 });

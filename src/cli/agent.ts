@@ -133,6 +133,14 @@ export function rollupAgentRecords(
 
     // `@jmux-agent-pane` is a session option, so any pane reads the same value.
     if (row.agentPane) record.agentPane = row.agentPane;
+    // `@jmux-agent-kind` is claimed here rather than below, from whichever pane
+    // declares one, because it is the only pane-level identity with no
+    // inheritance source. `@jmux-agent-state` *does* inherit into a pane-context
+    // read, so every pane in an agent's session reports it — and `since` with
+    // it, leaving them tied on both. The state winner is therefore whichever
+    // pane tmux happened to list first, and taking `kind` from that row
+    // reported `kind: null` for a session with an agent plainly running in it.
+    if (row.kind) record.kind = row.kind;
     // The active pane defines the session's reported path, matching what
     // `list-sessions` used to return.
     if (row.active) {
@@ -146,7 +154,6 @@ export function rollupAgentRecords(
     winner.set(row.sessionId, candidate);
     record.state = row.state;
     record.since = row.since;
-    record.kind = row.kind;
     record.ageSeconds = row.since !== null ? Math.max(0, nowSeconds - row.since) : null;
   }
 

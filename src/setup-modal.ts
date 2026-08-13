@@ -26,6 +26,15 @@ export type SetupState =
   | "done"
   /** Not yet, and jmux can do it — Enter runs it. */
   | "todo"
+  /**
+   * Not yet, and something else has to happen first (see `dependsOn`).
+   *
+   * Distinct from `unavailable`: that one jmux can never do for you, this one
+   * it can, just not yet. A flat list gave both the same weight, so a step that
+   * was merely *next* looked as impossible as one that needed a package
+   * manager.
+   */
+  | "blocked"
   /** Not yet, and jmux cannot do it for you (see `note`). */
   | "unavailable";
 
@@ -37,18 +46,44 @@ export interface SetupRow {
   state: SetupState;
   /** Right-hand summary: the current value, or what to run yourself. */
   note?: string;
+  /**
+   * Ids of the rows that must be `done` first. Used to name the blocker on the
+   * detail line, so a blocked row says what to go and do rather than just
+   * refusing.
+   */
+  dependsOn?: string[];
 }
 
 export interface SetupProviders {
   /** Called on open and after each activation. Free to touch the filesystem. */
   rows: () => SetupRow[];
-  /** Enter on a `todo` row. Never called for `done` or `unavailable`. */
-  onActivate: (id: string) => void;
+  /**
+   * Enter on a `todo` row. Never called for `done`, `blocked` or `unavailable`.
+   *
+   * May return a promise. It used to be synchronous `void`, which meant a step
+   * whose work finished later — writing a credential, authenticating — could
+   * never tick its own row over, and the wizard appeared dead at its most
+   * important moment.
+   */
+  onActivate: (id: string) => void | Promise<void>;
+  /**
+   * "I am never going to do this." Optional, and only ever called for a row
+   * jmux *could* have done — declining something it cannot do anyway is
+   * meaningless.
+   *
+   * The other half of persisted intent: without a way to write it, the
+   * preference is read by its consumers and set by nobody, and the user it
+   * exists for is nagged forever.
+   */
+  onDecline?: (id: string) => void;
 }
 
 const GLYPH: Record<SetupState, string> = {
   done: "✓",
   todo: "○",
+  // Distinct from both: not a circle (which reads as available) and not a dash
+  // (which reads as never).
+  blocked: "·",
   unavailable: "—",
 };
 
@@ -58,6 +93,7 @@ export class SetupModal {
   private providers: SetupProviders;
   private cached: SetupRow[] = [];
   private termRows = 30;
+  private scrollOffset = 0;
 
   constructor(providers: SetupProviders) {
     this.providers = providers;
@@ -66,12 +102,14 @@ export class SetupModal {
   open(): void {
     this._open = true;
     this.selectedIndex = 0;
+    this.scrollOffset = 0;
     this.refresh();
   }
 
   close(): void {
     this._open = false;
     this.selectedIndex = 0;
+    this.scrollOffset = 0;
     this.cached = [];
   }
 
@@ -90,9 +128,10 @@ export class SetupModal {
 
   private refresh(): void {
     this.cached = this.providers.rows();
-    if (this.selectedIndex >= this.paintedRows) {
-      this.selectedIndex = Math.max(0, this.paintedRows - 1);
+    if (this.selectedIndex >= this.cached.length) {
+      this.selectedIndex = Math.max(0, this.cached.length - 1);
     }
+    this.ensureVisible();
   }
 
   setTermRows(rows: number): void {
@@ -131,15 +170,28 @@ export class SetupModal {
     // did not knowingly choose. Rows past the fold are reached by resizing,
     // which is what the notice tells them to do.
     if (data === "\x1b[B" || data === "j") {
-      if (this.paintedRows > 0) {
-        this.selectedIndex = (this.selectedIndex + 1) % this.paintedRows;
+      if (this.cached.length > 0) {
+        this.selectedIndex = (this.selectedIndex + 1) % this.cached.length;
+        this.ensureVisible();
       }
       return { type: "consumed" };
     }
 
     if (data === "\x1b[A" || data === "k") {
-      if (this.paintedRows > 0) {
-        this.selectedIndex = (this.selectedIndex - 1 + this.paintedRows) % this.paintedRows;
+      if (this.cached.length > 0) {
+        this.selectedIndex = (this.selectedIndex - 1 + this.cached.length) % this.cached.length;
+        this.ensureVisible();
+      }
+      return { type: "consumed" };
+    }
+
+    if (data === "x" && this.providers.onDecline) {
+      const row = this.cached[this.selectedIndex];
+      // Only a step jmux could have taken. `unavailable` means it cannot, so
+      // declining it says nothing, and `done` is already true.
+      if (row && (row.state === "todo" || row.state === "blocked")) {
+        this.providers.onDecline(row.id);
+        if (this._open) this.refresh();
       }
       return { type: "consumed" };
     }
@@ -151,7 +203,7 @@ export class SetupModal {
       // all, and "I pressed Enter and cannot tell whether it worked" is the
       // exact doubt this screen exists to remove.
       if (!row || row.state !== "todo") return { type: "consumed" };
-      this.providers.onActivate(row.id);
+      const result = this.providers.onActivate(row.id);
       // Re-derive immediately: the row the user just actioned should tick over
       // under the cursor, which is the entire feedback for the keypress.
       //
@@ -159,6 +211,15 @@ export class SetupModal {
       // (the settings screen, the project-dirs prompt) do. Every detector here
       // hits the filesystem, and there is no one left to show the result to.
       if (this._open) this.refresh();
+      // And again when the work actually finishes, for the steps that are
+      // asynchronous. Guarded on still being open for the same reason, and the
+      // rejection is swallowed because a failing step is the step's own to
+      // report — throwing here would escape a keypress handler.
+      if (result && typeof (result as Promise<void>).then === "function") {
+        void (result as Promise<void>)
+          .then(() => { if (this._open) this.refresh(); })
+          .catch(() => { if (this._open) this.refresh(); });
+      }
       return { type: "consumed" };
     }
 
@@ -167,13 +228,18 @@ export class SetupModal {
 
   private buildChrome(): ModalChrome {
     const done = this.cached.filter((r) => r.state === "done").length;
-    const actionable = this.cached.filter((r) => r.state !== "unavailable").length;
+    // Blocked steps are not offered yet, so counting them would report work as
+    // available that pressing Enter refuses to do.
+    const actionable = this.cached.filter(
+      (r) => r.state !== "unavailable" && r.state !== "blocked",
+    ).length;
     return {
       title: "Set up jmux",
       count: `${done}/${actionable} done`,
       hints: [
         { key: "↑↓", label: "move" },
         { key: "↵", label: "set up" },
+        ...(this.providers.onDecline ? [{ key: "x", label: "not for me" }] : []),
         { key: "esc", label: "close" },
       ],
       hairlineAfterInput: false,
@@ -185,26 +251,38 @@ export class SetupModal {
     return Math.min(Math.max(1, this.cached.length), this.maxRows);
   }
 
-  /**
-   * Rows actually painted, and the one number navigation and rendering both
-   * read. When rows are cut, the "…and N more" line takes a slot of its own,
-   * so this is one less than `rowSlots` — counting against `rowSlots` instead
-   * made the notice undercount by exactly the row it was occupying.
-   */
+  /** How many rows the window shows at once. */
   private get paintedRows(): number {
-    const slots = this.rowSlots;
-    if (this.cached.length <= slots) return this.cached.length;
-    return slots >= 2 ? slots - 1 : slots; // no room for the notice at 1 slot
+    return Math.min(this.cached.length, this.rowSlots);
   }
 
-  /** Rows there was no room for. Zero whenever everything fits. */
-  private get hiddenRows(): number {
-    return Math.max(0, this.cached.length - this.paintedRows);
+  /**
+   * Keep the cursor inside the window.
+   *
+   * The list used to bound itself and tell you to resize, which was tolerable
+   * at five fixed rows. Sequenced steps make that a wall on a short terminal,
+   * and the rows past the fold are exactly the ones a new user has not done.
+   */
+  private ensureVisible(): void {
+    const visible = this.paintedRows;
+    if (visible <= 0) return;
+    if (this.selectedIndex < this.scrollOffset) {
+      this.scrollOffset = this.selectedIndex;
+    } else if (this.selectedIndex >= this.scrollOffset + visible) {
+      this.scrollOffset = this.selectedIndex - visible + 1;
+    }
+    const maxOffset = Math.max(0, this.cached.length - visible);
+    if (this.scrollOffset > maxOffset) this.scrollOffset = maxOffset;
   }
 
   getHeight(): number {
     // title(1) + rows + blank(1) + detail(1) + hint(1)
     return 4 + this.rowSlots;
+  }
+
+  /** Exposed for tests: the first row currently in the window. */
+  getScrollOffset(): number {
+    return this.scrollOffset;
   }
 
   getGrid(width: number): CellGrid {
@@ -238,12 +316,13 @@ export class SetupModal {
     // the user cannot see is a setup step they will not do, and a checklist
     // that quietly hides items is worse than one that admits it is cramped.
     const rowCount = this.paintedRows;
-    const hidden = this.hiddenRows;
+    const offset = this.scrollOffset;
 
     for (let i = 0; i < rowCount; i++) {
-      const row = this.cached[i];
+      const row = this.cached[offset + i];
+      if (!row) break;
       const y = rect.top + i;
-      const isSelected = i === this.selectedIndex;
+      const isSelected = offset + i === this.selectedIndex;
 
       if (isSelected) writeString(grid, y, 0, " ".repeat(width), SELECTED_BG_ATTRS);
 
@@ -259,7 +338,7 @@ export class SetupModal {
       const labelRoom = Math.max(1, width - labelStart - noteCols - 1);
       const label = truncateToCols(row.label, labelRoom);
       writeString(grid, y, labelStart, label,
-        row.state === "unavailable"
+        row.state === "unavailable" || row.state === "blocked"
           ? inertAttrs
           : isSelected ? SELECTED_RESULT_ATTRS : RESULT_ATTRS);
 
@@ -271,13 +350,6 @@ export class SetupModal {
       }
     }
 
-    if (hidden > 0) {
-      writeString(grid, rect.top + rowCount, 4,
-        truncateToCols(`…and ${hidden} more — resize the terminal to see ${hidden === 1 ? "it" : "them"}`,
-          Math.max(1, width - 6)),
-        NO_MATCHES_ATTRS);
-    }
-
     // Explain line for the selected row. One shared line rather than a second
     // row per item: the detail is only ever needed for the row you are on, and
     // doubling the list's height to pre-answer questions nobody asked is how a
@@ -285,8 +357,17 @@ export class SetupModal {
     const selected = this.cached[this.selectedIndex];
     if (selected && rect.rows >= 2) {
       const detailRow = rect.top + rect.rows - 1;
+      // A blocked row explains itself by naming what to do first, rather than
+      // repeating what it would eventually get you.
+      const blockers = (selected.dependsOn ?? [])
+        .map((id) => this.cached.find((r) => r.id === id))
+        .filter((r): r is SetupRow => r !== undefined && r.state !== "done")
+        .map((r) => r.label);
+      const detail = selected.state === "blocked" && blockers.length > 0
+        ? `First: ${blockers.join(", ")}`
+        : selected.detail;
       writeString(grid, detailRow, 2,
-        truncateToCols(selected.detail, Math.max(1, width - 4)), NO_MATCHES_ATTRS);
+        truncateToCols(detail, Math.max(1, width - 4)), NO_MATCHES_ATTRS);
     }
 
     drawModalChrome(grid, chrome);

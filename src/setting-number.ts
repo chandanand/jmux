@@ -163,6 +163,28 @@ export function rangeHint(spec: NumberSpec): string {
   return `(${parts.join(", ")})`;
 }
 
+/**
+ * Why this input cannot be used, or null if it can.
+ *
+ * `parseNumber` clamps, because stepping and the command-palette modals have
+ * nowhere to put a complaint — a press at the maximum has to stop there. A
+ * settings row does have somewhere: `onTextCommit` returns a message to reject,
+ * and typing 200 into a 10–60 field should say so rather than quietly become
+ * 60. Same reasoning as the rejection contract itself — a value that vanishes
+ * into a different one looks applied when it isn't.
+ */
+export function validateNumber(spec: NumberSpec, input: string): string | null {
+  const raw = input.trim().toLowerCase();
+  if (raw === "") return null;
+  if (spec.low && raw === spec.low.label.toLowerCase()) return null;
+  if (spec.high && raw === spec.high.label.toLowerCase()) return null;
+  const n = parseInt(raw, 10);
+  if (isNaN(n)) return `must be a number ${rangeHint(spec)}`;
+  if (n <= 0 && spec.low) return null;
+  if (n < spec.min || n > spec.max) return `must be ${rangeHint(spec).slice(1, -1)}`;
+  return null;
+}
+
 export interface NumberSettingOpts {
   id: string;
   label: string;
@@ -189,7 +211,12 @@ export function numberSetting(opts: NumberSettingOpts): SettingDef {
     getEditValue: () => editNumber(spec, opts.read()),
     rangeHint: () => rangeHint(spec),
     onStep: (delta) => opts.write(stepNumber(spec, opts.read(), delta)),
-    onTextCommit: (v) => opts.write(parseNumber(spec, v, opts.read())),
+    onTextCommit: (v) => {
+      const bad = validateNumber(spec, v);
+      if (bad) return bad;
+      opts.write(parseNumber(spec, v, opts.read()));
+      return null;
+    },
     ...(opts.describe ? { describe: opts.describe } : {}),
     ...(opts.getScope ? { getScope: opts.getScope } : {}),
     ...(opts.onClearOverride ? { onClearOverride: opts.onClearOverride } : {}),

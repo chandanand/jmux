@@ -1,6 +1,5 @@
 import { describe, test, expect } from "bun:test";
 import { Sidebar } from "../sidebar";
-import type { PinnedPaneEntry } from "../sidebar";
 import type { SessionInfo } from "../types";
 import { makeSessionOtelState } from "../types";
 import type { SessionContext, PipelineStatus } from "../adapters/types";
@@ -12,7 +11,7 @@ const SIDEBAR_WIDTH = 24;
 const makeBlankOtelState = makeSessionOtelState;
 
 function makeSessions(
-  entries: Array<{ name: string; directory?: string; gitBranch?: string; project?: string }>,
+  entries: Array<{ name: string; directory?: string; gitBranch?: string; repoName?: string }>,
 ): SessionInfo[] {
   return entries.map((e, i) => ({
     id: `$${i}`,
@@ -22,7 +21,7 @@ function makeSessions(
     windowCount: 1,
     directory: e.directory,
     gitBranch: e.gitBranch,
-    project: e.project,
+    repoName: e.repoName,
   }));
 }
 
@@ -1606,10 +1605,10 @@ describe("Overview entry", () => {
     expect(row2).toContain("Command Center");
   });
 
-  test("empty state: zero pinned panes, row 2 still contains 'Command Center'", () => {
+  test("empty state: an empty grid, row 2 still contains 'Command Center'", () => {
     const sidebar = new Sidebar(SIDEBAR_WIDTH, 30);
     sidebar.updateSessions(makeSessions([{ name: "api" }]));
-    // No setPinnedPanes call — default is empty
+    // No setGridSummary call — default is an empty grid
     const grid = sidebar.getGrid();
     const row2 = Array.from(
       { length: SIDEBAR_WIDTH },
@@ -1620,11 +1619,10 @@ describe("Overview entry", () => {
 
   test("command center shows a colored agent-state breakdown row", () => {
     const sidebar = new Sidebar(SIDEBAR_WIDTH, 30);
-    sidebar.setPinnedPanes([
-      { paneId: "%1", label: "api › claude", homeSessionName: "api", agentState: "running" },
-      { paneId: "%2", label: "web › claude", homeSessionName: "web", agentState: "running" },
-      { paneId: "%3", label: "db › claude", homeSessionName: "db", agentState: "waiting" },
-    ]);
+    sidebar.setGridSummary({
+      count: 3,
+      tally: { running: 2, waiting: 1, complete: 0 },
+    });
     sidebar.updateSessions(makeSessions([{ name: "api" }]));
     const grid = sidebar.getGrid();
     // Header at row 2, breakdown at row 3.
@@ -1637,12 +1635,12 @@ describe("Overview entry", () => {
     expect(row3).not.toContain("DONE"); // no complete panes → omitted
   });
 
-  test("pinned panes are NOT listed individually — only the count/breakdown", () => {
+  test("grid members are NOT listed individually — only the count/breakdown", () => {
     const sidebar = new Sidebar(SIDEBAR_WIDTH, 30);
-    sidebar.setPinnedPanes([
-      { paneId: "%1", label: "api › claude", homeSessionName: "api" },
-      { paneId: "%2", label: "api › npm test", homeSessionName: "api" },
-    ]);
+    sidebar.setGridSummary({
+      count: 2,
+      tally: { running: 0, waiting: 0, complete: 0 },
+    });
     sidebar.updateSessions(makeSessions([{ name: "api" }]));
     const grid = sidebar.getGrid();
 
@@ -1653,28 +1651,27 @@ describe("Overview entry", () => {
         (_, i) => grid.cells[r][i].char,
       ).join("") + "\n";
     }
-    // The individual pane labels must NOT appear in the sidebar anymore.
-    expect(allText).not.toContain("npm test");
-    // But the count is present in the Command Center header.
+    // The count is present in the Command Center header, and nothing else the
+    // grid holds is spelled out here.
     expect(allText).toContain("Command Center · 2");
   });
 
-  test("session that owns a pinned pane shows '(N pinned)' marker", () => {
+  // The count is the reconciler's, not a length the sidebar can derive: a
+  // derived grid is routinely full while no pane carries `@jmux-pinned` at all,
+  // and no session here has anything to do with the figure.
+  test("the overview count comes from the summary, not from the session list", () => {
     const sidebar = new Sidebar(SIDEBAR_WIDTH, 30);
-    sidebar.setPinnedPanes([
-      { paneId: "%1", label: "api › claude", homeSessionName: "api" },
-    ]);
     sidebar.updateSessions(makeSessions([{ name: "api" }]));
+    sidebar.setGridSummary({
+      count: 5,
+      tally: { running: 5, waiting: 0, complete: 0 },
+    });
     const grid = sidebar.getGrid();
-
-    let allText = "";
-    for (let r = 0; r < 30; r++) {
-      allText += Array.from(
-        { length: SIDEBAR_WIDTH },
-        (_, i) => grid.cells[r][i].char,
-      ).join("") + "\n";
-    }
-    expect(allText).toMatch(/1 pinned/);
+    const row2 = Array.from(
+      { length: SIDEBAR_WIDTH },
+      (_, i) => grid.cells[2][i].char,
+    ).join("");
+    expect(row2).toContain("Command Center · 5");
   });
 
   test("getSelectionByRow(2) returns {type:'overview'} after getGrid()", () => {
@@ -1686,12 +1683,12 @@ describe("Overview entry", () => {
     expect(sel?.type).toBe("overview");
   });
 
-  test("overview shows pane count when panes are present", () => {
+  test("overview shows the member count when the grid holds anything", () => {
     const sidebar = new Sidebar(SIDEBAR_WIDTH, 30);
-    sidebar.setPinnedPanes([
-      { paneId: "%1", label: "api › claude", homeSessionName: "api" },
-      { paneId: "%2", label: "api › npm test", homeSessionName: "api" },
-    ]);
+    sidebar.setGridSummary({
+      count: 2,
+      tally: { running: 0, waiting: 0, complete: 0 },
+    });
     sidebar.updateSessions(makeSessions([{ name: "api" }]));
     const grid = sidebar.getGrid();
     const row2 = Array.from(
@@ -1711,10 +1708,10 @@ describe("Sidebar — sort & filter", () => {
   function seeded(): Sidebar {
     const sb = new Sidebar(WIDTH, 40);
     sb.updateSessions(makeSessions([
-      { name: "alpha", project: "proj-a" },   // $0 running
-      { name: "bravo", project: "proj-a" },    // $1 waiting
-      { name: "charlie", project: "proj-b" },  // $2 idle
-      { name: "delta", project: "proj-b" },    // $3 waiting
+      { name: "alpha", repoName: "proj-a" },   // $0 running
+      { name: "bravo", repoName: "proj-a" },    // $1 waiting
+      { name: "charlie", repoName: "proj-b" },  // $2 idle
+      { name: "delta", repoName: "proj-b" },    // $3 waiting
     ]));
     const now = Date.now();
     sb.setAgentStateRecord("$0", { state: "running", since: now });
@@ -1816,9 +1813,9 @@ describe("Sidebar — sort & filter", () => {
     // proj-b: charlie (idle, hidden) + delta (waiting, shown) → group stays.
     // Make a third project entirely non-waiting to prove it vanishes.
     sb.updateSessions(makeSessions([
-      { name: "alpha", project: "proj-a" },
-      { name: "bravo", project: "proj-a" },
-      { name: "solo", project: "proj-c" },
+      { name: "alpha", repoName: "proj-a" },
+      { name: "bravo", repoName: "proj-a" },
+      { name: "solo", repoName: "proj-c" },
     ]));
     sb.setAgentStateRecord("$1", { state: "waiting", since: Date.now() });
     // proj-c/solo has no waiting → whole group hidden under attention filter.
@@ -3231,5 +3228,83 @@ describe("the branch row", () => {
     sidebar.updateSessions([withTitle]);
     sidebar.getGrid();
     expect(sidebar.getSessionByRow(5)?.name).toBe("tra-1787-notify");
+  });
+});
+
+describe("Sidebar project titles", () => {
+  // Pinned and Parked are extracted before project grouping, so their rows are
+  // the only ones on screen that cannot say which Project they belong to. The
+  // resolution happens in main.ts — the sidebar knows nothing about config or
+  // the @jmux-project stamp, the same boundary setSessionWorkflow draws.
+  const sessions = [
+    { id: "$1", name: "alpha", activity: 0, attached: false, windowCount: 1 },
+    { id: "$2", name: "beta", activity: 0, attached: false, windowCount: 1 },
+  ];
+
+  test("accepts resolved titles without disturbing navigation", () => {
+    const sb = new Sidebar(SIDEBAR_WIDTH, 30);
+    sb.updateSessions(sessions);
+    const before = sb.getNavOrder().length;
+    sb.setSessionProjects(new Map([["alpha", "API"]]));
+    expect(sb.getNavOrder().length).toBe(before);
+  });
+
+  test("an empty map is accepted", () => {
+    const sb = new Sidebar(SIDEBAR_WIDTH, 30);
+    sb.updateSessions(sessions);
+    expect(() => sb.setSessionProjects(new Map())).not.toThrow();
+  });
+
+  test("replacing the map does not accumulate stale entries", () => {
+    const sb = new Sidebar(SIDEBAR_WIDTH, 30);
+    sb.updateSessions(sessions);
+    sb.setSessionProjects(new Map([["alpha", "API"]]));
+    sb.setSessionProjects(new Map([["alpha", "Web"]]));
+    expect(sb.getNavOrder().length).toBe(2);
+  });
+
+  test("a session absent from the map is unaffected", () => {
+    const sb = new Sidebar(SIDEBAR_WIDTH, 30);
+    sb.updateSessions(sessions);
+    sb.setSessionProjects(new Map([["alpha", "API"]]));
+    const grid = sb.getGrid();
+    expect(grid.cells.map((r) => r.map((c) => c.char).join("")).join("\n")).toContain("beta");
+  });
+});
+
+// Pinned and Parked are extracted before project grouping, so their headers
+// name no project and their rows have to. Under group=project the header
+// already says it, so the row must not repeat it — the same rule, and the same
+// placement-time flag, that `stageInHeader` already follows.
+describe("Sidebar project identity on row 2", () => {
+  const withProject = (): SessionInfo[] =>
+    makeSessions([{ name: "alpha" }, { name: "beta" }]).map((s, i) => ({
+      ...s,
+      projectId: i === 0 ? "api" : "web",
+      projectName: i === 0 ? "API" : "Web",
+    }));
+
+  const allText = (sidebar: Sidebar): string =>
+    sidebar.getGrid().cells.map((r) => r.map((c) => c.char).join("")).join("\n");
+
+  test("a pinned row names its project — its band header does not", () => {
+    const sidebar = new Sidebar(40, 30);
+    sidebar.setPinnedSessions(new Set(["alpha"]));
+    sidebar.updateSessions(withProject());
+    expect(allText(sidebar)).toContain("API");
+  });
+
+  test("grouped by project, the row does not repeat what the header says", () => {
+    const sidebar = new Sidebar(40, 30);
+    sidebar.setGroupMode("project");
+    sidebar.updateSessions(withProject());
+    const naming = allText(sidebar).split("\n").filter((l) => l.includes("API"));
+    expect(naming.length).toBe(1);
+  });
+
+  test("a session with no project name says nothing and does not throw", () => {
+    const sidebar = new Sidebar(40, 30);
+    sidebar.updateSessions(makeSessions([{ name: "alpha" }]));
+    expect(() => allText(sidebar)).not.toThrow();
   });
 });

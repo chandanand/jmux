@@ -33,8 +33,16 @@ export interface SettingDef {
   getEditValue?: () => string;
   // For boolean: toggle callback
   onToggle?: () => void;
-  // For text: commit callback
-  onTextCommit?: (value: string) => void;
+  /**
+   * Commit a text value. Return a message to **reject** it; return nothing to
+   * accept. A rejected commit leaves the editor open with the message on the
+   * row — the alternative, which is what this screen used to do, was to discard
+   * the value in silence and leave the old one on screen looking applied.
+   *
+   * `void` stays in the union so the many rows that return nothing keep
+   * compiling unchanged.
+   */
+  onTextCommit?: (value: string) => string | null | void;
   /**
    * Nudge the value one place with ◂ ▸, without opening an editor.
    *
@@ -80,7 +88,8 @@ export interface SettingDef {
   onClearOverride?: () => void;
   /**
    * A short qualifier on the *effective* value, shown dim after it — for a row
-   * whose stored value is not yet the value in force ("restart to apply").
+   * whose value alone does not say what is actually true right now (the
+   * adapter rows report the connected organization, or why there isn't one).
    *
    * Distinct from `describe`, which explains what the setting does and is the
    * same every time. This says what is true right now, and returns null the
@@ -128,6 +137,9 @@ const VALUE_ATTRS: CellAttrs = { fg: 8, fgMode: ColorMode.Palette };
 const VALUE_ACTIVE: CellAttrs = { fg: 7, fgMode: ColorMode.Palette };
 const DIM_ATTRS: CellAttrs = { fg: 8, fgMode: ColorMode.Palette, dim: true };
 const HINT_ATTRS: CellAttrs = { fg: 8, fgMode: ColorMode.Palette, dim: true };
+// The explain line, matching the workflow screen's treatment so the two
+// full-screen surfaces read the same way.
+const EXPLAIN_ATTRS: CellAttrs = { fg: tokens.textSecondary.fg, fgMode: tokens.textSecondary.fgMode, dim: true };
 const HINT_KEY_ATTRS: CellAttrs = { fg: tokens.accentMuted.fg, fgMode: tokens.accentMuted.fgMode };
 const HINT_LABEL_ATTRS: CellAttrs = { fg: tokens.textSecondary.fg, fgMode: tokens.textSecondary.fgMode };
 const HINT_SEP_ATTRS: CellAttrs = { fg: tokens.ruleHairline.fg, fgMode: tokens.ruleHairline.fgMode, dim: tokens.ruleHairline.dim };
@@ -145,7 +157,7 @@ const OFF_ATTRS: CellAttrs = { fg: 1, fgMode: ColorMode.Palette };
 // Objects whose foreground tracks the accent / neutral-text / hairline tokens — patched by role.
 const ACCENT_ROLE: CellAttrs[] = [HEADER_ATTRS, CATEGORY_ACTIVE, LABEL_ACTIVE, CURSOR_ATTRS, EDIT_CURSOR, MAP_KEY_ACTIVE];
 const NEUTRAL_ROLE: CellAttrs[] = [LABEL_ATTRS, VALUE_ACTIVE, EDIT_TEXT];
-const TEXT_SECONDARY_ROLE: CellAttrs[] = [CATEGORY_ATTRS, HINT_LABEL_ATTRS];
+const TEXT_SECONDARY_ROLE: CellAttrs[] = [CATEGORY_ATTRS, HINT_LABEL_ATTRS, EXPLAIN_ATTRS];
 const HAIRLINE_ROLE: CellAttrs[] = [HAIRLINE_ATTRS, HINT_SEP_ATTRS];
 
 export function rebuildSettingsColors(): void {
@@ -281,21 +293,45 @@ export class SettingsScreen {
   private lastRenderRows = 24;
   private editState: EditState = null;
   private expandedMaps = new Set<string>();
+  /**
+   * The `/` filter. An explicit mode rather than type-to-filter, because bare
+   * typing collides with keys this screen already binds — `q` closes it and `d`
+   * clears an override, so "query" would close the screen on its first
+   * keystroke.
+   */
+  private filter = "";
+  private filtering = false;
+  private commitError: string | null = null;
+  private title = "Settings";
 
   get isOpen(): boolean { return this._open; }
   get isEditing(): boolean { return this.editState !== null; }
 
-  open(categories: SettingsCategory[]): void {
+  /**
+   * `title` exists because this class is a generic categories renderer, not a
+   * screen about one subject. The Projects surface is the same list, the same
+   * search, the same explain line and the same validation over a different set
+   * — building a second full-area surface to say "Projects" instead of
+   * "Settings" would be a copy of all four.
+   */
+  open(categories: SettingsCategory[], title = "Settings"): void {
+    this.title = title;
     this.categories = categories;
     this.selectedIndex = 0;
     this.scrollOffset = 0;
     this.editState = null;
+    this.filter = "";
+    this.filtering = false;
+    this.commitError = null;
     this._open = true;
   }
 
   close(): void {
     this._open = false;
     this.editState = null;
+    this.filter = "";
+    this.filtering = false;
+    this.commitError = null;
   }
 
   updateCategories(categories: SettingsCategory[]): void {
@@ -317,13 +353,41 @@ export class SettingsScreen {
       return this.handleEditInput(data);
     }
 
+    // Filter mode consumes everything printable, so the navigation keys below
+    // (q closes, d clears) cannot eat a search term.
+    if (this.filtering) {
+      if (data === "\x1b") {
+        this.filtering = false;
+        this.filter = "";
+        this.selectedIndex = 0;
+        this.scrollOffset = 0;
+        return { type: "none" };
+      }
+      if (data === "\r") { this.filtering = false; return { type: "none" }; }
+      if (data === "\x7f" || data === "\b") {
+        this.filter = this.filter.slice(0, -1);
+        this.clampSelection();
+        return { type: "none" };
+      }
+      if (data === "\x1b[A") { this.moveUp(); return { type: "none" }; }
+      if (data === "\x1b[B") { this.moveDown(); return { type: "none" }; }
+      if (data.length === 1 && data.charCodeAt(0) >= 32) {
+        this.filter += data;
+        this.clampSelection();
+        return { type: "none" };
+      }
+      return { type: "none" };
+    }
+
+    if (data === "/") { this.filtering = true; this.filter = ""; return { type: "none" }; }
+
     // Navigation mode
     if (data === "\x1b" || data === "q") {
       this.close();
       return { type: "none" };
     }
-    if (data === "\x1b[A") { this.moveUp(); return { type: "none" }; }
-    if (data === "\x1b[B") { this.moveDown(); return { type: "none" }; }
+    if (data === "\x1b[A" || data === "k") { this.moveUp(); return { type: "none" }; }
+    if (data === "\x1b[B" || data === "j") { this.moveDown(); return { type: "none" }; }
 
     // ◂ ▸ always change the selected row's value. Enter is only for values you
     // must type or search. A row with no ordered ladder — text, multiselect,
@@ -380,11 +444,14 @@ export class SettingsScreen {
     const rowPlan = this.buildRowPlan(nodes);
 
     // Header
-    writeString(grid, 0, left, "Settings", HEADER_ATTRS);
+    writeString(grid, 0, left, this.title, HEADER_ATTRS);
+    if (this.filtering || this.filter) {
+      writeString(grid, 1, left, `/${this.filter}`, LABEL_ACTIVE);
+    }
 
     // Settings is a frameless full-screen takeover (no shared footer), so it
     // keeps its own two bottom rows: what the selected row means, then what
-    // keys it takes.
+    // keys it takes — the same layout the workflow screen uses.
     const hintRow = rows - 1;
     const explainRow = rows - BOTTOM_RESERVED_ROWS;
 
@@ -411,19 +478,26 @@ export class SettingsScreen {
       }
     }
 
-    this.renderExplain(grid, explainRow, left, right);
-    this.renderHint(grid, hintRow, left);
+    if (this.filter && nodes.length === 0) {
+      writeString(grid, CONTENT_START_ROW, left + 2, "No matches", DIM_ATTRS);
+    }
+
+    // Only a `setting` row has a description; a category header or a map entry
+    // deliberately shows nothing rather than inheriting its neighbour's.
+    // Read off the `nodes` already built for the row loop — getSelectedNode()
+    // would rebuild the whole list a second time per frame, and a third for
+    // the hint line below.
+    const selectedNode = nodes[this.selectedIndex] ?? null;
+    if (selectedNode?.kind === "setting") {
+      const text = selectedNode.setting.describe?.() ?? "";
+      if (text) {
+        writeString(grid, explainRow, left, truncateToCols(text, Math.max(1, right - left)), EXPLAIN_ATTRS);
+      }
+    }
+
+    this.renderHint(grid, hintRow, left, selectedNode);
 
     return grid;
-  }
-
-  /** What the selected row means, in the row's own words. Blank when it has none. */
-  private renderExplain(grid: CellGrid, row: number, left: number, right: number): void {
-    const node = this.getSelectedNode();
-    if (node?.kind !== "setting") return;
-    const text = node.setting.describe?.();
-    if (!text) return;
-    writeString(grid, row, left, truncateToCols(text, Math.max(0, right - left)), DIM_ATTRS);
   }
 
   /**
@@ -432,12 +506,11 @@ export class SettingsScreen {
    * must not advertise the keys, and a read-only row must not claim an edit —
    * three Diagnostics rows said "↵ edit" while Enter did nothing at all.
    */
-  private hintGroups(): Array<{ key: string; label: string }> {
+  private hintGroups(node: SettingsNode | null): Array<{ key: string; label: string }> {
     if (this.editState) {
       return [{ key: "↵", label: "confirm" }, { key: "esc", label: "cancel" }];
     }
     const groups: Array<{ key: string; label: string }> = [{ key: "↑↓", label: "navigate" }];
-    const node = this.getSelectedNode();
 
     if (node?.kind === "setting") {
       const setting = node.setting;
@@ -462,12 +535,12 @@ export class SettingsScreen {
       groups.push({ key: "↵", label: "add" });
     }
 
-    groups.push({ key: "esc", label: "close" });
+    groups.push({ key: "/", label: "search" }, { key: "esc", label: "close" });
     return groups;
   }
 
-  private renderHint(grid: CellGrid, row: number, left: number): void {
-    const groups = this.hintGroups();
+  private renderHint(grid: CellGrid, row: number, left: number, selected: SettingsNode | null): void {
+    const groups = this.hintGroups(selected);
 
     let col = left;
     groups.forEach((group, i) => {
@@ -598,6 +671,14 @@ export class SettingsScreen {
     const cursorCol = fieldStart + state.cursorPos - sliceOffset;
     const cursorChar = state.cursorPos < state.buffer.length ? state.buffer[state.cursorPos] : " ";
     writeString(grid, row, cursorCol, cursorChar, EDIT_CURSOR);
+
+    // The rejection shares the row, right-aligned, so it costs no extra height
+    // and sits where the eye already is.
+    if (this.commitError) {
+      const msg = truncateToCols(this.commitError, Math.max(1, right - fieldStart - 2));
+      const col = right - textCols(msg);
+      if (col > fieldStart) writeString(grid, row, col, msg, OFF_ATTRS);
+    }
   }
 
   private renderMapEntry(grid: CellGrid, row: number, left: number, right: number, node: Extract<SettingsNode, { kind: "map-entry" }>, selected: boolean): void {
@@ -629,12 +710,19 @@ export class SettingsScreen {
       if (data === "\x1b") {
         // Cancel
         this.editState = null;
+        this.commitError = null;
         return { type: "none" };
       }
       if (data === "\r") {
-        // Commit
+        // Commit. A returned string is a rejection: stay in the editor so the
+        // value can be corrected, with the reason on the row.
         const setting = this.findSetting(state.settingId);
-        if (setting?.onTextCommit) setting.onTextCommit(state.buffer);
+        const err = setting?.onTextCommit ? setting.onTextCommit(state.buffer) : null;
+        if (typeof err === "string" && err.length > 0) {
+          this.commitError = err;
+          return { type: "none" };
+        }
+        this.commitError = null;
         this.editState = null;
         return { type: "none" };
       }
@@ -913,6 +1001,14 @@ export class SettingsScreen {
     this.ensureVisible();
   }
 
+  /** Keep the cursor on a real node after the filter changes the node list. */
+  private clampSelection(): void {
+    const n = this.buildNodes().length;
+    if (this.selectedIndex >= n) this.selectedIndex = Math.max(0, n - 1);
+    this.scrollOffset = 0;
+    this.ensureVisible();
+  }
+
   private getSelectedNode(): SettingsNode | null {
     const nodes = this.buildNodes();
     return nodes[this.selectedIndex] ?? null;
@@ -933,16 +1029,25 @@ export class SettingsScreen {
   }
 
   private buildNodes(): SettingsNode[] {
+    const q = this.filter.trim().toLowerCase();
     const nodes: SettingsNode[] = [];
     for (const cat of this.categories) {
+      const settings = q
+        ? cat.settings.filter((x) => x.label.toLowerCase().includes(q))
+        : cat.settings;
+      // A category with nothing matching is dropped whole: leaving its header
+      // would claim a section the filter has emptied.
+      if (q && settings.length === 0) continue;
       nodes.push({
         kind: "category",
         label: cat.label,
         collapsed: cat.collapsed,
-        count: cat.settings.length,
+        count: settings.length,
       });
-      if (cat.collapsed) continue;
-      for (const setting of cat.settings) {
+      // A filter overrides collapse. The user asked to see matches, and a match
+      // hidden inside a collapsed section reads as no match at all.
+      if (cat.collapsed && !q) continue;
+      for (const setting of settings) {
         nodes.push({ kind: "setting", setting });
         // Expanded map entries
         if (setting.type === "map" && this.expandedMaps.has(setting.id) && setting.getMapEntries) {

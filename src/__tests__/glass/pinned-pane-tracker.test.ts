@@ -1,5 +1,23 @@
 import { describe, test, expect } from "bun:test";
-import { PinnedPaneTracker } from "../../glass/pinned-pane-tracker";
+import { PinnedPaneTracker, parsePinValue } from "../../glass/pinned-pane-tracker";
+
+describe("parsePinValue", () => {
+  test("'on' reads as on", () => {
+    expect(parsePinValue("on")).toBe("on");
+  });
+
+  test("every legacy value (tab ids, '1', 'default') reads as on", () => {
+    expect(parsePinValue("1")).toBe("on");
+    expect(parsePinValue("default")).toBe("on");
+    expect(parsePinValue("some-old-tab-id")).toBe("on");
+  });
+
+  test("empty string, null and undefined all read as not pinned", () => {
+    expect(parsePinValue("")).toBeNull();
+    expect(parsePinValue(null)).toBeNull();
+    expect(parsePinValue(undefined)).toBeNull();
+  });
+});
 
 describe("PinnedPaneTracker", () => {
   test("apply('1') adds the pane and fires onChange", () => {

@@ -13,7 +13,7 @@
 // Kept pure — every fact arrives as an argument — so the whole decision table
 // unit-tests without tmux, a tracker, or a filesystem.
 
-import type { ResolvedRepoSettings } from "./repo-settings";
+import type { ResolvedProjectSettings } from "./project";
 import type { DetailLine } from "./issue-detail";
 import { DETAIL_LABEL, DETAIL_VALUE, DETAIL_DIM } from "./issue-detail";
 
@@ -35,7 +35,7 @@ export type PreflightPlan =
       /** The command that will launch, or null when no agent will run. */
       agentCommand: string | null;
     }
-  /** No teamRepoMap entry — Start falls through to the manual session picker. */
+  /** Routing found no project — Start falls through to the manual session picker. */
   | { kind: "manual"; team: string | null }
   /** A live session already claims this issue; Start just switches to it. */
   | { kind: "existing"; sessionName: string };
@@ -52,7 +52,7 @@ export interface PreflightInput {
   repoDir: string | null;
   sessionName: string | null;
   team: string | null;
-  settings: ResolvedRepoSettings;
+  settings: ResolvedProjectSettings;
   /** Whether an issue tracker is configured — gates the seeded agent prompt. */
   trackerPresent: boolean;
 }
@@ -64,7 +64,7 @@ export interface PreflightInput {
  */
 export function buildPreflight(input: PreflightInput): Preflight {
   // The existing-session check comes first, before the repo lookup, because an
-  // explicit L-key link has to work even for a team with no teamRepoMap entry.
+  // explicit L-key link has to work even for a team that routes to no project.
   if (input.issueState === "session" && input.linkedSessionName) {
     return {
       action: "switch",
@@ -80,7 +80,7 @@ export function buildPreflight(input: PreflightInput): Preflight {
   // identical to it.
   const agentCommand =
     input.settings.autoLaunchAgent && input.trackerPresent
-      ? input.settings.claudeCommand
+      ? input.settings.agentCommand
       : null;
 
   return {

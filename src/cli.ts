@@ -53,7 +53,6 @@ const VALUE_FLAGS = new Set([
   "issue",
   "worktree",
   "interval",
-  "tab",
   "title",
   "description",
   "team",
@@ -88,15 +87,15 @@ USAGE
   jmux ctl [GLOBAL FLAGS] <group> [action] [FLAGS] [args...]
 
 GROUPS
-  session    Manage tmux sessions (incl. session attention set/clear)
+  session    Manage tmux sessions (incl. attention set/clear, hide/unhide/hidden)
   window     Manage tmux windows
-  pane       Manage tmux panes
+  pane       Manage tmux panes (incl. pin/unpin/pinned)
   run-claude Run a Claude Code agent in a session
   agent      Inspect agent state (agent state | agent watch)
   issue      Work with issues (issue get|link|unlink|start|create|move)
   workflow   The work pipeline (workflow stages|board|next|statuses)
   status     One-shot orchestration snapshot of the whole workspace
-  cc         Command Center tabs (cc tabs)
+  cc         Command Center views (cc views)
   browser    Browser panes (browser list|open|action)
   dev-servers What is listening in a session, and on which port
 
@@ -123,7 +122,6 @@ FLAGS
   --repo <val>         Repository path (issue start/link)
   --base-branch <val>  Base branch for new worktree (issue start)
   --interval <val>     Poll interval in ms (agent watch)
-  --tab <val>          Command Center tab id or name (pane pin)
   --pane <val>         Target a specific browser pane (browser)
   --new                Force a new browser pane instead of reusing one (browser open)
   --stage <val>        Narrow to one workflow stage id (workflow board)

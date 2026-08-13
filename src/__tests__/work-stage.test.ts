@@ -2,7 +2,6 @@ import { describe, test, expect } from "bun:test";
 import {
   stageFromStateType,
   projectStage,
-  resolveIssueRepoDir,
   stageForIssue,
   STAGE_ORDER,
   type StageConfig,
@@ -81,25 +80,7 @@ describe("projectStage", () => {
   });
 });
 
-describe("resolveIssueRepoDir", () => {
-  const config: StageConfig = {
-    issueWorkflow: { teamRepoMap: { Platform: "~/code/backend", Web: "/code/web" } },
-  };
-  const home = "/Users/dev";
 
-  test("routes an issue to its team's repo", () => {
-    expect(resolveIssueRepoDir(issue({ team: "Web" }), config, home)).toBe("/code/web");
-  });
-
-  test("expands a leading ~ in the mapping", () => {
-    expect(resolveIssueRepoDir(issue({ team: "Platform" }), config, home)).toBe("/Users/dev/code/backend");
-  });
-
-  test("returns null for an unmapped or missing team", () => {
-    expect(resolveIssueRepoDir(issue({ team: "Mobile" }), config, home)).toBeNull();
-    expect(resolveIssueRepoDir(issue(), config, home)).toBeNull();
-  });
-});
 
 describe("stageForIssue", () => {
   // Stage lists now come from the queue tabs, which are global — so an issue's

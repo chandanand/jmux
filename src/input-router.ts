@@ -133,10 +133,33 @@ export interface InputRouterOptions {
   onGlassMouse?: (x: number, y: number, button: number, release: boolean) => void; // wheel/scroll → tile under cursor
   onGlassFocusMove?: (dir: "left" | "right" | "up" | "down") => void; // Shift+arrows
   onGlassDetach?: () => void;                        // prefix+d in glass → detach jmux, not the focused tile
-  onGlassTabSwitch?: (index: number) => void;       // glass-only Ctrl-a <n> → switch tab
-  onGlassTabRelative?: (delta: number) => void;     // glass-only Ctrl-a [ / ] → prev/next tab
-  glassStripRows?: () => number;                    // tab-strip row count (0 when hidden)
-  onGlassTabClick?: (x: number) => void;            // content-relative click on the strip row
+  onGlassViewSwitch?: (index: number) => void;      // glass-only Ctrl-a <n> → switch view
+  onGlassViewRelative?: (delta: number) => void;    // glass-only Ctrl-a [ / ] → prev/next view
+  glassStripRows?: () => number;                    // strip row count (0 when hidden)
+  onGlassViewClick?: (x: number) => void;           // content-relative click on the strip row
+  // Ctrl-a C — everywhere (ordinary + glass): toggle the Command Center.
+  onGlassToggle?: () => void;
+  // Ctrl-a P — everywhere: in the grid, remove the focused session; outside
+  // it, force-on the pane you're looking at. The callback decides which by
+  // reading glassActive() itself, the same shape as onGroupCycle/onSortCycle/
+  // onFilterCycle used to before they split.
+  onGlassPinToggle?: () => void;
+  // Ctrl-a Enter — glass only: open the focused tile's session full-size, on
+  // its displayed pane.
+  onGlassOpenFocused?: () => void;
+  // Ctrl-a x — glass only: cycle the focused tile's face.
+  onGlassCycleFace?: () => void;
+  // Ctrl-a z — glass only: zoom the focused tile to full size / restore.
+  onGlassZoom?: () => void;
+  // Ctrl-a G/s/f — glass only: the Command Center's own axes, split off the
+  // sidebar's onGroupCycle/onSortCycle/onFilterCycle (same bytes, ordinary arm).
+  onGlassGroupCycle?: () => void;
+  onGlassSortCycle?: () => void;
+  onGlassFilterCycle?: () => void;
+  // Ctrl-a D — glass only: cycle the grid's tile-size density. Capital D on
+  // purpose — lowercase d is glass detach, and tmux's own D (choose-client)
+  // has no client to choose from inside the grid.
+  onGlassCycleDensity?: () => void;
   // Diff panel additions
   onDiffPanelData?: (data: string) => void;
   onDiffPanelFocusToggle?: () => void;
@@ -156,6 +179,17 @@ export interface InputRouterOptions {
   onPanelNextPreview?: () => void;
   onPanelAction?: (key: string) => void;
   onPanelTabClick?: (col: number) => void; // col relative to panel start
+  /**
+   * Whether the panel's tab strip is currently painted. It shares row 0 with
+   * the toolbar (the renderer blits it there over the panel's columns), so the
+   * strip's columns are only the strip's while it is drawn — in full mode
+   * `panel.x === main.x`, and claiming that row unconditionally would make the
+   * toolbar unclickable whenever the strip hides itself for a lone Diff tab.
+   * Read at hit-test time from the same predicate the renderer paints from
+   * (`InfoPanel.tabBarShown`), alongside the `toolbarRows > 0` half of the
+   * renderer's condition, so the two cannot disagree about a frame.
+   */
+  panelTabBarShown?: () => boolean;
   /** Row and column relative to the panel's content origin (after the toolbar,
    * right of the panel's left edge). main.ts resolves both against the layout. */
   onPanelItemClick?: (row: number, col: number) => void;
@@ -455,7 +489,7 @@ export class InputRouter {
           return;
         }
 
-        // Glass owns the post-prefix byte: digits switch tabs, jmux chords
+        // Glass owns the post-prefix byte: digits switch views, jmux chords
         // intercept, everything else flushes the deferred prefix to the tile.
         //
         // The sentinel comments below delimit this arm for keymap.test.ts,
@@ -468,12 +502,12 @@ export class InputRouter {
           const deferred = this.glassPrefixDeferred;
           this.glassPrefixDeferred = false;
           if (data >= "1" && data <= "9") {
-            this.opts.onGlassTabSwitch?.(parseInt(data, 10));
+            this.opts.onGlassViewSwitch?.(parseInt(data, 10));
             return;
           }
           // --- keymap:glass-prefix start ---
-          if (data === "[") { this.opts.onGlassTabRelative?.(-1); return; }
-          if (data === "]") { this.opts.onGlassTabRelative?.(1); return; }
+          if (data === "[") { this.opts.onGlassViewRelative?.(-1); return; }
+          if (data === "]") { this.opts.onGlassViewRelative?.(1); return; }
           if (data === "d") { this.opts.onGlassDetach?.(); return; }
           if (data === "?") { this.opts.onHelp?.(); return; }
           if (data === "p") { this.opts.onModalToggle?.(); return; }
@@ -484,11 +518,21 @@ export class InputRouter {
           if (data === "Z") { this.opts.onUndoTransition?.(); return; }
           if (data === "I") { this.opts.onSettingsScreen?.(); return; }
           if (data === "W") { this.opts.onWorkflowScreen?.(); return; }
-          if (data === "G") { this.opts.onGroupCycle?.(); return; }
-          if (data === "s") { this.opts.onSortCycle?.(); return; }
-          if (data === "f") { this.opts.onFilterCycle?.(); return; }
+          // The grid's own axes — NOT onGroupCycle/onSortCycle/onFilterCycle,
+          // which are the sidebar's. Same bytes as the ordinary arm's
+          // group-cycle/sort-cycle/filter-cycle, deliberately: one physical
+          // chord, two different targets depending on which arm reads it.
+          if (data === "G") { this.opts.onGlassGroupCycle?.(); return; }
+          if (data === "s") { this.opts.onGlassSortCycle?.(); return; }
+          if (data === "f") { this.opts.onGlassFilterCycle?.(); return; }
           if (data === "b") { this.opts.onBrowserPane?.(); return; }
           if (data === "\\") { this.opts.onSidebarToggle?.(); return; }
+          if (data === "C") { this.opts.onGlassToggle?.(); return; }
+          if (data === "P") { this.opts.onGlassPinToggle?.(); return; }
+          if (data === "\r") { this.opts.onGlassOpenFocused?.(); return; }
+          if (data === "x") { this.opts.onGlassCycleFace?.(); return; }
+          if (data === "z") { this.opts.onGlassZoom?.(); return; }
+          if (data === "D") { this.opts.onGlassCycleDensity?.(); return; }
           // --- keymap:glass-prefix end ---
           // Not a jmux chord — flush the buffered prefix, then the key, to the tile.
           if (deferred) this.opts.onPtyData("\x01");
@@ -610,6 +654,18 @@ export class InputRouter {
         // previous-window, and mark-pane is a far quieter loss than either.
         if (data === "m") {
           this.opts.onFixWorkflowDrift?.();
+          return;
+        }
+        // Command Center. Live in both arms — see the glass arm's copy of
+        // these two bytes below — because the action makes sense from
+        // wherever you press it: open the grid from a session, or hide/pin a
+        // session from either side of it.
+        if (data === "C") {
+          this.opts.onGlassToggle?.();
+          return;
+        }
+        if (data === "P") {
+          this.opts.onGlassPinToggle?.();
           return;
         }
         // --- keymap:prefix end ---
@@ -782,10 +838,10 @@ export class InputRouter {
         const bareMotion = isMotion && (mouse.button & 0x03) === 3;
         if (bareMotion) return; // ignore hover motion (no button held)
 
-        // Strip row: a button-down switches tabs; ignore wheel/release/motion here.
+        // Strip row: a button-down switches views; ignore wheel/release/motion here.
         if (yInContent < stripRows) {
           if (!mouse.release && !isMotion && !isWheel) {
-            this.opts.onGlassTabClick?.(cx);
+            this.opts.onGlassViewClick?.(cx);
           }
           return;
         }
@@ -795,6 +851,29 @@ export class InputRouter {
           this.opts.onGlassClick?.(cx, cy); // focus on button-down
         }
         this.opts.onGlassMouse?.(cx, cy, mouse.button, mouse.release);
+        return;
+      }
+
+      // Panel tab strip — the panel's columns on the toolbar row. Tested
+      // before the toolbar because that branch claims the whole row whatever
+      // the column, which swallowed every tab click; hover reached the panel
+      // only because the toolbar branch ignores motion. The test mirrors both
+      // halves of the renderer's condition (`tabBar && toolbarRows > 0`): with
+      // the toolbar degraded away on a short terminal nothing is painted here
+      // and row 0 is the panel's first *content* row.
+      if (
+        layout.panel &&
+        gridY === 0 &&
+        layout.toolbarRows > 0 &&
+        gridX >= layout.panel.x &&
+        this.opts.panelTabBarShown?.()
+      ) {
+        const panelCol = gridX - layout.panel.x;
+        if (isMotion) {
+          this.opts.onPanelTabHover?.(panelCol);
+        } else if (!mouse.release && !isWheel) {
+          this.opts.onPanelTabClick?.(panelCol);
+        }
         return;
       }
 
@@ -818,17 +897,7 @@ export class InputRouter {
         // The press itself is consumed by the handle check above.
 
         if (gridX >= layout.panel.x) {
-          const panelCol = gridX - layout.panel.x; // 0-indexed in panel
-
-          // Panel tab bar — first row of the panel area (toolbar row)
-          if (gridY === 0) {
-            if (isMotion) {
-              this.opts.onPanelTabHover?.(panelCol);
-            } else if (!mouse.release && !isWheel) {
-              this.opts.onPanelTabClick?.(panelCol);
-            }
-            return;
-          }
+          // The tab strip's row is handled above, before the toolbar.
 
           // Click in panel acquires keyboard focus
           if (!mouse.release && !isMotion && !isWheel && !this.diffPanelFocused) {

@@ -1,8 +1,14 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { sanitizeTmuxSessionName, buildOtelResourceAttrs, loadUserConfig, ConfigStore, defaultConfig } from "../config";
-import { writeFileSync, unlinkSync, existsSync, mkdirSync, rmSync, readFileSync } from "fs";
+import {
+  sanitizeTmuxSessionName, buildOtelResourceAttrs, loadUserConfig, ConfigStore, defaultConfig,
+  migrateCommandCenterConfig, ConfigCorruptError, readConfigFile, CONFIG_SCHEMA_VERSION,
+} from "../config";
+import { writeFileSync, unlinkSync, existsSync, mkdirSync, rmSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { DEFAULT_MAX_CLIENTS } from "../glass/view";
+import { DEFAULT_VIEW_SEED_ID, DEFAULT_VIEW_SEED_NAME } from "../glass/views";
+import { DEFAULT_DENSITY } from "../glass/density";
 
 describe("sanitizeTmuxSessionName", () => {
   test("replaces dots with underscores", () => {
@@ -76,6 +82,111 @@ describe("loadUserConfig adapter config", () => {
     const result = loadUserConfig(tmpPath);
     expect(result.adapters).toBeUndefined();
     unlinkSync(tmpPath);
+  });
+});
+
+describe("migrateCommandCenterConfig", () => {
+  test("seeds the view registry alongside unrelated keys, leaving them untouched", () => {
+    const { config, changed } = migrateCommandCenterConfig({
+      sidebarWidth: 30,
+    });
+    expect(changed).toBe(false); // nothing present-but-wrong; seeding alone never dirties
+    expect(config.sidebarWidth).toBe(30); // untouched
+    expect(config.commandCenterViews).toEqual([
+      { id: DEFAULT_VIEW_SEED_ID, name: DEFAULT_VIEW_SEED_NAME, filter: "active", groupBy: "status", sortBy: "status" },
+    ]);
+    expect(config.commandCenterActiveViewId).toBe(DEFAULT_VIEW_SEED_ID);
+    expect(config.commandCenterAxes).toEqual({ filter: "active", groupBy: "status", sortBy: "status" });
+    expect(config.commandCenter).toEqual({ maxTiles: DEFAULT_MAX_CLIENTS, density: DEFAULT_DENSITY });
+  });
+
+  // Both keys' readers (`main.ts`'s tab registry, `cli/cc.ts`'s `cc tabs`) are
+  // gone as of phase 9, so the migration now deletes them outright instead of
+  // preserving them — the inverse of what this test asserted before.
+  test("deletes commandCenterTabs and autoPinAgentPanes from disk — nothing reads them any more", () => {
+    const raw = {
+      commandCenterTabs: [{ id: "default", name: "Main" }, { id: "backend", name: "Backend" }],
+      autoPinAgentPanes: true,
+    };
+    const { config, changed } = migrateCommandCenterConfig(raw);
+    expect(config.commandCenterTabs).toBeUndefined();
+    expect(config.autoPinAgentPanes).toBeUndefined();
+    // A present-but-dead key being dropped is a real disk mutation.
+    expect(changed).toBe(true);
+  });
+
+  test("populates every new field in-memory from nothing, but reports no change", () => {
+    // Absence alone must not flip `changed` — see the ConfigStore test below:
+    // a `changed:true` here would make the constructor persist immediately,
+    // before main.ts's ensureExists() ever runs, which would permanently hide
+    // the first-run setup checklist for every brand-new install.
+    const { config, changed } = migrateCommandCenterConfig({});
+    expect(changed).toBe(false);
+    expect(config.commandCenterViews).toHaveLength(1);
+    expect(config.commandCenterActiveViewId).toBe(DEFAULT_VIEW_SEED_ID);
+    expect(config.commandCenter?.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
+    expect(config.commandCenter?.density).toBe(DEFAULT_DENSITY);
+  });
+
+  test("clamps an illegal live axis to the active view's own value", () => {
+    const { config } = migrateCommandCenterConfig({
+      commandCenterViews: [
+        { id: "v1", name: "V1", filter: "all", groupBy: "project", sortBy: "name" },
+      ],
+      commandCenterActiveViewId: "v1",
+      commandCenterAxes: { filter: "bogus", groupBy: "project", sortBy: "name" },
+    });
+    expect(config.commandCenterAxes).toEqual({ filter: "all", groupBy: "project", sortBy: "name" });
+  });
+
+  test("clamps a vanished active view id to the first view", () => {
+    const { config } = migrateCommandCenterConfig({
+      commandCenterViews: [
+        { id: "v1", name: "V1", filter: "all", groupBy: "project", sortBy: "name" },
+      ],
+      commandCenterActiveViewId: "ghost",
+    });
+    expect(config.commandCenterActiveViewId).toBe("v1");
+  });
+
+  test("is idempotent — an already-migrated config reports no change", () => {
+    const migrated = {
+      commandCenterViews: [
+        { id: DEFAULT_VIEW_SEED_ID, name: DEFAULT_VIEW_SEED_NAME, filter: "active", groupBy: "status", sortBy: "status" },
+      ],
+      commandCenterActiveViewId: DEFAULT_VIEW_SEED_ID,
+      commandCenterAxes: { filter: "active", groupBy: "status", sortBy: "status" },
+      commandCenter: { maxTiles: DEFAULT_MAX_CLIENTS, density: DEFAULT_DENSITY },
+    };
+    const { changed } = migrateCommandCenterConfig(migrated);
+    expect(changed).toBe(false);
+  });
+
+  test("a mistyped/invalid maxTiles is replaced with the default", () => {
+    const { config, changed } = migrateCommandCenterConfig({ commandCenter: { maxTiles: 0 } });
+    expect(changed).toBe(true);
+    expect(config.commandCenter.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
+  });
+
+  test("a mistyped/invalid density is replaced with the default", () => {
+    const { config, changed } = migrateCommandCenterConfig({ commandCenter: { density: "cozy" } });
+    expect(changed).toBe(true);
+    expect(config.commandCenter.density).toBe(DEFAULT_DENSITY);
+  });
+
+  // A value written by an older jmux carrying the since-deleted third
+  // density ("compact") must fall back like any other unrecognized value,
+  // not be silently mapped onto a survivor.
+  test("a deleted density name is replaced with the default", () => {
+    const { config, changed } = migrateCommandCenterConfig({ commandCenter: { density: "compact" } });
+    expect(changed).toBe(true);
+    expect(config.commandCenter.density).toBe(DEFAULT_DENSITY);
+  });
+
+  test("a valid density round-trips untouched", () => {
+    const { config, changed } = migrateCommandCenterConfig({ commandCenter: { density: "focus" } });
+    expect(changed).toBe(false);
+    expect(config.commandCenter.density).toBe("focus");
   });
 });
 
@@ -162,8 +273,54 @@ describe("ConfigStore", () => {
     expect(store.config.issueWorkflow?.teamRepoMap?.core).toBe("/c");
     // migration persisted to disk
     const onDisk = JSON.parse(require("fs").readFileSync(cfgPath, "utf-8"));
-    expect(onDisk.claudeCommand).toBeUndefined();
+    expect(onDisk.agentCommand).toBeUndefined();
     expect(onDisk.repoDefaults.claudeCommand).toBe("cc");
+  });
+
+  test("loadUserConfig deletes commandCenterTabs and autoPinAgentPanes from disk", () => {
+    writeFileSync(cfgPath, JSON.stringify({
+      commandCenterTabs: [{ id: "default", name: "Main" }, { id: "backend", name: "Backend" }],
+      autoPinAgentPanes: true,
+    }));
+    const store = new ConfigStore(cfgPath);
+    // Both fields are gone from the type entirely — cast through `any` for
+    // the same reason the on-disk check below parses raw JSON instead of
+    // reading a typed field that no longer exists.
+    expect((store.config as any).commandCenterTabs).toBeUndefined();
+    expect((store.config as any).autoPinAgentPanes).toBeUndefined();
+    expect(store.config.commandCenterViews).toHaveLength(1);
+    expect(store.config.commandCenterActiveViewId).toBe(DEFAULT_VIEW_SEED_ID);
+    expect(store.config.commandCenterAxes).toEqual({ filter: "active", groupBy: "status", sortBy: "status" });
+    expect(store.config.commandCenter?.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
+    expect(store.config.commandCenter?.density).toBe(DEFAULT_DENSITY);
+
+    // The migration persisted to disk — both keys are gone there too, not
+    // merely absent from the in-memory view.
+    const onDisk = JSON.parse(require("fs").readFileSync(cfgPath, "utf-8"));
+    expect(onDisk.commandCenterTabs).toBeUndefined();
+    expect(onDisk.autoPinAgentPanes).toBeUndefined();
+  });
+
+  test("loadUserConfig repairs a present-but-invalid Command Center config and persists once", () => {
+    writeFileSync(cfgPath, JSON.stringify({
+      commandCenterViews: [
+        { id: "v1", name: "V1", filter: "all", groupBy: "project", sortBy: "name" },
+      ],
+      commandCenterActiveViewId: "ghost", // vanished — must clamp to v1
+      commandCenterAxes: { filter: "bogus", groupBy: "project", sortBy: "name" },
+      commandCenter: { maxTiles: 0, density: "cozy" }, // both invalid — must fall back to defaults
+    }));
+    const store = new ConfigStore(cfgPath);
+    expect(store.config.commandCenterActiveViewId).toBe("v1");
+    expect(store.config.commandCenterAxes).toEqual({ filter: "all", groupBy: "project", sortBy: "name" });
+    expect(store.config.commandCenter?.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
+    expect(store.config.commandCenter?.density).toBe(DEFAULT_DENSITY);
+
+    const onDisk = JSON.parse(require("fs").readFileSync(cfgPath, "utf-8"));
+    expect(onDisk.commandCenterActiveViewId).toBe("v1");
+    expect(onDisk.commandCenterAxes).toEqual({ filter: "all", groupBy: "project", sortBy: "name" });
+    expect(onDisk.commandCenter.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
+    expect(onDisk.commandCenter.density).toBe(DEFAULT_DENSITY);
   });
 
   test("setRepoDefault writes under repoDefaults and persists", () => {
@@ -182,17 +339,20 @@ describe("ConfigStore", () => {
     expect(store.config.repos?.["/code/jmux/.git"]).toBeUndefined(); // emptied entry pruned
   });
 
-  test("setTeamRepo adds and removes mappings", () => {
+  // Replaces "setTeamRepo adds and removes mappings". teamRepoMap is gone: the
+  // Projects migration deletes it, so a writer for it wrote into a void. The
+  // team now lives on the Project, and this asserts the replacement.
+  test("a team is attached to a project, and replaces a migrated name", () => {
     const store = new ConfigStore(cfgPath);
-    store.setTeamRepo("frontend", "/code/frontend");
-    expect(store.config.issueWorkflow?.teamRepoMap?.frontend).toBe("/code/frontend");
+    store.upsertProject({ id: "api", title: "API", dir: "/code/api", legacyTeamName: "Core" });
+    const project = store.config.projects![0];
+    const { legacyTeamName: _dropped, ...rest } = project;
+    store.upsertProject({ ...rest, teamId: "T1" });
 
-    store.setTeamRepo("backend", "/code/backend");
-    expect(store.config.issueWorkflow?.teamRepoMap?.backend).toBe("/code/backend");
-
-    store.setTeamRepo("frontend", null);
-    expect(store.config.issueWorkflow?.teamRepoMap?.frontend).toBeUndefined();
-    expect(store.config.issueWorkflow?.teamRepoMap?.backend).toBe("/code/backend");
+    const after = store.config.projects![0];
+    expect(after.teamId).toBe("T1");
+    // Two answers to one question is how they come to disagree.
+    expect(after.legacyTeamName).toBeUndefined();
   });
 
   test("setAdapter sets and removes adapter config", () => {
@@ -258,6 +418,22 @@ describe("ConfigStore", () => {
 
     const again = store.ensureExists();
     expect(again).toBe(false);
+  });
+
+  test("constructing against a config with no Command Center history writes nothing (first-run detection)", () => {
+    // main.ts builds ConfigStore at module scope and only checks
+    // ensureExists() much later, at first-run, to decide whether to open the
+    // setup checklist. If the Command Center migration wrote seeded defaults
+    // to disk eagerly, the file would already exist by the time that check
+    // runs and the checklist would never show for a new install.
+    const newPath = join(tmpDir, "sub", "config.json");
+    const store = new ConfigStore(newPath);
+    expect(existsSync(newPath)).toBe(false);
+    // The in-memory config is still fully populated.
+    expect(store.config.commandCenterViews).toHaveLength(1);
+    expect(store.config.commandCenterActiveViewId).toBe(DEFAULT_VIEW_SEED_ID);
+    expect(store.config.commandCenter?.maxTiles).toBe(DEFAULT_MAX_CLIENTS);
+    expect(store.config.commandCenter?.density).toBe(DEFAULT_DENSITY);
   });
 
   test("configPath returns the path", () => {
@@ -352,6 +528,393 @@ describe("snapshot config merging", () => {
     expect(reloaded.config.snapshot?.scrollbackIntervalMs).toBe(8000);
     expect(reloaded.config.snapshot?.scrollbackMaxBytes).toBe(3 * 1024 * 1024);
     expect(reloaded.config.snapshot?.dir).toBe("/data");
+  });
+});
+
+describe("ConfigStore durability", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = join(tmpdir(), `jmux-cfg-${process.pid}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    path = join(dir, "config.json");
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a successful write leaves no temp files", () => {
+    writeFileSync(path, "{}");
+    const store = new ConfigStore(path);
+    store.set("sidebarWidth", 30);
+    expect(readdirSync(dir)).toEqual(["config.json"]);
+    expect(store.lastWriteError).toBeNull();
+  });
+
+  test("the written file is valid JSON containing the new value", () => {
+    writeFileSync(path, "{}");
+    const store = new ConfigStore(path);
+    store.set("sidebarWidth", 31);
+    expect(JSON.parse(readFileSync(path, "utf-8")).sidebarWidth).toBe(31);
+  });
+
+  test("lastWriteError reports a failed write instead of throwing", () => {
+    writeFileSync(path, "{}");
+    const store = new ConfigStore(path);
+    rmSync(path);
+    mkdirSync(path);
+    store.set("sidebarWidth", 32);
+    expect(store.lastWriteError).not.toBeNull();
+  });
+});
+
+describe("readConfigFile", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = join(tmpdir(), `jmux-read-${process.pid}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    path = join(dir, "config.json");
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("missing file reports missing, not corrupt", () => {
+    expect(readConfigFile(path)).toEqual({ kind: "missing" });
+  });
+
+  test("valid JSON reports ok with the parsed object", () => {
+    writeFileSync(path, '{"sidebarWidth":40}');
+    const r = readConfigFile(path);
+    expect(r.kind).toBe("ok");
+    if (r.kind === "ok") expect(r.raw.sidebarWidth).toBe(40);
+  });
+
+  test("truncated JSON reports corrupt", () => {
+    writeFileSync(path, '{"sidebarWidth":4');
+    expect(readConfigFile(path).kind).toBe("corrupt");
+  });
+
+  test("a JSON array reports corrupt", () => {
+    writeFileSync(path, "[]");
+    expect(readConfigFile(path).kind).toBe("corrupt");
+  });
+
+  test("a bare JSON scalar reports corrupt", () => {
+    writeFileSync(path, "42");
+    expect(readConfigFile(path).kind).toBe("corrupt");
+  });
+});
+
+describe("ConfigStore construction on a corrupt file", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = join(tmpdir(), `jmux-corrupt-${process.pid}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    path = join(dir, "config.json");
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("throws ConfigCorruptError rather than falling back to defaults", () => {
+    writeFileSync(path, "{ not json");
+    expect(() => new ConfigStore(path)).toThrow(ConfigCorruptError);
+  });
+
+  test("does not overwrite the corrupt file", () => {
+    writeFileSync(path, "{ not json");
+    try { new ConfigStore(path); } catch { /* expected */ }
+    expect(readFileSync(path, "utf-8")).toBe("{ not json");
+  });
+
+  test("a missing file still constructs with defaults", () => {
+    const store = new ConfigStore(path);
+    expect(store.config.snapshot?.enabled).toBe(true);
+  });
+});
+
+describe("ConfigStore hot reload of a corrupt file", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = join(tmpdir(), `jmux-hot-${process.pid}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    path = join(dir, "config.json");
+    writeFileSync(path, '{"sidebarWidth":42}');
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("reload does not throw", () => {
+    const store = new ConfigStore(path);
+    writeFileSync(path, "{ broken");
+    expect(() => store.reload()).not.toThrow();
+  });
+
+  test("keeps the last known good value in memory", () => {
+    const store = new ConfigStore(path);
+    writeFileSync(path, "{ broken");
+    store.reload();
+    expect(store.config.sidebarWidth).toBe(42);
+  });
+
+  test("reports the load error", () => {
+    const store = new ConfigStore(path);
+    writeFileSync(path, "{ broken");
+    store.reload();
+    expect(store.loadError).not.toBeNull();
+    expect(store.writesDisabled).toBe(true);
+  });
+
+  test("a latched store refuses to write over the corrupt file", () => {
+    const store = new ConfigStore(path);
+    writeFileSync(path, "{ broken");
+    store.reload();
+    store.set("sidebarWidth", 99);
+    expect(readFileSync(path, "utf-8")).toBe("{ broken");
+  });
+
+  test("a valid reload clears the latch", () => {
+    const store = new ConfigStore(path);
+    writeFileSync(path, "{ broken");
+    store.reload();
+    writeFileSync(path, '{"sidebarWidth":43}');
+    store.reload();
+    expect(store.loadError).toBeNull();
+    expect(store.writesDisabled).toBe(false);
+    expect(store.config.sidebarWidth).toBe(43);
+  });
+
+  test("in-memory changes still apply while latched, so the UI stays responsive", () => {
+    const store = new ConfigStore(path);
+    writeFileSync(path, "{ broken");
+    store.reload();
+    store.set("sidebarWidth", 99);
+    expect(store.config.sidebarWidth).toBe(99);
+  });
+});
+
+describe("forward compatibility", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = join(tmpdir(), `jmux-fwd-${process.pid}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    path = join(dir, "config.json");
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  // Load-bearing: an older jmux must carry a newer jmux's config through
+  // untouched rather than deleting what it does not understand. Phase 2 ships
+  // `projects` and relies on exactly this.
+  test("a key this version knows nothing about survives a write", () => {
+    writeFileSync(path, JSON.stringify({ sidebarWidth: 26, projects: [{ id: "x" }] }));
+    const store = new ConfigStore(path);
+    store.set("sidebarWidth", 30);
+    const written = JSON.parse(readFileSync(path, "utf-8"));
+    expect(written.projects).toEqual([{ id: "x" }]);
+    expect(written.sidebarWidth).toBe(30);
+  });
+
+  test("writes stamp the current schema version", () => {
+    writeFileSync(path, "{}");
+    const store = new ConfigStore(path);
+    store.set("sidebarWidth", 30);
+    expect(JSON.parse(readFileSync(path, "utf-8")).schemaVersion).toBe(CONFIG_SCHEMA_VERSION);
+  });
+
+  test("a newer schemaVersion is preserved and does not block startup", () => {
+    writeFileSync(path, JSON.stringify({ schemaVersion: 999, sidebarWidth: 26 }));
+    const store = new ConfigStore(path);
+    expect(store.config.sidebarWidth).toBe(26);
+    store.set("sidebarWidth", 30);
+    // Not downgraded: this jmux migrated nothing, so claiming its own version
+    // would be a lie about the contents.
+    expect(JSON.parse(readFileSync(path, "utf-8")).schemaVersion).toBe(999);
+  });
+});
+
+describe("ConfigStore projects", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = join(tmpdir(), `jmux-proj-${process.pid}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    path = join(dir, "config.json");
+    writeFileSync(path, "{}");
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("upsertProject adds and then replaces by id", () => {
+    const store = new ConfigStore(path);
+    store.upsertProject({ id: "api", title: "API", dir: "/code/api" });
+    expect(store.config.projects).toHaveLength(1);
+    store.upsertProject({ id: "api", title: "API v2", dir: "/code/api" });
+    expect(store.config.projects).toHaveLength(1);
+    expect(store.config.projects?.[0].title).toBe("API v2");
+  });
+
+  // Soft delete, so a session still stamped with the id can report `orphaned`
+  // rather than silently re-routing to whatever else claims its team.
+  test("deleteProject marks rather than removes", () => {
+    const store = new ConfigStore(path);
+    store.upsertProject({ id: "api", title: "API", dir: "/code/api" });
+    store.deleteProject("api");
+    expect(store.config.projects).toHaveLength(1);
+    expect(store.config.projects?.[0].deletedAt).toBeDefined();
+  });
+
+  test("setProjectSetting stores by key presence and clearProjectSetting removes the key", () => {
+    const store = new ConfigStore(path);
+    store.upsertProject({ id: "api", title: "API", dir: "/code/api" });
+    store.setProjectSetting("api", "agentCommand", "codex");
+    expect(store.config.projects?.[0].settings?.agentCommand).toBe("codex");
+    store.clearProjectSetting("api", "agentCommand");
+    expect("agentCommand" in (store.config.projects?.[0].settings ?? {})).toBe(false);
+  });
+
+  test("an explicit null is stored as a present key, not dropped", () => {
+    const store = new ConfigStore(path);
+    store.upsertProject({ id: "api", title: "API", dir: "/code/api" });
+    store.setProjectSetting("api", "onMrMergedState", null);
+    expect("onMrMergedState" in (store.config.projects?.[0].settings ?? {})).toBe(true);
+  });
+
+  test("routes are written and cleared by kind", () => {
+    const store = new ConfigStore(path);
+    store.setRoute("issue", "I1", "api");
+    store.setRoute("linearProject", "LP1", "web");
+    expect(store.config.routes?.issue?.I1).toBe("api");
+    expect(store.config.routes?.linearProject?.LP1).toBe("web");
+    store.clearRoute("issue", "I1");
+    expect(store.config.routes?.issue?.I1).toBeUndefined();
+  });
+
+  test("everything persists across a reload", () => {
+    const store = new ConfigStore(path);
+    store.upsertProject({ id: "api", title: "API", dir: "/code/api" });
+    store.setProjectSetting("api", "agentCommand", "codex");
+    store.setRoute("issue", "I1", "api");
+    const reloaded = new ConfigStore(path);
+    expect(reloaded.config.projects?.[0].settings?.agentCommand).toBe("codex");
+    expect(reloaded.config.routes?.issue?.I1).toBe("api");
+  });
+});
+
+describe("ConfigStore project migration", () => {
+  let dir: string;
+  let path: string;
+  const resolver = (d: string) => `${d}/.git`;
+
+  beforeEach(() => {
+    dir = join(tmpdir(), `jmux-pmig-${process.pid}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    path = join(dir, "config.json");
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("migrates teamRepoMap and repos into projects, and removes the legacy keys", async () => {
+    writeFileSync(path, JSON.stringify({
+      issueWorkflow: { teamRepoMap: { Core: "/code/api" } },
+      repos: { "/code/api/.git": { claudeCommand: "cc" } },
+      repoDefaults: { autoLaunchAgent: false },
+    }));
+    const store = new ConfigStore(path);
+    await store.migrateProjects(resolver);
+
+    expect(store.config.projects).toHaveLength(1);
+    expect(store.config.projects?.[0].settings?.agentCommand).toBe("cc");
+    expect(store.config.projectDefaults?.autoLaunchAgent).toBe(false);
+    // Two sources for one answer is how they come to disagree.
+    expect(store.config.issueWorkflow?.teamRepoMap).toBeUndefined();
+    expect(store.config.repos).toBeUndefined();
+    expect(store.config.repoDefaults).toBeUndefined();
+
+    const onDisk = JSON.parse(readFileSync(path, "utf-8"));
+    expect(onDisk.projects).toHaveLength(1);
+    expect(onDisk.teamRepoMap).toBeUndefined();
+  });
+
+  test("is a no-op the second time, and does not re-create a deleted Project", async () => {
+    writeFileSync(path, JSON.stringify({
+      issueWorkflow: { teamRepoMap: { Core: "/code/api" } },
+    }));
+    const store = new ConfigStore(path);
+    await store.migrateProjects(resolver);
+    store.deleteProject(store.config.projects![0].id);
+    await store.migrateProjects(resolver);
+    expect(store.config.projects).toHaveLength(1);
+    expect(store.config.projects?.[0].deletedAt).toBeDefined();
+  });
+
+  test("does not write when there is nothing legacy to migrate", async () => {
+    writeFileSync(path, JSON.stringify({ sidebarWidth: 26 }));
+    const store = new ConfigStore(path);
+    await store.migrateProjects(resolver);
+    expect(store.config.projects).toBeUndefined();
+  });
+
+  test("writes a backup before rewriting the file", async () => {
+    writeFileSync(path, JSON.stringify({
+      issueWorkflow: { teamRepoMap: { Core: "/code/api" } },
+    }));
+    const store = new ConfigStore(path);
+    await store.migrateProjects(resolver);
+    const backups = readdirSync(dir).filter((n) => n.includes(".backup"));
+    expect(backups.length).toBe(1);
+    // The backup must hold the *pre-migration* document.
+    expect(JSON.parse(readFileSync(join(dir, backups[0]), "utf-8")).issueWorkflow).toBeDefined();
+  });
+});
+
+describe("ConfigStore.upsertProjects", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = join(tmpdir(), `jmux-ups-${process.pid}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    path = join(dir, "config.json");
+    writeFileSync(path, "{}");
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("adds several in one write", () => {
+    const store = new ConfigStore(path);
+    store.upsertProjects([
+      { id: "a", title: "A", dir: "/a" },
+      { id: "b", title: "B", dir: "/b" },
+    ]);
+    expect(JSON.parse(readFileSync(path, "utf-8")).projects).toHaveLength(2);
+  });
+
+  test("replaces by id rather than appending duplicates", () => {
+    const store = new ConfigStore(path);
+    store.upsertProject({ id: "a", title: "A", dir: "/a" });
+    store.upsertProjects([{ id: "a", title: "A2", dir: "/a", teamId: "T1" }]);
+    const projects = store.config.projects ?? [];
+    expect(projects).toHaveLength(1);
+    expect(projects[0].teamId).toBe("T1");
+  });
+
+  test("an empty list writes nothing", () => {
+    writeFileSync(path, '{"sidebarWidth":26}');
+    const store = new ConfigStore(path);
+    const before = readFileSync(path, "utf-8");
+    store.upsertProjects([]);
+    expect(readFileSync(path, "utf-8")).toBe(before);
   });
 });
 

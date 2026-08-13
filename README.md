@@ -145,13 +145,13 @@ Full guide, including what to check when a tab doesn't appear: [docs/connecting.
 
 Kicking off five agents is easy. Keeping track of them is the hard part — which one is still thinking, which one stopped to ask you a question, which one quietly finished ten minutes ago.
 
-jmux answers that at a glance. The **sidebar** lists every session with live indicators, and the **Command Center** gives you a single grid of every agent you care about — each tile a live, drivable mirror of a pinned pane, its border colored by state so you see who needs you without hunting.
+jmux answers that at a glance. The **sidebar** lists every session with live indicators, and the **Command Center** (`Ctrl-a C`) gives you a single grid of every agent you care about — each tile a live, drivable mirror of a session, its border colored by state so you see who needs you without hunting. It fills itself: membership is derived from the same sessions your sidebar is showing, so there is nothing to set up.
 
 ![jmux Command Center: a grid of live Claude agent panes, borders colored by state](docs/screenshots/fleet.gif)
 
 - **Green `●`** — new output.  **Orange `!`** — an agent finished and needs your review.
 - **Pipeline glyphs** — `✓` passed, `⟳` running, `✗` failed, `◆` merged, right in the sidebar.
-- **Pin any pane** into a named Command Center tab (`Backend`, `Review`, …) — panes stay in their own session, never moved or broken.
+- **The Command Center fills itself** — no pinning. Narrow it with saved **views** (`Active`, `Needs you`, …); pin a pane to keep its session on the grid and choose the face it shows, or hide a session you don't want. Panes stay in their own session, never moved or broken.
 - **Jump between sessions** with `Ctrl-Shift-Up/Down`. Sessions sharing a project are grouped automatically.
 
 <details>
@@ -253,7 +253,7 @@ See [Browser panes](docs/browser-panes.md).
 
 ### Configuration
 
-jmux layers tmux config in three tiers — jmux defaults, then your `~/.tmux.conf`, then the small set of settings jmux requires. jmux's own settings live in `~/.config/jmux/config.json`. Full guide: **[docs/configuration.md](docs/configuration.md)**.
+jmux layers tmux config in three tiers — jmux defaults, then your own tmux config (`~/.tmux.conf` or `~/.config/tmux/tmux.conf`), then the small set of settings jmux requires. Set `userTmuxConfig` to `false` if you'd rather jmux didn't source yours at all. jmux's own settings live in `~/.config/jmux/config.json`. Full guide: **[docs/configuration.md](docs/configuration.md)**.
 
 ### Architecture
 

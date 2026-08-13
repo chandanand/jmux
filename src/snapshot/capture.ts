@@ -334,6 +334,17 @@ export class Snapshotter {
     this.markDirty();
   }
 
+  /**
+   * The session → Project stamp, captured from the session list.
+   *
+   * Snapshotting it is what makes the link durable: tmux options die with the
+   * server, and a restore without this reads every session as unstamped.
+   */
+  onProjectId(name: string, projectId: string | null): void {
+    this.opts.model.setProjectId(name, projectId);
+    this.markDirty();
+  }
+
   onLinks(
     name: string,
     links: { type: "issue" | "mr"; id: string }[],

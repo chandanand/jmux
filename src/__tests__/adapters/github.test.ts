@@ -165,25 +165,64 @@ describe("GitHubAdapter", () => {
     expect(adapter.type).toBe("github");
   });
 
-  test("authenticate succeeds with env var (no network I/O)", async () => {
+  // This used to assert that authenticate() performs no network I/O at all,
+  // so a transient blip could not permanently latch `failed` — the coordinator
+  // never retried. That protection now lives in the `unreachable` state plus
+  // PollCoordinator.retryUnreachableAuth, which is what makes a real identity
+  // probe safe. The probe is required: without it, swapping to a revoked token
+  // replaces a working adapter with a dead one and reports success.
+  test("authenticate succeeds when the API confirms the token", async () => {
     const origGH = process.env.GH_TOKEN;
     const origGithub = process.env.GITHUB_TOKEN;
     process.env.GH_TOKEN = "test-token";
     delete process.env.GITHUB_TOKEN;
-    // Auth must NOT touch the network now — fail any fetch to prove it.
     const originalFetch = global.fetch;
-    global.fetch = ((() => {
-      throw new Error("authenticate() must not perform network I/O");
-    }) as unknown) as typeof global.fetch;
+    global.fetch = (async () =>
+      new Response(JSON.stringify({ login: "ada" }), { status: 200 })) as unknown as typeof global.fetch;
     try {
       const adapter = new GitHubAdapter({ type: "github" });
       await adapter.authenticate();
       expect(adapter.authState).toBe("ok");
+      expect(adapter.identity?.account).toBe("ada");
     } finally {
       global.fetch = originalFetch;
       if (origGH === undefined) delete process.env.GH_TOKEN;
       else process.env.GH_TOKEN = origGH;
       if (origGithub !== undefined) process.env.GITHUB_TOKEN = origGithub;
+    }
+  });
+
+  test("a rejected token reports failed", async () => {
+    const origGH = process.env.GH_TOKEN;
+    process.env.GH_TOKEN = "revoked";
+    const originalFetch = global.fetch;
+    global.fetch = (async () => new Response("{}", { status: 401 })) as unknown as typeof global.fetch;
+    try {
+      const adapter = new GitHubAdapter({ type: "github" });
+      await adapter.authenticate();
+      expect(adapter.authState).toBe("failed");
+    } finally {
+      global.fetch = originalFetch;
+      if (origGH === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = origGH;
+    }
+  });
+
+  // The blip case the presence-only check existed to protect. It must be
+  // distinguishable from a rejection, because only this one is retried.
+  test("a network error reports unreachable, not failed", async () => {
+    const origGH = process.env.GH_TOKEN;
+    process.env.GH_TOKEN = "test-token";
+    const originalFetch = global.fetch;
+    global.fetch = ((() => { throw new Error("ECONNREFUSED"); }) as unknown) as typeof global.fetch;
+    try {
+      const adapter = new GitHubAdapter({ type: "github" });
+      await adapter.authenticate();
+      expect(adapter.authState).toBe("unreachable");
+    } finally {
+      global.fetch = originalFetch;
+      if (origGH === undefined) delete process.env.GH_TOKEN;
+      else process.env.GH_TOKEN = origGH;
     }
   });
 

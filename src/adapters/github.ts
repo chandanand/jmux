@@ -5,9 +5,11 @@ import {
   type MergeRequest,
   type PipelineStatus,
   type BranchContext,
+  type AdapterIdentity,
 } from "./types";
 import { logError } from "../log";
 import { openUrl } from "../platform";
+import { resolveCredential } from "../credentials";
 
 const GITHUB_API = "https://api.github.com";
 
@@ -94,6 +96,7 @@ export class GitHubAdapter implements CodeHostAdapter {
   type = "github";
   authState: AdapterAuthState = "unauthenticated";
   authHint = "$GH_TOKEN or $GITHUB_TOKEN";
+  identity: AdapterIdentity | null = null;
   private token: string | null = null;
   private baseUrl: string;
   private username: string | null = null;
@@ -103,25 +106,29 @@ export class GitHubAdapter implements CodeHostAdapter {
   }
 
   async authenticate(): Promise<void> {
-    // Match GitLabAdapter: authentication is token-presence only — no network
-    // I/O here. A transient blip at startup must not permanently flip authState
-    // to "failed" (the coordinator never retries once authState !== "ok").
-    // The username needed by getMyMergeRequests / getMrsAwaitingMyReview is
-    // resolved lazily on first use and surfaces auth failures through the
-    // normal handleErrorStatus path.
-    const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN ?? null;
-    if (token) {
-      this.token = token;
+    // Token presence used to be the whole check, on the reasoning that a
+    // transient blip must not permanently latch `failed`. That reasoning was
+    // right and the conclusion was wrong: `unreachable` now carries it, so a
+    // network failure stays retryable while a *rejected* credential is known
+    // to be rejected. Without a real probe, swapping to a revoked token
+    // replaces a working adapter with a dead one and reports success.
+    const token =
+      resolveCredential("github", ["GH_TOKEN", "GITHUB_TOKEN"]).token ?? this.readGhToken() ?? null;
+    if (!token) { this.authState = "failed"; this.identity = null; return; }
+    this.token = token;
+    try {
+      const resp = await fetch("https://api.github.com/user", {
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
+      });
+      if (!resp.ok) { this.authState = "failed"; this.identity = null; return; }
+      const user = await resp.json() as { login?: string };
+      if (!user.login) { this.authState = "failed"; this.identity = null; return; }
+      this.identity = { account: user.login, organization: null };
       this.authState = "ok";
-      return;
+    } catch {
+      this.authState = "unreachable";
+      this.identity = null;
     }
-    const ghToken = this.readGhToken();
-    if (ghToken) {
-      this.token = ghToken;
-      this.authState = "ok";
-      return;
-    }
-    this.authState = "failed";
   }
 
   // Extracted so tests can stub it without spawning `gh`. The array-form spawn

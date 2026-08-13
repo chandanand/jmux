@@ -5,8 +5,10 @@ import {
   type MergeRequest,
   type PipelineStatus,
   type BranchContext,
+  type AdapterIdentity,
 } from "./types";
 import { openUrl } from "../platform";
+import { resolveCredential } from "../credentials";
 
 const GITLAB_API = "https://gitlab.com/api/v4";
 
@@ -26,6 +28,7 @@ export class GitLabAdapter implements CodeHostAdapter {
   type = "gitlab";
   authState: AdapterAuthState = "unauthenticated";
   authHint = "$GITLAB_TOKEN or $GITLAB_PRIVATE_TOKEN";
+  identity: AdapterIdentity | null = null;
   private token: string | null = null;
   private baseUrl: string;
 
@@ -34,19 +37,36 @@ export class GitLabAdapter implements CodeHostAdapter {
   }
 
   async authenticate(): Promise<void> {
-    const token = process.env.GITLAB_TOKEN ?? process.env.GITLAB_PRIVATE_TOKEN ?? process.env.GITLAB_PERSONAL_ACCESS_TOKEN ?? null;
+    let token = resolveCredential("gitlab", [
+      "GITLAB_TOKEN",
+      "GITLAB_PRIVATE_TOKEN",
+      "GITLAB_PERSONAL_ACCESS_TOKEN",
+    ]).token;
     if (!token) {
       try {
         const proc = Bun.spawnSync(["glab", "auth", "status", "-t"], { stdout: "pipe", stderr: "pipe" });
         const output = proc.stdout.toString() + proc.stderr.toString();
         const match = output.match(/Token:\s+(\S+)/);
-        if (match) { this.token = match[1]; this.authState = "ok"; return; }
+        if (match) token = match[1];
       } catch {}
-      this.authState = "failed";
-      return;
     }
+    if (!token) { this.authState = "failed"; this.identity = null; return; }
     this.token = token;
-    this.authState = "ok";
+    // A real probe, for the same reason as GitHub and Linear: presence is not
+    // validity, and a swap must not publish a revoked credential as healthy.
+    try {
+      const resp = await fetch(`${GITLAB_API}/user`, {
+        headers: { "PRIVATE-TOKEN": token },
+      });
+      if (!resp.ok) { this.authState = "failed"; this.identity = null; return; }
+      const user = await resp.json() as { username?: string };
+      if (!user.username) { this.authState = "failed"; this.identity = null; return; }
+      this.identity = { account: user.username, organization: null };
+      this.authState = "ok";
+    } catch {
+      this.authState = "unreachable";
+      this.identity = null;
+    }
   }
 
   async getMergeRequest(remote: string, branch: string): Promise<MergeRequest | null> {

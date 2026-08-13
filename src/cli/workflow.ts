@@ -37,9 +37,11 @@ import { resolve } from "path";
 import { homedir } from "os";
 import { existsSync } from "fs";
 import { runTmuxDirect } from "./tmux";
+import { PROJECT_OPTION, resolveSettingsFor, type ProjectConfig } from "../project";
+import { resolveIssueProject } from "../project-routing";
 import { CliError, type CliContext } from "./context";
 import { loadUserConfig, type JmuxConfig } from "../config";
-import { RepoFactsCache, resolveForRepo } from "../repo-settings";
+import { RepoFactsCache } from "../repo-settings";
 import { INTERNAL_SESSION_FILTER } from "../glass/internal-sessions";
 import { SessionState } from "../session-state";
 import { LinearAdapter } from "../adapters/linear";
@@ -100,6 +102,28 @@ export interface BoardSession {
   pinned: boolean;
   parked: boolean;
   issue: BoardIssue | null;
+  /**
+   * Same three answers as `ctl status`: null is a session nobody adopted,
+   * `deleted` a dangling stamp. Flattening them would hide a real
+   * misconfiguration behind "no project".
+   */
+  project: { id: string; title: string } | { id: string; state: "deleted" } | null;
+}
+
+/**
+ * The Project a board row reports. Same three answers as `ctl status`, and the
+ * same reason: a dangling stamp is a real misconfiguration an agent can act on,
+ * and must not read as "no project".
+ */
+function resolveBoardProject(
+  stampedId: string,
+  projects: readonly ProjectConfig[],
+): BoardSession["project"] {
+  if (!stampedId) return null;
+  const match = projects.find((p) => p.id === stampedId);
+  if (!match) return null;
+  if (match.deletedAt !== undefined) return { id: match.id, state: "deleted" };
+  return { id: match.id, title: match.title };
 }
 
 export interface BoardStage {
@@ -189,6 +213,8 @@ export interface BoardSessionInput {
   pinned: boolean;
   /** `session_activity`, epoch ms — feeds `parking.autoParkIdleDays`. */
   lastActivity: number;
+  /** The `@jmux-project` stamp, or "" when the session carries none. */
+  projectId?: string;
 }
 
 export interface BoardInputs {
@@ -197,6 +223,8 @@ export interface BoardInputs {
   upNextOrder: string[];
   /** `pipeline.parkedStates` — the statuses whose sessions park. */
   parkedStates: string[];
+  /** Including soft-deleted, so a dangling stamp is reportable. */
+  projects?: readonly ProjectConfig[];
   parking: ParkingConfig;
   unstartedCap: number | "all";
   sessions: BoardSessionInput[];
@@ -271,6 +299,7 @@ export function buildBoard(inp: BoardInputs): Board {
         pinned: s.pinned,
         parked,
         issue: issue ? toBoardIssue(issue) : null,
+        project: resolveBoardProject(s.projectId ?? "", inp.projects ?? []),
       },
     };
   });
@@ -457,6 +486,7 @@ const STATUS_FORMAT = [
   `#{${ISSUE_LINK_OPTION}}`,
   "#{pane_current_path}",
   "#{pane_active}",
+  `#{${PROJECT_OPTION}}`,
 ].join(US);
 
 function readSessionRows(ctx: CliContext): StatusSessionRow[] {
@@ -530,11 +560,26 @@ async function gatherBoard(ctx: CliContext): Promise<Board> {
 
   const liveSessions = new Set(rows.map((r) => r.name));
   const repoFacts = new RepoFactsCache();
+  // Through Projects. resolveForRepo reads config.repos, which the migration
+  // deletes — so this silently returned the built-in template and ignored
+  // whatever the user had configured.
   const templateFor = (repoDir: string) =>
-    resolveForRepo(config, repoFacts.get(repoDir)).sessionNameTemplate;
+    resolveSettingsFor(config, { dir: repoDir, bare: repoFacts.get(repoDir).bare })
+      .sessionNameTemplate;
+  // Same router as the TUI: a board that resolved repos differently from the
+  // sidebar is the disagreement the shared-module rule exists to prevent.
   const repoDirFor = (issue: Issue): string | null => {
-    const dir = config.issueWorkflow?.teamRepoMap?.[issue.team ?? ""];
-    return dir ? dir.replace("~", homedir()) : null;
+    const outcome = resolveIssueProject(
+      {
+        id: issue.id,
+        teamId: issue.teamId,
+        teamName: issue.team ?? undefined,
+        linearProjectId: issue.linearProjectId,
+      },
+      config.projects ?? [],
+      config.routes ?? {},
+    );
+    return outcome.kind === "resolved" ? outcome.project.dir : null;
   };
 
   const issueSessionStates = new Map<string, IssueSessionInfo>();
@@ -572,6 +617,9 @@ async function gatherBoard(ctx: CliContext): Promise<Board> {
     views,
     upNextOrder: config.pipeline?.upNext ?? [],
     parkedStates: parked,
+    // Soft-deleted included, so a dangling stamp reports `deleted` rather than
+    // being indistinguishable from a session nobody adopted.
+    projects: config.projects ?? [],
     parking: parkingConfig(config),
     unstartedCap: capValue(config),
     issues,
@@ -601,6 +649,7 @@ async function gatherBoard(ctx: CliContext): Promise<Board> {
         attentionReason: row.attention === "1" ? row.attentionReason || null : null,
         pinned: pinned.has(row.name),
         lastActivity: activity.get(row.id) ?? Date.now(),
+        projectId: row.projectId,
       };
     }),
   });
@@ -610,6 +659,45 @@ async function gatherBoard(ctx: CliContext): Promise<Board> {
 function capValue(config: JmuxConfig): number | "all" {
   const n = ghostCapValue(config.pipeline?.showUnstartedInSidebar ?? null);
   return n === Infinity ? "all" : n;
+}
+
+/**
+ * The board's sessions re-bucketed by Project.
+ *
+ * Keyed on the Project *id*, never its title — two Projects may share one, and
+ * merging them would put two teams' work under one heading. A session with no
+ * `@jmux-project` stamp is reported under a null id rather than dropped: an
+ * unadopted session is a fact an agent needs, and silently omitting it makes
+ * the board disagree with `ctl session list`.
+ */
+export interface BoardProjectGroup {
+  id: string | null;
+  title: string | null;
+  sessions: unknown[];
+}
+
+function groupBoardByProject(board: Awaited<ReturnType<typeof gatherBoard>>): unknown {
+  const groups = new Map<string | null, BoardProjectGroup>();
+  const every = [...board.stages.flatMap((st) => st.sessions), ...board.ungrouped];
+  for (const session of every) {
+    const project = (session as { project?: { id?: string; title?: string } | null }).project ?? null;
+    const id = project?.id ?? null;
+    let group = groups.get(id);
+    if (!group) {
+      group = { id, title: project?.title ?? null, sessions: [] };
+      groups.set(id, group);
+    }
+    group.sessions.push(session);
+  }
+  // Unadopted last: it is the residue, not a peer.
+  const ordered = [...groups.values()].sort((a, b) =>
+    a.id === null ? 1 : b.id === null ? -1 : a.id.localeCompare(b.id));
+  return {
+    groupedBy: "project",
+    projects: ordered,
+    upNext: board.upNext,
+    unstartedCap: board.unstartedCap,
+  };
 }
 
 function narrowToStage(board: Board, stageId: string): Board {
@@ -637,7 +725,11 @@ export async function handleWorkflow(
     case "board": {
       const board = await gatherBoard(ctx);
       const stage = typeof parsed.flags.stage === "string" ? parsed.flags.stage : null;
-      return stage ? narrowToStage(board, stage) : board;
+      const narrowed = stage ? narrowToStage(board, stage) : board;
+      // `--group project` re-buckets the same sessions the stage view already
+      // resolved, rather than re-deriving membership: an agent grouping one way
+      // and a human reading the other must not see different sets.
+      return parsed.flags.group === "project" ? groupBoardByProject(narrowed) : narrowed;
     }
 
     case "next": {

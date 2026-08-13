@@ -13,7 +13,7 @@
  * Ubuntu 24.04 build, among others) escapes it to the 4-character octal text
  * `\037`. A parser that splits on the raw byte alone therefore finds no
  * separator on 3.4 output and silently drops every row — which broke
- * `ctl status`, `ctl agent state`, and the Command Center's auto-pin detection
+ * `ctl status`, `ctl agent state`, and the Command Center's pane detection
  * (GitHub issue #7). {@link splitFields} splits on either form so every parse
  * site works on both tmux versions.
  *

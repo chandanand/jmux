@@ -37,7 +37,12 @@ export interface WorkflowInputs {
    * session because transitions are configured per repo and a session's
    * hand-linked issues can come from teams that map elsewhere.
    */
-  targetFor: (issue: Pick<Issue, "team">, event: TransitionEvent) => string | null;
+  targetFor: (
+    // Routing keys on ids, not the team *name* — a name is not unique across
+    // workspaces. These are exactly the fields resolveIssueProject reads.
+    issue: Pick<Issue, "id" | "team" | "teamId" | "linearProjectId">,
+    event: TransitionEvent,
+  ) => string | null;
 }
 
 export interface DriftMove {

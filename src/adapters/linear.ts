@@ -1,13 +1,14 @@
 // src/adapters/linear.ts
-import { HttpError, type IssueTrackerAdapter, type AdapterAuthState, type Issue, type IssueStateType, type WorkflowState } from "./types";
+import { HttpError, type IssueTrackerAdapter, type AdapterAuthState, type AdapterIdentity, type Issue, type IssueStateType, type WorkflowState } from "./types";
 import { buildLinearPrompt, buildLinearGroupPrompt } from "./linear-prompt";
 import { logError } from "../log";
 import { openUrl } from "../platform";
+import { resolveCredential } from "../credentials";
 
 const LINEAR_API = "https://api.linear.app/graphql";
 
 // Shared GraphQL fields for issue queries
-const ISSUE_FIELDS = `id identifier title description branchName state { name type } assignee { name } team { name } project { name } priority updatedAt labels { nodes { name parent { name } } } attachments { nodes { title url sourceType } } comments(first: 20) { nodes { id parent { id } body user { name } createdAt } } url`;
+const ISSUE_FIELDS = `id identifier title description branchName state { name type } assignee { name } team { id name } project { id name } priority updatedAt labels { nodes { name parent { name } } } attachments { nodes { title url sourceType } } comments(first: 20) { nodes { id parent { id } body user { name } createdAt } } url`;
 
 const ISSUE_STATE_TYPES: ReadonlySet<IssueStateType> = new Set(["triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"]);
 function isIssueStateType(v: unknown): v is IssueStateType {
@@ -24,15 +25,45 @@ export class LinearAdapter implements IssueTrackerAdapter {
   type = "linear";
   authState: AdapterAuthState = "unauthenticated";
   authHint = "$LINEAR_API_KEY or $LINEAR_TOKEN";
+  identity: AdapterIdentity | null = null;
   private token: string | null = null;
 
   constructor(_config: Record<string, unknown>) {}
 
   async authenticate(): Promise<void> {
-    const token = process.env.LINEAR_API_KEY ?? process.env.LINEAR_TOKEN ?? null;
-    if (!token) { this.authState = "failed"; return; }
+    // Through the shared resolver, never process.env directly: `jmux ctl`
+    // constructs its own adapters, so a token stored by the wizard would
+    // otherwise work in the TUI and fail in the CLI.
+    const { token } = resolveCredential("linear", ["LINEAR_API_KEY", "LINEAR_TOKEN"]);
+    if (!token) { this.authState = "failed"; this.identity = null; return; }
     this.token = token;
-    this.authState = "ok";
+    // A real request, not merely a non-empty string. Presence proved nothing:
+    // a revoked, malformed or wrong-workspace token reported `ok`, so every
+    // "connected" the UI showed was a claim about a string existing. It also
+    // makes "swap only on success" mean something — see swapAdapters.
+    try {
+      const resp = await fetch(LINEAR_API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: token },
+        body: JSON.stringify({ query: `query { viewer { id name organization { name urlKey } } }` }),
+      });
+      if (!resp.ok) { this.authState = "failed"; this.identity = null; return; }
+      const json = await resp.json() as {
+        data?: { viewer?: { id?: string; name?: string; organization?: { name?: string } } };
+      };
+      const viewer = json?.data?.viewer;
+      if (!viewer?.id) { this.authState = "failed"; this.identity = null; return; }
+      this.identity = {
+        account: viewer.name ?? viewer.id,
+        organization: viewer.organization?.name ?? null,
+      };
+      this.authState = "ok";
+    } catch {
+      // Network, DNS, timeout — the token may be perfectly good. Latching
+      // `failed` here would block a swap over a blip.
+      this.authState = "unreachable";
+      this.identity = null;
+    }
   }
 
   async getLinkedIssue(mrUrl: string): Promise<Issue | null> {
@@ -200,7 +231,9 @@ export class LinearAdapter implements IssueTrackerAdapter {
         .filter((u: string) => u && (u.includes("merge_requests") || u.includes("/pull/"))),
       webUrl: raw.url ?? "",
       team: raw.team?.name ?? undefined,
+      teamId: raw.team?.id ?? undefined,
       project: raw.project?.name ?? undefined,
+      linearProjectId: raw.project?.id ?? undefined,
       priority: typeof raw.priority === "number" ? raw.priority : undefined,
       updatedAt: raw.updatedAt ? new Date(raw.updatedAt).getTime() : undefined,
       description: raw.description ?? undefined,

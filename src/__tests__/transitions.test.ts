@@ -5,7 +5,7 @@ import {
   sharedStatuses,
   type MrSnapshot,
 } from "../transitions";
-import { REPO_SETTING_DEFAULTS } from "../repo-settings";
+import { PROJECT_SETTING_DEFAULTS } from "../project";
 
 const mr = (id: string, status: MrSnapshot["status"]): MrSnapshot => ({ id, status });
 
@@ -53,14 +53,14 @@ describe("detectMrTransitions", () => {
 
 describe("transitionTarget", () => {
   test("returns null when the event has no configured state", () => {
-    expect(transitionTarget("session-start", REPO_SETTING_DEFAULTS)).toBeNull();
-    expect(transitionTarget("mr-open", REPO_SETTING_DEFAULTS)).toBeNull();
-    expect(transitionTarget("mr-merged", REPO_SETTING_DEFAULTS)).toBeNull();
+    expect(transitionTarget("session-start", PROJECT_SETTING_DEFAULTS)).toBeNull();
+    expect(transitionTarget("mr-open", PROJECT_SETTING_DEFAULTS)).toBeNull();
+    expect(transitionTarget("mr-merged", PROJECT_SETTING_DEFAULTS)).toBeNull();
   });
 
   test("maps each event onto its configured state", () => {
     const s = {
-      ...REPO_SETTING_DEFAULTS,
+      ...PROJECT_SETTING_DEFAULTS,
       onSessionStartState: "In Progress",
       onMrOpenState: "In Review",
       onMrMergedState: "QA",
@@ -71,7 +71,7 @@ describe("transitionTarget", () => {
   });
 
   test("an explicitly null event stays off even when siblings are set", () => {
-    const s = { ...REPO_SETTING_DEFAULTS, onMrOpenState: "In Review", onMrMergedState: null };
+    const s = { ...PROJECT_SETTING_DEFAULTS, onMrOpenState: "In Review", onMrMergedState: null };
     expect(transitionTarget("mr-merged", s)).toBeNull();
   });
 });

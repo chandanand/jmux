@@ -2,14 +2,14 @@ import { describe, test, expect } from "bun:test";
 import { GhostPreview, type GhostPreviewPort, type StartOutcome } from "../ghost-preview";
 import { buildPreflight, type Preflight } from "../ghost-preflight";
 import type { Issue } from "../adapters/types";
-import type { ResolvedRepoSettings } from "../repo-settings";
+import type { ResolvedProjectSettings } from "../project";
 
-const SETTINGS: ResolvedRepoSettings = {
+const SETTINGS: ResolvedProjectSettings = {
   defaultBaseBranch: "main",
   wtmIntegration: true,
   autoLaunchAgent: true,
   sessionNameTemplate: "{issue}",
-  claudeCommand: "claude",
+  agentCommand: "claude",
   onSessionStartState: null,
   onMrOpenState: null,
   onMrMergedState: null,

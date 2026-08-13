@@ -1,4 +1,5 @@
 import { resolveSessionContext } from "./context-resolver";
+import type { AdapterSet } from "./registry";
 import { logError } from "../log";
 import {
   HttpError,
@@ -78,6 +79,7 @@ export class PollCoordinator {
   private degradedSessions = new Set<string>();
   /** Backfill waits for start(), which main.ts calls once adapter auth settles. */
   private started = false;
+  private epoch = 0;
 
   get rateLimitState(): RateLimitState {
     return this._rateLimitState;
@@ -89,6 +91,43 @@ export class PollCoordinator {
 
   get issueTracker(): IssueTrackerAdapter | null {
     return this.opts.issueTracker;
+  }
+
+  /** The current adapter generation. Exposed so tests can observe a swap. */
+  get adapterEpoch(): number { return this.epoch; }
+
+  /** Sessions being resolved right now. Exposed so a swap can be seen to drain them. */
+  get inFlightCount(): number { return this.inFlight.size; }
+
+  /** Whether a captured epoch is still the live one. */
+  private isCurrent(epoch: number): boolean { return epoch === this.epoch; }
+
+  /**
+   * Replace the adapters and retire everything derived from the old ones.
+   *
+   * Clearing is not optional. Contexts, global caches and link signatures were
+   * all computed against a different workspace, and `resolvedLinkSignatures` in
+   * particular would make every session look freshly resolved and suppress the
+   * re-resolve that would fix it. Sessions are re-queued so they refill from
+   * the new adapters.
+   */
+  setAdapters(set: AdapterSet): void {
+    this.epoch++;
+    this.opts.codeHost = set.codeHost;
+    this.opts.issueTracker = set.issueTracker;
+
+    this.contexts.clear();
+    this.resolvedLinkSignatures.clear();
+    this.degradedSessions.clear();
+    this.globalIssues = [];
+    this.globalMrs = [];
+    this.globalReviewMrs = [];
+    this._rateLimitState = "normal";
+    this.pending.clear();
+    this.inFlight.clear();
+
+    for (const name of this.sessionDirs.keys()) this.enqueueBackfill(name);
+    this.opts.onUpdate("__global__");
   }
 
   getGlobalIssues(): Issue[] { return this.globalIssues; }
@@ -171,30 +210,64 @@ export class PollCoordinator {
     if (this.globalTimer) { clearInterval(this.globalTimer); this.globalTimer = null; }
   }
 
-  async pollGlobal(): Promise<void> {
+  /**
+   * Give an adapter that could not be *reached* another chance.
+   *
+   * `authenticate()` runs once at startup and every poll gates on
+   * `authState === "ok"`, so without this a network blip during startup would
+   * disable the adapter for the whole session with no way back but a restart.
+   * That is precisely why auth used to be a token-presence check with no I/O;
+   * a real identity probe is only safe alongside this retry.
+   *
+   * Deliberately only `unreachable`. A `failed` credential was *rejected* — the
+   * answer will not change by asking again, and re-probing a revoked token on
+   * every global tick is a request per tick, forever.
+   */
+  private async retryUnreachableAuth(): Promise<void> {
     const { codeHost, issueTracker } = this.opts;
+    const attempts: Array<Promise<void>> = [];
+    if (issueTracker?.authState === "unreachable") attempts.push(issueTracker.authenticate());
+    if (codeHost?.authState === "unreachable") attempts.push(codeHost.authenticate());
+    if (attempts.length > 0) await Promise.allSettled(attempts);
+  }
+
+  async pollGlobal(): Promise<void> {
+    await this.retryUnreachableAuth();
+    // Captured after the retry, since that awaits and a swap can land inside it.
+    const { codeHost, issueTracker } = this.opts;
+    const epoch = this.epoch;
 
     if (issueTracker && issueTracker.authState === "ok") {
       try {
-        this.globalIssues = await issueTracker.getMyIssues();
+        const issues = await issueTracker.getMyIssues();
+        if (!this.isCurrent(epoch)) return;
+        this.globalIssues = issues;
       } catch (e) {
+        if (!this.isCurrent(epoch)) return;
         logError("PollCoordinator", `global issues poll failed: ${(e as Error).message}`);
       }
     }
 
     if (codeHost && codeHost.authState === "ok") {
       try {
-        this.globalMrs = await codeHost.getMyMergeRequests();
+        const mrs = await codeHost.getMyMergeRequests();
+        if (!this.isCurrent(epoch)) return;
+        this.globalMrs = mrs;
       } catch (e) {
+        if (!this.isCurrent(epoch)) return;
         logError("PollCoordinator", `global MRs poll failed: ${(e as Error).message}`);
       }
       try {
-        this.globalReviewMrs = await codeHost.getMrsAwaitingMyReview();
+        const review = await codeHost.getMrsAwaitingMyReview();
+        if (!this.isCurrent(epoch)) return;
+        this.globalReviewMrs = review;
       } catch (e) {
+        if (!this.isCurrent(epoch)) return;
         logError("PollCoordinator", `global review MRs poll failed: ${(e as Error).message}`);
       }
     }
 
+    if (!this.isCurrent(epoch)) return;
     this.opts.onUpdate("__global__");
   }
 
@@ -306,7 +379,12 @@ export class PollCoordinator {
         === issueLinkSignature(this.linkIdsFor(name));
       if (this.contexts.has(name) && !this.degradedSessions.has(name) && fresh) continue;
       this.inFlight.add(name);
+      const startedAt = this.epoch;
       void this.resolveContext(name).finally(() => {
+        // Only the epoch that added this marker may remove it. A retired
+        // resolve settling late would otherwise delete a marker the current
+        // epoch had just added, and two resolves would run for one session.
+        if (!this.isCurrent(startedAt)) return;
         this.inFlight.delete(name);
         void this.drainBackfill();
       });
@@ -328,7 +406,14 @@ export class PollCoordinator {
     return this.contexts;
   }
 
-  reportRateLimit(state: RateLimitState): void {
+  /**
+   * `epoch` is optional so callers that have none keep working. When supplied
+   * and stale the report is dropped: a 429 belongs to the adapter that earned
+   * it, and applying a retired one throttles a brand-new adapter that has made
+   * no requests at all.
+   */
+  reportRateLimit(state: RateLimitState, epoch?: number): void {
+    if (epoch !== undefined && !this.isCurrent(epoch)) return;
     this._rateLimitState = state;
     this.stop();
     if (state !== "hard_limited") {
@@ -336,7 +421,13 @@ export class PollCoordinator {
     }
   }
 
-  reportAuthFailure(adapterKey: "codeHost" | "issueTracker"): void {
+  /**
+   * Looks up the *current* adapter, so a late 401 from a retired one would
+   * otherwise mark its replacement dead — with no request of its own having
+   * failed, and nothing on screen able to explain why.
+   */
+  reportAuthFailure(adapterKey: "codeHost" | "issueTracker", epoch?: number): void {
+    if (epoch !== undefined && !this.isCurrent(epoch)) return;
     const adapter = this.opts[adapterKey];
     if (adapter) {
       adapter.authState = "failed";
@@ -346,6 +437,7 @@ export class PollCoordinator {
   private async resolveContext(name: string): Promise<void> {
     const dir = this.sessionDirs.get(name);
     if (!dir) return;
+    const epoch = this.epoch;
     try {
       // Both link stores. Their id shapes differ — a tracker UUID from
       // state.json, a human identifier from the tmux option — and the resolver's
@@ -364,6 +456,14 @@ export class PollCoordinator {
         manualIssueIds,
         manualMrIds,
       });
+      // The signature above was stamped *before* the await — deliberately, so a
+      // link added mid-resolution stays stale. That stamp would otherwise
+      // survive a swap that cleared the map, marking this session fresh against
+      // adapters it was never resolved from, and it would never re-resolve.
+      if (!this.isCurrent(epoch)) {
+        this.resolvedLinkSignatures.delete(name);
+        return;
+      }
       this.contexts.set(name, ctx);
       // Cache it either way — a partial context still shows whatever resolved —
       // but remember an incomplete one so the background sweep tries again.
@@ -372,12 +472,20 @@ export class PollCoordinator {
       else this.degradedSessions.delete(name);
       this.opts.onUpdate(name);
     } catch (e) {
+      if (!this.isCurrent(epoch)) {
+        this.resolvedLinkSignatures.delete(name);
+        return;
+      }
       logError("PollCoordinator", `resolve session "${name}" failed: ${(e as Error).message}`);
       this.degradedSessions.add(name);
     }
   }
 
   private async pollActiveSession(): Promise<void> {
+    // Every catch below reports auth/rate state against the *current* adapter,
+    // so a failure from a retired one must not be applied. Captured once here
+    // and passed to each report.
+    const epoch = this.epoch;
     if (!this.activeSession || this._rateLimitState === "hard_limited") return;
     const name = this.activeSession;
     const ctx = this.contexts.get(name);
@@ -400,62 +508,74 @@ export class PollCoordinator {
     const dir = this.sessionDirs.get(name);
     if (dir) {
       const currentBranch = await getGitBranch(dir);
+      if (!this.isCurrent(epoch)) return;
       if (currentBranch !== ctx.branch) {
         await this.resolveContext(name);
         return;
       }
     }
 
+    // Re-read rather than reusing the `ctx` captured above: a swap clears
+    // `contexts`, which detaches that object from the map. Mutating it below
+    // would write into something nothing reads again.
+    const live = this.contexts.get(name);
+    if (!live) return;
+
     const { codeHost, issueTracker } = this.opts;
     let changed = false;
 
     // Poll all MRs by ID
-    if (ctx.mrs.length > 0 && codeHost && codeHost.authState === "ok") {
+    if (live.mrs.length > 0 && codeHost && codeHost.authState === "ok") {
       try {
-        const ids = ctx.mrs.map((mr) => mr.id);
+        const ids = live.mrs.map((mr) => mr.id);
         const updated = await codeHost.pollMergeRequestsByIds(ids);
-        for (let i = 0; i < ctx.mrs.length; i++) {
-          const fresh = updated.get(ctx.mrs[i].id);
+        if (!this.isCurrent(epoch)) return;
+        for (let i = 0; i < live.mrs.length; i++) {
+          const fresh = updated.get(live.mrs[i].id);
           if (fresh) {
-            ctx.mrs[i] = { ...fresh, source: ctx.mrs[i].source };
+            live.mrs[i] = { ...fresh, source: live.mrs[i].source };
             changed = true;
           }
         }
       } catch (e) {
+        if (!this.isCurrent(epoch)) return;
         const status = e instanceof HttpError ? e.status : 0;
-        if (status === 401 || status === 403) this.reportAuthFailure("codeHost");
-        else if (status === 429) this.reportRateLimit("rate_limited");
+        if (status === 401 || status === 403) this.reportAuthFailure("codeHost", epoch);
+        else if (status === 429) this.reportRateLimit("rate_limited", epoch);
         else logError("PollCoordinator", `poll error: ${(e as Error).message}`);
       }
     }
 
     // Poll all issues by ID
-    if (ctx.issues.length > 0 && issueTracker && issueTracker.authState === "ok") {
+    if (live.issues.length > 0 && issueTracker && issueTracker.authState === "ok") {
       try {
-        const ids = ctx.issues.map((issue) => issue.id);
+        const ids = live.issues.map((issue) => issue.id);
         const updated = await issueTracker.pollAllIssues(ids);
-        for (let i = 0; i < ctx.issues.length; i++) {
-          const fresh = updated.get(ctx.issues[i].id);
+        if (!this.isCurrent(epoch)) return;
+        for (let i = 0; i < live.issues.length; i++) {
+          const fresh = updated.get(live.issues[i].id);
           if (fresh) {
-            ctx.issues[i] = { ...fresh, source: ctx.issues[i].source };
+            live.issues[i] = { ...fresh, source: live.issues[i].source };
             changed = true;
           }
         }
       } catch (e) {
+        if (!this.isCurrent(epoch)) return;
         const status = e instanceof HttpError ? e.status : 0;
-        if (status === 401 || status === 403) this.reportAuthFailure("issueTracker");
-        else if (status === 429) this.reportRateLimit("rate_limited");
+        if (status === 401 || status === 403) this.reportAuthFailure("issueTracker", epoch);
+        else if (status === 429) this.reportRateLimit("rate_limited", epoch);
         else logError("PollCoordinator", `poll error: ${(e as Error).message}`);
       }
     }
 
     if (changed) {
-      ctx.resolvedAt = Date.now();
+      live.resolvedAt = Date.now();
       this.opts.onUpdate(name);
     }
   }
 
   private async pollBackgroundSessions(): Promise<void> {
+    const epoch = this.epoch;
     if (this._rateLimitState !== "normal") return;
     const { codeHost, issueTracker } = this.opts;
 
@@ -497,6 +617,9 @@ export class PollCoordinator {
     if (branchContexts.length > 0 && codeHost && codeHost.authState === "ok") {
       try {
         const results = await codeHost.pollAllMergeRequests(branchContexts);
+        // contexts is cleared by a swap, but re-queued sessions can repopulate it
+        // before these results land — so the map lookup alone is not enough.
+        if (!this.isCurrent(epoch)) return;
         for (const [sessionName, mr] of results) {
           const ctx = this.contexts.get(sessionName);
           if (ctx) {
@@ -507,8 +630,9 @@ export class PollCoordinator {
           }
         }
       } catch (e) {
+        if (!this.isCurrent(epoch)) return;
         const status = e instanceof HttpError ? e.status : 0;
-        if (status === 429) this.reportRateLimit("rate_limited");
+        if (status === 429) this.reportRateLimit("rate_limited", epoch);
         else logError("PollCoordinator", `poll error: ${(e as Error).message}`);
       }
     }
@@ -517,6 +641,7 @@ export class PollCoordinator {
     if (nonBranchMrIds.length > 0 && codeHost && codeHost.authState === "ok") {
       try {
         const results = await codeHost.pollMergeRequestsByIds(nonBranchMrIds);
+        if (!this.isCurrent(epoch)) return;
         for (const [mrId, mr] of results) {
           const sessionName = mrIdToSession.get(mrId);
           if (!sessionName) continue;
@@ -531,8 +656,9 @@ export class PollCoordinator {
           }
         }
       } catch (e) {
+        if (!this.isCurrent(epoch)) return;
         const status = e instanceof HttpError ? e.status : 0;
-        if (status === 429) this.reportRateLimit("rate_limited");
+        if (status === 429) this.reportRateLimit("rate_limited", epoch);
         else logError("PollCoordinator", `poll error: ${(e as Error).message}`);
       }
     }
@@ -541,6 +667,7 @@ export class PollCoordinator {
     if (allIssueIds.length > 0 && issueTracker && issueTracker.authState === "ok") {
       try {
         const results = await issueTracker.pollAllIssues(allIssueIds);
+        if (!this.isCurrent(epoch)) return;
         for (const [issueId, issue] of results) {
           const sessionName = issueIdToSession.get(issueId);
           if (!sessionName) continue;
@@ -555,8 +682,9 @@ export class PollCoordinator {
           }
         }
       } catch (e) {
+        if (!this.isCurrent(epoch)) return;
         const status = e instanceof HttpError ? e.status : 0;
-        if (status === 429) this.reportRateLimit("rate_limited");
+        if (status === 429) this.reportRateLimit("rate_limited", epoch);
         else logError("PollCoordinator", `poll error: ${(e as Error).message}`);
       }
     }

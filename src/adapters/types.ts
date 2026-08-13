@@ -36,7 +36,15 @@ export interface Issue {
   linkedMrUrls: string[];
   webUrl: string;
   team?: string;
+  /**
+   * The tracker's own id for the team. Routing keys on this, never on `team` —
+   * a name is not unique across workspaces, and `startIssueGroup` already
+   * carries a documented bug from name-keying.
+   */
+  teamId?: string;
   project?: string;
+  /** The tracker's own id for the project. See `teamId`. */
+  linearProjectId?: string;
   priority?: number;   // 0=none, 1=urgent, 2=high, 3=medium, 4=low
   updatedAt?: number;  // epoch ms
   description?: string;
@@ -89,7 +97,19 @@ export interface SessionContext {
   degraded?: boolean;
 }
 
-export type AdapterAuthState = "ok" | "failed" | "unauthenticated";
+/**
+ * `unreachable` is deliberately distinct from `failed`. A revoked token and a
+ * dropped network used to be the same state, which meant a blip at startup
+ * latched the adapter off for the whole run — and, now that adapters can be
+ * swapped, would let a transient failure block a swap that was actually fine.
+ */
+export type AdapterAuthState = "ok" | "failed" | "unreachable" | "unauthenticated";
+
+/** Who the credential belongs to, for display and cross-workspace warnings. */
+export interface AdapterIdentity {
+  account: string;
+  organization: string | null;
+}
 
 export type LinkSource = "manual" | "branch" | "mr-link" | "transitive";
 
@@ -97,6 +117,8 @@ export interface CodeHostAdapter {
   type: string;
   authState: AdapterAuthState;
   authHint: string;
+  /** Populated by a successful `authenticate()`; null otherwise. */
+  identity: AdapterIdentity | null;
 
   authenticate(): Promise<void>;
   getMergeRequest(remote: string, branch: string): Promise<MergeRequest | null>;
@@ -116,6 +138,8 @@ export interface IssueTrackerAdapter {
   type: string;
   authState: AdapterAuthState;
   authHint: string;
+  /** Populated by a successful `authenticate()`; null otherwise. */
+  identity: AdapterIdentity | null;
 
   authenticate(): Promise<void>;
   getLinkedIssue(mrUrl: string): Promise<Issue | null>;
