@@ -1,0 +1,219 @@
+import { describe, expect, test } from "bun:test";
+import { cellWidth, textCols } from "../cell-grid";
+import type { CellGrid } from "../types";
+import { deriveStatus, type SetupFacts } from "../onboarding/status";
+import { OnboardingFlow } from "../onboarding/flow";
+import { renderFlow, wrapProse, GLYPHS, BOTTOM_RESERVED_ROWS } from "../onboarding/render";
+
+const facts: SetupFacts = {
+  agentsPresent: ["Claude Code"], agentsStale: ["Claude Code"], skillCurrent: false,
+  trackerType: "linear", trackerAuthed: false, trackerDeclined: false,
+  projectCount: 0, attachedTeamCount: 0, workflowTabCount: 0, hunkInstalled: false,
+};
+
+const flow = (f: Partial<SetupFacts> = {}) => new OnboardingFlow(deriveStatus({ ...facts, ...f }));
+const lines = (g: CellGrid): string[] => g.cells.map((r) => r.map((c) => c.char).join(""));
+const text = (g: CellGrid): string => lines(g).join("\n");
+
+describe("glyphs", () => {
+  // A glyph the column model scores differently from the real cursor shears
+  // every cell after it on the row. This is the check that keeps that class of
+  // bug out before anything reaches a CellGrid.
+  test("every glyph the surface paints is exactly one column wide", () => {
+    for (const glyph of GLYPHS) {
+      expect([glyph, cellWidth(glyph.codePointAt(0)!)]).toEqual([glyph, 1]);
+      expect([glyph, textCols(glyph)]).toEqual([glyph, 1]);
+    }
+  });
+});
+
+describe("wrapProse", () => {
+  test("caps at the measure even on a very wide terminal", () => {
+    const long = "word ".repeat(120).trim();
+    for (const line of wrapProse(long, 400)) {
+      expect(textCols(line)).toBeLessThanOrEqual(64);
+    }
+  });
+
+  test("never splits a word", () => {
+    expect(wrapProse("alpha beta gamma", 11)).toEqual(["alpha beta", "gamma"]);
+  });
+
+  test("an empty paragraph is one empty line, not nothing", () => {
+    expect(wrapProse("", 40)).toEqual([""]);
+  });
+
+  test("a word longer than the measure is emitted rather than dropped", () => {
+    const word = "x".repeat(90);
+    expect(wrapProse(word, 40)).toEqual([word]);
+  });
+});
+
+describe("renderFlow — geometry", () => {
+  test("the grid is exactly the requested size", () => {
+    const grid = renderFlow(flow(), 80, 24);
+    expect(grid.rows).toBe(24);
+    expect(grid.cols).toBe(80);
+    expect(grid.cells.length).toBe(24);
+    for (const row of grid.cells) expect(row.length).toBe(80);
+  });
+
+  test("no row overflows, at any width, on any page", () => {
+    const f = flow();
+    f.chooseIntent("tracker");
+    for (let step = 0; step < 6; step++) {
+      for (const w of [40, 52, 61, 80, 120, 200]) {
+        const grid = renderFlow(f, w, 24);
+        for (const row of grid.cells) expect(row.length).toBe(w);
+      }
+      f.next();
+    }
+  });
+
+  test("survives a terminal too short to hold the content", () => {
+    const f = flow();
+    f.chooseIntent("solo");
+    for (const h of [4, 6, 8, 12]) {
+      const grid = renderFlow(f, 80, h);
+      expect(grid.cells.length).toBe(h);
+    }
+  });
+
+  // Shared by the painter and anything clamping content: a hint line that
+  // moved as the cursor travelled would cost more than the row it saved.
+  test("the action bar is on the last row whatever the height", () => {
+    const f = flow();
+    f.chooseIntent("solo");
+    for (const h of [14, 20, 24, 50]) {
+      const painted = lines(renderFlow(f, 80, h));
+      expect(painted[h - 1]).toContain("next");
+      expect(painted[h - BOTTOM_RESERVED_ROWS]).toContain("─");
+    }
+  });
+});
+
+describe("renderFlow — pages", () => {
+  test("welcome offers all three intents with their costs", () => {
+    const out = text(renderFlow(flow(), 90, 26));
+    expect(out).toContain("Just run agents");
+    expect(out).toContain("Agents, wired to my issue tracker");
+    expect(out).toContain("I'll do it myself");
+    expect(out).toContain("2 steps, about a minute");
+  });
+
+  test("the intent cursor marks the selected row", () => {
+    const f = flow();
+    const first = lines(renderFlow(f, 90, 26)).findIndex((l) => l.includes("▸"));
+    f.moveIntent(1);
+    const second = lines(renderFlow(f, 90, 26)).findIndex((l) => l.includes("▸"));
+    expect(second).toBeGreaterThan(first);
+  });
+
+  test("the page title and step label both appear", () => {
+    const f = flow();
+    f.chooseIntent("solo");
+    const out = text(renderFlow(f, 90, 26));
+    expect(out).toContain("Where your code lives");
+    expect(out).toContain("Step 1 of 2");
+  });
+
+  test("welcome carries no step label", () => {
+    expect(text(renderFlow(flow(), 90, 26))).not.toContain("Step 1 of");
+  });
+
+  test("the projects page says so when nothing is configured", () => {
+    const f = flow();
+    f.chooseIntent("solo");
+    expect(text(renderFlow(f, 90, 26, { projectDirs: [] }))).toContain("Nothing yet.");
+  });
+
+  test("the projects page lists configured directories", () => {
+    const f = flow();
+    f.chooseIntent("solo");
+    const out = text(renderFlow(f, 90, 26, { projectDirs: ["~/Code/personal", "~/work"] }));
+    expect(out).toContain("~/Code/personal");
+    expect(out).toContain("~/work");
+  });
+
+  test("the agents page renders its write list from the targets it is given", () => {
+    const f = flow();
+    f.chooseIntent("solo");
+    f.next();
+    const out = text(renderFlow(f, 90, 30, {
+      writeTargets: ["/custom/claude/settings.json", "/custom/codex/config.toml"],
+    }));
+    expect(out).toContain("Will write to");
+    expect(out).toContain("/custom/claude/settings.json");
+    expect(out).toContain("/custom/codex/config.toml");
+  });
+
+  test("no agents reads as honest, not as a failure", () => {
+    const f = flow({ agentsPresent: [], agentsStale: [] });
+    f.chooseIntent("solo");
+    f.next();
+    const out = text(renderFlow(f, 90, 26));
+    expect(out).toContain("No coding agents found");
+    expect(out).toContain("jmux works fine without one");
+  });
+
+  // Every one of these strings is text that lands raw on the frame today.
+  test("install results render as a table, not as printed output", () => {
+    const f = flow();
+    f.chooseIntent("solo");
+    f.next();
+    const out = text(renderFlow(f, 90, 30, {
+      reports: [
+        { label: "Claude Code", kind: "installed", notes: [] },
+        { label: "hunk-review skill", kind: "skipped", notes: ["hunk not installed"] },
+      ],
+    }));
+    expect(out).toContain("Claude Code");
+    expect(out).toContain("set up");
+    expect(out).toContain("hunk not installed");
+  });
+
+  test("the finish page ticks what was achieved", () => {
+    const f = flow();
+    f.chooseIntent("solo");
+    f.next(); f.next();
+    const out = text(renderFlow(f, 90, 26, { achievements: ["Two projects — jmux, hunk"] }));
+    expect(out).toContain("You're set up");
+    expect(out).toContain("Two projects — jmux, hunk");
+    expect(out).toContain("✓");
+  });
+
+  test("a busy action says so", () => {
+    const f = flow();
+    f.chooseIntent("tracker");
+    f.next(); f.next();
+    expect(text(renderFlow(f, 90, 26, { busy: "checking…" }))).toContain("checking…");
+  });
+});
+
+describe("renderFlow — the map", () => {
+  test("lists every step with a word rather than a bare glyph", () => {
+    const f = flow({ projectCount: 2 });
+    f.chooseIntent("solo");
+    f.zoomOut();
+    const out = text(renderFlow(f, 90, 26));
+    expect(out).toContain("Where your code lives");
+    expect(out).toContain("2 projects");
+    expect(out).toContain("Letting jmux see your agents");
+  });
+
+  test("an unavailable step still says what it is waiting for", () => {
+    const f = flow();
+    f.chooseIntent("solo");
+    f.zoomOut();
+    expect(text(renderFlow(f, 90, 26))).toContain("needs a tracker");
+  });
+
+  test("only satisfied rows carry a tick", () => {
+    const f = flow({ projectCount: 0 });
+    f.chooseIntent("solo");
+    f.zoomOut();
+    const projectRow = lines(renderFlow(f, 90, 26))
+      .find((l) => l.includes("Where your code lives"))!;
+    expect(projectRow).not.toContain("✓");
+  });
+});
