@@ -912,15 +912,20 @@ async function preflight(): Promise<void> {
   const hasBrew = isMac && hasCommand(["brew", "--version"]);
   const hasApt = !isMac && hasCommand(["apt", "--version"]);
 
-  console.log(`\njmux requires ${missing.join(" and ")} to run.\n`);
+  // Plain stdout, deliberately: there is no alt screen yet, and on a clean
+  // machine this may have to install tmux before jmux can run at all. What it
+  // can be is the first step of one flow rather than an error report — the
+  // person reading this has just installed jmux and wants to use it.
+  console.log(`\nWelcome to jmux.\n`);
+  console.log("It runs several coding agents at once, each in its own tmux session,");
+  console.log(`so it needs ${missing.join(" and ")} before it can start.\n`);
 
   if (hasBrew || hasApt) {
     const pm = hasBrew ? "brew" : "sudo apt";
     const installCmd = `${pm} install ${missing.join(" ")}`;
-    console.log(`Install with:\n\n  ${installCmd}\n`);
+    console.log(`  ${installCmd}\n`);
 
-    // Prompt to install
-    process.stdout.write("Install now? [Y/n] ");
+    process.stdout.write("Run that now, and carry on into jmux? [Y/n] ");
     const response = await new Promise<string>((resolve) => {
       process.stdin.setRawMode?.(false);
       process.stdin.resume();
@@ -938,23 +943,23 @@ async function preflight(): Promise<void> {
           : ["sudo", "apt-get", "install", "-y", ...missing];
         const result = Bun.spawnSync(args, { stdout: "inherit", stderr: "inherit" });
         if (result.exitCode !== 0) {
-          console.error("\nInstallation failed. Please install manually and try again.");
+          console.error(`\nThat didn't work. Install ${missing.join(" and ")} yourself, then run jmux again.`);
           process.exit(1);
         }
       } catch {
-        console.error("\nInstallation failed. Please install manually and try again.");
+        console.error(`\nThat didn't work. Install ${missing.join(" and ")} yourself, then run jmux again.`);
         process.exit(1);
       }
-      console.log("\nDependencies installed. Starting jmux...\n");
+      console.log("\nDone. Starting jmux — it will walk you through the rest.\n");
       return;
     }
   } else {
     // No package manager detected — just show instructions
     if (isMac) {
-      console.log("Install Homebrew first: https://brew.sh");
-      console.log(`Then run: brew install ${missing.join(" ")}`);
+      console.log("Install Homebrew first — https://brew.sh — then run:");
+      console.log(`  brew install ${missing.join(" ")}`);
     } else {
-      console.log(`Install with your package manager, e.g.:`);
+      console.log("Install it with your package manager, then run jmux again:");
       console.log(`  apt install ${missing.join(" ")}`);
       console.log(`  dnf install ${missing.join(" ")}`);
       console.log(`  pacman -S ${missing.join(" ")}`);
