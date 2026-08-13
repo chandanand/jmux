@@ -62,7 +62,7 @@ import { buildGridHiddenCommands } from "./cli/session";
 import type { CellAttrs } from "./cell-grid";
 import { createGrid } from "./cell-grid";
 import type { Modal } from "./modal";
-import { rebuildModalAttrs } from "./modal";
+import { rebuildModalAttrs, resizeOrClose } from "./modal";
 import { rebuildChromeTokens } from "./chrome-tokens";
 import {
   theme,
@@ -10470,7 +10470,11 @@ themeRequeryInterval = setInterval(() => {
 // --- Resize ---
 
 process.on("SIGWINCH", () => {
-  if (activeModal) {
+  // A modal that can re-lay out keeps its state; one that cannot is closed,
+  // exactly as it always was. `closeModal()` rather than the bare `close()`
+  // resizeOrClose already performed, because it also clears the result
+  // callback and hands input routing back to whatever still claims it.
+  if (resizeOrClose(activeModal, process.stdout.columns || 80, process.stdout.rows || 24) === "closed") {
     closeModal();
   }
   // A terminal resize invalidates the geometry the drag was hit-tested

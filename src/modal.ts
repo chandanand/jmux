@@ -19,6 +19,38 @@ export interface Modal {
   getCursorPosition(): { row: number; col: number } | null;
   handleInput(data: string): ModalAction;
   close(): void;
+  /**
+   * Re-lay out for a new terminal size, instead of being closed by SIGWINCH.
+   *
+   * Every modal sizes itself at open, which is why the resize handler closes
+   * the active one: its geometry is stale and there is nothing to preserve. A
+   * modal that is a *flow* is the exception — closing it discards every step
+   * behind you and any half-typed value, on nothing more than a window drag.
+   *
+   * Optional, so every existing modal keeps today's behaviour untouched and
+   * only a surface that has state worth keeping opts in.
+   */
+  onResize?(cols: number, rows: number): void;
+}
+
+/**
+ * What SIGWINCH should do with the active modal.
+ *
+ * Extracted so the rule is testable: the handler itself lives in main.ts,
+ * which no test can import.
+ */
+export function resizeOrClose(
+  modal: Modal | null,
+  cols: number,
+  rows: number,
+): "none" | "resized" | "closed" {
+  if (!modal) return "none";
+  if (modal.onResize) {
+    modal.onResize(cols, rows);
+    return "resized";
+  }
+  modal.close();
+  return "closed";
 }
 
 // --- Shared color attrs ---
