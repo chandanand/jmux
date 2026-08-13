@@ -607,6 +607,14 @@ byte-by-byte makes a lone `\x1b` read as Escape.
 
 ## 19. Known limits, stated
 
+- **The team page explains but does not route.** It is the one step that cannot
+  be completed inside the flow: it renders its prose and its `↵` is inert.
+  Deliberately *not* advertised — its action bar offers only `→ ← esc`, so no
+  key silently does nothing — but a user reaching it must attach the team from
+  the Projects screen. The routing shape wants confirming against
+  `ProjectConfig.teamId` and the tracker's team list before it is wired, and
+  inventing a mutation path to close the gap on paper would have been worse
+  than naming it. This is the first thing to finish.
 - **Existing users never see the flow naturally.** It opens on
   `configStore.ensureExists()` — an absent `config.json`. Deliberate (§2), but
   it means the real audience is reached only through the palette and toolbar dot.
