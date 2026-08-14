@@ -7,7 +7,7 @@ import { renderFlow, wrapProse, GLYPHS, BOTTOM_RESERVED_ROWS } from "../onboardi
 
 const facts: SetupFacts = {
   agentsPresent: ["Claude Code"], agentsStale: ["Claude Code"], skillCurrent: false,
-  namingConfigured: false, namingAvailable: ["claude"],
+  namingConfigured: false, namingDeclined: false, namingAvailable: ["claude"],
   trackerType: "linear", trackerAuthed: false, trackerDeclined: false,
   projectCount: 0, attachedTeamCount: 0, workflowTabCount: 0, hunkInstalled: false,
 };

@@ -14,7 +14,7 @@ import { deriveStatus, type SetupStatus } from "./status";
  */
 const EMPTY_STATUS: SetupStatus = deriveStatus({
   agentsPresent: [], agentsStale: [], skillCurrent: false,
-  namingConfigured: false, namingAvailable: [],
+  namingConfigured: false, namingDeclined: false, namingAvailable: [],
   trackerType: null, trackerAuthed: false, trackerDeclined: false,
   projectCount: 0, attachedTeamCount: 0, workflowTabCount: 0, hunkInstalled: false,
 });

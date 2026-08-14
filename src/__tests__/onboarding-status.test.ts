@@ -9,6 +9,7 @@ const base: SetupFacts = {
   agentsStale: [],
   skillCurrent: false,
   namingConfigured: false,
+  namingDeclined: false,
   namingAvailable: [],
   trackerType: null,
   trackerAuthed: false,
@@ -135,5 +136,43 @@ describe("deriveStatus — outstanding", () => {
   test("the facts travel with the status, so a page need not be handed both", () => {
     const s = deriveStatus({ ...base, hunkInstalled: true });
     expect(s.facts.hunkInstalled).toBe(true);
+  });
+});
+
+describe("deriveStatus — naming", () => {
+  const withClaude = { ...base, namingAvailable: ["claude"] };
+
+  test("available but unconfigured is pending", () => {
+    expect(deriveStatus(withClaude).steps.naming.state).toBe("pending");
+  });
+
+  test("configured is satisfied", () => {
+    expect(deriveStatus({ ...withClaude, namingConfigured: true }).steps.naming.state)
+      .toBe("satisfied");
+  });
+
+  // Choosing "leave them unnamed" stores no command, which on its own is
+  // indistinguishable from never having answered — so without the declaration
+  // the step stays outstanding and the toolbar dot nags about a preference the
+  // user has already expressed, with no way to satisfy it.
+  test("declining is an answer, and closes the step", () => {
+    const s = deriveStatus({ ...withClaude, namingDeclined: true });
+    expect(s.steps.naming.state).toBe("unavailable");
+    expect(s.steps.naming.summary).toBe("not for me");
+  });
+
+  test("declining stops it raising the toolbar dot", () => {
+    const nagging = deriveStatus({ ...withClaude, projectCount: 1, trackerDeclined: true });
+    expect(nagging.outstanding).toBe(true);
+    const answered = deriveStatus({
+      ...withClaude, projectCount: 1, trackerDeclined: true, namingDeclined: true,
+    });
+    expect(answered.outstanding).toBe(false);
+  });
+
+  test("no agent CLI is unavailable, and says which", () => {
+    const s = deriveStatus(base);
+    expect(s.steps.naming.state).toBe("unavailable");
+    expect(s.steps.naming.summary).toBe("needs an agent CLI");
   });
 });

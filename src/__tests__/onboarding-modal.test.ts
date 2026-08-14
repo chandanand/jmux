@@ -5,7 +5,7 @@ import type { InstallReport } from "../agent-hooks/registry";
 
 const facts: SetupFacts = {
   agentsPresent: ["Claude Code"], agentsStale: ["Claude Code"], skillCurrent: false,
-  namingConfigured: false, namingAvailable: ["claude"],
+  namingConfigured: false, namingDeclined: false, namingAvailable: ["claude"],
   trackerType: "linear", trackerAuthed: false, trackerDeclined: false,
   projectCount: 0, attachedTeamCount: 0, workflowTabCount: 0, hunkInstalled: false,
 };
@@ -350,6 +350,26 @@ describe("OnboardingModal — naming", () => {
     expect(modal.hasChild()).toBe(false);
     expect(calls.setNaming).toEqual([]);
     expect(modal.isOpen()).toBe(true);
+  });
+
+  // A hand-written command has no preset row, so nothing ticked and picking a
+  // preset replaced it without a word.
+  test("a custom command is listed, so it can be seen and kept", () => {
+    const { modal, calls } = onProjects({
+      namingOptions: () => [
+        { id: "custom", label: "my-namer --fast", note: "your own command — keep it" },
+        { id: "claude", label: "claude", note: "Around 11s." },
+        { id: "off", label: "Leave sessions unnamed", note: "the branch name" },
+      ],
+      namingChosen: () => "custom",
+    });
+    modal.handleInput(RIGHT); modal.handleInput(RIGHT);
+    const text = modal.getGrid(90).cells.map((r) => r.map((c) => c.char).join("")).join("\n");
+    expect(text).toContain("my-namer --fast");
+
+    modal.handleInput("\r");
+    modal.handleInput("\r");
+    expect(calls.setNaming).toEqual(["custom"]);
   });
 
   test("no available command means no picker at all", () => {

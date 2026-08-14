@@ -5,7 +5,7 @@ import { pagesFor, INTENT_CHOICES, MAP_STEPS } from "../onboarding/pages";
 
 const facts: SetupFacts = {
   agentsPresent: ["Claude Code"], agentsStale: ["Claude Code"], skillCurrent: false,
-  namingConfigured: false, namingAvailable: ["claude"],
+  namingConfigured: false, namingDeclined: false, namingAvailable: ["claude"],
   trackerType: "linear", trackerAuthed: false, trackerDeclined: false,
   projectCount: 0, attachedTeamCount: 0, workflowTabCount: 0, hunkInstalled: false,
 };

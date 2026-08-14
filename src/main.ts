@@ -6198,6 +6198,7 @@ function buildSetupFacts(): SetupFacts {
     // counts as current rather than as work outstanding.
     skillCurrent: skill === "current" || skill === "symlink",
     namingConfigured: (configStore.config.sessionTitle?.command?.length ?? 0) > 0,
+    namingDeclined: configStore.config.setup?.sessionTitle === "never",
     // Only presets whose binary is actually here. Offering a command that
     // cannot run is the "confident wrong answer" the preset table itself
     // refuses to ship.
@@ -6322,8 +6323,20 @@ function buildOnboardingPort(): OnboardingPort {
       const available = TITLE_PRESETS.filter(
         (preset) => preset.command[0] !== undefined && Bun.which(preset.command[0]) !== null,
       );
-      if (available.length === 0) return [];
+      const current = configStore.config.sessionTitle?.command;
+      // A hand-written command is listed so it can be seen and kept. Without a
+      // row for it nothing ticks, and choosing a preset silently replaces a
+      // command the user wrote themselves.
+      const custom = presetForCommand(current) === TITLE_CUSTOM
+        ? [{
+            id: TITLE_CUSTOM,
+            label: formatTitleCommand(current),
+            note: "your own command — keep it",
+          }]
+        : [];
+      if (available.length === 0 && custom.length === 0) return [];
       return [
+        ...custom,
         ...available.map((preset) => ({
           id: preset.id,
           label: preset.command[0]!,
@@ -6336,13 +6349,23 @@ function buildOnboardingPort(): OnboardingPort {
     namingChosen: () => presetForCommand(configStore.config.sessionTitle?.command),
 
     setNaming: (id) => {
+      // Keeping what is already there, rather than resolving `custom` to
+      // nothing and wiping a command the user wrote by hand.
+      if (id === TITLE_CUSTOM) {
+        configStore.setSetupIntent("sessionTitle", null);
+        return;
+      }
+      // "Leave them unnamed" stores no command, which on its own is
+      // indistinguishable from never having answered — so the step would stay
+      // outstanding and keep nagging. The declaration is what closes it, and
+      // it is reversible from the same picker.
+      configStore.setSetupIntent("sessionTitle", id === TITLE_OFF ? "never" : null);
       // Stores full argv, never the preset's name — the row reads back which
       // preset is in force by matching the stored array, so config.json keeps
       // exactly the shape resolveTitleConfig already validates.
-      const command = commandForPreset(id);
       configStore.set("sessionTitle", {
         ...configStore.config.sessionTitle,
-        command,
+        command: commandForPreset(id),
       });
     },
 

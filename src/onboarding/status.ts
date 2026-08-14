@@ -49,6 +49,8 @@ export interface SetupFacts {
   skillCurrent: boolean;
   /** Whether `sessionTitle.command` is configured. */
   namingConfigured: boolean;
+  /** `setup.sessionTitle === "never"` — declared, and undetectable otherwise. */
+  namingDeclined: boolean;
   /** Preset ids whose binary is actually on PATH — only these are offered. */
   namingAvailable: string[];
   trackerType: string | null;
@@ -95,9 +97,11 @@ export function deriveStatus(facts: SetupFacts): SetupStatus {
   // raise the toolbar dot on a machine that can never satisfy it.
   const naming: StepStatus = facts.namingConfigured
     ? { state: "satisfied", summary: "on" }
-    : facts.namingAvailable.length === 0
-      ? { state: "unavailable", summary: "needs an agent CLI" }
-      : { state: "pending", summary: "not yet" };
+    : facts.namingDeclined
+      ? { state: "unavailable", summary: "not for me" }
+      : facts.namingAvailable.length === 0
+        ? { state: "unavailable", summary: "needs an agent CLI" }
+        : { state: "pending", summary: "not yet" };
 
   const tracker: StepStatus = facts.trackerAuthed
     ? { state: "satisfied", summary: facts.trackerType ?? "connected" }

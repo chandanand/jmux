@@ -136,6 +136,15 @@ export interface JmuxConfig {
      */
     tracker?: "never";
     agentHooks?: "never";
+    /**
+     * "I don't want my sessions named by a model."
+     *
+     * Needed for the same reason the two above are: choosing "leave them
+     * unnamed" stores *no* command, which is indistinguishable from never
+     * having answered — so without this the step stays outstanding and the
+     * toolbar dot nags about a preference the user has already expressed.
+     */
+    sessionTitle?: "never";
   };
   /**
    * Which tmux config jmux sources on the user's behalf, between its own
@@ -963,7 +972,7 @@ export class ConfigStore {
    * `null` is how it is taken back. A preference you cannot reverse from the
    * same place you set it is worse than the nag it replaced.
    */
-  setSetupIntent(key: "tracker" | "agentHooks", value: "never" | null): void {
+  setSetupIntent(key: "tracker" | "agentHooks" | "sessionTitle", value: "never" | null): void {
     const setup = { ...this.data.setup };
     if (value === null) delete setup[key];
     else setup[key] = value;
