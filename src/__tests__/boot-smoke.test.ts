@@ -111,7 +111,15 @@ describe("jmux refuses a corrupt config", () => {
     try {
       const proc = Bun.spawnSync(
         ["bun", "run", join(import.meta.dir, "..", "main.ts"), "--config", cfg],
-        { stdout: "pipe", stderr: "pipe" },
+        {
+          stdout: "pipe",
+          stderr: "pipe",
+          // jmux refuses to nest, and that refusal is also a nonzero exit with
+          // a diagnostic — so inheriting these from a developer running the
+          // suite inside jmux satisfies the exit-code assertion for the wrong
+          // reason and fails only on the message.
+          env: { ...process.env, JMUX: "", TMUX: "", TMUX_PANE: "" },
+        },
       );
       expect(proc.exitCode).not.toBe(0);
       const err = new TextDecoder().decode(proc.stderr);
