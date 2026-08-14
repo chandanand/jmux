@@ -6375,10 +6375,21 @@ function buildOnboardingPort(): OnboardingPort {
       // Stores full argv, never the preset's name — the row reads back which
       // preset is in force by matching the stored array, so config.json keeps
       // exactly the shape resolveTitleConfig already validates.
-      configStore.set("sessionTitle", {
-        ...configStore.config.sessionTitle,
-        command: commandForPreset(id),
-      });
+      const command = commandForPreset(id);
+      const existing = configStore.config.sessionTitle;
+      if (command) {
+        configStore.set("sessionTitle", { ...existing, command });
+        return;
+      }
+      // Turning it off drops the command and keeps any timeout or budget the
+      // user set. If that leaves nothing, the key goes rather than being
+      // written as `{}` — config.json is sparse by key presence, and a key
+      // asserting nothing is noise in a file people read.
+      const { command: _dropped, ...rest } = existing ?? {};
+      configStore.set(
+        "sessionTitle",
+        Object.keys(rest).length > 0 ? rest : undefined,
+      );
     },
 
     trackerName: () =>
