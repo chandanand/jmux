@@ -6346,7 +6346,19 @@ function buildOnboardingPort(): OnboardingPort {
       ];
     },
 
-    namingChosen: () => presetForCommand(configStore.config.sessionTitle?.command),
+    /**
+     * Which row is in force, or "" when the step has not been answered.
+     *
+     * `presetForCommand(undefined)` is `off`, so ticking it directly showed
+     * "leave sessions unnamed" as a deliberate choice on a step the map was
+     * simultaneously reporting as `not yet` — the same fact, two surfaces, two
+     * answers. A tick has to mean somebody chose.
+     */
+    namingChosen: () => {
+      const command = configStore.config.sessionTitle?.command;
+      if ((command?.length ?? 0) > 0) return presetForCommand(command);
+      return configStore.config.setup?.sessionTitle === "never" ? TITLE_OFF : "";
+    },
 
     setNaming: (id) => {
       // Keeping what is already there, rather than resolving `custom` to

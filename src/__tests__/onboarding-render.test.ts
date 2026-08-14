@@ -390,3 +390,35 @@ describe("the naming step", () => {
     expect(lines(renderFlow(f, 90, 26)).at(-1)!).not.toContain("↵ choose");
   });
 });
+
+describe("the naming page ticks only a real choice", () => {
+  const opts = [
+    { id: "claude", label: "claude", note: "Around 11s." },
+    { id: "off", label: "Leave sessions unnamed", note: "the branch name" },
+  ];
+  const naming = () => {
+    const f = flow();
+    f.chooseIntent("solo");
+    f.openStep("naming");
+    return f;
+  };
+
+  // presetForCommand(undefined) is "off", so ticking it directly showed
+  // "leave sessions unnamed" as a deliberate choice on a step the map was
+  // reporting as "not yet" — the same fact with two answers.
+  test("nothing is ticked before the step is answered", () => {
+    const painted = lines(renderFlow(naming(), 90, 26, {
+      namingOptions: opts, namingChosen: "",
+    }));
+    for (const row of painted.filter((l) => l.includes("Leave sessions unnamed") || l.includes("claude"))) {
+      expect(row).not.toContain("✓");
+    }
+  });
+
+  test("declining explicitly does tick", () => {
+    const painted = lines(renderFlow(naming(), 90, 26, {
+      namingOptions: opts, namingChosen: "off",
+    }));
+    expect(painted.find((l) => l.includes("Leave sessions unnamed"))!).toContain("✓");
+  });
+});
