@@ -8,6 +8,8 @@ const base: SetupFacts = {
   agentsPresent: [],
   agentsStale: [],
   skillCurrent: false,
+  namingConfigured: false,
+  namingAvailable: [],
   trackerType: null,
   trackerAuthed: false,
   trackerDeclined: false,

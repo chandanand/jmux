@@ -5,6 +5,7 @@ import { pagesFor, INTENT_CHOICES, MAP_STEPS } from "../onboarding/pages";
 
 const facts: SetupFacts = {
   agentsPresent: ["Claude Code"], agentsStale: ["Claude Code"], skillCurrent: false,
+  namingConfigured: false, namingAvailable: ["claude"],
   trackerType: "linear", trackerAuthed: false, trackerDeclined: false,
   projectCount: 0, attachedTeamCount: 0, workflowTabCount: 0, hunkInstalled: false,
 };
@@ -15,12 +16,12 @@ const ids = (f: OnboardingFlow) => f.pages().map((p) => p.id);
 describe("pagesFor", () => {
   test("solo is welcome, the two steps, done", () => {
     expect(pagesFor("solo", status).map((p) => p.id))
-      .toEqual(["welcome", "projects", "agents", "done"]);
+      .toEqual(["welcome", "projects", "agents", "naming", "done"]);
   });
 
   test("tracker adds its three pages before done", () => {
     expect(pagesFor("tracker", status).map((p) => p.id))
-      .toEqual(["welcome", "projects", "agents", "tracker", "team", "workflow", "done"]);
+      .toEqual(["welcome", "projects", "agents", "naming", "tracker", "team", "workflow", "done"]);
   });
 
   test("manual is welcome alone — nothing configured, nothing claimed", () => {
@@ -42,7 +43,7 @@ describe("pagesFor", () => {
 
   test("welcome and done are not steps", () => {
     expect(pagesFor("solo", status).filter((p) => p.counts).map((p) => p.id))
-      .toEqual(["projects", "agents"]);
+      .toEqual(["projects", "agents", "naming"]);
   });
 
   test("every page has a title and at least one paragraph", () => {
@@ -172,16 +173,16 @@ describe("OnboardingFlow — step numbering", () => {
   test("counts only real steps, and matches the promise", () => {
     const f = flow();
     f.chooseIntent("solo");
-    expect(f.stepLabel()).toBe("Step 1 of 2");
+    expect(f.stepLabel()).toBe("Step 1 of 3");
     f.next();
-    expect(f.stepLabel()).toBe("Step 2 of 2");
+    expect(f.stepLabel()).toBe("Step 2 of 3");
   });
 
   test("welcome and done carry no step label", () => {
     const f = flow();
     expect(f.stepLabel()).toBeNull();
     f.chooseIntent("solo");
-    f.next(); f.next();
+    for (let i = 0; i < 10; i++) f.next();
     expect(f.currentPage().id).toBe("done");
     expect(f.stepLabel()).toBeNull();
   });
@@ -213,7 +214,7 @@ describe("OnboardingFlow — restatus", () => {
   test("keeps the cursor on its page when the world changes underneath", () => {
     const f = flow();
     f.chooseIntent("tracker");
-    f.next(); f.next();
+    f.openStep("tracker");
     expect(f.currentPage().id).toBe("tracker");
     f.setStatus(deriveStatus({ ...facts, trackerAuthed: true }));
     expect(f.currentPage().id).toBe("tracker");
@@ -258,6 +259,6 @@ describe("the map lists every step, and every listed step opens", () => {
     f.chooseIntent("solo");
     f.zoomOut();
     f.openStep("workflow");
-    expect(f.stepLabel()).toBe("Step 5 of 5");
+    expect(f.stepLabel()).toBe("Step 6 of 6");
   });
 });

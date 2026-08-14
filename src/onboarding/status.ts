@@ -12,7 +12,7 @@
  * what makes every state below reachable in a test.
  */
 
-export type StepId = "projects" | "agents" | "tracker" | "team" | "workflow";
+export type StepId = "projects" | "agents" | "naming" | "tracker" | "team" | "workflow";
 
 export type StepState =
   /** Already true on this machine. */
@@ -47,6 +47,10 @@ export interface SetupFacts {
   /** Of those, the ones whose hooks are absent or out of date. */
   agentsStale: string[];
   skillCurrent: boolean;
+  /** Whether `sessionTitle.command` is configured. */
+  namingConfigured: boolean;
+  /** Preset ids whose binary is actually on PATH — only these are offered. */
+  namingAvailable: string[];
   trackerType: string | null;
   trackerAuthed: boolean;
   /** `setup.tracker === "never"` — declared intent, which nothing can detect. */
@@ -86,6 +90,15 @@ export function deriveStatus(facts: SetupFacts): SetupStatus {
             : "skill not installed",
         };
 
+  // The naming presets are the agent CLIs, so a machine with none installed
+  // has nothing to offer here — unavailable rather than pending, so it cannot
+  // raise the toolbar dot on a machine that can never satisfy it.
+  const naming: StepStatus = facts.namingConfigured
+    ? { state: "satisfied", summary: "on" }
+    : facts.namingAvailable.length === 0
+      ? { state: "unavailable", summary: "needs an agent CLI" }
+      : { state: "pending", summary: "not yet" };
+
   const tracker: StepStatus = facts.trackerAuthed
     ? { state: "satisfied", summary: facts.trackerType ?? "connected" }
     : facts.trackerDeclined
@@ -111,7 +124,7 @@ export function deriveStatus(facts: SetupFacts): SetupStatus {
     plural(facts.workflowTabCount, "stage", "stages"),
   );
 
-  const steps: Record<StepId, StepStatus> = { projects, agents, tracker, team, workflow };
+  const steps: Record<StepId, StepStatus> = { projects, agents, naming, tracker, team, workflow };
   return {
     steps,
     outstanding: Object.values(steps).some((s) => s.state === "pending"),

@@ -26,12 +26,23 @@ export interface InputModalConfig {
    * not anything the user typed.
    */
   secret?: boolean;
+  /**
+   * Shown in place of the subheader when Enter is pressed on an empty buffer.
+   *
+   * Without it that keypress is silently consumed — the field sits there
+   * looking ready and the key appears dead, which is indistinguishable from
+   * the app having hung. Opt-in, so every existing caller keeps today's
+   * behaviour.
+   */
+  requiredHint?: string;
 }
 
 export class InputModal {
   private _open = false;
   private value: string;
   private config: InputModalConfig;
+  /** Set when Enter was pressed on an empty buffer; cleared on the next key. */
+  private nagging = false;
 
   constructor(config: InputModalConfig) {
     this.config = config;
@@ -41,6 +52,7 @@ export class InputModal {
   open(): void {
     this._open = true;
     this.value = this.config.value ?? "";
+    this.nagging = false;
   }
 
   close(): void { this._open = false; }
@@ -66,7 +78,12 @@ export class InputModal {
   handleInput(data: string): ModalAction {
     if (data === "\x1b") return { type: "closed" };
     if (data === "\r") {
-      if (this.value.length === 0) return { type: "consumed" };
+      if (this.value.length === 0) {
+        // Refusing an empty commit is right; refusing it in silence is the
+        // failure. Say so where the user is already looking.
+        if (this.config.requiredHint) this.nagging = true;
+        return { type: "consumed" };
+      }
       return { type: "result", value: this.value };
     }
     // Alt+Backspace / Cmd+Backspace / Ctrl-U: clear entire input
@@ -80,6 +97,7 @@ export class InputModal {
     }
     if (data.length === 1 && data >= " " && data <= "~") {
       this.value += data;
+      this.nagging = false;
       return { type: "consumed" };
     }
     return { type: "consumed" };
@@ -97,7 +115,10 @@ export class InputModal {
     writeString(grid, 0, 2, this.config.header, HEADER_ATTRS);
 
     if (hasSubheader) {
-      writeString(grid, 1, 2, this.config.subheader!, SUBHEADER_ATTRS);
+      const line = this.nagging && this.config.requiredHint
+        ? this.config.requiredHint
+        : this.config.subheader!;
+      writeString(grid, 1, 2, line, SUBHEADER_ATTRS);
     }
 
     const inputRow = hasSubheader ? 2 : 1;

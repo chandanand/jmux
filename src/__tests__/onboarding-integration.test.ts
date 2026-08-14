@@ -111,7 +111,7 @@ describe.skipIf(!TMUX)("onboarding, under a real pty", () => {
 
       await session.press("\r");
       await session.waitFor("Where your code lives");
-      expect(session.frame()).toContain("Step 1 of 2");
+      expect(session.frame()).toContain("Step 1 of 3");
 
       await session.press("\x1b[C");
       await session.waitFor("Letting jmux see your agents");
@@ -147,10 +147,11 @@ describe.skipIf(!TMUX)("onboarding, under a real pty", () => {
       await session.waitFor("Where your code lives");
       await session.press("\x1b[C");
       await session.press("\x1b[C");
+      await session.press("\x1b[C");
       await session.waitFor("Connect your issue tracker");
 
       await session.press("\r");
-      await session.waitFor("Paste your token");
+      await session.waitFor("API key");
       session.write("abc123");
       await Bun.sleep(300);
 
@@ -161,7 +162,7 @@ describe.skipIf(!TMUX)("onboarding, under a real pty", () => {
       // collector and its draft survive a window drag.
       session.resize(100, 32);
       await Bun.sleep(1500);
-      expect(session.frame()).toContain("Paste your token");
+      expect(session.frame()).toContain("API key");
     } finally {
       session.dispose();
     }

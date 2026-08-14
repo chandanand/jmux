@@ -12,7 +12,7 @@ import type { SetupStatus, StepId } from "./status";
 export type Intent = "solo" | "tracker" | "manual";
 
 export type PageId =
-  | "welcome" | "projects" | "agents"
+  | "welcome" | "projects" | "agents" | "naming"
   | "tracker" | "team" | "workflow" | "done";
 
 export interface IntentChoice {
@@ -33,13 +33,13 @@ export const INTENT_CHOICES: readonly IntentChoice[] = [
   {
     id: "solo",
     label: "Just run agents",
-    cost: "2 steps, about a minute",
+    cost: "3 steps, about a minute",
     blurb: "Somewhere to work, and agent status in the sidebar.",
   },
   {
     id: "tracker",
     label: "Agents, wired to my issue tracker",
-    cost: "5 steps",
+    cost: "6 steps",
     blurb: "All of the above, plus start work straight from a ticket.",
   },
   {
@@ -75,11 +75,11 @@ export interface PageDef {
  * on and the row that is drawn cannot be different rows.
  */
 export const MAP_STEPS: readonly StepId[] = [
-  "projects", "agents", "tracker", "team", "workflow",
+  "projects", "agents", "naming", "tracker", "team", "workflow",
 ];
 
-const SOLO_STEPS: PageId[] = ["projects", "agents"];
-const TRACKER_STEPS: PageId[] = ["projects", "agents", "tracker", "team", "workflow"];
+const SOLO_STEPS: PageId[] = ["projects", "agents", "naming"];
+const TRACKER_STEPS: PageId[] = ["projects", "agents", "naming", "tracker", "team", "workflow"];
 
 export const PAGES: Record<PageId, PageDef> = {
   welcome: {
@@ -121,14 +121,31 @@ export const PAGES: Record<PageId, PageDef> = {
           ],
   },
 
+  naming: {
+    id: "naming",
+    title: "Naming your sessions",
+    step: "naming",
+    counts: true,
+    body: (status) =>
+      status.facts.namingAvailable.length === 0
+        ? [
+            "Nothing to name with yet — this runs one of your agent CLIs.",
+            "Install Claude Code or Codex and jmux can label each session with a phrase describing the work, instead of leaving you to read branch names.",
+          ]
+        : [
+            "A session called `feat/TRA-412-retry-backoff` tells you less at a glance than “retrying failed webhook deliveries”.",
+            "jmux can ask a small model for that phrase, from the branch, its commits, or the issue the session is linked to. It runs once per session, not per frame, and the name it produces sits in front of the session's real name — which never changes.",
+          ],
+  },
+
   tracker: {
     id: "tracker",
     title: "Connect your issue tracker",
     step: "tracker",
     counts: true,
     body: () => [
-      "With a tracker connected your issues appear in the info panel, and you can start a session from one — branch, worktree and agent, all named after the ticket.",
-      "Verified before it is saved, so a bad paste says so rather than sitting there looking connected.",
+      "jmux talks to Linear. With it connected your issues appear in the info panel, and you can start a session from one — branch, worktree and agent, all named after the ticket.",
+      "It is the only issue tracker jmux speaks to today, so a token for anything else will not connect. Yours is checked before it is saved, rather than sitting there looking connected.",
     ],
   },
 

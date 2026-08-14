@@ -6197,6 +6197,13 @@ function buildSetupFacts(): SetupFacts {
     // A symlink is someone's deliberate wiring and not ours to replace, so it
     // counts as current rather than as work outstanding.
     skillCurrent: skill === "current" || skill === "symlink",
+    namingConfigured: (configStore.config.sessionTitle?.command?.length ?? 0) > 0,
+    // Only presets whose binary is actually here. Offering a command that
+    // cannot run is the "confident wrong answer" the preset table itself
+    // refuses to ship.
+    namingAvailable: TITLE_PRESETS
+      .filter((preset) => preset.command[0] !== undefined && Bun.which(preset.command[0]) !== null)
+      .map((preset) => preset.id),
     trackerType: tracker?.type ?? null,
     trackerAuthed: tracker?.authState === "ok",
     trackerDeclined: configStore.config.setup?.tracker === "never",
@@ -6268,17 +6275,81 @@ function buildOnboardingPort(): OnboardingPort {
 
     installAgents: async () => [...installAllAgents(), ...installSkills()],
 
+    // Rejections are returned rather than toasted: a toast lands in the
+    // toolbar's status chip, which is the wrong end of the screen from the
+    // modal the user is looking at.
     addProjectDir: async (raw) => {
-      const dir = raw.trim().replace(/^~(?=\/|$)/, homedir());
-      if (!dir) return;
+      const typed = raw.trim();
+      const dir = typed.replace(/^~(?=\/|$)/, homedir());
+      if (!dir) return { ok: false, message: "Type a path to add." };
       if (!existsSync(dir)) {
-        showToast(`No such directory: ${raw.trim()}`);
-        return;
+        return { ok: false, message: `No such directory: ${typed}` };
       }
       const dirs = configStore.config.projectDirs ?? [];
       if (!dirs.includes(dir)) configStore.set("projectDirs", [...dirs, dir]);
+      const before = liveProjects(configStore.config.projects ?? []).length;
       await adoptProjectsUnder();
+      const after = liveProjects(configStore.config.projects ?? []).length;
+      // Added, but empty: without this the row appears and nothing else does,
+      // which reads as a half-failure with no explanation.
+      if (after === before) {
+        return { ok: false, message: `Added ${collapseHome(dir)}, but found no git repositories under it.` };
+      }
+      return { ok: true };
     },
+
+    /**
+     * The first candidate that actually exists, as an editable default.
+     *
+     * Offered as a real value rather than placeholder text: dim hint text
+     * sitting where the value goes reads as a filled field, so Enter looks
+     * like it should commit — and an empty commit is refused, so the flow
+     * looks hung. `~` always exists, so there is always something to press
+     * Enter on.
+     */
+    suggestedProjectDir: () => {
+      for (const name of ["Code", "Projects", "src", "work", "dev"]) {
+        const candidate = resolve(homedir(), name);
+        if (existsSync(candidate)) return collapseHome(candidate);
+      }
+      return "~";
+    },
+
+    // Named on screen. Linear is the only issue-tracker adapter jmux has, so
+    // asking for "your token" tells a GitHub Issues user nothing about why
+    // theirs will not work.
+    namingOptions: () => {
+      const available = TITLE_PRESETS.filter(
+        (preset) => preset.command[0] !== undefined && Bun.which(preset.command[0]) !== null,
+      );
+      if (available.length === 0) return [];
+      return [
+        ...available.map((preset) => ({
+          id: preset.id,
+          label: preset.command[0]!,
+          note: preset.note,
+        })),
+        { id: TITLE_OFF, label: "Leave sessions unnamed", note: "the branch name, as today" },
+      ];
+    },
+
+    namingChosen: () => presetForCommand(configStore.config.sessionTitle?.command),
+
+    setNaming: (id) => {
+      // Stores full argv, never the preset's name — the row reads back which
+      // preset is in force by matching the stored array, so config.json keeps
+      // exactly the shape resolveTitleConfig already validates.
+      const command = commandForPreset(id);
+      configStore.set("sessionTitle", {
+        ...configStore.config.sessionTitle,
+        command,
+      });
+    },
+
+    trackerName: () =>
+      adapters.issueTracker?.type ??
+      configStore.config.adapters?.issueTracker?.type ??
+      "Linear",
 
     connectTracker: async (token) => {
       const type =
@@ -6298,7 +6369,6 @@ function buildOnboardingPort(): OnboardingPort {
         },
         verify: () => swapAdapters(configStore.config.adapters ?? {}),
       });
-      if (!result.ok) showToast("That token was rejected — nothing was changed");
       return result;
     },
 
@@ -6324,6 +6394,7 @@ function buildOnboardingPort(): OnboardingPort {
       if (facts.agentsPresent.length > 0 && facts.agentsStale.length === 0) {
         out.push(`${listPhrase(facts.agentsPresent)} report their state`);
       }
+      if (facts.namingConfigured) out.push("Sessions named by a model");
       if (facts.trackerAuthed) out.push(`${facts.trackerType ?? "Tracker"} connected`);
       if (!facts.hunkInstalled) {
         out.push("Diff viewer not installed — npm i -g hunkdiff, then Ctrl-a g");

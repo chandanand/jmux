@@ -67,7 +67,7 @@ export function wrapProse(text: string, cols: number): string[] {
 
 interface Palette {
   title: CellAttrs; body: CellAttrs; dim: CellAttrs;
-  ok: CellAttrs; accent: CellAttrs; ahead: CellAttrs;
+  ok: CellAttrs; accent: CellAttrs; ahead: CellAttrs; warn: CellAttrs;
 }
 
 function palette(): Palette {
@@ -78,6 +78,7 @@ function palette(): Palette {
     ok: { ...tokens.affirmative },
     accent: { ...tokens.accent },
     ahead: { ...tokens.ruleFrame },
+    warn: { ...tokens.attention },
   };
 }
 
@@ -129,6 +130,7 @@ function paintRail(grid: CellGrid, width: number, label: string | null): void {
 const MAP_LABELS: Record<StepId, string> = {
   projects: "Where your code lives",
   agents: "Letting jmux see your agents",
+  naming: "Naming your sessions",
   tracker: "Connect an issue tracker",
   team: "Point a project at a team",
   workflow: "How your work moves",
@@ -139,6 +141,7 @@ const HINTS: Record<PageId | "map", string> = {
   welcome: "↑↓ choose   ↵ start",
   projects: "↵ add a directory   → next   ← back   esc overview",
   agents: "↵ set these up   → next   ← back   esc overview",
+  naming: "↵ choose   → next   ← back   esc overview",
   tracker: "↵ paste a token   → next   ← back   esc overview",
   team: "→ next   ← back   esc overview",
   workflow: "↵ use these   → next   ← back   esc overview",
@@ -202,6 +205,11 @@ export interface RenderExtras {
   achievements?: string[];
   /** Busy message, shown while an async action runs. */
   busy?: string;
+  /** A refusal, drawn on the page that caused it rather than in the toolbar. */
+  notice?: string;
+  /** Naming commands offered, and which one is in force. */
+  namingOptions?: ReadonlyArray<{ id: string; label: string; note: string }>;
+  namingChosen?: string;
   /**
    * Which map row the cursor is on.
    *
@@ -318,6 +326,18 @@ export function renderFlow(
         }
       }
     }
+  } else if (page.id === "naming") {
+    for (const option of extras.namingOptions ?? []) {
+      if (y >= height - BOTTOM_RESERVED_ROWS) break;
+      const chosen = option.id === extras.namingChosen;
+      if (chosen) writeString(grid, y, INSET, CHECK, p.ok);
+      writeString(grid, y, INSET + 3,
+        truncateToCols(option.label, Math.max(1, width - INSET * 2 - 34)),
+        chosen ? p.body : p.dim);
+      const note = truncateToCols(option.note, 30);
+      writeString(grid, y, rightX(width, note, INSET + 6), note, p.dim);
+      y += 1;
+    }
   } else if (page.id === "done") {
     for (const line of extras.achievements ?? []) {
       if (y >= height - BOTTOM_RESERVED_ROWS) break;
@@ -343,9 +363,14 @@ export function renderFlow(
     }
   }
 
-  if (extras.busy && height - BOTTOM_RESERVED_ROWS - 1 > 0) {
+  // A refusal belongs on the page that caused it. Sent to the toolbar's status
+  // chip it is transient, far from a centred modal, and reads as nothing
+  // having happened at all.
+  const footnote = extras.busy ?? extras.notice;
+  if (footnote && height - BOTTOM_RESERVED_ROWS - 1 > 0) {
     writeString(grid, height - BOTTOM_RESERVED_ROWS - 1, INSET,
-      truncateToCols(extras.busy, Math.max(1, width - INSET * 2)), p.accent);
+      truncateToCols(footnote, Math.max(1, width - INSET * 2)),
+      extras.busy ? p.accent : p.warn);
   }
 
   // The bar describes what the keys do *now*, never what the page is for in
@@ -354,8 +379,10 @@ export function renderFlow(
   // action with nothing to act on — a key that silently does nothing being the
   // failure this codebase names most often.
   const installed = page.id === "agents" && (extras.reports?.length ?? 0) > 0;
+  const noAgents = page.id === "agents" && status.facts.agentsPresent.length === 0;
   const nothingToSeed = page.id === "workflow" && !status.facts.trackerAuthed;
-  const hints = installed || nothingToSeed
+  const nothingToName = page.id === "naming" && status.facts.namingAvailable.length === 0;
+  const hints = installed || noAgents || nothingToSeed || nothingToName
     ? "→ next   ← back   esc overview"
     : HINTS[page.id];
   paintActionBar(grid, width, height, hints);

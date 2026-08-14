@@ -5,6 +5,7 @@ import type { InstallReport } from "../agent-hooks/registry";
 
 const facts: SetupFacts = {
   agentsPresent: ["Claude Code"], agentsStale: ["Claude Code"], skillCurrent: false,
+  namingConfigured: false, namingAvailable: ["claude"],
   trackerType: "linear", trackerAuthed: false, trackerDeclined: false,
   projectCount: 0, attachedTeamCount: 0, workflowTabCount: 0, hunkInstalled: false,
 };
@@ -17,14 +18,22 @@ const ESC = "\x1b";
 function makePort(over: Partial<OnboardingPort> = {}) {
   const calls = {
     installAgents: 0, addProjectDir: [] as string[], connectTracker: [] as string[],
-    seedWorkflow: 0, finish: 0, changes: 0,
+    seedWorkflow: 0, finish: 0, changes: 0, setNaming: [] as string[],
   };
   const port: OnboardingPort = {
     getStatus: () => deriveStatus(facts),
     getProjectDirs: () => [],
     agentWriteTargets: () => ["/tmp/claude/settings.json"],
     installAgents: async () => { calls.installAgents += 1; return []; },
-    addProjectDir: async (d) => { calls.addProjectDir.push(d); },
+    addProjectDir: async (d) => { calls.addProjectDir.push(d); return { ok: true }; },
+    suggestedProjectDir: () => "~/Code",
+    trackerName: () => "Linear",
+    namingOptions: () => [
+      { id: "claude", label: "claude", note: "Around 11s." },
+      { id: "off", label: "Leave sessions unnamed", note: "the branch name" },
+    ],
+    namingChosen: () => "off",
+    setNaming: (id) => { calls.setNaming.push(id); },
     connectTracker: async (t) => { calls.connectTracker.push(t); return { ok: true }; },
     seedWorkflow: () => { calls.seedWorkflow += 1; },
     finish: () => { calls.finish += 1; },
@@ -93,7 +102,7 @@ describe("OnboardingModal — intent", () => {
     modal.open();
     modal.handleInput(DOWN);
     modal.handleInput("\r");
-    modal.handleInput(RIGHT); modal.handleInput(RIGHT);
+    for (let i = 0; i < 3; i++) modal.handleInput(RIGHT);
     expect(modal.currentPageId()).toBe("tracker");
   });
 
@@ -116,8 +125,20 @@ describe("OnboardingModal — hosted collectors", () => {
     const { modal } = onProjects();
     modal.handleInput("\r");
     expect(modal.hasChild()).toBe(true);
-    for (const ch of "~/Code") modal.handleInput(ch);
+    for (const ch of "/tmp") modal.handleInput(ch);
+    expect(modal.childValue()).toBe("~/Code/tmp");
+  });
+
+  // Placeholder text sitting where the value goes reads as a filled field, so
+  // Enter looks like it should commit — and an empty commit is refused in
+  // silence, so the flow looks hung. The default is a real value instead.
+  test("the directory collector opens on a real, committable default", async () => {
+    const { modal, calls } = onProjects();
+    modal.handleInput("\r");
     expect(modal.childValue()).toBe("~/Code");
+    modal.handleInput("\r");
+    await Bun.sleep(1);
+    expect(calls.addProjectDir).toEqual(["~/Code"]);
   });
 
   test("the flow is still open underneath, and the grid is the collector's", () => {
@@ -136,13 +157,39 @@ describe("OnboardingModal — hosted collectors", () => {
     expect(modal.currentPageId()).toBe("projects");
   });
 
-  test("committing a collector delivers the value to the port", async () => {
+  test("committing a collector delivers the edited value to the port", async () => {
     const { modal, calls } = onProjects();
     modal.handleInput("\r");
-    for (const ch of "~/Code") modal.handleInput(ch);
+    for (let i = 0; i < 6; i++) modal.handleInput("\x7f");   // clear the default
+    for (const ch of "/srv") modal.handleInput(ch);
     modal.handleInput("\r");
     await Bun.sleep(1);
-    expect(calls.addProjectDir).toEqual(["~/Code"]);
+    expect(calls.addProjectDir).toEqual(["/srv"]);
+  });
+
+  // The bug as reported: the page looked stuck because the refusal was
+  // announced in the toolbar's status chip, at the far end of the screen.
+  test("a rejected directory says so on the page, not somewhere else", async () => {
+    const { modal } = onProjects({
+      addProjectDir: async () => ({ ok: false, message: "No such directory: ~/Code" }),
+    });
+    modal.handleInput("\r");
+    modal.handleInput("\r");
+    await Bun.sleep(2);
+    const text = modal.getGrid(90).cells.map((r) => r.map((c) => c.char).join("")).join("\n");
+    expect(text).toContain("No such directory: ~/Code");
+  });
+
+  test("moving off the page clears a stale refusal", async () => {
+    const { modal } = onProjects({
+      addProjectDir: async () => ({ ok: false, message: "No such directory: ~/Code" }),
+    });
+    modal.handleInput("\r");
+    modal.handleInput("\r");
+    await Bun.sleep(2);
+    modal.handleInput(RIGHT);
+    const text = modal.getGrid(90).cells.map((r) => r.map((c) => c.char).join("")).join("\n");
+    expect(text).not.toContain("No such directory");
   });
 
   test("the token collector is masked", () => {
@@ -150,7 +197,7 @@ describe("OnboardingModal — hosted collectors", () => {
     const modal = new OnboardingModal(port);
     modal.open();
     modal.handleInput(DOWN); modal.handleInput("\r");
-    modal.handleInput(RIGHT); modal.handleInput(RIGHT);
+    for (let i = 0; i < 3; i++) modal.handleInput(RIGHT);
     expect(modal.currentPageId()).toBe("tracker");
     modal.handleInput("\r");
     for (const ch of "lin_secret") modal.handleInput(ch);
@@ -210,7 +257,7 @@ describe("OnboardingModal — async actions", () => {
     release();
     await Bun.sleep(1);
     modal.handleInput(RIGHT);
-    expect(modal.currentPageId()).toBe("done");
+    expect(modal.currentPageId()).toBe("naming");
   });
 
   test("install results are kept and rendered rather than printed", async () => {
@@ -283,10 +330,41 @@ describe("OnboardingModal — the painter never asks the world", () => {
   });
 });
 
+describe("OnboardingModal — naming", () => {
+  test("Enter opens the picker and the choice reaches the port", () => {
+    const { modal, calls } = onProjects();
+    modal.handleInput(RIGHT); modal.handleInput(RIGHT);
+    expect(modal.currentPageId()).toBe("naming");
+    modal.handleInput("\r");
+    expect(modal.hasChild()).toBe(true);
+    modal.handleInput("\r");
+    expect(calls.setNaming).toEqual(["claude"]);
+    expect(modal.hasChild()).toBe(false);
+  });
+
+  test("esc leaves the picker without choosing", () => {
+    const { modal, calls } = onProjects();
+    modal.handleInput(RIGHT); modal.handleInput(RIGHT);
+    modal.handleInput("\r");
+    modal.handleInput(ESC);
+    expect(modal.hasChild()).toBe(false);
+    expect(calls.setNaming).toEqual([]);
+    expect(modal.isOpen()).toBe(true);
+  });
+
+  test("no available command means no picker at all", () => {
+    const { modal, calls } = onProjects({ namingOptions: () => [] });
+    modal.handleInput(RIGHT); modal.handleInput(RIGHT);
+    modal.handleInput("\r");
+    expect(modal.hasChild()).toBe(false);
+    expect(calls.setNaming).toEqual([]);
+  });
+});
+
 describe("OnboardingModal — finish", () => {
   test("Enter on the done page hands off and closes", () => {
     const { modal, calls } = onProjects();
-    modal.handleInput(RIGHT); modal.handleInput(RIGHT);
+    for (let i = 0; i < 10; i++) modal.handleInput(RIGHT);
     expect(modal.currentPageId()).toBe("done");
     expect(modal.handleInput("\r")).toEqual({ type: "consumed" });
     expect(calls.finish).toBe(1);
@@ -295,8 +373,8 @@ describe("OnboardingModal — finish", () => {
 
   test("back from done returns to the last step", () => {
     const { modal } = onProjects();
-    modal.handleInput(RIGHT); modal.handleInput(RIGHT);
+    for (let i = 0; i < 10; i++) modal.handleInput(RIGHT);
     modal.handleInput(LEFT);
-    expect(modal.currentPageId()).toBe("agents");
+    expect(modal.currentPageId()).toBe("naming");
   });
 });

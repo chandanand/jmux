@@ -205,3 +205,40 @@ describe("InputModal", () => {
     expect(modal.isOpen()).toBe(false);
   });
 });
+
+describe("InputModal required hint", () => {
+  const rowText = (m: InputModal, row: number, w = 60) =>
+    m.getGrid(w).cells[row]!.map((c) => c.char).join("");
+
+  // Refusing an empty commit is right; refusing it in silence is the failure —
+  // the field sits there looking ready and the key appears dead.
+  test("Enter on an empty buffer says why instead of doing nothing", () => {
+    const modal = new InputModal({
+      header: "Add a directory",
+      subheader: "jmux will offer the repositories it finds underneath.",
+      requiredHint: "Type a path, or press esc to skip this step.",
+    });
+    modal.open();
+    expect(rowText(modal, 1)).toContain("jmux will offer");
+    expect(modal.handleInput("\r")).toEqual({ type: "consumed" });
+    expect(rowText(modal, 1)).toContain("Type a path");
+  });
+
+  test("typing clears the nag", () => {
+    const modal = new InputModal({
+      header: "H", subheader: "sub", requiredHint: "required",
+    });
+    modal.open();
+    modal.handleInput("\r");
+    expect(rowText(modal, 1)).toContain("required");
+    modal.handleInput("x");
+    expect(rowText(modal, 1)).toContain("sub");
+  });
+
+  test("without the hint, behaviour is exactly as before", () => {
+    const modal = new InputModal({ header: "H", subheader: "sub" });
+    modal.open();
+    expect(modal.handleInput("\r")).toEqual({ type: "consumed" });
+    expect(rowText(modal, 1)).toContain("sub");
+  });
+});

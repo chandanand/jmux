@@ -7,6 +7,7 @@ import { renderFlow, wrapProse, GLYPHS, BOTTOM_RESERVED_ROWS } from "../onboardi
 
 const facts: SetupFacts = {
   agentsPresent: ["Claude Code"], agentsStale: ["Claude Code"], skillCurrent: false,
+  namingConfigured: false, namingAvailable: ["claude"],
   trackerType: "linear", trackerAuthed: false, trackerDeclined: false,
   projectCount: 0, attachedTeamCount: 0, workflowTabCount: 0, hunkInstalled: false,
 };
@@ -98,7 +99,7 @@ describe("renderFlow — pages", () => {
     expect(out).toContain("Just run agents");
     expect(out).toContain("Agents, wired to my issue tracker");
     expect(out).toContain("I'll do it myself");
-    expect(out).toContain("2 steps, about a minute");
+    expect(out).toContain("3 steps, about a minute");
   });
 
   test("the intent cursor marks the selected row", () => {
@@ -114,7 +115,7 @@ describe("renderFlow — pages", () => {
     f.chooseIntent("solo");
     const out = text(renderFlow(f, 90, 26));
     expect(out).toContain("Where your code lives");
-    expect(out).toContain("Step 1 of 2");
+    expect(out).toContain("Step 1 of 3");
   });
 
   test("welcome carries no step label", () => {
@@ -138,7 +139,7 @@ describe("renderFlow — pages", () => {
   test("the agents page renders its write list from the targets it is given", () => {
     const f = flow();
     f.chooseIntent("solo");
-    f.next();
+    f.openStep("agents");
     const out = text(renderFlow(f, 90, 30, {
       writeTargets: ["/custom/claude/settings.json", "/custom/codex/config.toml"],
     }));
@@ -150,7 +151,7 @@ describe("renderFlow — pages", () => {
   test("no agents reads as honest, not as a failure", () => {
     const f = flow({ agentsPresent: [], agentsStale: [] });
     f.chooseIntent("solo");
-    f.next();
+    f.openStep("agents");
     const out = text(renderFlow(f, 90, 26));
     expect(out).toContain("No coding agents found");
     expect(out).toContain("jmux works fine without one");
@@ -160,7 +161,7 @@ describe("renderFlow — pages", () => {
   test("install results render as a table, not as printed output", () => {
     const f = flow();
     f.chooseIntent("solo");
-    f.next();
+    f.openStep("agents");
     const out = text(renderFlow(f, 90, 30, {
       reports: [
         { label: "Claude Code", kind: "installed", notes: [] },
@@ -175,7 +176,7 @@ describe("renderFlow — pages", () => {
   test("the finish page ticks what was achieved", () => {
     const f = flow();
     f.chooseIntent("solo");
-    f.next(); f.next();
+    for (let i = 0; i < 10; i++) f.next();
     const out = text(renderFlow(f, 90, 26, { achievements: ["Two projects — jmux, hunk"] }));
     expect(out).toContain("You're set up");
     expect(out).toContain("Two projects — jmux, hunk");
@@ -185,7 +186,7 @@ describe("renderFlow — pages", () => {
   test("a busy action says so", () => {
     const f = flow();
     f.chooseIntent("tracker");
-    f.next(); f.next();
+    f.openStep("tracker");
     expect(text(renderFlow(f, 90, 26, { busy: "checking…" }))).toContain("checking…");
   });
 });
@@ -222,7 +223,7 @@ describe("renderFlow — the finish page teaches the keys", () => {
   const done = () => {
     const f = flow();
     f.chooseIntent("solo");
-    f.next(); f.next();
+    for (let i = 0; i < 10; i++) f.next();   // to the end, however long it is
     return f;
   };
 
@@ -252,7 +253,7 @@ describe("renderFlow — the action bar follows the page's state", () => {
   test("the agents hint changes once the install has run", () => {
     const f = flow();
     f.chooseIntent("solo");
-    f.next();
+    f.openStep("agents");
     const before = lines(renderFlow(f, 90, 26)).at(-1)!;
     expect(before).toContain("set these up");
 
@@ -337,5 +338,55 @@ describe("no page advertises an action it cannot perform", () => {
     const out = text(renderFlow(f, 90, 26));
     expect(out).toContain("An issue has to become a branch");
     expect(out).not.toContain("needs a tracker connected first");
+  });
+});
+
+describe("the naming step", () => {
+  const naming = (f: Partial<SetupFacts> = {}) => {
+    const fl = flow(f);
+    fl.chooseIntent("solo");
+    fl.openStep("naming");
+    return fl;
+  };
+
+  test("is a step on both arms, and the counts say so", () => {
+    const solo = flow(); solo.chooseIntent("solo"); solo.openStep("naming");
+    expect(solo.stepLabel()).toBe("Step 3 of 3");
+    const tr = flow(); tr.chooseIntent("tracker"); tr.openStep("naming");
+    expect(tr.stepLabel()).toBe("Step 3 of 6");
+  });
+
+  test("lists the commands that will actually run here", () => {
+    const out = text(renderFlow(naming(), 90, 26, {
+      namingOptions: [
+        { id: "claude", label: "claude", note: "Around 11s." },
+        { id: "off", label: "Leave sessions unnamed", note: "the branch name" },
+      ],
+      namingChosen: "off",
+    }));
+    expect(out).toContain("claude");
+    expect(out).toContain("Around 11s.");
+    expect(out).toContain("Leave sessions unnamed");
+  });
+
+  test("ticks the one in force", () => {
+    const painted = lines(renderFlow(naming(), 90, 26, {
+      namingOptions: [
+        { id: "claude", label: "claude", note: "Around 11s." },
+        { id: "off", label: "Leave sessions unnamed", note: "the branch name" },
+      ],
+      namingChosen: "claude",
+    }));
+    const row = painted.find((l) => l.includes("claude"))!;
+    expect(row).toContain("✓");
+  });
+
+  // The presets are the agent CLIs, so a machine with neither has nothing to
+  // choose between — and must not advertise a key that opens an empty picker.
+  test("says why there is nothing to choose, and drops its Enter hint", () => {
+    const f = naming({ namingAvailable: [] });
+    const out = text(renderFlow(f, 90, 26));
+    expect(out).toContain("Nothing to name with yet");
+    expect(lines(renderFlow(f, 90, 26)).at(-1)!).not.toContain("↵ choose");
   });
 });

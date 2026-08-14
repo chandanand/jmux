@@ -2,6 +2,7 @@ import type { CellGrid } from "../types";
 import type { Modal, ModalAction } from "../modal";
 import type { InstallReport } from "../agent-hooks/registry";
 import { InputModal } from "../input-modal";
+import { ListModal } from "../list-modal";
 import { OnboardingFlow } from "./flow";
 import { renderFlow, type RenderExtras } from "./render";
 import { INTENT_CHOICES, MAP_STEPS } from "./pages";
@@ -13,6 +14,7 @@ import { deriveStatus, type SetupStatus } from "./status";
  */
 const EMPTY_STATUS: SetupStatus = deriveStatus({
   agentsPresent: [], agentsStale: [], skillCurrent: false,
+  namingConfigured: false, namingAvailable: [],
   trackerType: null, trackerAuthed: false, trackerDeclined: false,
   projectCount: 0, attachedTeamCount: 0, workflowTabCount: 0, hunkInstalled: false,
 });
@@ -30,8 +32,17 @@ export interface OnboardingPort {
   getProjectDirs(): string[];
   /** Every file the agents page will write, from installer metadata. */
   agentWriteTargets(): string[];
+  /** A path that exists on this machine, offered as the editable default. */
+  suggestedProjectDir(): string;
+  /** What the tracker step is actually connecting to, named on screen. */
+  trackerName(): string;
+  /** Naming commands that will actually run here, and the one in force. */
+  namingOptions(): ReadonlyArray<{ id: string; label: string; note: string }>;
+  namingChosen(): string;
+  setNaming(id: string): void;
   installAgents(): Promise<InstallReport[]>;
-  addProjectDir(dir: string): Promise<void>;
+  /** Rejections are returned, never toasted: see `notice` in the modal. */
+  addProjectDir(dir: string): Promise<{ ok: boolean; message?: string }>;
   connectTracker(token: string): Promise<{ ok: boolean }>;
   seedWorkflow(): void;
   /** Close, and hand off to the flow that is good at making sessions. */
@@ -58,11 +69,21 @@ export class OnboardingModal implements Modal {
   private _open = false;
   private flow: OnboardingFlow;
   private readonly port: OnboardingPort;
-  private child: InputModal | null = null;
+  private child: InputModal | ListModal | null = null;
   private termRows = 24;
   private reports: InstallReport[] = [];
   private busy: string | undefined;
   private mapIndex = 0;
+  /**
+   * The last rejection, shown on the page that caused it.
+   *
+   * It used to go through `showToast`, which lands in the *toolbar's* status
+   * chip — the top of the screen, transient, and nowhere near the centred
+   * modal the user is looking at. A refusal announced somewhere the user is
+   * not looking is indistinguishable from the flow having hung, which is
+   * exactly how it was reported.
+   */
+  private notice: string | undefined;
   /**
    * The port's answers, cached.
    *
@@ -151,6 +172,8 @@ export class OnboardingModal implements Modal {
       projectDirs: this.port.getProjectDirs(),
       writeTargets: this.port.agentWriteTargets(),
       achievements: this.port.achievements(),
+      namingOptions: this.port.namingOptions(),
+      namingChosen: this.port.namingChosen(),
     };
   }
 
@@ -161,12 +184,15 @@ export class OnboardingModal implements Modal {
       reports: this.reports.length > 0 ? this.reports : undefined,
       busy: this.busy,
       mapIndex: this.mapIndex,
+      notice: this.notice,
     };
   }
 
   // --- Test seams ---
   hasChild(): boolean { return this.child !== null; }
-  childValue(): string { return this.child?.getValue() ?? ""; }
+  childValue(): string {
+    return this.child instanceof InputModal ? this.child.getValue() : "";
+  }
   currentPageId(): string { return this.flow.currentPage().id; }
   view(): string { return this.flow.view(); }
   getReports(): InstallReport[] { return this.reports; }
@@ -180,11 +206,16 @@ export class OnboardingModal implements Modal {
         this.child = null;
         return { type: "consumed" };
       }
+      const wasList = this.child instanceof ListModal;
       const action = this.child.handleInput(data);
       if (action.type === "result") {
-        const value = String(action.value ?? "");
         this.child = null;
-        void this.commitChild(value);
+        if (wasList) {
+          const picked = action.value as { id: string } | undefined;
+          if (picked) { this.port.setNaming(picked.id); this.refresh(); }
+        } else {
+          void this.commitChild(String(action.value ?? ""));
+        }
       } else if (action.type === "closed") {
         this.child = null;
       }
@@ -212,8 +243,8 @@ export class OnboardingModal implements Modal {
       return { type: "consumed" };
     }
 
-    if (data === "\x1b[C") { this.flow.next(); return { type: "consumed" }; }
-    if (data === "\x1b[D") { this.flow.back(); return { type: "consumed" }; }
+    if (data === "\x1b[C") { this.notice = undefined; this.flow.next(); return { type: "consumed" }; }
+    if (data === "\x1b[D") { this.notice = undefined; this.flow.back(); return { type: "consumed" }; }
     if (data === "\r") { void this.activate(); return { type: "consumed" }; }
     return { type: "consumed" };
   }
@@ -244,10 +275,16 @@ export class OnboardingModal implements Modal {
     const page = this.flow.currentPage().id;
     if (!this.flow.beginAction()) return;
     this.busy = page === "tracker" ? "checking…" : "scanning…";
+    this.notice = undefined;
     this.port.onChange();
     try {
-      if (page === "projects") await this.port.addProjectDir(value);
-      else if (page === "tracker") await this.port.connectTracker(value);
+      if (page === "projects") {
+        const result = await this.port.addProjectDir(value);
+        if (!result.ok) this.notice = result.message ?? `Could not add ${value}`;
+      } else if (page === "tracker") {
+        const result = await this.port.connectTracker(value);
+        if (!result.ok) this.notice = "That token was rejected — nothing was changed";
+      }
     } finally {
       this.busy = undefined;
       this.flow.endAction();
@@ -260,10 +297,14 @@ export class OnboardingModal implements Modal {
     const page = this.flow.currentPage().id;
 
     if (page === "projects") {
+      // A real value, not a placeholder. Dim hint text sitting where the value
+      // goes reads as a filled field, so Enter looks like it should work — and
+      // an empty commit is silently refused, so the flow looks hung.
       this.child = new InputModal({
         header: "Add a directory",
         subheader: "jmux will offer the repositories it finds underneath.",
-        placeholder: "~/Code",
+        requiredHint: "Type a path, or press esc to skip this step.",
+        value: this.port.suggestedProjectDir(),
       });
       this.child.open();
       return;
@@ -271,11 +312,25 @@ export class OnboardingModal implements Modal {
 
     if (page === "tracker") {
       this.child = new InputModal({
-        header: "Paste your token",
+        header: `Paste your ${this.port.trackerName()} API key`,
         subheader: "Checked before it is saved. Stored in ~/.config/jmux/credentials.json, mode 0600.",
+        requiredHint: "Paste a key, or press esc to skip this step.",
         secret: true,
       });
       this.child.open();
+      return;
+    }
+
+    if (page === "naming") {
+      const options = this.port.namingOptions();
+      if (options.length === 0) return;
+      const picker = new ListModal({
+        header: "Name sessions with",
+        subheader: "Runs once per session. Change it any time in Settings.",
+        items: options.map((o) => ({ id: o.id, label: o.label })),
+      });
+      picker.open();
+      this.child = picker;
       return;
     }
 
