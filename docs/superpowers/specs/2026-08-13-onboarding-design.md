@@ -169,6 +169,7 @@ them** — and can be *completed* inside the flow.
 | Agent hooks + `ctl` skill | **Earns one, jointly.** No decision, but it writes into another tool's config, so it needs consent — and it is one idea. |
 | Tracker credential | **Earns one**, tracker arm only. |
 | Team ↔ project | **Earns one**, tracker arm only. |
+| Session naming | **Earns one.** Only the user knows whether they want a model naming their sessions, and it costs a subprocess per session. Reuses `TITLE_PRESETS`, offering only presets whose binary is on `PATH`. |
 | Workflow stages | **Earns a pre-answered page.** `suggestLayout()` (`panel-view.ts:521`) already guesses. `↵` accepts. |
 | "Check it all works" | **Not a page.** It is the finish. |
 | Install the diff viewer | **Not a page.** One line on the finish page — never a shell command handed over mid-flow. |
@@ -215,8 +216,8 @@ copy says so.
 ## 9. The intent branch is derived, never persisted
 
 ```
-solo      Welcome → Code → Agents → Done
-tracker   Welcome → Code → Agents → Tracker → Team → Workflow → Done
+solo      Welcome → Code → Agents → Naming → Done
+tracker   Welcome → Code → Agents → Naming → Tracker → Team → Workflow → Done
 manual    Welcome → Map. Nothing configured, nothing claimed.
 ```
 
@@ -604,6 +605,26 @@ Recorded because the first draft argued the opposite in each case.
 
 Escape sequences in the pty harness are written as a **single** write;
 byte-by-byte makes a lone `\x1b` read as Escape.
+
+## 18.1 What driving it actually found
+
+Five defects the tests could not see, recorded because each is a rule:
+
+- **A placeholder is not a default.** Hint text where the value goes reads as a
+  filled field, and `InputModal` silently consumes Enter on an empty buffer, so
+  the flow looked hung. Collectors open on a real value; `requiredHint` makes an
+  empty commit say why.
+- **A refusal belongs on the page that caused it.** `showToast` reaches only the
+  toolbar's status chip — far from a centred modal, and transient — so a
+  rejected directory read as nothing having happened.
+- **Every step must be answerable.** "Leave sessions unnamed" stored no command,
+  which is indistinguishable from never having answered, so the step nagged
+  forever with no way to satisfy it.
+- **A tick means somebody chose.** `presetForCommand(undefined)` is `off`, so an
+  unanswered naming step ticked "unnamed" while the map said `not yet`.
+- **Name what you are connecting to.** The tracker step asked for "your token"
+  without saying Linear is the only adapter jmux has, so a GitHub Issues user
+  had no way to learn their token would not work before pasting it.
 
 ## 19. Known limits, stated
 
