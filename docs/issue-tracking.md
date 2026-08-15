@@ -39,15 +39,15 @@ define workflow stages in `Ctrl-a W`, **the issue tabs become your stages** —
 A tab appears only if the adapter behind it authenticated: no tracker means no
 issue tabs at all, rather than an empty one. Only **Diff** is unconditional.
 
-Click the panel or press `Shift-Right` to focus it. Use `[` and `]` to cycle
-between tabs.
+Click the panel or press `Shift-Right` to focus it. Use `h` and `l` to cycle
+between tabs (`[` and `]` also work).
 
 ### Navigation
 
 | Key | Action |
 |-----|--------|
-| `[` / `]` | Cycle tabs |
-| `↑` / `↓` | Move selection through items |
+| `h` / `l` (or `[` / `]`) | Cycle tabs |
+| `j` / `k` (or `↓` / `↑`) | Move selection through items |
 | `Enter` | Collapse/expand group headers |
 | Mouse wheel | Scroll item list or detail pane |
 | Click item | Select it |
@@ -60,7 +60,7 @@ between tabs.
 |-----|--------|
 | `o` | Open in browser |
 | `n` | Create a new session from this issue |
-| `l` | Add this issue to the current session |
+| `L` | Add this issue to the current session |
 | `s` | Update status (picks from available workflow states) |
 | `c` | Copy the issue prompt to the clipboard |
 | `p` | Send the issue prompt to this session's agent (shows it first) |
@@ -71,9 +71,9 @@ between tabs.
 | Key | Action |
 |-----|--------|
 | `n` | Start every issue under it as **one** session (confirms the name first) |
-| `l` | Add every issue under it to the current session (confirms the count first) |
+| `L` | Add every issue under it to the current session (confirms the count first) |
 
-Both ask first, because a group header exists on every grouping axis — `l` on a
+Both ask first, because a group header exists on every grouping axis — `L` on a
 status section is otherwise a bulk write of forty links from one keystroke.
 
 **Selecting issues directly** (works on every tab, including ones with no
@@ -83,7 +83,7 @@ headers at all):
 |-----|--------|
 | `Space` | Tick / untick the highlighted issue |
 | `n` | Start every ticked issue as **one** session |
-| `l` | Add every ticked issue to the current session |
+| `L` | Add every ticked issue to the current session |
 | `s` | Move every ticked issue to one status |
 | `c` | Copy one prompt covering every ticked issue |
 | `p` | Send that prompt to this session's agent |
@@ -103,7 +103,7 @@ none, jmux says so rather than showing an empty list. The whole batch is one
 | Key | Action |
 |-----|--------|
 | `o` | Open in browser |
-| `l` | Link this MR to the current session |
+| `L` | Link this MR to the current session |
 | `a` | Approve the MR |
 | `r` | Mark ready (remove Draft prefix) |
 
@@ -186,7 +186,7 @@ jmux automatically links sessions to their issues and MRs using multiple signals
 2. **MR source branch** — the session's git branch is matched to an open MR
 3. **MR-to-issue links** — if the MR links to a Linear issue (via Linear attachments), jmux follows it
 4. **Transitive links** — if an issue has MR URLs in its attachments, jmux resolves those too
-5. **Manual links** — press `l` in the panel or use the command palette to explicitly link items
+5. **Manual links** — press `L` in the panel or use the command palette to explicitly link items
 
 Linked items lead the sidebar's second row, as a badge:
 
@@ -310,7 +310,7 @@ Three ways in:
   issue there is no tracker-supplied branch name to inherit — then provisions
   one session and seeds the agent with all of the issues at once. Issues that
   already have a session are left where they are and reported, not moved.
-- **Add as you go.** Press `l` on an issue to add it to the session you're in,
+- **Add as you go.** Press `L` on an issue to add it to the session you're in,
   or `a` in the ghost preview to pick a session for an unstarted issue.
 - **From an agent.** `jmux ctl issue link <session> <issue-id>` appends rather
   than replacing; `jmux ctl issue unlink <session> [issue-id]` removes one link
@@ -390,7 +390,7 @@ still act on the whole set, as they do everywhere else.)
 #### Telling the agent about a late arrival
 
 A session start seeds the agent with its issues. Anything linked *afterwards* —
-`l`, `ctl issue link`, a ticket that lands mid-feature — the agent knows nothing
+`L`, `ctl issue link`, a ticket that lands mid-feature — the agent knows nothing
 about. Press **`p`** on the issue (or on a ticked set) to hand it the same
 prompt a session start would have used. jmux shows you what will be sent and
 waits for Enter; it never writes into an agent's context on its own.

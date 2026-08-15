@@ -116,7 +116,7 @@ export interface ViewState {
   detailScrollOffset: number;
   filterQuery: string | null;  // null = filter off, "" = bar open but empty, "abc" = filtering
   /**
-   * Ticked item ids — the set `n` and `l` act on instead of the highlighted row.
+   * Ticked item ids — the set `n` and `L` act on instead of the highlighted row.
    *
    * Transient and per-view, never persisted: it is a selection, not a
    * preference. It lives here rather than on the view because two tabs showing
@@ -1125,14 +1125,14 @@ function renderActionBar(grid: CellGrid, startRow: number, cols: number, item: R
     let col = pad;
     col = writeAction(grid, startRow, col, "[o]", " Open  ");
     col = writeAction(grid, startRow, col, "[n]", ` ${nLabel}  `);
-    col = writeAction(grid, startRow, col, "[l]", " Link  ");
+    col = writeAction(grid, startRow, col, "[L]", " Link  ");
     col = writeAction(grid, startRow, col, "[s]", " Status  ");
     col = writeAction(grid, startRow, col, "[c]", " Copy  ");
     col = writeAction(grid, startRow, col, "[C]", " Create  ");
   } else {
     let col = pad;
     col = writeAction(grid, startRow, col, "[o]", " Open  ");
-    col = writeAction(grid, startRow, col, "[l]", " Link  ");
+    col = writeAction(grid, startRow, col, "[L]", " Link  ");
     col = writeAction(grid, startRow, col, "[a]", " Approve  ");
   }
 }

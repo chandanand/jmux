@@ -330,7 +330,7 @@ reaching for the palette once you have learned the chord.
 | Key | Action |
 |-----|--------|
 | `Ctrl-a g` | Toggle info panel on/off |
-| `[` / `]` | Cycle tabs (Diff, Issues, MRs, Review) |
+| `h` / `l` (or `[` / `]`) | Cycle tabs (Diff, Issues, MRs, Review) |
 | `Ctrl-a z` | Zoom panel (split ↔ full, when focused) |
 | `Ctrl-a Tab` | Switch focus between tmux and panel |
 | `Ctrl-a v` | Choose what the Diff tab shows |
@@ -363,11 +363,11 @@ your branch has added since it forked.
 
 | Key | Action |
 |-----|--------|
-| `↑` / `↓` | Navigate items |
+| `j` / `k` (or `↓` / `↑`) | Navigate items |
 | `Enter` | Collapse/expand group |
 | `o` | Open in browser |
 | `n` | Start session from issue |
-| `l` | Link to current session |
+| `L` | Link to current session |
 | `s` | Update issue status |
 | `a` | Approve MR |
 | `c` | Copy issue prompt |

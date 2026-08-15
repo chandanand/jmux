@@ -419,7 +419,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "panel-prev-tab",
-    keys: "[",
+    keys: "h / [",
     label: "Previous tab",
     section: "Info panel",
     source: "jmux",
@@ -427,11 +427,19 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "panel-next-tab",
-    keys: "]",
+    keys: "l / ]",
     label: "Next tab",
     section: "Info panel",
     source: "jmux",
     context: IN_PANEL,
+  },
+  {
+    id: "panel-navigate",
+    keys: "j / k / Up / Down",
+    label: "Navigate items",
+    section: "Info panel",
+    source: "jmux",
+    context: IN_PANEL_LIST,
   },
   {
     id: "panel-open",
@@ -451,7 +459,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "panel-link",
-    keys: "l",
+    keys: "L",
     label: "Link to current session",
     section: "Info panel",
     source: "jmux",

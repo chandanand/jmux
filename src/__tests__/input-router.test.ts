@@ -1040,6 +1040,36 @@ describe("chrome row classification and routing", () => {
 });
 
 describe("InfoPanel tab switching", () => {
+  test("h key triggers onPanelPrevTab when panel focused", () => {
+    let prevTabCalled = false;
+    const router = new InputRouter(
+      {
+        onPtyData: () => {},
+        onSidebarClick: () => {},
+        onPanelPrevTab: () => { prevTabCalled = true; },
+      },
+      baseLayout(24, "split", 40),
+    );
+    router.setPanelFocused(true);
+    router.handleInput("h");
+    expect(prevTabCalled).toBe(true);
+  });
+
+  test("l key triggers onPanelNextTab when panel focused", () => {
+    let nextTabCalled = false;
+    const router = new InputRouter(
+      {
+        onPtyData: () => {},
+        onSidebarClick: () => {},
+        onPanelNextTab: () => { nextTabCalled = true; },
+      },
+      baseLayout(24, "split", 40),
+    );
+    router.setPanelFocused(true);
+    router.handleInput("l");
+    expect(nextTabCalled).toBe(true);
+  });
+
   test("[ key triggers onPanelPrevTab when panel focused", () => {
     let prevTabCalled = false;
     const router = new InputRouter(
@@ -1182,6 +1212,38 @@ describe("InfoPanel tab switching", () => {
     expect(called).toBe(true);
   });
 
+  test("k key triggers onPanelSelectPrev when panel tabs active", () => {
+    let called = false;
+    const router = new InputRouter(
+      {
+        onPtyData: () => {},
+        onSidebarClick: () => {},
+        onPanelSelectPrev: () => { called = true; },
+      },
+      baseLayout(24, "split", 40),
+    );
+    router.setPanelFocused(true);
+    router.setPanelTabsActive(true);
+    router.handleInput("k");
+    expect(called).toBe(true);
+  });
+
+  test("j key triggers onPanelSelectNext when panel tabs active", () => {
+    let called = false;
+    const router = new InputRouter(
+      {
+        onPtyData: () => {},
+        onSidebarClick: () => {},
+        onPanelSelectNext: () => { called = true; },
+      },
+      baseLayout(24, "split", 40),
+    );
+    router.setPanelFocused(true);
+    router.setPanelTabsActive(true);
+    router.handleInput("j");
+    expect(called).toBe(true);
+  });
+
   test("arrows pass through to diff panel when tabs not active", () => {
     let diffData = "";
     const router = new InputRouter(
@@ -1271,7 +1333,7 @@ describe("InfoPanel tab switching", () => {
     expect(called).toBe(true);
   });
 
-  test("l key triggers onPanelLinkToSession when tabs active", () => {
+  test("L key triggers onPanelLinkToSession when tabs active", () => {
     let called = false;
     const router = new InputRouter({
       onPtyData: () => {}, onSidebarClick: () => {},
@@ -1279,7 +1341,7 @@ describe("InfoPanel tab switching", () => {
     }, baseLayout(24, "split", 40));
     router.setPanelFocused(true);
     router.setPanelTabsActive(true);
-    router.handleInput("l");
+    router.handleInput("L");
     expect(called).toBe(true);
   });
 });
@@ -1326,6 +1388,24 @@ describe("panel filter mode", () => {
     router.handleInput("s"); // normally changes status
     router.handleInput("n"); // normally creates session
     expect(calls).toEqual(["filterInput:o", "filterInput:s", "filterInput:n"]);
+  });
+
+  test("Vim navigation letters remain filter text while filter mode is active", () => {
+    const tabCalls: string[] = [];
+    const { router, calls } = makeFilterRouter({
+      onPanelPrevTab: () => { tabCalls.push("prevTab"); },
+      onPanelNextTab: () => { tabCalls.push("nextTab"); },
+    });
+    router.handleInput("/");
+    calls.length = 0;
+    for (const char of "hjkl") router.handleInput(char);
+    expect(calls).toEqual([
+      "filterInput:h",
+      "filterInput:j",
+      "filterInput:k",
+      "filterInput:l",
+    ]);
+    expect(tabCalls).toEqual([]);
   });
 
   test("backspace calls onPanelFilterBackspace in filter mode", () => {

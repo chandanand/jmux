@@ -204,7 +204,7 @@ export interface InputRouterOptions {
   onPanelToggleSortOrder?: () => void;
   onPanelToggleCollapse?: () => void;
   onPanelCreateSession?: () => void;  // 'n' key
-  onPanelLinkToSession?: () => void;  // 'l' key
+  onPanelLinkToSession?: () => void;  // 'L' key (`l` navigates to the next tab)
   onPanelToggleCheck?: () => void;    // space — tick the highlighted item
   /** True when the active view has ticked items, so Escape clears them first. */
   panelHasChecks?: () => boolean;
@@ -957,7 +957,9 @@ export class InputRouter {
     // When diff panel is focused, intercept tab-switching and action keys before
     // forwarding to the diff panel's underlying process
     if (this.diffPanelFocused && this.layout.panel !== null) {
-      // Tab switching — clear filter mode first
+      // Bracket tab switching stays available while filtering and clears the
+      // filter first. The Vim h/l aliases live below the filter arm: printable
+      // characters typed into `/` are query text, including h and l.
       if (data === "[" && this.opts.onPanelPrevTab) {
         if (this.panelFilterActive) { this.panelFilterActive = false; this.opts.onPanelFilterClear?.(); }
         this.opts.onPanelPrevTab();
@@ -986,13 +988,25 @@ export class InputRouter {
         return;
       }
 
-      // Up/Down arrow for item selection within a tab (only on MR/Issues tabs)
+      // Vim-style horizontal navigation switches top-level tabs. Keep the
+      // bracket bindings as aliases for existing muscle memory.
+      if (data === "h" && this.opts.onPanelPrevTab) {
+        this.opts.onPanelPrevTab();
+        return;
+      }
+      if (data === "l" && this.opts.onPanelNextTab) {
+        this.opts.onPanelNextTab();
+        return;
+      }
+
+      // Up/Down arrows and k/j move item selection within list tabs. On Diff,
+      // these bytes continue to the underlying viewer unchanged.
       if (this.panelTabsActive) {
-        if (data === "\x1b[A" && this.opts.onPanelSelectPrev) {
+        if ((data === "\x1b[A" || data === "k") && this.opts.onPanelSelectPrev) {
           this.opts.onPanelSelectPrev();
           return;
         }
-        if (data === "\x1b[B" && this.opts.onPanelSelectNext) {
+        if ((data === "\x1b[B" || data === "j") && this.opts.onPanelSelectNext) {
           this.opts.onPanelSelectNext();
           return;
         }
@@ -1018,7 +1032,7 @@ export class InputRouter {
         if (data === "r" && this.opts.onPanelRefresh) { this.opts.onPanelRefresh(); return; }
         if (data === "\r" && this.opts.onPanelToggleCollapse) { this.opts.onPanelToggleCollapse(); return; }
         if (data === "n" && this.opts.onPanelCreateSession) { this.opts.onPanelCreateSession(); return; }
-        if (data === "l" && this.opts.onPanelLinkToSession) { this.opts.onPanelLinkToSession(); return; }
+        if (data === "L" && this.opts.onPanelLinkToSession) { this.opts.onPanelLinkToSession(); return; }
         // Preview tabs, shifted from the queue-tab keys beside them: `[`/`]`
         // move between queues, `{`/`}` between the issues of the set you are
         // looking at. Same gesture, one level in.

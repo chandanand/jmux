@@ -2661,7 +2661,7 @@ async function applyStatusPick(
 /**
  * Pick a status and write it to every issue in `issues`.
  *
- * Ticks are the reason this takes a list. `n` and `l` have read them since
+ * Ticks are the reason this takes a list. `n` and `L` have read them since
  * groups proved unable to name an arbitrary set, and `s` reading only the
  * highlighted row made "these three are done" three separate trips through the
  * same modal — in exactly the multi-issue sessions where it is the common move.
@@ -4002,14 +4002,14 @@ async function deliverReview(
  * Hand an agent the prompt for issues added to its session after it started.
  *
  * A session start seeds the agent with its issues. Everything linked *after* —
- * the `l` key, `ctl issue link`, a ticket that arrives mid-feature — was
+ * the `L` key, `ctl issue link`, a ticket that arrives mid-feature — was
  * invisible to the agent, which had no way to learn ticket two existed. The
  * only route was `c`, switch pane, paste.
  *
  * Confirmed and never automatic, for the reason `sendReviewToAgent` states:
  * this puts words into an agent's context and sets it working, so the user sees
  * exactly what lands before it does. That is also why it is its own key rather
- * than a step bolted onto `l` — claiming an issue and briefing an agent about
+ * than a step bolted onto `L` — claiming an issue and briefing an agent about
  * it are separate decisions, and a session may not even have an agent.
  */
 function briefAgentAbout(issues: import("./adapters/types").Issue[]): void {
@@ -5863,10 +5863,9 @@ const inputRouter = new InputRouter(
       // is one ticket or a whole project.
       //
       // But it asks first, and `n` on a group asking (via its name prompt) is
-      // why. A group is any header on any axis, so `l` on a status section is a
+      // why. A group is any header on any axis, so `L` on a status section is a
       // bulk write of forty links from one keystroke, undone only by forty
-      // unlinks. Single-item attach stays instant: it is one link and `L`
-      // reverses it.
+      // unlinks. Single-item attach stays instant: it is only one link.
       //
       // Ticked items take the same confirmed path — a tick is a claim about
       // the set, not about one row, so acting on it silently would be the same
@@ -6040,7 +6039,7 @@ const inputRouter = new InputRouter(
       if (!pc) return;
       const { viewState, nodes } = pc;
 
-      // Ticked issues, for the keys that can act on a set. `n` and `l` already
+      // Ticked issues, for the keys that can act on a set. `n` and `L` already
       // read ticks; `s` and the prompt keys reading only the highlighted row is
       // what made "these three are done" three trips through one modal.
       const tickedIssues = checkedItems(nodes, viewState)
