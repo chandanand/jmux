@@ -31,7 +31,9 @@ export function buildClaudeLaunchCommand(
   if (promptTempFile === null) {
     return `${shell} -c '${claudeCmd}; exec ${shell}'`;
   }
-  return `${shell} -c '${claudeCmd} -p "$(cat ${promptTempFile})"; rm -f ${promptTempFile}; exec ${shell}'`;
+  // Seed the interactive agent with a positional prompt. Claude's `-p` is
+  // non-interactive print mode, while Codex uses `-p` for config profiles.
+  return `${shell} -c '${claudeCmd} "$(cat ${promptTempFile})"; rm -f ${promptTempFile}; exec ${shell}'`;
 }
 
 export function handleRunClaude(ctx: CliContext, parsed: ParsedCtlArgs): unknown {

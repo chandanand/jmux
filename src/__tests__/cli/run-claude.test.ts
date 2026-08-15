@@ -37,7 +37,8 @@ describe("buildClaudeLaunchCommand", () => {
     expect(cmd).toContain("cat /tmp/jmux-prompt-abc123");
     expect(cmd).toContain("rm -f /tmp/jmux-prompt-abc123");
     expect(cmd).toContain("exec /bin/zsh");
-    expect(cmd).toContain("claude -p");
+    expect(cmd).toContain('claude "$(cat');
+    expect(cmd).not.toContain("claude -p");
   });
 
   test("uses custom claude command", () => {
@@ -48,7 +49,15 @@ describe("buildClaudeLaunchCommand", () => {
   test("with prompt file uses shell to cat and clean up", () => {
     const cmd = buildClaudeLaunchCommand("claude", "/tmp/jmux-prompt-xyz", "/bin/bash");
     expect(cmd).toBe(
-      "/bin/bash -c 'claude -p \"$(cat /tmp/jmux-prompt-xyz)\"; rm -f /tmp/jmux-prompt-xyz; exec /bin/bash'",
+      "/bin/bash -c 'claude \"$(cat /tmp/jmux-prompt-xyz)\"; rm -f /tmp/jmux-prompt-xyz; exec /bin/bash'",
     );
+  });
+
+  test("seeds Codex without treating the prompt as a profile", () => {
+    const cmd = buildClaudeLaunchCommand("codex", "/tmp/jmux-prompt-codex", "/bin/zsh");
+    expect(cmd).toBe(
+      "/bin/zsh -c 'codex \"$(cat /tmp/jmux-prompt-codex)\"; rm -f /tmp/jmux-prompt-codex; exec /bin/zsh'",
+    );
+    expect(cmd).not.toContain("codex -p");
   });
 });
