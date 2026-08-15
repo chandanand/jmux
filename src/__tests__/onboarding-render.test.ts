@@ -232,10 +232,10 @@ describe("renderFlow — the finish page teaches the keys", () => {
   test("names three keys and what they do", () => {
     const out = text(renderFlow(done(), 90, 30, { achievements: ["Two projects ready"] }));
     expect(out).toContain("Three things worth knowing");
-    expect(out).toContain("Ctrl-a n");
+    expect(out).toContain("Ctrl-Space n");
     expect(out).toContain("start a new piece of work");
-    expect(out).toContain("Ctrl-a p");
-    expect(out).toContain("Ctrl-a ?");
+    expect(out).toContain("Ctrl-Space p");
+    expect(out).toContain("Ctrl-Space ?");
   });
 
   test("drops the keys rather than overrunning a short terminal", () => {

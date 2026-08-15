@@ -34,11 +34,11 @@ export const BOTTOM_RESERVED_ROWS = 2;
 
 const RAIL_COLS = 16;
 
-/** The three keys the finish page teaches. `Ctrl-a ?` carries every other. */
+/** The three keys the finish page teaches. `Ctrl-Space ?` carries every other. */
 const WORTH_KNOWING: ReadonlyArray<readonly [string, string]> = [
-  ["Ctrl-a n", "start a new piece of work"],
-  ["Ctrl-a p", "the command palette — everything is in here"],
-  ["Ctrl-a ?", "every key jmux binds"],
+  ["Ctrl-Space n", "start a new piece of work"],
+  ["Ctrl-Space p", "the command palette — everything is in here"],
+  ["Ctrl-Space ?", "every key jmux binds"],
 ];
 
 /**
@@ -348,7 +348,7 @@ export function renderFlow(
     }
     // The keys, because a finish that only ticks boxes has said nothing about
     // what to actually do next — and this is the last moment anyone is
-    // reading. Ctrl-a ? carries the rest, so this stays three.
+    // reading. Ctrl-Space ? carries the rest, so this stays three.
     if (y + 2 < height - BOTTOM_RESERVED_ROWS) {
       y += 1;
       writeString(grid, y, INSET, "Three things worth knowing", p.dim);

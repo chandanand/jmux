@@ -944,7 +944,7 @@ export class GlassView {
    * appended when it is not the session's natural first choice.
    *
    * "Not the natural choice" is computed fresh from current state, not
-   * cached, because the face can move (`Ctrl-a x`, a retarget) without a new
+   * cached, because the face can move (`Ctrl-Space x`, a retarget) without a new
    * `spec` arriving — `setTiles` only runs on the caller's own reconcile
    * cadence. The two triggers are literal: a live cycle override
    * (`faceOverrides` naming this tile) or the displayed pane itself carrying

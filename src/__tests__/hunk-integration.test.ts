@@ -160,9 +160,9 @@ describe.skipIf(!TMUX || !HUNK)("hunk control plane, against a real jmux", () =>
         pty.write("\x1b");
         await Bun.sleep(1200);
 
-        // Ctrl-a g opens the panel. One byte at a time — the router matches a
+        // Ctrl-Space g opens the panel. One byte at a time — the router matches a
         // single anchored report per read and silently drops merged chunks.
-        for (const ch of "\x01g") {
+        for (const ch of "\x00g") {
           pty.write(ch);
           await Bun.sleep(80);
         }

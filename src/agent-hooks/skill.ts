@@ -39,12 +39,12 @@ const HUNK_SKILL_JMUX_NOTE = `
 ## Inside jmux
 
 jmux runs Hunk as its Diff panel. If \`hunk session list\` is empty, ask the
-user to press \`Ctrl-a g\` to open it rather than running \`hunk diff\` yourself.
+user to press \`Ctrl-Space g\` to open it rather than running \`hunk diff\` yourself.
 
 The panel is pointed at the jmux session's own worktree, so \`--repo\` selection
 usually resolves without an explicit id. Notes you add appear inline for the
 user; notes *they* write (\`c\` in the panel) are sent back to you when they
-press \`Ctrl-a r\`, so there is no need to poll \`comment list\` for them.
+press \`Ctrl-Space r\`, so there is no need to poll \`comment list\` for them.
 `;
 
 /**

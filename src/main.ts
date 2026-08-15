@@ -48,6 +48,7 @@ import { buildFooter, layoutFooter, type FooterModel } from "./footer";
 import { CommandPalette } from "./command-palette";
 import { HelpModal } from "./help-modal";
 import { KEYMAP, bindingsBySection, keysFor, shortKeys } from "./keymap";
+import { PREFIX_BYTE } from "./prefix";
 import { InputModal } from "./input-modal";
 import { ListModal, type ListItem } from "./list-modal";
 import { ContentModal, type StyledLine } from "./content-modal";
@@ -314,7 +315,7 @@ function checkBunVersion(): void {
  *
  * Lists only bindings with no `context`: a chord that works solely inside the
  * Command Center or a focused info panel means nothing to someone reading
- * `--help` before they have started jmux. `Ctrl-a ?` shows those in place,
+ * `--help` before they have started jmux. `Ctrl-Space ?` shows those in place,
  * which is what the section header points at.
  */
 function helpKeybindings(): string {
@@ -374,7 +375,7 @@ Agent Control (JSON output):
   jmux ctl workflow next --start Start the next thing in the queue
   jmux ctl --help                Show all ctl subcommands
 
-Keybindings (Ctrl-a ? shows these in the app, and everything else):
+Keybindings (Ctrl-Space ? shows these in the app, and everything else):
 ${helpKeybindings()}
 
   Mouse
@@ -424,7 +425,7 @@ const configFile = configFileIn(jmuxDir);
 // is inherited from this process. Setting it here means we don't need to
 // `set-environment -g JMUX_DIR ...` after control-mode attaches.
 process.env.JMUX_DIR = jmuxDir;
-// Same mechanism, same reason: defaults.conf's `C-a y` bind pipes into
+// Same mechanism, same reason: defaults.conf's `C-Space y` bind pipes into
 // $JMUX_COPY. Resolved here rather than in the conf so the platform branch is
 // testable and lives in one place. Empty is meaningful — the bind reports it.
 process.env.JMUX_COPY = clipboardCopyCommand();
@@ -523,7 +524,7 @@ if (demoMode) {
       // blocking here would hold the first frame behind it. jmux boots, the
       // panes settle in the background, and the sidebar picks up the state as
       // the emitters write it. The watcher then stays up for the life of the
-      // demo so sessions created later — by `Ctrl-a u`, or `n` in the issue
+      // demo so sessions created later — by `Ctrl-Space u`, or `n` in the issue
       // panel — don't strand their agent on the same dialog.
       void live.acceptWorkspaceTrust(ctx);
       live.watchWorkspaceTrust(ctx);
@@ -595,7 +596,7 @@ if (userTmuxConfigNotice) warnConfig(userTmuxConfigNotice);
 process.env.JMUX_USER_CONF = userTmuxConfPath;
 
 let sidebarWidth = configStore.config.sidebarWidth || 26;
-// `Ctrl-a \` — the sidebar hidden by the user, as opposed to by the terminal
+// `Ctrl-Space \` — the sidebar hidden by the user, as opposed to by the terminal
 // being too narrow for it. Deliberately not persisted: this is "give the panes
 // the whole terminal for a minute", not a preference, and a hidden sidebar
 // that survived a restart would take away the surface that explains how to get
@@ -1132,7 +1133,7 @@ function isBrowserInstalled(): boolean {
  * Forget the cached answer. Called from the one place that discovers the
  * truth the hard way — a keypress that found nothing installed — so a browser
  * installed since startup surfaces the toolbar button instead of leaving it
- * hidden until a restart while `Ctrl-a b` quietly works.
+ * hidden until a restart while `Ctrl-Space b` quietly works.
  */
 function forgetBrowserInstalled(): void {
   browserInstalled = null;
@@ -1801,13 +1802,13 @@ function applySidebarSort(mode: SortMode): void {
  * Cycling the group axis afterwards is silent by contrast — there the ghost rows
  * visibly appear or disappear, which is its own feedback.
  *
- * Both entry points (`Ctrl-a f` and the palette submenu) route through here so
+ * Both entry points (`Ctrl-Space f` and the palette submenu) route through here so
  * they cannot disagree about whether the disclosure appears.
  */
 function applySidebarFilter(mode: FilterMode): void {
   sidebar.setFilterMode(mode);
   if (mode === "started" && sidebar.getGroupMode() !== "stage") {
-    showToast("started only: hides unstarted work when grouped by stage (Ctrl-a G)");
+    showToast("started only: hides unstarted work when grouped by stage (Ctrl-Space G)");
   }
 }
 const agentStateTracker = new AgentStateTracker();
@@ -1870,7 +1871,7 @@ let gridAxes: CommandCenterAxes = normalizeAxes(
 /**
  * The grid's tile-size floor, named. Unlike `commandCenter.maxTiles` this is
  * hot-applied (`GlassView.setDensity` only resizes existing clients, never
- * spawns or tears one down) — both from `Ctrl-a D` and from a config-file
+ * spawns or tears one down) — both from `Ctrl-Space D` and from a config-file
  * edit, in the config watcher below.
  */
 let commandCenterDensity: Density = normalizeDensity(configStore.config.commandCenter?.density);
@@ -2543,7 +2544,7 @@ interface UndoMove {
 /**
  * A *batch*, because one event can move several issues: a merge request closing
  * four tickets is one decision the user made and has to be able to take back as
- * one. A single record here meant `^a Z` reverted whichever issue happened to
+ * one. A single record here meant `^Space Z` reverted whichever issue happened to
  * be written last and silently stranded the rest.
  */
 interface PendingUndo {
@@ -2568,7 +2569,7 @@ function undoChipLabel(): string | null {
   const what = moves.length === 1
     ? `${moves[0]!.identifier} → ${moves[0]!.to}`
     : `${moves.length} issues moved`;
-  return `${what}  ^a Z undo`;
+  return `${what}  ^Space Z undo`;
 }
 
 // A transient confirmation in the toolbar chip. Actions that deliberately
@@ -2626,7 +2627,7 @@ async function applyTransition(
  * of it — the per-repo target lookup, the confirm policy, the event label — is
  * about a write jmux decided to make. This one was named outright, so it needs
  * none of that. What it does share is the `UndoMove`, so a manual pick lands in
- * the same `Ctrl-a Z` batch as everything else.
+ * the same `Ctrl-Space Z` batch as everything else.
  */
 async function applyStatusPick(
   issue: import("./adapters/types").Issue,
@@ -2740,7 +2741,7 @@ async function fixWorkflowDrift(): Promise<void> {
   }
 
   const drift = detectDrift(ctx.issues, ctx.mrs, workflowInputs());
-  // Silence would read as a broken key. Said out loud, the same way `Ctrl-a e`
+  // Silence would read as a broken key. Said out loud, the same way `Ctrl-Space e`
   // reports having nothing to disclose.
   if (!drift) {
     showToast("Nothing to move — the tracker already agrees");
@@ -3765,7 +3766,7 @@ function applyChromeLayout(): void {
 }
 
 /**
- * Hide or show the sidebar (`Ctrl-a \`). The state is an input to
+ * Hide or show the sidebar (`Ctrl-Space \`). The state is an input to
  * computeFrameLayout rather than anything the sidebar itself knows, so the
  * pty, the input router's hit-testing and the composite all follow from the
  * one relayout.
@@ -3784,7 +3785,7 @@ function toggleSidebar(): void {
 }
 
 /**
- * `Ctrl-a g` — show me the panel, from wherever I am.
+ * `Ctrl-Space g` — show me the panel, from wherever I am.
  *
  * On the normal frame that is the plain toggle. On a full-screen surface
  * (settings, workflow, ghost preview) it is a swap: the surface owns the whole
@@ -3904,7 +3905,7 @@ async function sendReviewToAgent(): Promise<void> {
       title: "No review to send",
       message: diffPanel.isActive()
         ? "hunk's session daemon isn't answering, so jmux can't read your notes."
-        : "Open the Diff tab with Ctrl-a g and leave notes with c first.",
+        : "Open the Diff tab with Ctrl-Space g and leave notes with c first.",
     });
     return;
   }
@@ -5198,7 +5199,7 @@ function persistViews(next: PanelView[]): void {
   panelViews = next;
   const ids = new Set(panelViews.map((v) => v.id));
   for (const v of panelViews) if (!viewStates.has(v.id)) viewStates.set(v.id, createViewState());
-  // A deleted tab must not linger in the up-next rotation, or `Ctrl-a u` would
+  // A deleted tab must not linger in the up-next rotation, or `Ctrl-Space u` would
   // silently skip a queue that no longer exists.
   const upNext = configStore.config.pipeline?.upNext ?? [];
   const pruned = upNext.filter((id) => ids.has(id));
@@ -6442,7 +6443,7 @@ function buildOnboardingPort(): OnboardingPort {
       if (facts.namingConfigured) out.push("Sessions named by a model");
       if (facts.trackerAuthed) out.push(`${facts.trackerType ?? "Tracker"} connected`);
       if (!facts.hunkInstalled) {
-        out.push("Diff viewer not installed — npm i -g hunkdiff, then Ctrl-a g");
+        out.push("Diff viewer not installed — npm i -g hunkdiff, then Ctrl-Space g");
       }
       return out;
     },
@@ -6475,11 +6476,11 @@ function openSetup(): void {
 }
 
 /**
- * The `Ctrl-a ?` keyboard reference, also reachable from the toolbar's `?`
+ * The `Ctrl-Space ?` keyboard reference, also reachable from the toolbar's `?`
  * button and the palette.
  *
- * Toggling rather than stacking: a second `Ctrl-a ?` closes it, matching
- * `Ctrl-a p`. Opening over another modal replaces it, since the two are
+ * Toggling rather than stacking: a second `Ctrl-Space ?` closes it, matching
+ * `Ctrl-Space p`. Opening over another modal replaces it, since the two are
  * alternatives rather than layers — and it means a user who opened the wrong
  * one is never trapped.
  */
@@ -6772,7 +6773,7 @@ function buildPaletteCommands(): PaletteCommand[] {
     );
   }
 
-  // Sidebar group / sort / filter — submenus mirroring the Ctrl-a G / s / f cycles.
+  // Sidebar group / sort / filter — submenus mirroring the Ctrl-Space G / s / f cycles.
   const activeGroup = sidebar.getGroupMode();
   const activeSort = sidebar.getSortMode();
   const activeFilter = sidebar.getFilterMode();
@@ -7523,7 +7524,7 @@ function buildSettingsCategories(): SettingsCategory[] {
         ...repoDefaultSettings(),
         {
           id: "project-dirs", label: "Project directories", type: "text" as const,
-          describe: () => "Comma-separated. Where Ctrl-a n looks for repos, and where adding a project scans.",
+          describe: () => "Comma-separated. Where Ctrl-Space n looks for repos, and where adding a project scans.",
           getValue: () => {
             const dirs = configStore.config.projectDirs ?? [];
             return dirs.length > 0 ? dirs.join(", ") : "auto-detect";
@@ -7742,7 +7743,7 @@ function openProjectsScreen(): void {
  * throwing away the screen the user was reading a moment before and making the
  * one row that opened it a one-way door.
  *
- * Opened directly — `Ctrl-a W`, the command palette — there is nothing to go
+ * Opened directly — `Ctrl-Space W`, the command palette — there is nothing to go
  * back to, so this stays null and Escape closes outright. The slot is set from
  * `settingsScreen.isOpen` at the moment of opening rather than from which
  * call site did it, so a new entry point cannot forget to declare itself.
@@ -7774,7 +7775,7 @@ function openSettingsScreen(focusId?: string): void {
 }
 
 function toggleSettingsScreen(): void {
-  // An explicit toggle dismisses the whole stack: Ctrl-a i on a Projects
+  // An explicit toggle dismisses the whole stack: Ctrl-Space i on a Projects
   // screen means "put this away", not "go up one level" — that is what Escape
   // is for.
   surfaceReturn = null;
@@ -7937,7 +7938,7 @@ function workflowBands(tier: SettingsTier): WorkflowBand[] {
             if (stages.length === 0) {
               return "Grouped by stage this fills every band; on this axis it needs a stage in Up next — mark one with u above.";
             }
-            return `${each} from each of ${stages.join(", ")}, in one band.${except} Group by stage (^a G) for a band each.`;
+            return `${each} from each of ${stages.join(", ")}, in one band.${except} Group by stage (^Space G) for a band each.`;
           },
         },
       ],
@@ -7950,7 +7951,7 @@ function workflowBands(tier: SettingsTier): WorkflowBand[] {
         {
           id: "transition-confirm", label: "Confirmation", type: "list" as const,
           getValue: () => transitionConfirmMode(),
-          describe: () => "undo-toast writes and offers Ctrl-a Z for 20s; always asks first; never writes silently.",
+          describe: () => "undo-toast writes and offers Ctrl-Space Z for 20s; always asks first; never writes silently.",
           options: ["undo-toast", "always", "never"],
           onOptionSelect: (v: string) =>
             configStore.setPipeline("transitionConfirm", v as "always" | "undo-toast" | "never"),
@@ -7975,7 +7976,7 @@ function buildWorkflowPort(): WorkflowPort {
     unstartedCap: ghostCap,
     getUpNext: () => configStore.config.pipeline?.upNext ?? [],
     toggleUpNext: (viewId) => {
-      // Append on add, so the order you add them is the order Ctrl-a u checks.
+      // Append on add, so the order you add them is the order Ctrl-Space u checks.
       const cur = (configStore.config.pipeline?.upNext ?? []).slice();
       const at = cur.indexOf(viewId);
       if (at >= 0) cur.splice(at, 1); else cur.push(viewId);
@@ -8537,7 +8538,7 @@ async function startWorkOnIssue(
  */
 function sectionedViewNotice(view: PanelView): boolean {
   if (view.states === undefined) return false;
-  showToast(`${view.label}: sections come from its statuses — grouping doesn't apply (Ctrl-a W)`);
+  showToast(`${view.label}: sections come from its statuses — grouping doesn't apply (Ctrl-Space W)`);
   return true;
 }
 
@@ -8742,7 +8743,7 @@ function issuesForView(view: PanelView | undefined): import("./adapters/types").
  * Every issues queue's contents, in the order its own tab renders them.
  *
  * Ordering reuses buildViewNodes so "the top of the list" means exactly what the
- * panel shows — no second sort implementation to drift. Shared by `Ctrl-a u` and
+ * panel shows — no second sort implementation to drift. Shared by `Ctrl-Space u` and
  * the sidebar's ghost band so both agree on what "next" is.
  */
 function orderedIssuesByView(): Map<string, import("./adapters/types").Issue[]> {
@@ -9360,7 +9361,7 @@ function focusPanelOnIssue(issueId: string): void {
 }
 
 /**
- * Directories `Ctrl-a n` offers, Projects first.
+ * Directories `Ctrl-Space n` offers, Projects first.
  *
  * A configured Project is a repo the user has already adopted, so it leads —
  * and this is what stops `projectDirs` being load-bearing for making a session
@@ -10773,7 +10774,7 @@ async function showVersionInfo(): Promise<void> {
 // Check for updates in the background (non-blocking)
 checkForUpdates();
 
-// Warm the project-dirs cache in the background so Ctrl-a+n is instant
+// Warm the project-dirs cache in the background so Ctrl-Space+n is instant
 refreshProjectDirsInBackground();
 
 // --- Control mode events ---
@@ -11349,7 +11350,7 @@ function applyGridSnapshot(snap: GridSnapshot): void {
     // show, folded into one string because the tile label is a single chip.
     // The pane suffix — which pane this is, when it isn't the session's
     // natural choice — is appended at draw time (`tileLabel`), not here: it
-    // can change (a live `Ctrl-a x` cycle) without a new spec arriving.
+    // can change (a live `Ctrl-Space x` cycle) without a new spec arriving.
     const identity = displaySessionName(session);
     const badge = formatIssueBadge(pollCoordinator.getContext(session.name)?.issues ?? []);
     specs.push({
@@ -11455,8 +11456,8 @@ async function enterGlass(): Promise<void> {
 }
 
 /**
- * Switch the Command Center's active view — what the strip's chips, `Ctrl-a
- * 1…9` and `Ctrl-a [ / ]` now drive. The incoming view's axes win over any
+ * Switch the Command Center's active view — what the strip's chips, `Ctrl-Space
+ * 1…9` and `Ctrl-Space [ / ]` now drive. The incoming view's axes win over any
  * dirty (unsaved) live axes: selecting a view means adopting it (transition 1
  * of `views.ts`'s three), not carrying an in-flight narrowing across.
  */
@@ -11580,7 +11581,7 @@ async function leaveGlass(sessionId: string): Promise<boolean> {
 }
 
 /**
- * Ctrl-a C. Enters the grid exactly like clicking the Overview row; leaving is
+ * Ctrl-Space C. Enters the grid exactly like clicking the Overview row; leaving is
  * the harder half, because `exitGlass` deliberately does not choose a session
  * (see its doc comment) and a switch can fail. So this picks a target itself
  * — `preGlassSessionId` if it's still alive, else the first session in the
@@ -11615,7 +11616,7 @@ async function toggleCommandCenter(): Promise<void> {
 }
 
 /**
- * Ctrl-a Enter. Re-resolves the tile's pane at press time (via GlassView's own
+ * Ctrl-Space Enter. Re-resolves the tile's pane at press time (via GlassView's own
  * live face, not a cached one) so a face cycled a moment ago is honored.
  *
  * Session gone: notice, stay in the grid — `leaveGlass` must never run against
@@ -11648,7 +11649,7 @@ async function openFocusedGlassTile(): Promise<void> {
 }
 
 /**
- * Ctrl-a P. In the grid it removes the focused session — hide the session AND
+ * Ctrl-Space P. In the grid it removes the focused session — hide the session AND
  * clear every one of its panes' force-on pins, as one action, so unhiding it
  * later doesn't silently readmit it through a pin that was never cleared.
  * Outside the grid it's the opposite: force-on the pane you're looking at and
@@ -11711,7 +11712,7 @@ function cycleGridDensity(): void {
 
 /**
  * Detach the interactive client — the Command Center equivalent of a normal
- * Ctrl-a d. In glass, keystrokes are routed to the focused tile's mirror client,
+ * Ctrl-Space d. In glass, keystrokes are routed to the focused tile's mirror client,
  * so prefix+d would detach that tile, not jmux. We replay prefix+d straight to
  * the main PTY instead: that detaches cleanly even while the client is parked on
  * the internal session (verified), whereas `detach-client -c` over the control
@@ -11719,7 +11720,7 @@ function cycleGridDensity(): void {
  * firing pty.onExit → cleanup(), which tears down the glass tiles.
  */
 function detachClient(): void {
-  pty.write("\x01d");
+  pty.write(`${PREFIX_BYTE}d`);
 }
 
 async function handleTabClick(windowId: string): Promise<void> {
@@ -12097,7 +12098,7 @@ async function start(): Promise<void> {
   }
 
   // First run opens the setup checklist rather than a wall of keybindings.
-  // The chords it used to list now live in `Ctrl-a ?` (and the `?` button),
+  // The chords it used to list now live in `Ctrl-Space ?` (and the `?` button),
   // where they can be re-read at any point instead of only in the thirty
   // seconds before the modal was dismissed for good.
   if (configStore.ensureExists()) {

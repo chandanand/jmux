@@ -58,7 +58,7 @@ honest about it. Every tile is therefore a *session* tile: `TileKey` is
 `session:$id` and nothing else, membership is a set of sessions, and a pin
 chooses a session's **face** (which pane it shows, via
 `glass/representative.ts`'s election) rather than adding a second tile. Seeing a
-session's other agents is a cycle within its one tile (`Ctrl-a x`), not a second
+session's other agents is a cycle within its one tile (`Ctrl-Space x`), not a second
 row on the grid.
 
 Fanning a session out across multiple tiles would need each tile to blit a

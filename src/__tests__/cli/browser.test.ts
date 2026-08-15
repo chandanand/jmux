@@ -107,7 +107,7 @@ describe("resolveTarget", () => {
 
   test("tells the caller how to get a browser when there is none", () => {
     // An agent hitting this needs to know both routes out of it.
-    expect(() => resolveTarget([], {})).toThrow(/browser open|Ctrl-a b/);
+    expect(() => resolveTarget([], {})).toThrow(/browser open|Ctrl-Space b/);
   });
 });
 

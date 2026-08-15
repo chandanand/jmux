@@ -10,7 +10,7 @@ GitLab and GitHub Enterprise Server).
 > **Setup lives on its own page.** Tokens, adapter config, and what to do when a
 > tab doesn't appear are all in **[Connecting](connecting.md)**. This page
 > assumes it's already working. Shaping the panel around your own process —
-> stages, parking, `Ctrl-a u`, status writes — is in **[Workflow](workflow.md)**.
+> stages, parking, `Ctrl-Space u`, status writes — is in **[Workflow](workflow.md)**.
 >
 > No credentials yet? `jmux --demo` runs the whole panel against mock data.
 
@@ -21,7 +21,7 @@ GitHub — jmux treats them as one thing and so do the keybindings.
 
 ## The Info Panel
 
-Press `Ctrl-a g` to toggle the info panel. It docks to the right side of the
+Press `Ctrl-Space g` to toggle the info panel. It docks to the right side of the
 terminal with tabbed views:
 
 | Tab | What it shows |
@@ -32,7 +32,7 @@ terminal with tabbed views:
 | **Review** | MRs awaiting your review |
 
 Those three are the defaults you get before configuring anything. Once you
-define workflow stages in `Ctrl-a W`, **the issue tabs become your stages** —
+define workflow stages in `Ctrl-Space W`, **the issue tabs become your stages** —
 `Urgent`, `To do`, `Waiting` — and the strip reads as your pipeline. See
 [Workflow](workflow.md).
 
@@ -96,7 +96,7 @@ exactly as it always has.
 issues on different teams can sit on entirely different workflows, and a status
 only some of them accept would half-apply and report nothing. If they share
 none, jmux says so rather than showing an empty list. The whole batch is one
-`Ctrl-a Z` undo, and cancelling the picker keeps your ticks.
+`Ctrl-Space Z` undo, and cancelling the picker keeps your ticks.
 
 **On a merge request:**
 
@@ -127,7 +127,7 @@ of your workspace: the **States** list is pulled live from your tracker, and
 `F` is the durable definition of what belongs in the tab.
 
 Changes persist to `~/.config/jmux/config.json` automatically. Once a view looks
-right, **Save current view as tab** in the command palette (`Ctrl-a p`) clones
+right, **Save current view as tab** in the command palette (`Ctrl-Space p`) clones
 it under a new name — configuring by demonstration rather than by editing JSON.
 
 ### Images in issue previews
@@ -166,7 +166,7 @@ both are looked for automatically, and without either those formats fall back to
 links. Fetching an attachment from a private tracker uses the same credential
 the tracker adapter does, and only ever sends it to that tracker's own host.
 
-Two settings, both under **Display** in the settings screen (`Ctrl-a I`):
+Two settings, both under **Display** in the settings screen (`Ctrl-Space I`):
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
@@ -196,7 +196,7 @@ Linked items lead the sidebar's second row, as a badge:
 ```
 
 `ENG-1234` is the linked issue, `Review` is the workflow stage it's in (once
-you've defined one under `Ctrl-a W`), `!88` is the linked merge request, and
+you've defined one under `Ctrl-Space W`), `!88` is the linked merge request, and
 `✓` is the pipeline status glyph.
 
 A session can carry **several** issues, and then the badge reads `ENG-1234 +4`.
@@ -205,12 +205,12 @@ finished — which is also what decides the session's workflow stage band. So a
 session drops out of "In Review" only when its last ticket does, and a closed
 ticket can't hold a session in Done while four open ones sit under it.
 
-Press `Ctrl-a e` to expand the badge into the full list — see
+Press `Ctrl-Space e` to expand the badge into the full list — see
 [Seeing what a session carries](#seeing-what-a-session-carries).
 
 ### Manual linking from the command palette
 
-Press `Ctrl-a p` and search for:
+Press `Ctrl-Space p` and search for:
 - **"Link issue"** — fuzzy search Linear issues and link one to the current session
 - **"Link MR"** — fuzzy search MRs and link one to the current session
 - **"Unlink issue"** / **"Unlink MR"** — remove a manual link
@@ -276,7 +276,7 @@ gets a worktree; `wtmIntegration` only picks the mechanism. The old
 
 The `teamRepoMap` is what enables the automated flow. Without it, pressing `n` on an issue opens the standard new-session modal where you pick a directory manually.
 
-Configure it in settings (`Ctrl-a I` > **Repo** > **Team → repo mappings**) or edit the config file directly. The inline picker shows your project directories for quick selection.
+Configure it in settings (`Ctrl-Space I` > **Repo** > **Team → repo mappings**) or edit the config file directly. The inline picker shows your project directories for quick selection.
 
 ### Three-state workflow
 
@@ -323,7 +323,7 @@ repos instead of guessing.
 #### Seeing what a session carries
 
 The sidebar row shows the driving issue and a count of the rest — `TRA-123 +4`.
-Press **`Ctrl-a e`** (or click the badge) to expand that into a row per issue,
+Press **`Ctrl-Space e`** (or click the badge) to expand that into a row per issue,
 with its status:
 
 ```
@@ -504,5 +504,5 @@ subheadings both come from those statuses, and `groupBy` is ignored.
 ## Next
 
 - **[Connecting](connecting.md)** — tokens, adapter config, troubleshooting
-- **[Workflow](workflow.md)** — your stages, parking, `Ctrl-a u`, status writes
+- **[Workflow](workflow.md)** — your stages, parking, `Ctrl-Space u`, status writes
 - **[Configuration](configuration.md)** — everything else in `config.json`

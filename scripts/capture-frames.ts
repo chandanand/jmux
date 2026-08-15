@@ -21,6 +21,7 @@
 
 import { Terminal } from "bun-pty";
 import { ScreenBridge } from "../src/screen-bridge";
+import { PREFIX_BYTE, PREFIX_LABEL } from "../src/prefix";
 import type { Cell, CellGrid, CursorPosition } from "../src/types";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { hostname, tmpdir, userInfo } from "os";
@@ -65,7 +66,7 @@ function osc11Reply({ r, g, b }: { r: number; g: number; b: number }): string {
 // The beats
 // ---------------------------------------------------------------------------
 
-const CTRL_A = "\x01";
+const PREFIX = PREFIX_BYTE;
 const ENTER = "\r";
 const NAV_DOWN = "\x1b[1;6B"; // Ctrl-Shift-Down
 
@@ -79,7 +80,7 @@ const NAV_DOWN = "\x1b[1;6B"; // Ctrl-Shift-Down
  * new one.
  */
 const KEY_NAMES: Record<string, string> = {
-  [CTRL_A]: "Ctrl-a",
+  [PREFIX]: PREFIX_LABEL,
   [ENTER]: "Enter",
   [NAV_DOWN]: "Ctrl-Shift-↓",
   "\x1b": "Esc",
@@ -94,7 +95,7 @@ export function describeKeys(beat: Beat): string[] {
 
   const out: string[] = [];
   for (const key of sent) {
-    // A chord is written as one string (CTRL_A + "G") but read as two caps.
+    // A chord is written as one string (PREFIX + "G") but read as two caps.
     let rest = key;
     while (rest.length > 0) {
       const named = Object.keys(KEY_NAMES).find((k) => rest.startsWith(k));
@@ -163,7 +164,7 @@ const BEATS: Beat[] = [
     label: "Five agents, one screen",
     // Demo mode opens grouped by stage. The page earns that grouping in beat
     // three, so the opener steps off it to a flat list first.
-    keys: [CTRL_A, "G"],
+    keys: [PREFIX, "G"],
     // Sidebar names are truncated to the column width, so assertions match what
     // the sidebar can actually fit rather than the session's real name.
     expect: ["Flat", "api-paginati", "chart-perf"],
@@ -176,7 +177,7 @@ const BEATS: Beat[] = [
     // times": the sidebar's order is a product decision that is allowed to
     // change, and a capture that counts rows would silently start landing on
     // the wrong session the day it does.
-    keys: [CTRL_A, "p", "auth", ENTER],
+    keys: [PREFIX, "p", "auth", ENTER],
     expect: ["WAITING", "auth-refactor"],
     settleMs: 700,
   },
@@ -185,7 +186,7 @@ const BEATS: Beat[] = [
     label: "Grouped by your workflow stages",
     // Three presses back round to stage today. Driven by the label rather than
     // the count, so adding a grouping axis re-times this instead of breaking it.
-    advance: { key: CTRL_A + "G", until: "Stage", max: 6 },
+    advance: { key: PREFIX + "G", until: "Stage", max: 6 },
     keys: [],
     expect: ["Stage", "In progress"],
     settleMs: 500,
@@ -262,7 +263,7 @@ export interface EncodedFilm {
   label: string;
   cols: number;
   rows: number;
-  /** Display forms of the keys this beat pressed, e.g. ["Ctrl-a", "G"]. */
+  /** Display forms of the keys this beat pressed, e.g. ["Ctrl-Space", "G"]. */
   keys: string[];
   steps: EncodedStep[];
 }
@@ -523,7 +524,7 @@ export function thin(shots: Shot[]): Shot[] {
   const distinct: Shot[] = [];
   let previous: string | null = null;
   for (const shot of shots) {
-    const key = frameText(shot.grid) + ` ${shot.cursor.x},${shot.cursor.y}`;
+    const key = frameText(shot.grid) + `\x00${shot.cursor.x},${shot.cursor.y}`;
     if (key !== previous) distinct.push(shot);
     previous = key;
   }
@@ -677,7 +678,7 @@ async function main(): Promise<void> {
   // all. Opening the info panel does that, and it is also what the frames
   // wanted anyway — the main area stops being an empty prompt and starts being
   // the issue queue these beats keep talking about.
-  await typeKeys(pty, [CTRL_A, "g"]);
+  await typeKeys(pty, [PREFIX, "g"]);
   await settle(state, 800, 10_000);
 
   // Start on the first session so the sidebar is scrolled to the top.
@@ -688,7 +689,7 @@ async function main(): Promise<void> {
   // is a jmux rendering bug rather than a capture artifact (it survives a fully
   // settled read), and it is filed separately; this keeps it off the website in
   // the meantime by never opening in the state that triggers it.
-  await typeKeys(pty, [CTRL_A, "p", "api", ENTER]);
+  await typeKeys(pty, [PREFIX, "p", "api", ENTER]);
   await settle(state, 700, 10_000);
 
   for (const beat of BEATS) {

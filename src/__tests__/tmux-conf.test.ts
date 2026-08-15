@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { DETACH_ON_DESTROY_COMMAND } from "../config-generation";
+import { PREFIX_BYTE, TMUX_PREFIX_KEY } from "../prefix";
 
 // The .conf files are the one part of jmux tmux executes directly, so nothing
 // in the type system or the render pipeline can catch a reference to a file
@@ -28,6 +29,13 @@ function confText(name: string): string {
 }
 
 describe("tmux config files", () => {
+  test("core.conf uses the prefix byte recognized by the input router", () => {
+    const text = confText("core.conf");
+    expect(PREFIX_BYTE.charCodeAt(0)).toBe(0);
+    expect(text).toContain(`set -g prefix ${TMUX_PREFIX_KEY}`);
+    expect(text).toContain(`bind-key ${TMUX_PREFIX_KEY} send-prefix`);
+  });
+
   for (const name of CONF_FILES) {
     test(`${name} references only files that exist`, () => {
       const text = confText(name);
@@ -123,6 +131,8 @@ describe("tmux config files", () => {
       "automatic-rename",
       "automatic-rename-format",
       "status", //           jmux draws its own toolbar in that row
+      "prefix", //          must match the byte recognized by the input router
+      "send-prefix", //     lets a doubled prefix reach the pane
     ];
     const unexpected = settings.filter((line) => !allowed.some((s) => line.includes(s)));
     expect(unexpected).toEqual([]);

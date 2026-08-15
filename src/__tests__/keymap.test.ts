@@ -13,7 +13,7 @@ import { buildToolbarButtons } from "../renderer";
 //
 // Both directions matters. Checking only "every table row exists in the source"
 // would pass a router that grew a chord nobody documented, which is exactly how
-// `Ctrl-a j` came to be advertised for a bind that was never written.
+// `Ctrl-Space j` came to be advertised for a bind that was never written.
 
 const ROOT = resolve(import.meta.dir, "..", "..");
 
@@ -54,10 +54,6 @@ function confBinds(): string[] {
       break;
     }
     const key = tokens[i];
-    // `bind-key C-a send-prefix` binds the prefix to itself so a literal
-    // Ctrl-a reaches the pane. It is plumbing for the prefix, not an action a
-    // user would look up, and keymap.ts deliberately has no row for it.
-    if (key === "C-a") continue;
     if (key) keys.push(key);
   }
   return keys;
@@ -198,7 +194,7 @@ describe("keymap ↔ input-router", () => {
   // The per-binding matrix above only walks bindings that already exist in
   // the table — a chord added straight to a router arm with no Binding row at
   // all has nothing to iterate over and is invisible to it. That is exactly
-  // the drift this file exists to prevent (`Ctrl-a j`, advertised for a bind
+  // the drift this file exists to prevent (`Ctrl-Space j`, advertised for a bind
   // that was never written), so the router→table direction needs its own
   // check per arm: every byte an arm actually intercepts must be claimed by
   // at least one row that declares *that* arm.
@@ -246,7 +242,7 @@ describe("keymap ↔ input-router", () => {
     expect(stray).toEqual([]);
   });
 
-  test("Ctrl-a ? reaches the help overlay from both arms", () => {
+  test("Ctrl-Space ? reaches the help overlay from both arms", () => {
     // The regression this pins: the overlay was advertised by footer.ts for
     // months with no handler behind it anywhere.
     expect(routerPrefixKeys("prefix")).toContain("?");
@@ -382,17 +378,15 @@ describe("keymap internal consistency", () => {
   });
 
   test("keysFor resolves a known id and returns undefined otherwise", () => {
-    expect(keysFor("palette")).toBe("Ctrl-a p");
+    expect(keysFor("palette")).toBe("Ctrl-Space p");
     expect(keysFor("no-such-command")).toBeUndefined();
   });
 });
 
 describe("shortKeys", () => {
   test("compacts the prefix without mangling the chord key", () => {
-    expect(shortKeys("Ctrl-a p")).toBe("^a p");
-    // The ordering trap: a general Ctrl- rule applied first would leave "^a p"
-    // by luck here but break "Ctrl-a Left", whose "a" is not a modifier.
-    expect(shortKeys("Ctrl-a Left")).toBe("^a ←");
+    expect(shortKeys("Ctrl-Space p")).toBe("^Space p");
+    expect(shortKeys("Ctrl-Space Left")).toBe("^Space ←");
   });
 
   test("compacts standalone modifiers and arrows", () => {

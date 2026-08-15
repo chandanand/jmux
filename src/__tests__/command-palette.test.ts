@@ -204,20 +204,20 @@ describe("CommandPalette", () => {
     expect(palette.isOpen()).toBe(false);
   });
 
-  test("Ctrl-a then p closes palette", () => {
+  test("Ctrl-Space then p closes palette", () => {
     const palette = new CommandPalette();
     palette.open(testCommands);
-    const action1 = palette.handleInput("\x01"); // Ctrl-a
+    const action1 = palette.handleInput("\x00"); // Ctrl-Space
     expect(action1.type).toBe("consumed"); // buffered
     const action2 = palette.handleInput("p");
     expect(action2.type).toBe("closed");
     expect(palette.isOpen()).toBe(false);
   });
 
-  test("Ctrl-a then non-p discards both bytes", () => {
+  test("Ctrl-Space then non-p discards both bytes", () => {
     const palette = new CommandPalette();
     palette.open(testCommands);
-    palette.handleInput("\x01"); // Ctrl-a
+    palette.handleInput("\x00"); // Ctrl-Space
     const action = palette.handleInput("x"); // not p
     expect(action.type).toBe("consumed");
     expect(palette.isOpen()).toBe(true);
@@ -420,8 +420,8 @@ describe("disabled palette rows", () => {
 // the palette itself never spells one out.
 describe("palette keybinding column", () => {
   const withKeys: PaletteCommand[] = [
-    { id: "split-h", label: "Split horizontal", category: "pane", keys: "^a |" },
-    { id: "new-window", label: "New window", category: "window", keys: "^a c" },
+    { id: "split-h", label: "Split horizontal", category: "pane", keys: "^Space |" },
+    { id: "new-window", label: "New window", category: "window", keys: "^Space c" },
     { id: "kill-session", label: "Kill session", category: "session" },
   ];
 
@@ -431,8 +431,8 @@ describe("palette keybinding column", () => {
   test("renders the keys of a command that has them", () => {
     const p = new CommandPalette();
     p.open(withKeys);
-    expect(rowAt(p, 60, 0)).toContain("^a |");
-    expect(rowAt(p, 60, 1)).toContain("^a c");
+    expect(rowAt(p, 60, 0)).toContain("^Space |");
+    expect(rowAt(p, 60, 1)).toContain("^Space c");
   });
 
   test("a command with no binding renders exactly as before", () => {
@@ -449,15 +449,15 @@ describe("palette keybinding column", () => {
     const row = rowAt(p, 60, 0);
     expect(row).toContain("pane");
     // The tag owns the right edge; the keys sit to its left, not through it.
-    expect(row.indexOf("^a |")).toBeLessThan(row.indexOf("pane"));
+    expect(row.indexOf("^Space |")).toBeLessThan(row.indexOf("pane"));
   });
 
   test("keys are dropped, not overlapped, when the row is too tight", () => {
     // A chord half-painted over a label would teach a key that does not exist.
     const p = new CommandPalette();
-    p.open([{ id: "x", label: "Some quite long command label", category: "pane", keys: "^a |" }]);
+    p.open([{ id: "x", label: "Some quite long command label", category: "pane", keys: "^Space |" }]);
     const row = rowAt(p, 20, 0);
-    expect(row).not.toContain("^a |");
+    expect(row).not.toContain("^Space |");
   });
 
   test("every row still fits the grid width", () => {

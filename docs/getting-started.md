@@ -88,7 +88,7 @@ A **pane** splits a window into multiple terminals side by side. Useful when you
 
 ## Essential keybindings
 
-jmux uses `Ctrl-a` as the **prefix key**. Some actions require pressing `Ctrl-a` first, then the next key. Others work directly.
+jmux uses `Ctrl-Space` as the **prefix key**. Some actions require pressing `Ctrl-Space` first, then the next key. Others work directly.
 
 ### Navigating sessions
 
@@ -104,10 +104,10 @@ No prefix key needed — these work instantly.
 
 | Action | Keys |
 |--------|------|
-| New session | `Ctrl-a` then `n` |
-| New window (tab) | `Ctrl-a` then `c` |
-| Split pane left / right | `Ctrl-a` then `\|` |
-| Split pane top / bottom | `Ctrl-a` then `-` |
+| New session | `Ctrl-Space` then `n` |
+| New window (tab) | `Ctrl-Space` then `c` |
+| Split pane left / right | `Ctrl-Space` then `\|` |
+| Split pane top / bottom | `Ctrl-Space` then `-` |
 
 The split keys look like what they do: `|` gives you a vertical divider, `-` a
 horizontal one. "Horizontal" and "vertical" are avoided on purpose — tmux uses
@@ -122,17 +122,17 @@ talking.
 | Next window | `Ctrl-Right` |
 | Previous window | `Ctrl-Left` |
 | Switch pane | `Shift-Arrow` (any direction) |
-| Resize pane | `Ctrl-a` then arrow keys (repeatable) |
-| Toggle pane zoom | `Ctrl-a` then `z` |
+| Resize pane | `Ctrl-Space` then arrow keys (repeatable) |
+| Toggle pane zoom | `Ctrl-Space` then `z` |
 
 ### Info panel
 
 | Action | Keys |
 |--------|------|
-| Toggle info panel | `Ctrl-a` then `g` |
+| Toggle info panel | `Ctrl-Space` then `g` |
 | Cycle tabs (Diff/Issues/MRs/Review) | `[` / `]` (when panel is focused) |
-| Zoom panel (split ↔ full) | `Ctrl-a` then `z` (when panel is focused) |
-| Switch focus (tmux ↔ panel) | `Ctrl-a` then `Tab` |
+| Zoom panel (split ↔ full) | `Ctrl-Space` then `z` (when panel is focused) |
+| Switch focus (tmux ↔ panel) | `Ctrl-Space` then `Tab` |
 | Focus panel from rightmost pane | `Shift-Right` |
 | Return focus to tmux | `Shift-Left` (from panel) |
 
@@ -142,13 +142,13 @@ The Diff tab is powered by [hunk](https://github.com/modem-dev/hunk) — install
 
 | Action | Keys |
 |--------|------|
-| Keyboard shortcuts | `Ctrl-a` then `?` (or click `?` in the toolbar) |
-| Command palette | `Ctrl-a` then `p` |
-| Settings | `Ctrl-a` then `i` |
-| Clear pane | `Ctrl-a` then `k` |
-| Copy pane to clipboard | `Ctrl-a` then `y` |
-| Rename session | `Ctrl-a` then `p`, "Rename session" |
-| Move window to session | `Ctrl-a` then `p`, "Move window to session" |
+| Keyboard shortcuts | `Ctrl-Space` then `?` (or click `?` in the toolbar) |
+| Command palette | `Ctrl-Space` then `p` |
+| Settings | `Ctrl-Space` then `i` |
+| Clear pane | `Ctrl-Space` then `k` |
+| Copy pane to clipboard | `Ctrl-Space` then `y` |
+| Rename session | `Ctrl-Space` then `p`, "Rename session" |
+| Move window to session | `Ctrl-Space` then `p`, "Move window to session" |
 
 ---
 
@@ -159,16 +159,16 @@ The Diff tab is powered by [hunk](https://github.com/modem-dev/hunk) — install
 1. Start jmux: `jmux`
 2. You're in your first session — this is your first project
 3. Open your editor in the default window
-4. Create a new window for your agent: `Ctrl-a` then `c`
+4. Create a new window for your agent: `Ctrl-Space` then `c`
 5. Start your agent: `claude`
-6. Create another window for your dev server: `Ctrl-a` then `c`
+6. Create another window for your dev server: `Ctrl-Space` then `c`
 7. Switch between windows with `Ctrl-Right` / `Ctrl-Left` or click the tabs
 
 Now you have one project with an editor, an agent, and a dev server — each in its own tab.
 
 ### Working on multiple projects
 
-1. Create a new session: `Ctrl-a` then `n`
+1. Create a new session: `Ctrl-Space` then `n`
 2. Pick a project directory, name the session
 3. Set up windows for that project (editor, agent, etc.)
 4. Repeat for more projects
@@ -189,7 +189,7 @@ This creates a bare repo with [wtm](https://github.com/jarredkenny/worktree-mana
 
 **Daily workflow:**
 
-1. Press `Ctrl-a` then `n` to create a new session
+1. Press `Ctrl-Space` then `n` to create a new session
 2. Select your wtm-managed project
 3. Choose **+ new worktree**
 4. Pick a base branch (e.g., `main`) and name your branch
@@ -220,10 +220,10 @@ myproject (sidebar)
 When an agent finishes work and the `!` flag appears:
 
 1. Switch to that session
-2. Press `Ctrl-a g` to open the info panel in split mode — you'll see the agent's terminal on the left and its code changes on the right (Diff tab)
+2. Press `Ctrl-Space g` to open the info panel in split mode — you'll see the agent's terminal on the left and its code changes on the right (Diff tab)
 3. Click the panel or press `Shift-Right` to focus it, then use `j`/`k` to scroll and `[`/`]` to jump between hunks — or between tabs
-4. Press `Ctrl-a z` to zoom the panel to full-screen for thorough review
-5. Press `Ctrl-a z` again to unzoom, or `Ctrl-a g` to close the panel entirely
+4. Press `Ctrl-Space z` to zoom the panel to full-screen for thorough review
+5. Press `Ctrl-Space z` again to unzoom, or `Ctrl-Space g` to close the panel entirely
 
 The Diff tab shows the working tree changes for whichever session is active. Switch sessions in the sidebar and the diff updates automatically. The Issues and MRs tabs show your tracked items across all sessions — see [issue-tracking.md](issue-tracking.md).
 
@@ -237,21 +237,21 @@ When you have several agents running in different sessions:
 
 Switch to a session to check on it. The indicators clear when you type something in that session — not when you're just passing through.
 
-For a bird's-eye view, open the **Command Center** — `Ctrl-a C`, or the entry at
+For a bird's-eye view, open the **Command Center** — `Ctrl-Space C`, or the entry at
 the top of the sidebar: a grid of live, drivable tiles, one per session, with
 borders colored by agent state. It's non-destructive — panes stay in their own
 sessions. You don't pin anything to populate it: membership is **derived**, the
 same way the sidebar's own rows are — the grid shows whichever sessions the
 active view's filter would put in front of you, automatically, as agents start
-and finish. A session with several agent panes still gets one tile; `Ctrl-a x`
+and finish. A session with several agent panes still gets one tile; `Ctrl-Space x`
 cycles which pane it's showing.
 
 When the derived set isn't quite what you want, two per-session overrides are a
-keystroke away: `Ctrl-a P` on a session removes it from the grid (or, from
+keystroke away: `Ctrl-Space P` on a session removes it from the grid (or, from
 inside a session, adds it, showing the pane you're on); a hidden session stays
 off the grid until you bring it back from the palette's **Show hidden sessions
 (N)…**. Switch between saved presets of the grid's own filter/group/sort with
-`Ctrl-a <number>` or `Ctrl-a [` / `Ctrl-a ]`, or save your current narrowing as
+`Ctrl-Space <number>` or `Ctrl-Space [` / `Ctrl-Space ]`, or save your current narrowing as
 a new one with **Save current axes as view…** in the palette.
 
 ---
@@ -281,11 +281,11 @@ export LINEAR_API_KEY="lin_api_..."    # from linear.app/settings/api
 export GITLAB_TOKEN="glpat-..."        # api scope — or GH_TOKEN for GitHub
 ```
 
-Then `Ctrl-a I` → **Integrations** → set **Code host** (`gitlab` or `github`)
+Then `Ctrl-Space I` → **Integrations** → set **Code host** (`gitlab` or `github`)
 and **Issue tracker** (`linear`), and **restart jmux** — adapters are the one
 setting that doesn't hot-reload.
 
-Press `Ctrl-a g` and use `[`/`]` to reach the Issues or MRs tab. If a tab isn't
+Press `Ctrl-Space g` and use `[`/`]` to reach the Issues or MRs tab. If a tab isn't
 there, the adapter didn't connect.
 
 **Full setup, self-hosted hosts, and what to check when a tab doesn't appear:
@@ -296,7 +296,7 @@ there, the adapter didn't connect.
 
 If you want to create sessions directly from issues (press `n` on an issue), tell jmux which Linear team maps to which local repository:
 
-In settings (`Ctrl-a I` > **Repo** > **Team → repo mappings**), add entries like:
+In settings (`Ctrl-Space I` > **Repo** > **Team → repo mappings**), add entries like:
 - `Platform` → `~/repos/backend`
 - `Frontend` → `~/repos/frontend`
 
@@ -304,7 +304,7 @@ Now selecting an issue and pressing `n` will create a worktree, open a session, 
 
 ### 3. Define your workflow (optional)
 
-Your tracker probably has more statuses than you have steps. Press `Ctrl-a W` and
+Your tracker probably has more statuses than you have steps. Press `Ctrl-Space W` and
 define **your own stages** — Urgent, To do, In Progress, Waiting — each covering
 one or many of your tracker's statuses.
 
@@ -325,11 +325,11 @@ Two keystrokes worth knowing once that's set up:
 
 | Key | Action |
 |-----|--------|
-| `Ctrl-a u` | Start the next issue from your stage rotation (press `u` on a stage to add it) |
-| `Ctrl-a a` | Capture a new issue — `Enter` files it, `Ctrl-S` files it *and* starts work |
+| `Ctrl-Space u` | Start the next issue from your stage rotation (press `u` on a stage to add it) |
+| `Ctrl-Space a` | Capture a new issue — `Enter` files it, `Ctrl-S` files it *and* starts work |
 
 See [workflow.md](workflow.md) for the full pipeline reference — stages, parking,
-`Ctrl-a u`, and status writes back to your tracker — and
+`Ctrl-Space u`, and status writes back to your tracker — and
 [issue-tracking.md](issue-tracking.md) for custom views, pipeline glyphs and
 manual linking.
 
@@ -337,7 +337,7 @@ manual linking.
 
 ## Settings
 
-Press `Ctrl-a` then `I` (capital) to open the settings screen:
+Press `Ctrl-Space` then `I` (capital) to open the settings screen:
 
 - **Display** — sidebar width, panel width, cache timers, state colours
 - **Integrations** — code host (GitLab or GitHub), issue tracker (Linear)
@@ -346,7 +346,7 @@ Press `Ctrl-a` then `I` (capital) to open the settings screen:
 - **Workflow** — opens the workflow screen (below)
 - **Diagnostics** — read-only: whether the tracker is connected, and what's parked
 
-The issue pipeline has a screen of its own: `Ctrl-a W` is where you define your
+The issue pipeline has a screen of its own: `Ctrl-Space W` is where you define your
 own workflow stages and map your tracker's statuses onto them — two settings per
 status, plus parking and status writes back to your tracker.
 
@@ -358,13 +358,13 @@ the row reads `restart to apply` until you relaunch.
 
 ## Tips
 
-- **Command palette** (`Ctrl-a` then `p`) lets you fuzzy-search sessions, windows, pane actions, and settings — useful when you can't remember a keybinding
+- **Command palette** (`Ctrl-Space` then `p`) lets you fuzzy-search sessions, windows, pane actions, and settings — useful when you can't remember a keybinding
 - **Scroll the sidebar** with your mouse wheel when you have many sessions
 - **Click the version** at the bottom of the sidebar to see release notes
 - **Mouse selection** works — click and drag to select text, it copies to your clipboard
 - **Your tmux config** still works. If you have `~/.tmux.conf` (or `~/.config/tmux/tmux.conf`), jmux loads it. Your plugins, themes, and custom bindings carry over — and `userTmuxConfig: false` turns that off if its chrome collides with jmux's
-- **Resize panes** with `Ctrl-a` then arrow keys (hold for continuous resize)
-- **Zoom a pane** with `Ctrl-a` then `z` — the tab shows ⤢ when zoomed, press again to unzoom
+- **Resize panes** with `Ctrl-Space` then arrow keys (hold for continuous resize)
+- **Zoom a pane** with `Ctrl-Space` then `z` — the tab shows ⤢ when zoomed, press again to unzoom
 - **Pane borders** auto-show when a window has multiple panes and hide for single-pane windows
 
 ---

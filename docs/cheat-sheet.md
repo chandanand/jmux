@@ -1,6 +1,6 @@
 # jmux Cheat Sheet
 
-Quick reference for all keybindings and features. The default prefix is `Ctrl-a`.
+Quick reference for all keybindings and features. The default prefix is `Ctrl-Space`.
 
 ---
 
@@ -11,7 +11,7 @@ Quick reference for all keybindings and features. The default prefix is `Ctrl-a`
 | Switch session | Click a session in the sidebar |
 | Next/prev session | `Ctrl-Shift-Down` / `Ctrl-Shift-Up` |
 | Scroll sidebar | Mouse wheel over the sidebar |
-| Hide / show the sidebar | `Ctrl-a \` — the panes take the whole terminal |
+| Hide / show the sidebar | `Ctrl-Space \` — the panes take the whole terminal |
 | Mouse select & copy | Click-drag in the main area to select, copies to clipboard |
 
 The sidebar shows all sessions with:
@@ -43,15 +43,15 @@ bucket into headers, sorting decides the order *within* a bucket.
 
 | Key | Action | Cycles through |
 |-----|--------|----------------|
-| `Ctrl-a G` | Cycle grouping | `Flat` → `Project` → `Status` → `Stage` |
-| `Ctrl-a s` | Cycle sort within a group | `Name` → `Activity` → `Status` |
-| `Ctrl-a f` | Cycle filter | `All` → `Started` → `Needs you` → `Active` |
+| `Ctrl-Space G` | Cycle grouping | `Flat` → `Project` → `Status` → `Stage` |
+| `Ctrl-Space s` | Cycle sort within a group | `Name` → `Activity` → `Status` |
+| `Ctrl-Space f` | Cycle filter | `All` → `Started` → `Needs you` → `Active` |
 
 The current modes show as chips at the top of the sidebar (`⊞ Status  ⇅ Activity`),
-alongside a count of sessions wanting your attention. `Ctrl-a s` deliberately
+alongside a count of sessions wanting your attention. `Ctrl-Space s` deliberately
 shadows tmux's `choose-session`, which the sidebar already replaces.
 
-`Stage` groups sessions by the workflow stages you defined in `Ctrl-a W` — a
+`Stage` groups sessions by the workflow stages you defined in `Ctrl-Space W` — a
 session sits under the stage that claims its linked issue's status, with headers
 in your own stage order. Sessions with no linked issue, or whose status no stage
 claims, list flat below the stage groups. See [Workflow](workflow.md#your-stages-in-the-sidebar).
@@ -86,8 +86,8 @@ Four bands sit outside the grouping, in fixed positions:
   | `s` | Change the issue's status (park it, or move it along) |
   | `o` | Open the issue in your browser |
   | `↑` `↓` `PgUp` `PgDn` | Scroll the issue body |
-  | `Ctrl-a \` | Hide / show the sidebar, as anywhere else |
-  | `Ctrl-a g` | Leave the preview and open the panel — the two can't share the frame |
+  | `Ctrl-Space \` | Hide / show the sidebar, as anywhere else |
+  | `Ctrl-Space g` | Leave the preview and open the panel — the two can't share the frame |
   | `Esc` / `q` | Back to what you were doing |
 
   The preview shows the issue *and* what starting it would do — the session and
@@ -108,9 +108,9 @@ Four bands sit outside the grouping, in fixed positions:
 |-----|--------|
 | `Ctrl-Shift-Up` | Move to previous sidebar row |
 | `Ctrl-Shift-Down` | Move to next sidebar row |
-| `Ctrl-a n` | New session / new worktree (auto-detects wtm projects) |
-| `Ctrl-a p` → "Rename session" | Rename current session |
-| `Ctrl-a p` → "Move window to session" | Move current window to another session |
+| `Ctrl-Space n` | New session / new worktree (auto-detects wtm projects) |
+| `Ctrl-Space p` → "Rename session" | Rename current session |
+| `Ctrl-Space p` → "Move window to session" | Move current window to another session |
 
 `Ctrl-Shift-Up` / `Ctrl-Shift-Down` walk every row the sidebar draws, not only
 sessions: landing on a session switches to it, landing on an unstarted issue
@@ -127,7 +127,7 @@ you — see [Parking](workflow.md#parking-the-back-burner).
 
 | Key | Action |
 |-----|--------|
-| `Ctrl-a c` | New window (starts in `~`) |
+| `Ctrl-Space c` | New window (starts in `~`) |
 | `Ctrl-Right` | Next window |
 | `Ctrl-Left` | Previous window |
 | `Ctrl-Shift-Right` | Move window right |
@@ -139,19 +139,19 @@ you — see [Parking](workflow.md#parking-the-back-burner).
 
 | Key | Action |
 |-----|--------|
-| `Ctrl-a \|` | Split pane left / right |
-| `Ctrl-a -` | Split pane top / bottom |
-| `Ctrl-a b` | Open browser pane |
+| `Ctrl-Space \|` | Split pane left / right |
+| `Ctrl-Space -` | Split pane top / bottom |
+| `Ctrl-Space b` | Open browser pane |
 | `Shift-Left/Right/Up/Down` | Navigate between panes |
-| `Ctrl-a Left/Right/Up/Down` | Resize pane (repeatable) |
-| `Ctrl-a z` | Toggle pane zoom (⤢ shown in tab) |
+| `Ctrl-Space Left/Right/Up/Down` | Resize pane (repeatable) |
+| `Ctrl-Space z` | Toggle pane zoom (⤢ shown in tab) |
 
 
 Pane borders auto-show when a window has multiple panes and hide for single-pane windows.
 
 ### Browser panes
 
-`Ctrl-a b` opens a real browser beside the current pane. The browser is
+`Ctrl-Space b` opens a real browser beside the current pane. The browser is
 [terminal-browser](https://github.com/zenbu-labs/terminal-browser) by
 [Zenbu Labs](https://github.com/zenbu-labs) (MIT) — a separate program jmux
 spawns rather than bundles, so install it yourself:
@@ -187,7 +187,7 @@ decoration: `isolate` gives each pane a private registry, so `terminal-browser`
 run directly from an agent's pane finds nothing. jmux knows which registry
 belongs to which pane and points the CLI at it.
 
-`Ctrl-a p` → **Open dev server in a browser pane** finds whatever the current
+`Ctrl-Space p` → **Open dev server in a browser pane** finds whatever the current
 session is listening on and opens it. `jmux ctl dev-servers` is the same list as
 JSON.
 
@@ -244,25 +244,25 @@ state. Non-destructive: panes never leave their own session. Membership is
 **derived**, not hand-placed: the grid shows whatever sessions the active view's
 filter/group/sort would put in the sidebar, the same way the sidebar itself
 derives its rows. Open it from the **Command Center** entry at the top of the
-sidebar, or `Ctrl-a C` from anywhere.
+sidebar, or `Ctrl-Space C` from anywhere.
 
 | Key | Arm | Action |
 |-----|-----|--------|
-| `Ctrl-a C` | everywhere | Toggle the Command Center |
-| `Ctrl-a P` | everywhere | In the grid: remove the focused session from it. In a session: add the current pane's session, showing this pane |
-| `Ctrl-a ↵` | in the grid | Open the focused tile's session full-size, on its displayed pane |
-| `Ctrl-a x` | in the grid | Cycle the focused tile's face — which pane of a multi-agent session it shows |
-| `Ctrl-a z` | in the grid | Zoom the focused tile to full size, or restore |
-| `Ctrl-a G` / `s` / `f` | in the grid | Cycle the grid's own grouping / sort / filter — independent of the sidebar's |
-| `Ctrl-a D` | in the grid | Toggle tile density: Fit / Focus |
-| `Ctrl-a 1…9` | in the grid | Switch to view N |
-| `Ctrl-a [` / `Ctrl-a ]` | in the grid | Previous / next view, wrapping |
-| `Ctrl-a d` | in the grid | Detach jmux (not the focused tile) |
+| `Ctrl-Space C` | everywhere | Toggle the Command Center |
+| `Ctrl-Space P` | everywhere | In the grid: remove the focused session from it. In a session: add the current pane's session, showing this pane |
+| `Ctrl-Space ↵` | in the grid | Open the focused tile's session full-size, on its displayed pane |
+| `Ctrl-Space x` | in the grid | Cycle the focused tile's face — which pane of a multi-agent session it shows |
+| `Ctrl-Space z` | in the grid | Zoom the focused tile to full size, or restore |
+| `Ctrl-Space G` / `s` / `f` | in the grid | Cycle the grid's own grouping / sort / filter — independent of the sidebar's |
+| `Ctrl-Space D` | in the grid | Toggle tile density: Fit / Focus |
+| `Ctrl-Space 1…9` | in the grid | Switch to view N |
+| `Ctrl-Space [` / `Ctrl-Space ]` | in the grid | Previous / next view, wrapping |
+| `Ctrl-Space d` | in the grid | Detach jmux (not the focused tile) |
 | Shift-arrows | in the grid | Move focus between tiles |
 | Click a view chip | in the grid | Switch to that view |
 | Mouse wheel | in the grid | Scroll the tile under the cursor |
 
-**Density** picks the tile-size floor the grid packs against — `Ctrl-a D`
+**Density** picks the tile-size floor the grid packs against — `Ctrl-Space D`
 toggles **Fit** (everything visible, sized to whatever fits — the default)
 and **Focus** (four big, legible tiles; the rest scroll). The active mode's
 name sits at the right end of the strip. Fit is the default: it's what
@@ -271,7 +271,7 @@ name sits at the right end of the strip. Fit is the default: it's what
 **Why one tile per session:** tmux ties the current window and zoom to the
 *session*, not the client, so two tiles can't show two panes of one session at
 once by any arrangement of pins. A session with several agent panes shows one at
-a time; `Ctrl-a x` cycles between them, and the focused tile's bottom border
+a time; `Ctrl-Space x` cycles between them, and the focused tile's bottom border
 names the position (`⌃a x agent 2/3`) so the others are a visible fact before
 you press anything.
 
@@ -283,10 +283,10 @@ drifted from what's saved); **Save current axes as view…** in the palette keep
 them instead. The grid ships one seeded view, **Active**.
 
 Two exceptions layer on top of the derived set, both from the command palette
-(`Ctrl-a p`) or `jmux ctl`: **Pin to Command Center** keeps a session on the grid
+(`Ctrl-Space p`) or `jmux ctl`: **Pin to Command Center** keeps a session on the grid
 even when the view's axes wouldn't include it, and prefers this pane as the
 session's face; **Unpin from Command Center** drops that preference. A session
-removed from the grid with `Ctrl-a P` stays off it (via `@jmux-grid-hidden`)
+removed from the grid with `Ctrl-Space P` stays off it (via `@jmux-grid-hidden`)
 until you bring it back — the palette's **Show hidden sessions (N)…** lists
 every session currently hidden this way, so an exception is never invisible.
 Hiding a session always wins over a pin left on one of its panes: hide's subject
@@ -300,7 +300,7 @@ An empty grid names the active view and how to widen it (`⌃a f  all sessions`,
 
 ## Command Palette
 
-Press `Ctrl-a p` to open the command palette — a floating overlay for fuzzy-searching all actions.
+Press `Ctrl-Space p` to open the command palette — a floating overlay for fuzzy-searching all actions.
 
 | Key | Action (inside palette) |
 |-----|--------|
@@ -308,7 +308,7 @@ Press `Ctrl-a p` to open the command palette — a floating overlay for fuzzy-se
 | `↑` / `↓` | Navigate results (scrolls with long lists) |
 | `Enter` | Execute command or drill into setting sub-list |
 | `Escape` | Back out of sub-list, or close palette |
-| `Ctrl-a p` | Close palette |
+| `Ctrl-Space p` | Close palette |
 
 **Available commands:** switch sessions, switch windows, new session/window, kill session, close window/pane, split a pane either way, open a browser pane, zoom pane, rename session, **re-name session with the model**, move window, open Claude, keyboard shortcuts, setup, Command Center (pin/unpin, save/rename/delete view, switch view, show hidden sessions), sidebar width, Claude command, project directories.
 
@@ -329,12 +329,12 @@ reaching for the palette once you have learned the chord.
 
 | Key | Action |
 |-----|--------|
-| `Ctrl-a g` | Toggle info panel on/off |
+| `Ctrl-Space g` | Toggle info panel on/off |
 | `h` / `l` (or `[` / `]`) | Cycle tabs (Diff, Issues, MRs, Review) |
-| `Ctrl-a z` | Zoom panel (split ↔ full, when focused) |
-| `Ctrl-a Tab` | Switch focus between tmux and panel |
-| `Ctrl-a v` | Choose what the Diff tab shows |
-| `Ctrl-a r` | Send your review notes to this session's agent |
+| `Ctrl-Space z` | Zoom panel (split ↔ full, when focused) |
+| `Ctrl-Space Tab` | Switch focus between tmux and panel |
+| `Ctrl-Space v` | Choose what the Diff tab shows |
+| `Ctrl-Space r` | Send your review notes to this session's agent |
 | `Shift-Right` | Focus panel from rightmost pane |
 | `Shift-Left` | Return focus to tmux from panel |
 | Click panel | Focus panel for keyboard navigation |
@@ -350,13 +350,13 @@ hunk 0.17+ runs a local session daemon, which lets jmux read the diff's shape
 and the notes you write on it. See [diff-panel.md](diff-panel.md) for the whole
 loop; the short version:
 
-1. `Ctrl-a g` — open the panel. The tab shows live `+N −M` for the changeset.
+1. `Ctrl-Space g` — open the panel. The tab shows live `+N −M` for the changeset.
 2. `c` in the panel — write a note on the hunk under the cursor.
-3. `Ctrl-a r` — jmux shows what it will send, and on Enter types the notes into
+3. `Ctrl-Space r` — jmux shows what it will send, and on Enter types the notes into
    the pane running this session's agent. Sent notes are cleared, so the `●N`
    count on the tab always means "written but not sent yet".
 
-`Ctrl-a v` repoints the panel: working tree, staged, last commit, or everything
+`Ctrl-Space v` repoints the panel: working tree, staged, last commit, or everything
 your branch has added since it forked.
 
 ### Issue & MR views (when on Issues/MRs/Review tab)
@@ -388,13 +388,13 @@ See [connecting.md](connecting.md) for setup, [issue-tracking.md](issue-tracking
 
 | Key | Action |
 |-----|--------|
-| `Ctrl-a ?` | Keyboard shortcuts — every binding on this page, in the app |
-| `Ctrl-a p` | Command palette (fuzzy search all actions) |
-| `Ctrl-a k` | Clear pane content + scrollback |
-| `Ctrl-a y` | Copy entire pane content to clipboard |
-| `Ctrl-a i` | Settings palette (quick one-shot toggles) |
-| `Ctrl-a I` | Settings screen (display, integrations, repo, project) |
-| `Ctrl-a W` | Workflow screen (your stages, and a table of statuses → stage + parks) |
+| `Ctrl-Space ?` | Keyboard shortcuts — every binding on this page, in the app |
+| `Ctrl-Space p` | Command palette (fuzzy search all actions) |
+| `Ctrl-Space k` | Clear pane content + scrollback |
+| `Ctrl-Space y` | Copy entire pane content to clipboard |
+| `Ctrl-Space i` | Settings palette (quick one-shot toggles) |
+| `Ctrl-Space I` | Settings screen (display, integrations, repo, project) |
+| `Ctrl-Space W` | Workflow screen (your stages, and a table of statuses → stage + parks) |
 
 ---
 
@@ -402,14 +402,14 @@ See [connecting.md](connecting.md) for setup, [issue-tracking.md](issue-tracking
 
 | Key | Action |
 |-----|--------|
-| `Ctrl-a W` | Define your workflow stages and map statuses onto them |
-| `Ctrl-a a` | Capture a new issue (`Enter` files it, `Ctrl-S` files it and starts work) |
-| `Ctrl-a u` | Start the next issue from your stage rotation |
-| `Ctrl-a Z` | Undo the last status write to your tracker |
-| `Ctrl-a e` | Expand this session's issues in the sidebar |
-| `Ctrl-a m` | Move this session's issues where the workflow says they should be |
+| `Ctrl-Space W` | Define your workflow stages and map statuses onto them |
+| `Ctrl-Space a` | Capture a new issue (`Enter` files it, `Ctrl-S` files it and starts work) |
+| `Ctrl-Space u` | Start the next issue from your stage rotation |
+| `Ctrl-Space Z` | Undo the last status write to your tracker |
+| `Ctrl-Space e` | Expand this session's issues in the sidebar |
+| `Ctrl-Space m` | Move this session's issues where the workflow says they should be |
 
-`Ctrl-a W` is where you define **your own workflow stages** — Urgent, To do,
+`Ctrl-Space W` is where you define **your own workflow stages** — Urgent, To do,
 In Progress, Waiting — each sitting on top of one or many of your tracker's
 statuses. Two blocks: your stages, then a table of every status. Each status has
 two settings: which stage it belongs to (`↵`) and whether it parks (`space`).
@@ -423,7 +423,7 @@ On a **stage** row:
 | `⇧↑` `⇧↓` | Reorder it — this order drives the panel's tabs and the sidebar's bands |
 | `s` | Show / hide the stage in the sidebar (its sessions stay either way) |
 | `space` | Show / hide its unstarted work as startable rows |
-| `u` | Add to / drop from the `Ctrl-a u` rotation |
+| `u` | Add to / drop from the `Ctrl-Space u` rotation |
 | `d` | Delete the stage (asks first) |
 
 `◂` `▸` step a counted setting in place — including **how many unstarted issues
@@ -458,6 +458,6 @@ config/defaults.conf      <- jmux defaults (baseline)
 config/core.conf          <- jmux core (always wins)
 ```
 
-Override any default in your `~/.tmux.conf` — prefix key, colors, keybindings, plugins. Only a few core settings are enforced: `detach-on-destroy off`, `mouse on`, `allow-rename off` with automatic window naming, and `status off` (jmux renders its own toolbar). jmux's own chords (`Ctrl-a p`, `n`, `?` and the rest) are not tmux binds at all — jmux's input router intercepts them before tmux sees them, so they are unaffected by anything in your tmux config.
+Override presentation defaults in your `~/.tmux.conf` — colors, keybindings, and plugins. A few core settings are enforced, including the `Ctrl-Space` prefix, `detach-on-destroy off`, `mouse on`, automatic window naming, and `status off` (jmux renders its own toolbar).
 
 See [configuration.md](configuration.md) for the full guide.

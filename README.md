@@ -61,12 +61,12 @@ That second one is what keeps a fleet manageable:
 ![Marking a status as parked in the workflow screen; its sessions collapse into a Parked row in the sidebar](docs/screenshots/flow.gif)
 
 - **See what you haven't started.** Each stage can show the work sitting in it that nobody has picked up — issues with no session — as dimmed rows right under the sessions that do. Click one and it becomes real: worktree, session, agent, issue linked. The sidebar stops being a list of what's running and becomes the whole board.
-- **Pull the next thing** with `Ctrl-a u`. It takes the top item from your first non-empty stage and does the whole ticket-to-worktree-to-agent dance. The daily ritual is one keystroke.
-- **Capture without losing your place** — `Ctrl-a a` files a Linear issue from wherever you are. `Enter` files it and returns you; `Ctrl-S` files it *and* starts work on it.
-- **Status updates as a byproduct.** Optionally move an issue along when you start a session on it, when an MR appears on its branch, and when that MR merges — with `TRA-123 → QA  ^a Z undo` in the toolbar for twenty seconds. All of it defaults to off: **jmux never writes to your tracker until you say so.**
+- **Pull the next thing** with `Ctrl-Space u`. It takes the top item from your first non-empty stage and does the whole ticket-to-worktree-to-agent dance. The daily ritual is one keystroke.
+- **Capture without losing your place** — `Ctrl-Space a` files a Linear issue from wherever you are. `Enter` files it and returns you; `Ctrl-S` files it *and* starts work on it.
+- **Status updates as a byproduct.** Optionally move an issue along when you start a session on it, when an MR appears on its branch, and when that MR merges — with `TRA-123 → QA  ^Space Z undo` in the toolbar for twenty seconds. All of it defaults to off: **jmux never writes to your tracker until you say so.**
 
 <details>
-<summary><b>Setup</b> — one screen, <code>Ctrl-a W</code></summary>
+<summary><b>Setup</b> — one screen, <code>Ctrl-Space W</code></summary>
 
 Everything above is configured on one screen. It's two blocks: your panel tabs, then a table of every status your tracker offers.
 
@@ -105,7 +105,7 @@ Full guide: [docs/workflow.md](docs/workflow.md).
 
 ### From ticket to merged, without leaving the terminal
 
-Connect [Linear](https://linear.app) and [GitLab](https://about.gitlab.com) or [GitHub](https://github.com) — [five minutes, one page](docs/connecting.md) — open the info panel with `Ctrl-a g`, and the whole loop lives in your terminal:
+Connect [Linear](https://linear.app) and [GitLab](https://about.gitlab.com) or [GitHub](https://github.com) — [five minutes, one page](docs/connecting.md) — open the info panel with `Ctrl-Space g`, and the whole loop lives in your terminal:
 
 **Pick an issue → press `n` → jmux creates a worktree, opens a session, and launches your agent with the issue context.** One keystroke from ticket to working code.
 
@@ -117,7 +117,7 @@ While it works, watch the sidebar. When it finishes, toggle the **integrated dif
 
 Then flip to the **MRs tab** — approve or update status without opening a browser. `o` opens anything in your browser, `s` updates an issue's status, `a` approves, `r` refreshes from the tracker.
 
-Each agent gets its own isolated branch via **[wtm](https://github.com/jarredkenny/worktree-manager)** — no stashing, no conflicts, no switching. `Ctrl-a n` → pick a project → **+ new worktree**.
+Each agent gets its own isolated branch via **[wtm](https://github.com/jarredkenny/worktree-manager)** — no stashing, no conflicts, no switching. `Ctrl-Space n` → pick a project → **+ new worktree**.
 
 <details>
 <summary><b>Setup</b> — Linear + GitLab / GitHub / GitHub Enterprise</summary>
@@ -145,7 +145,7 @@ Full guide, including what to check when a tab doesn't appear: [docs/connecting.
 
 Kicking off five agents is easy. Keeping track of them is the hard part — which one is still thinking, which one stopped to ask you a question, which one quietly finished ten minutes ago.
 
-jmux answers that at a glance. The **sidebar** lists every session with live indicators, and the **Command Center** (`Ctrl-a C`) gives you a single grid of every agent you care about — each tile a live, drivable mirror of a session, its border colored by state so you see who needs you without hunting. It fills itself: membership is derived from the same sessions your sidebar is showing, so there is nothing to set up.
+jmux answers that at a glance. The **sidebar** lists every session with live indicators, and the **Command Center** (`Ctrl-Space C`) gives you a single grid of every agent you care about — each tile a live, drivable mirror of a session, its border colored by state so you see who needs you without hunting. It fills itself: membership is derived from the same sessions your sidebar is showing, so there is nothing to set up.
 
 ![jmux Command Center: a grid of live Claude agent panes, borders colored by state](docs/screenshots/fleet.gif)
 
@@ -179,9 +179,9 @@ jmux ships a [Claude Code skill](skills/jmux-control.md) that agents auto-discov
 
 ### It's real tmux. Bring everything.
 
-jmux wraps a real tmux process — it doesn't replace it. Your `~/.tmux.conf`, prefix key, plugins, theme, and custom bindings all carry over. Only a small set of core settings are enforced.
+jmux wraps a real tmux process — it doesn't replace it. Your `~/.tmux.conf`, plugins, theme, and custom bindings all carry over. jmux reserves `Ctrl-Space` as its prefix, along with a small set of core settings required to draw and manage the workspace.
 
-jmux paints its own sidebar, toolbar, and rounded window chrome — and it **fully adapts to your terminal's color scheme**. Every glyph and surface is drawn from your terminal's own palette, so jmux inherits whatever theme you already run and looks native in **light or dark**, with no config. Tune the state colors, adapters, and pane widths from the settings screen (`Ctrl-a I`).
+jmux paints its own sidebar, toolbar, and rounded window chrome — and it **fully adapts to your terminal's color scheme**. Every glyph and surface is drawn from your terminal's own palette, so jmux inherits whatever theme you already run and looks native in **light or dark**, with no config. Tune the state colors, adapters, and pane widths from the settings screen (`Ctrl-Space I`).
 
 ![jmux in a dark terminal theme showing the sidebar, window tabs, and a Claude Code session](docs/screenshots/theme-dark.webp)
 
@@ -199,12 +199,12 @@ See [Images in issue previews](docs/issue-tracking.md#images-in-issue-previews).
 
 ### A real browser, in a pane
 
-`Ctrl-a b` splits the pane and puts **Chromium** in it. Not a text-mode renderer
+`Ctrl-Space b` splits the pane and puts **Chromium** in it. Not a text-mode renderer
 — a live page you can click, scroll, fill in and open DevTools on, beside the
 agent that's building it. Powered by
 [terminal-browser](https://github.com/zenbu-labs/terminal-browser).
 
-`Ctrl-a p` → **Open dev server** asks what the current session is actually
+`Ctrl-Space p` → **Open dev server** asks what the current session is actually
 listening on and opens it. It reads listening sockets rather than your
 scrollback, so a server that printed its URL before you scrolled is still found,
 and a URL in a log line isn't mistaken for one.
@@ -225,10 +225,10 @@ See [Browser panes](docs/browser-panes.md).
 
 ### Also included
 
-- **Command palette** (`Ctrl-a p`) — fuzzy-search sessions, windows, pane actions, settings, and issue/MR commands. ([screenshot](docs/screenshots/command-palette.webp))
-- **Diff panel zoom** (`Ctrl-a z`) — blow the diff up to full-screen; the sidebar stays for session switching. ([screenshot](docs/screenshots/diff-panel-full.webp))
-- **Settings screen** (`Ctrl-a I`) — themes and state colors, code-host/issue-tracker adapters, per-repo defaults. `Ctrl-a i` is a shorter palette of one-shot toggles. ([screenshot](docs/screenshots/settings.webp))
-- **Workflow screen** (`Ctrl-a W`) — define your own workflow stages, then map every tracker status onto one in a single table.
+- **Command palette** (`Ctrl-Space p`) — fuzzy-search sessions, windows, pane actions, settings, and issue/MR commands. ([screenshot](docs/screenshots/command-palette.webp))
+- **Diff panel zoom** (`Ctrl-Space z`) — blow the diff up to full-screen; the sidebar stays for session switching. ([screenshot](docs/screenshots/diff-panel-full.webp))
+- **Settings screen** (`Ctrl-Space I`) — themes and state colors, code-host/issue-tracker adapters, per-repo defaults. `Ctrl-Space i` is a shorter palette of one-shot toggles. ([screenshot](docs/screenshots/settings.webp))
+- **Workflow screen** (`Ctrl-Space W`) — define your own workflow stages, then map every tracker status onto one in a single table.
 
 ---
 
@@ -239,15 +239,15 @@ See [Browser panes](docs/browser-panes.md).
 | Key | Action |
 |-----|--------|
 | `Ctrl-Shift-Up/Down` | Switch to prev/next session |
-| `Ctrl-a n` | New session / worktree |
-| `Ctrl-a p` | Command palette |
-| `Ctrl-a g` | Toggle info panel (Diff / Issues / MRs / Review) |
-| `Ctrl-a a` | Capture a new issue (`Ctrl-S` files it *and* starts work) |
-| `Ctrl-a u` | Start the next issue from your stage rotation |
-| `Ctrl-a W` | Workflow screen — your stages, their statuses, parking |
-| `Ctrl-a \|` / `Ctrl-a -` | Split pane horizontal / vertical |
-| `Ctrl-a b` | Open a browser pane |
-| `Ctrl-a z` | Zoom pane or diff panel |
+| `Ctrl-Space n` | New session / worktree |
+| `Ctrl-Space p` | Command palette |
+| `Ctrl-Space g` | Toggle info panel (Diff / Issues / MRs / Review) |
+| `Ctrl-Space a` | Capture a new issue (`Ctrl-S` files it *and* starts work) |
+| `Ctrl-Space u` | Start the next issue from your stage rotation |
+| `Ctrl-Space W` | Workflow screen — your stages, their statuses, parking |
+| `Ctrl-Space \|` / `Ctrl-Space -` | Split pane horizontal / vertical |
+| `Ctrl-Space b` | Open a browser pane |
+| `Ctrl-Space z` | Zoom pane or diff panel |
 
 **Full keybinding reference → [docs/cheat-sheet.md](docs/cheat-sheet.md)**
 
@@ -267,7 +267,7 @@ on screen — so it belongs here:
 
 - **[terminal-browser](https://github.com/zenbu-labs/terminal-browser)** by
   [Zenbu Labs](https://github.com/zenbu-labs) (MIT) — a real browser that runs
-  inside your terminal. It *is* the browser pane: `Ctrl-a b`, the dev-server
+  inside your terminal. It *is* the browser pane: `Ctrl-Space b`, the dev-server
   opener, and everything `jmux ctl browser` drives. jmux relays its graphics and
   gets out of the way.
 - **[hunk](https://github.com/modem-dev/hunk)** by

@@ -272,7 +272,7 @@ export interface JmuxConfig {
   pipeline?: PipelineConfig;
   /** Inline image rendering in issue previews. */
   images?: ImagesConfig;
-  /** Browser panes (Ctrl-a b), powered by terminal-browser. */
+  /** Browser panes (Ctrl-Space b), powered by terminal-browser. */
   browser?: BrowserConfig;
 }
 

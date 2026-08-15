@@ -142,16 +142,16 @@ describe("thinning", () => {
 
 describe("key labels", () => {
   test("splits a chord into separate caps", () => {
-    expect(describeKeys({ id: "x", label: "", keys: ["\x01", "G"], expect: [] })).toEqual([
-      "Ctrl-a",
+    expect(describeKeys({ id: "x", label: "", keys: ["\x00", "G"], expect: [] })).toEqual([
+      "Ctrl-Space",
       "G",
     ]);
   });
 
   test("keeps typed text as one cap rather than one per letter", () => {
     expect(
-      describeKeys({ id: "x", label: "", keys: ["\x01", "p", "auth", "\r"], expect: [] }),
-    ).toEqual(["Ctrl-a", "p", "auth", "Enter"]);
+      describeKeys({ id: "x", label: "", keys: ["\x00", "p", "auth", "\r"], expect: [] }),
+    ).toEqual(["Ctrl-Space", "p", "auth", "Enter"]);
   });
 
   test("names an advance key once, not once per press", () => {

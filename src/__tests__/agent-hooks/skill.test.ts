@@ -253,6 +253,6 @@ describe("hunkSkillSource", () => {
     if (real === null) return; // hunk isn't installed on this machine
     expect(real).toContain("name: hunk-review");
     expect(real).toContain("Inside jmux");
-    expect(real).toContain("Ctrl-a g");
+    expect(real).toContain("Ctrl-Space g");
   });
 });

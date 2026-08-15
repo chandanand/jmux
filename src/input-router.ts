@@ -8,6 +8,7 @@ import {
   type DragHandle,
   type DragIntent,
 } from "./drag";
+import { PREFIX_BYTE } from "./prefix";
 
 export interface SgrMouseEvent {
   button: number;
@@ -97,7 +98,7 @@ export interface InputRouterOptions {
   panelSplit?: () => { row: number; minRow: number; maxRow: number } | null;
   onModalInput?: (data: string) => void;
   onModalToggle?: () => void;
-  // Ctrl-a ? — the keyboard-help overlay. Also reachable by mouse from the
+  // Ctrl-Space ? — the keyboard-help overlay. Also reachable by mouse from the
   // toolbar's `?` button, which is the path that needs no prior knowledge of
   // the prefix concept at all.
   onHelp?: () => void;
@@ -106,15 +107,15 @@ export interface InputRouterOptions {
   onCaptureIssue?: () => void;
   onStartUpNext?: () => void;
   onUndoTransition?: () => void;
-  onSettingsScreen?: () => void;  // Ctrl-a I (uppercase) — full settings screen
-  // Ctrl-a W (uppercase) — the workflow screen. Uppercase because tmux binds
+  onSettingsScreen?: () => void;  // Ctrl-Space I (uppercase) — full settings screen
+  // Ctrl-Space W (uppercase) — the workflow screen. Uppercase because tmux binds
   // lowercase `w` to choose-tree and jmux never unbinds it.
   onWorkflowScreen?: () => void;
-  onGroupCycle?: () => void;      // Ctrl-a G — cycle sidebar group mode
-  onSortCycle?: () => void;       // Ctrl-a s — cycle sidebar sort mode
-  onFilterCycle?: () => void;     // Ctrl-a f — cycle sidebar filter mode
-  onBrowserPane?: () => void;     // Ctrl-a b — open a terminal-browser pane
-  onSidebarToggle?: () => void;   // Ctrl-a \ — hide/show the sidebar
+  onGroupCycle?: () => void;      // Ctrl-Space G — cycle sidebar group mode
+  onSortCycle?: () => void;       // Ctrl-Space s — cycle sidebar sort mode
+  onFilterCycle?: () => void;     // Ctrl-Space f — cycle sidebar filter mode
+  onBrowserPane?: () => void;     // Ctrl-Space b — open a terminal-browser pane
+  onSidebarToggle?: () => void;   // Ctrl-Space \ — hide/show the sidebar
   /**
    * True while a full-screen surface (settings, workflow, ghost preview) owns
    * input. Those set `modalOpen`, which otherwise kills every chord — right
@@ -133,30 +134,30 @@ export interface InputRouterOptions {
   onGlassMouse?: (x: number, y: number, button: number, release: boolean) => void; // wheel/scroll → tile under cursor
   onGlassFocusMove?: (dir: "left" | "right" | "up" | "down") => void; // Shift+arrows
   onGlassDetach?: () => void;                        // prefix+d in glass → detach jmux, not the focused tile
-  onGlassViewSwitch?: (index: number) => void;      // glass-only Ctrl-a <n> → switch view
-  onGlassViewRelative?: (delta: number) => void;    // glass-only Ctrl-a [ / ] → prev/next view
+  onGlassViewSwitch?: (index: number) => void;      // glass-only Ctrl-Space <n> → switch view
+  onGlassViewRelative?: (delta: number) => void;    // glass-only Ctrl-Space [ / ] → prev/next view
   glassStripRows?: () => number;                    // strip row count (0 when hidden)
   onGlassViewClick?: (x: number) => void;           // content-relative click on the strip row
-  // Ctrl-a C — everywhere (ordinary + glass): toggle the Command Center.
+  // Ctrl-Space C — everywhere (ordinary + glass): toggle the Command Center.
   onGlassToggle?: () => void;
-  // Ctrl-a P — everywhere: in the grid, remove the focused session; outside
+  // Ctrl-Space P — everywhere: in the grid, remove the focused session; outside
   // it, force-on the pane you're looking at. The callback decides which by
   // reading glassActive() itself, the same shape as onGroupCycle/onSortCycle/
   // onFilterCycle used to before they split.
   onGlassPinToggle?: () => void;
-  // Ctrl-a Enter — glass only: open the focused tile's session full-size, on
+  // Ctrl-Space Enter — glass only: open the focused tile's session full-size, on
   // its displayed pane.
   onGlassOpenFocused?: () => void;
-  // Ctrl-a x — glass only: cycle the focused tile's face.
+  // Ctrl-Space x — glass only: cycle the focused tile's face.
   onGlassCycleFace?: () => void;
-  // Ctrl-a z — glass only: zoom the focused tile to full size / restore.
+  // Ctrl-Space z — glass only: zoom the focused tile to full size / restore.
   onGlassZoom?: () => void;
-  // Ctrl-a G/s/f — glass only: the Command Center's own axes, split off the
+  // Ctrl-Space G/s/f — glass only: the Command Center's own axes, split off the
   // sidebar's onGroupCycle/onSortCycle/onFilterCycle (same bytes, ordinary arm).
   onGlassGroupCycle?: () => void;
   onGlassSortCycle?: () => void;
   onGlassFilterCycle?: () => void;
-  // Ctrl-a D — glass only: cycle the grid's tile-size density. Capital D on
+  // Ctrl-Space D — glass only: cycle the grid's tile-size density. Capital D on
   // purpose — lowercase d is glass detach, and tmux's own D (choose-client)
   // has no client to choose from inside the grid.
   onGlassCycleDensity?: () => void;
@@ -167,9 +168,9 @@ export interface InputRouterOptions {
   onToggleSessionIssues?: () => void;
   onFixWorkflowDrift?: () => void;
   onDiffToggle?: () => void;
-  onDiffZoom?: () => void;  // Ctrl-a z when diff panel is focused — toggles split/full
-  onDiffSendReview?: () => void;  // Ctrl-a r — hunk review notes → this session's agent
-  onDiffViewPicker?: () => void;  // Ctrl-a v — pick the changeset the Diff tab shows
+  onDiffZoom?: () => void;  // Ctrl-Space z when diff panel is focused — toggles split/full
+  onDiffSendReview?: () => void;  // Ctrl-Space r — hunk review notes → this session's agent
+  onDiffViewPicker?: () => void;  // Ctrl-Space v — pick the changeset the Diff tab shows
   onPaneNavRight?: () => void;  // Shift+Right when diff panel is open — main.ts queries pane_at_right
   // Info panel tab / action callbacks
   onPanelPrevTab?: () => void;
@@ -450,8 +451,8 @@ export class InputRouter {
       }
     }
 
-    // Ctrl-a p interception: detect prefix + p to toggle palette
-    // Ctrl-a is forwarded to tmux (so other prefix bindings work),
+    // Ctrl-Space p interception: detect prefix + p to toggle palette
+    // Ctrl-Space is forwarded to tmux (so other prefix bindings work),
     // but if next byte is "p" we intercept it before tmux sees it.
     //
     // A full-screen surface (settings, workflow, ghost preview) consumes
@@ -459,7 +460,7 @@ export class InputRouter {
     // there. That is right for chords acting on the surface's own area, and
     // wrong for the ones acting on the chrome *around* it: the sidebar is
     // painted beside all three, and the preview is the surface you reach from
-    // a sidebar row, so `Ctrl-a \` going dead exactly there is the least
+    // a sidebar row, so `Ctrl-Space \` going dead exactly there is the least
     // defensible place for it to. Those surfaces therefore get their own
     // narrow arm below (the Command Center has had one all along).
     const surfaceActive = this.modalOpen && this.opts.fullScreenSurfaceActive?.() === true;
@@ -484,7 +485,7 @@ export class InputRouter {
           // one option that answers neither.
           if (data === "g") { this.opts.onDiffToggle?.(); return; }
           // --- keymap:surface-prefix end ---
-          if (deferred) this.opts.onModalInput?.("\x01");
+          if (deferred) this.opts.onModalInput?.(PREFIX_BYTE);
           this.opts.onModalInput?.(data);
           return;
         }
@@ -535,7 +536,7 @@ export class InputRouter {
           if (data === "D") { this.opts.onGlassCycleDensity?.(); return; }
           // --- keymap:glass-prefix end ---
           // Not a jmux chord — flush the buffered prefix, then the key, to the tile.
-          if (deferred) this.opts.onPtyData("\x01");
+          if (deferred) this.opts.onPtyData(PREFIX_BYTE);
           this.opts.onPtyData(data);
           return;
         }
@@ -674,7 +675,7 @@ export class InputRouter {
           return;
         }
         // Not intercepted — forward to PTY normally (tmux handles its prefix binding)
-      } else if (data === "\x01") {
+      } else if (data === PREFIX_BYTE) {
         this.prefixSeen = true;
         this.prefixTimer = setTimeout(() => {
           this.prefixSeen = false;
@@ -705,7 +706,7 @@ export class InputRouter {
     // A missing sidebar is a sidebar of zero columns, not a reason to stop
     // classifying. This block used to be gated on `layout.sidebar` outright,
     // on the reading that null meant "the terminal is too narrow for jmux's
-    // chrome" — but `Ctrl-a \` hides the sidebar with every other piece of
+    // chrome" — but `Ctrl-Space \` hides the sidebar with every other piece of
     // chrome still on screen, and the gate took the toolbar's buttons, the
     // panel's tabs, link clicks, hover and the divider drag down with it.
     // Every test below reads `sidebarCols`, which is 0 in that case, so the

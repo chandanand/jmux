@@ -26,7 +26,7 @@ export interface FrameLayoutInput {
    */
   borderWidth: number;
   /**
-   * User override: hide the sidebar outright (`Ctrl-a \`), whatever the
+   * User override: hide the sidebar outright (`Ctrl-Space \`), whatever the
    * terminal is wide enough for. Optional because it *overrides* the width
    * rule below rather than being a second input to it — absent means the
    * width decides, which is the answer for every caller that has no user to

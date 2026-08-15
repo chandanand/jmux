@@ -69,11 +69,11 @@ describe("HelpModal contents", () => {
 
   test("a key spelling finds its binding, in both long and short form", () => {
     const long = opened();
-    type(long, "Ctrl-a p");
+    type(long, "Ctrl-Space p");
     expect(bindingRows(long).some((r) => r.kind === "binding" && r.binding.id === "palette")).toBe(true);
 
     const short = opened();
-    type(short, "^a p");
+    type(short, "^Space p");
     expect(bindingRows(short).some((r) => r.kind === "binding" && r.binding.id === "palette")).toBe(true);
   });
 
@@ -117,9 +117,9 @@ describe("HelpModal input", () => {
     expect(modal.isOpen()).toBe(false);
   });
 
-  test("Ctrl-a ? closes, mirroring Ctrl-a p on the palette", () => {
+  test("Ctrl-Space ? closes, mirroring Ctrl-Space p on the palette", () => {
     const modal = opened();
-    expect(modal.handleInput("\x01")).toEqual({ type: "consumed" });
+    expect(modal.handleInput("\x00")).toEqual({ type: "consumed" });
     expect(modal.handleInput("?")).toEqual({ type: "closed" });
     expect(modal.isOpen()).toBe(false);
   });
@@ -134,9 +134,9 @@ describe("HelpModal input", () => {
     expect(bindingRows(modal).some((r) => r.kind === "binding" && r.binding.id === "panel-sort-order")).toBe(true);
   });
 
-  test("Ctrl-a followed by anything else is swallowed, not typed", () => {
+  test("Ctrl-Space followed by anything else is swallowed, not typed", () => {
     const modal = opened();
-    modal.handleInput("\x01");
+    modal.handleInput("\x00");
     modal.handleInput("x");
     expect(modal.getQuery()).toBe("");
     expect(modal.isOpen()).toBe(true);

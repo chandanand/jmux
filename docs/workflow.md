@@ -30,7 +30,7 @@ one or many of your tracker's statuses:
 A stage shows up as a tab in the info panel, but that is how it *appears*, not
 what it *is*. It is one rung on the ladder you actually work by, and its order
 in the list is its priority — which is why the same stages also group your
-*sessions* in the sidebar (`Ctrl-a G` → `Stage`), not just your issues.
+*sessions* in the sidebar (`Ctrl-Space G` → `Stage`), not just your issues.
 
 Every status then has exactly two settings and no more:
 
@@ -45,9 +45,9 @@ which is the right answer for something like **Done**.
 
 ---
 
-## The workflow screen (`Ctrl-a W`)
+## The workflow screen (`Ctrl-Space W`)
 
-Press `Ctrl-a W` (also: `Ctrl-a I` → **Workflow**, or "Configure workflow" in
+Press `Ctrl-Space W` (also: `Ctrl-Space I` → **Workflow**, or "Configure workflow" in
 the palette). It is two blocks: your stages, then a table of every status your
 tracker offers.
 
@@ -93,7 +93,7 @@ including when it will do nothing.
 | `Enter` | choose its stage | rename the stage | edit |
 | `space` | park / don't park | show / hide its unstarted work | — |
 | `s` | — | show / hide the stage in the sidebar | — |
-| `u` | — | add to / drop from the `Ctrl-a u` rotation | — |
+| `u` | — | add to / drop from the `Ctrl-Space u` rotation | — |
 | `d` | take it out of its stage | delete the stage (asks first) | clear a repo override |
 | `⇧↑` `⇧↓` | reorder within its stage | reorder the stage | — |
 | `◂` `▸` | — | — | step a counted value (e.g. how many unstarted) |
@@ -101,7 +101,7 @@ including when it will do nothing.
 | `Esc` | close | | |
 
 Order is priority order, top to bottom, for both stages and the statuses inside
-one. The order you add stages with `u` is the order `Ctrl-a u` checks them.
+one. The order you add stages with `u` is the order `Ctrl-Space u` checks them.
 
 A stage row only reports a sidebar setting when it is *off* its default, which is
 why most rows above say nothing about it: `hidden` (no band at all) or
@@ -142,7 +142,7 @@ wrong for a result the status names already give you.
 
 ## Your stages in the sidebar
 
-The panel groups your *issues* by stage. `Ctrl-a G` cycles the sidebar's
+The panel groups your *issues* by stage. `Ctrl-Space G` cycles the sidebar's
 grouping axis on to `Stage` and groups your *sessions* the same way — so the
 left rail reads as your pipeline, with the work in progress under `In Progress`
 and the handed-off work under `Waiting`:
@@ -171,7 +171,7 @@ grouping the header already says it, so those columns go back to the row.)
 
 A session lands in the stage that claims its linked issue's status. Headers come
 out in your own stage order, not alphabetically — `Urgent` is above `In Progress`
-because that is where you put it in `Ctrl-a W`.
+because that is where you put it in `Ctrl-Space W`.
 
 Sessions with no linked issue (`jmux`, `dotfiles` above), or whose status no
 stage claims, list flat below the groups rather than under a "no stage" header:
@@ -196,7 +196,7 @@ issue badge that leads it — carries the stage its issue is in:
 ```
 
 That is your **stage** label, not the raw tracker status — the word you chose in
-`Ctrl-a W`. Two statuses in the same stage read the same here; press `Ctrl-a e`
+`Ctrl-Space W`. Two statuses in the same stage read the same here; press `Ctrl-Space e`
 and each disclosed row spells its own status out. A status that no stage claims
 has nothing to abbreviate to, so it prints as-is.
 
@@ -236,24 +236,24 @@ That reads: the MR is merged, your `MR merged` transition says such issues
 belong in `Done`, and this one never got there. Grouped by `Stage` it shortens
 to just `→Done`, since the header already told you where the ticket is — the
 disagreement is about where it should be, which no header carries.
-**`Ctrl-a m` moves it**, with `Ctrl-a Z` to take it back. Several issues on one session all move together —
+**`Ctrl-Space m` moves it**, with `Ctrl-Space Z` to take it back. Several issues on one session all move together —
 each to whatever *its* repo's transition configures, since hand-linked issues
 can come from teams that map elsewhere.
 
 Three things it will not do:
 
 - **Flag a ticket you moved past the target.** "Behind" means behind in the
-  stage order you arranged in `Ctrl-a W`, so a ticket in `Released` is not
+  stage order you arranged in `Ctrl-Space W`, so a ticket in `Released` is not
   behind `Done`.
 - **Guess without an ordering.** No configured transition, or a status that no
   stage claims, and jmux says nothing rather than inventing a comparison.
   Settings → Diagnostics → *Drift detection* tells you when that is why the
   feature is quiet.
-- **Write anything by itself.** The marker is a report. Only `Ctrl-a m` writes,
+- **Write anything by itself.** The marker is a report. Only `Ctrl-Space m` writes,
   and because you asked for it, your transition-confirmation setting does not
   gate it.
 
-Expanding a session (`Ctrl-a e`) marks *every* drifting issue it carries, not
+Expanding a session (`Ctrl-Space e`) marks *every* drifting issue it carries, not
 just the one the badge names.
 
 ---
@@ -323,7 +323,7 @@ pre-flight says so, and `↵` opens the manual session picker instead.
 park it, since parking is a status. The row re-bands or disappears on its own.
 
 `Esc` returns you to whatever you were doing; the session underneath was never
-touched. `Ctrl-a u` still starts the top item of your first non-empty queue in
+touched. `Ctrl-Space u` still starts the top item of your first non-empty queue in
 one gesture, without previewing — it is an explicit start command, and what
 changed here is only that *selecting* a row no longer provisions.
 
@@ -339,7 +339,7 @@ being offered as unstarted rather than being offered twice.
 Note `IN REVIEW` above: a stage with no sessions still gets a band when it has
 unstarted work. And a stage whose work is all in flight simply shows no `○` rows.
 
-**Turn it on** in `Ctrl-a W` under **Unstarted work**:
+**Turn it on** in `Ctrl-Space W` under **Unstarted work**:
 
 ```
   Unstarted work ───────────────────────────────────────────────────────
@@ -390,10 +390,10 @@ choices are kept, not cleared, so switching the count back on restores them.
 
 ### Grouped by something other than stage
 
-Stage bands only exist under `Ctrl-a G` → `Stage`. On the other axes an issue
+Stage bands only exist under `Ctrl-Space G` → `Stage`. On the other axes an issue
 with no session has no project, no agent state and no activity to sort under, so
 the rows collect into a single **Up next** band above `Parked`, fed by the stages
-you marked with `u` for the `Ctrl-a u` rotation — minus any that opted out above,
+you marked with `u` for the `Ctrl-Space u` rotation — minus any that opted out above,
 so a stage you switched off cannot come back through the other placement:
 
 ```
@@ -411,7 +411,7 @@ so a stage you switched off cannot come back through the other placement:
 Ghost rows behave the same in both placements: clicking one previews it, and
 `Ctrl-Shift-↑`/`↓` walks it alongside your sessions.
 
-`Ctrl-a f` hides them, and which mode does depends on the axis:
+`Ctrl-Space f` hides them, and which mode does depends on the axis:
 
 | Filter | Effect on unstarted rows |
 |--------|--------------------------|
@@ -474,7 +474,7 @@ session straight back out, flagged:
 | a pipeline goes red | CI fails |
 | the agent wants you | The agent in that session is waiting on you |
 
-`Ctrl-a p` → **Park session** / **Unpark session** overrides the derived
+`Ctrl-Space p` → **Park session** / **Unpark session** overrides the derived
 answer for sessions with no issue, or when you disagree with your tracker. An
 override is remembered against the stage it was made at and drops once the
 issue moves on, so it can't silently suppress parking forever.
@@ -484,7 +484,7 @@ Sessions with no linked issue can auto-park on idleness instead
 
 ---
 
-## Capture (`Ctrl-a a`)
+## Capture (`Ctrl-Space a`)
 
 One composer, two commit keys:
 
@@ -504,7 +504,7 @@ jmux ctl issue create --title "Fix flaky test" --start   # capture and start
 
 ---
 
-## Queues and Up next (`Ctrl-a u`)
+## Queues and Up next (`Ctrl-Space u`)
 
 Tabs are an attention model — **Urgent / To do / In Progress / Waiting** — and
 what varies per workspace is which of *your* tracker states roll up into each. A
@@ -521,7 +521,7 @@ When `states` is present it drives **both** membership and the panel's
 subheadings, and `groupBy` is ignored. Config order is priority order — rendered
 verbatim rather than sorted. A status the stage does not list is not in it at all.
 
-**You don't have to write that by hand.** `Ctrl-a W` lists every status in a
+**You don't have to write that by hand.** `Ctrl-Space W` lists every status in a
 table with its stage beside it. Assigning a status moves it out of wherever it
 was, so a status has exactly one home. Stages show live counts (`Urgent 3`), so
 "is anything urgent?" never requires switching tabs.
@@ -547,7 +547,7 @@ Rather than writing that by hand, shape a view live with the panel's `g` / `G`
 / `/` / `?` keys and then run **Save current view as tab** from the palette —
 see [View customization](issue-tracking.md#view-customization).
 
-`pipeline.upNext` is an ordered list of stage ids. `Ctrl-a u` takes the first item
+`pipeline.upNext` is an ordered list of stage ids. `Ctrl-Space u` takes the first item
 from the first non-empty stage in that order and starts work on it, so the daily
 ritual is one keystroke. Press `u` on a stage in the workflow screen to add or
 remove it; the order you add them is the order they are checked, and each stage
@@ -576,17 +576,17 @@ so attaching to an old session cannot replay history into your tracker.
 
 | Mode | Behaviour |
 |------|-----------|
-| `undo-toast` (default) | Writes, then shows `TRA-123 → QA  ^a Z undo` in the toolbar for 20s |
+| `undo-toast` (default) | Writes, then shows `TRA-123 → QA  ^Space Z undo` in the toolbar for 20s |
 | `always` | Asks before every write |
 | `never` | Writes silently |
 
-`Ctrl-a Z` takes the last write back while the toast is up.
+`Ctrl-Space Z` takes the last write back while the toast is up.
 
 ---
 
 ## Pipeline settings reference
 
-The pipeline is configured on the workflow screen (`Ctrl-a W`), which writes
+The pipeline is configured on the workflow screen (`Ctrl-Space W`), which writes
 these keys to `~/.config/jmux/config.json`:
 
 ```json

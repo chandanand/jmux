@@ -133,9 +133,9 @@ if (exitCode !== null) {
   process.exit(1);
 }
 
-console.log("opening a browser pane (Ctrl-a b)…");
+console.log("opening a browser pane (Ctrl-Space b)…");
 const before = output.length;
-await send("\x01b");
+await send("\x00b");
 
 for (let i = 0; i < 40; i++) {
   await Bun.sleep(1000);
@@ -225,7 +225,7 @@ if (paneRow) {
 // wrong, which is why it is so confusing to look at.
 console.log("\nopening a second browser pane…");
 const idsBefore = new Set(imageIds);
-await send("\x01b");
+await send("\x00b");
 for (let i = 0; i < 40; i++) {
   await Bun.sleep(1000);
   if ([...imageIds].some((id) => !idsBefore.has(id))) break;
@@ -236,9 +236,9 @@ check(
   `image ids in play: ${[...imageIds].join(", ") || "none"}`,
 );
 
-console.log("\nopening a modal over it (Ctrl-a p)…");
+console.log("\nopening a modal over it (Ctrl-Space p)…");
 const beforeModal = output.length;
-await send("\x01p");
+await send("\x00p");
 await Bun.sleep(2000);
 const withModal = output.slice(beforeModal);
 check(

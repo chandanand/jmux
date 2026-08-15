@@ -1,6 +1,6 @@
 # Connecting Linear, GitLab and GitHub
 
-Connect an issue tracker and a code host and the info panel (`Ctrl-a g`) gains
+Connect an issue tracker and a code host and the info panel (`Ctrl-Space g`) gains
 tabs for your issues, your merge requests, and the ones waiting on your review —
 plus pipeline glyphs in the sidebar and the one-keystroke
 [issue-to-session flow](issue-tracking.md#issue-to-session-workflow).
@@ -17,7 +17,7 @@ jmux has two independent slots. Fill either, both, or neither.
 
 | Slot | Options | What it drives |
 |------|---------|----------------|
-| `issueTracker` | `linear` | Issue tabs, ghost rows, capture (`Ctrl-a a`), status writes, `Ctrl-a u` |
+| `issueTracker` | `linear` | Issue tabs, ghost rows, capture (`Ctrl-Space a`), status writes, `Ctrl-Space u` |
 | `codeHost` | `gitlab`, `github` | MR/PR tabs, review queue, approvals, pipeline glyphs |
 
 They're independent: a tracker with no code host gives you issue tabs and no MR
@@ -47,7 +47,7 @@ export LINEAR_API_KEY="lin_api_..."
 jmux reads issues, teams, workflow states and comments. It **writes** only for
 things you explicitly turn on or press: `s` to change a status,
 [transitions](workflow.md#transitions-writes-to-your-tracker) (off by default),
-and `Ctrl-a a` / `jmux ctl issue create` to file an issue. A read-only key works
+and `Ctrl-Space a` / `jmux ctl issue create` to file an issue. A read-only key works
 fine if you never use those.
 
 ### GitLab
@@ -90,7 +90,7 @@ after jmux started is not visible to it.
 
 ## 2. Name your adapters
 
-Settings (`Ctrl-a I` — capital I) → **Integrations** → set **Code host** and
+Settings (`Ctrl-Space I` — capital I) → **Integrations** → set **Code host** and
 **Issue tracker**. Or edit `~/.config/jmux/config.json`:
 
 ```jsonc
@@ -139,14 +139,14 @@ workflow pipeline — applies immediately.
 
 ## 4. Check it worked
 
-Press `Ctrl-a g`. You should see more than the lone **Diff** tab: an issues tab
+Press `Ctrl-Space g`. You should see more than the lone **Diff** tab: an issues tab
 if the tracker connected, **My MRs** and **Review** if the code host did.
 
 **Tabs appear only for a slot that authenticated.** If a tracker fails, its tabs
 are removed from the strip rather than shown empty — which is why "no Issues tab
 at all" is the symptom to look for, not an error message.
 
-For a direct answer, open `Ctrl-a I` → **Diagnostics**:
+For a direct answer, open `Ctrl-Space I` → **Diagnostics**:
 
 | Row | Reads |
 |-----|-------|
@@ -184,5 +184,5 @@ swallows — the log is the reliable copy.
 ## Next
 
 - [Issue tracking](issue-tracking.md) — the panel, its keys, session linking, and starting work from an issue
-- [Workflow](workflow.md) — your own stages over your tracker's statuses, parking, `Ctrl-a u`, and status writes
+- [Workflow](workflow.md) — your own stages over your tracker's statuses, parking, `Ctrl-Space u`, and status writes
 - [Configuration](configuration.md) — everything else in `config.json`

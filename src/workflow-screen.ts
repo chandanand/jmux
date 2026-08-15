@@ -139,7 +139,7 @@ export interface WorkflowPort {
   getParkedStates(): readonly string[];
   /** Add a status to the parked list, or take it out. */
   toggleParked(state: string): void;
-  /** Ordered stage ids in the `Ctrl-a u` rotation. */
+  /** Ordered stage ids in the `Ctrl-Space u` rotation. */
   getUpNext(): readonly string[];
   /** Add a tab to the rotation, or drop it. Appending is what sets priority. */
   toggleUpNext(viewId: string): void;
@@ -763,7 +763,7 @@ export class WorkflowScreen {
   }
 
   /**
-   * Add or remove this stage from the `Ctrl-a u` rotation. A marker on the row it
+   * Add or remove this stage from the `Ctrl-Space u` rotation. A marker on the row it
    * describes rather than a separate ordered multiselect listing tab names back
    * at you — the order you add them is the order they are checked.
    */

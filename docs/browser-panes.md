@@ -2,7 +2,7 @@
 
 A real browser, in a pane, beside the agent that's building the thing.
 
-`Ctrl-a b` splits the current pane and puts Chromium in it — a live page you can
+`Ctrl-Space b` splits the current pane and puts Chromium in it — a live page you can
 click, scroll, fill in and open DevTools on, rendered into the terminal with the
 same graphics protocol jmux uses for [inline images](issue-tracking.md#images-in-issue-previews).
 Your agent can drive it too.
@@ -48,7 +48,7 @@ doing nothing:
 - **A terminal that can draw pictures** — Ghostty, kitty, WezTerm, and anything
   else implementing the kitty graphics protocol.
 
-The `⊙` toolbar button appears only when both are true. `Ctrl-a b` always
+The `⊙` toolbar button appears only when both are true. `Ctrl-Space b` always
 answers, and says which one is missing.
 
 ---
@@ -57,10 +57,10 @@ answers, and says which one is missing.
 
 | How | What it does |
 |-----|--------------|
-| `Ctrl-a b` | Browser pane beside the current one |
+| `Ctrl-Space b` | Browser pane beside the current one |
 | `⊙` in the toolbar | The same |
-| `Ctrl-a p` → **Open browser pane** | The same, from the palette |
-| `Ctrl-a p` → **Open dev server in a browser pane** | Finds what this session is serving and opens it |
+| `Ctrl-Space p` → **Open browser pane** | The same, from the palette |
+| `Ctrl-Space p` → **Open dev server in a browser pane** | Finds what this session is serving and opens it |
 
 Panes are independent. Two browser panes are two browsers, with their own tabs,
 history and pages — see [Isolation](#isolation) for why that needs saying.
@@ -89,7 +89,7 @@ palette (`⌘P`) also holds mobile and tablet emulation, and "close pane".
 
 ## Dev servers
 
-`Ctrl-a p` → **Open dev server in a browser pane** asks what the current session
+`Ctrl-Space p` → **Open dev server in a browser pane** asks what the current session
 is actually listening on and opens it. One match opens straight away; several
 give you a picker.
 

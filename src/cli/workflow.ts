@@ -1,7 +1,7 @@
 // `jmux ctl workflow` — the work pipeline, as JSON.
 //
 // The TUI's pipeline (user-defined stages sitting on top of tracker statuses,
-// parking, the `Ctrl-a u` pull rotation, unstarted work) was previously visible
+// parking, the `Ctrl-Space u` pull rotation, unstarted work) was previously visible
 // only on screen. This is the same model, for an agent.
 //
 // **Everything is re-derived, not read out of a running TUI.** There is no IPC:
@@ -136,7 +136,7 @@ export interface BoardStage {
   inSidebar: boolean;
   /** Contributes unstarted rows to the sidebar (`space` there). */
   showsUnstarted: boolean;
-  /** Position in the `Ctrl-a u` rotation, or null when not in it. */
+  /** Position in the `Ctrl-Space u` rotation, or null when not in it. */
   upNextRank: number | null;
   counts: { issues: number; sessions: number; parked: number; unstarted: number };
   sessions: BoardSession[];
@@ -177,7 +177,7 @@ export function toBoardIssue(issue: Issue): BoardIssue {
  *
  * A transcription of `main.ts`'s `orderedIssuesByView` onto injected arguments.
  * Reusing `buildViewNodes` is what makes "the top of the list" mean the same
- * thing to `workflow next` and to `Ctrl-a u`; a second sort here would drift.
+ * thing to `workflow next` and to `Ctrl-Space u`; a second sort here would drift.
  */
 export function orderedIssuesByView(
   views: PanelView[],
@@ -219,7 +219,7 @@ export interface BoardSessionInput {
 
 export interface BoardInputs {
   views: PanelView[];
-  /** `pipeline.upNext` — the ordered stage ids `Ctrl-a u` walks. */
+  /** `pipeline.upNext` — the ordered stage ids `Ctrl-Space u` walks. */
   upNextOrder: string[];
   /** `pipeline.parkedStates` — the statuses whose sessions park. */
   parkedStates: string[];

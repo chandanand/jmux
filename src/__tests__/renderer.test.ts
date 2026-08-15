@@ -231,7 +231,7 @@ describe("compositeGrids with no sidebar", () => {
   // A missing sidebar subtracts the sidebar and nothing else. This used to
   // `return main` — dropping the toolbar, the rules, the diff panel and the
   // modal overlay with it — which was invisible while the only way to lose the
-  // sidebar was a terminal too narrow to carry chrome anyway. `Ctrl-a \` made
+  // sidebar was a terminal too narrow to carry chrome anyway. `Ctrl-Space \` made
   // it reachable on a wide one, where it read as the diff panel, the palette
   // and the toolbar all being broken at once.
   const tab = (over: Record<string, unknown> = {}): WindowTab => ({
@@ -1262,7 +1262,7 @@ describe("buildToolbarButtons", () => {
   test("omits the browser button unless a browser pane can actually be opened", () => {
     // It depends on a program jmux does not ship. A button whose only possible
     // outcome is a notice explaining why it doesn't work is worse than no
-    // button — Ctrl-a b still answers and says what to install.
+    // button — Ctrl-Space b still answers and says what to install.
     expect(buildToolbarButtons({ panelActive: false }).map((b) => b.id))
       .not.toContain("browser-pane");
     expect(buildToolbarButtons({ panelActive: false, browserAvailable: false }).map((b) => b.id))
@@ -1593,7 +1593,7 @@ describe("drag handle chrome", () => {
 // packChips — which drops whole tabs, never partial ones — would make a tab
 // vanish and reappear as the pointer crossed the cluster.
 describe("toolbar hover hint", () => {
-  const hint = { label: "Split pane left / right", keys: "^a |" };
+  const hint = { label: "Split pane left / right", keys: "^Space |" };
   const tabsOf = (n: number, name = "window"): WindowTab[] =>
     Array.from({ length: n }, (_, i) => ({
       windowId: `@${i}`, name: `${name}${i}`, index: i + 1,
@@ -1601,11 +1601,11 @@ describe("toolbar hover hint", () => {
     }));
 
   test("fitHoverHint prefers the full form when it fits", () => {
-    expect(fitHoverHint(hint, 40)).toBe("Split pane left / right · ^a |");
+    expect(fitHoverHint(hint, 40)).toBe("Split pane left / right · ^Space |");
   });
 
   test("fitHoverHint falls back to the key alone before giving up", () => {
-    expect(fitHoverHint(hint, 10)).toBe("^a |");
+    expect(fitHoverHint(hint, 10)).toBe("^Space |");
   });
 
   test("fitHoverHint drops the hint entirely rather than overflow", () => {

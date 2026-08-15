@@ -4,7 +4,7 @@
 // by hand in five places — input-router.ts's post-prefix block,
 // config/defaults.conf, main.ts's HELP const, the first-run modal and
 // docs/cheat-sheet.md — and had drifted apart in every direction at once. The
-// docs advertised `Ctrl-a j` for a window picker nothing ever bound; they named
+// docs advertised `Ctrl-Space j` for a window picker nothing ever bound; they named
 // a palette command buildPaletteCommands has never built; they credited
 // core.conf with a bind it does not contain; and they described `r` and `/` as
 // doing what the router gives to two other keys.
@@ -16,7 +16,7 @@
 // chain in input-router.ts, and every consumer reads from here rather than
 // restating a key.
 //
-// Consumers: help-modal.ts (the `Ctrl-a ?` overlay), command-palette.ts (the
+// Consumers: help-modal.ts (the `Ctrl-Space ?` overlay), command-palette.ts (the
 // keys column), main.ts's makeToolbar (hover hints) and HELP const.
 
 /**
@@ -26,7 +26,7 @@
  * - `tmux`   — a bind jmux ships in config/defaults.conf.
  * - `tmux-default` — tmux's own stock binding, which jmux deliberately does
  *   not unbind. These appear in no jmux file at all, which is exactly why they
- *   need a row: `Ctrl-a z` has been in jmux's cheat sheet and `--help` for as
+ *   need a row: `Ctrl-Space z` has been in jmux's cheat sheet and `--help` for as
  *   long as both have existed, and grepping the repo for it finds nothing.
  *   keymap.test.ts holds them to every rule except the defaults.conf match,
  *   which they would fail by definition.
@@ -51,9 +51,9 @@ export interface Binding {
    */
   id: string;
   /**
-   * Display form, spelled out: "Ctrl-a p", "Ctrl-Shift-Up", "Shift-Left".
+   * Display form, spelled out: "Ctrl-Space p", "Ctrl-Shift-Up", "Shift-Left".
    *
-   * Deliberately not the compact `^a p` dialect. This table's primary reader is
+   * Deliberately not the compact `^Space p` dialect. This table's primary reader is
    * the help overlay, whose whole audience is people who do not already know
    * the chords — and "Ctrl-Shift-Up" is legible to them in a way "^⇧↑" is not.
    * Tight surfaces call shortKeys() to compress it.
@@ -93,12 +93,12 @@ export interface Binding {
 /**
  * Compact a spelled-out `keys` string for width-constrained surfaces (the
  * palette's keys column, the toolbar's hover chip). Purely mechanical and
- * order-sensitive: "Ctrl-a " collapses to "^a " before the general "Ctrl-"
- * rule, or "Ctrl-a p" would come out as "^a p" by luck rather than by rule.
+ * order-sensitive: "Ctrl-Space " collapses to "^Space " before the general
+ * "Ctrl-" rule, keeping the prefix readable in narrow surfaces.
  */
 export function shortKeys(keys: string): string {
   return keys
-    .replace(/Ctrl-a /g, "^a ")
+    .replace(/Ctrl-Space /g, "^Space ")
     .replace(/Ctrl-/g, "^")
     .replace(/Shift-/g, "⇧")
     .replace(/\bUp\b/g, "↑")
@@ -118,7 +118,7 @@ export const KEYMAP: readonly Binding[] = [
   // --- Getting around ---
   {
     id: "help",
-    keys: "Ctrl-a ?",
+    keys: "Ctrl-Space ?",
     label: "Keyboard shortcuts",
     section: "Getting around",
     source: "jmux",
@@ -127,7 +127,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "palette",
-    keys: "Ctrl-a p",
+    keys: "Ctrl-Space p",
     label: "Command palette",
     section: "Getting around",
     source: "jmux",
@@ -152,7 +152,7 @@ export const KEYMAP: readonly Binding[] = [
   // --- Sessions ---
   {
     id: "new-session",
-    keys: "Ctrl-a n",
+    keys: "Ctrl-Space n",
     label: "New session or worktree",
     section: "Sessions",
     source: "jmux",
@@ -161,7 +161,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "group-cycle",
-    keys: "Ctrl-a G",
+    keys: "Ctrl-Space G",
     label: "Cycle sidebar grouping",
     section: "Sessions",
     source: "jmux",
@@ -172,7 +172,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "sort-cycle",
-    keys: "Ctrl-a s",
+    keys: "Ctrl-Space s",
     label: "Cycle sidebar sort",
     section: "Sessions",
     source: "jmux",
@@ -181,14 +181,14 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "session-picker",
-    keys: "Ctrl-a w",
+    keys: "Ctrl-Space w",
     label: "tmux's own session/window tree",
     section: "Sessions",
     source: "tmux-default",
   },
   {
     id: "filter-cycle",
-    keys: "Ctrl-a f",
+    keys: "Ctrl-Space f",
     label: "Cycle sidebar filter",
     section: "Sessions",
     source: "jmux",
@@ -197,7 +197,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "sidebar-toggle",
-    keys: "Ctrl-a \\",
+    keys: "Ctrl-Space \\",
     label: "Hide / show the sidebar",
     section: "Sessions",
     source: "jmux",
@@ -208,7 +208,7 @@ export const KEYMAP: readonly Binding[] = [
   // --- Windows ---
   {
     id: "new-window",
-    keys: "Ctrl-a c",
+    keys: "Ctrl-Space c",
     label: "New window",
     section: "Windows",
     source: "tmux",
@@ -259,7 +259,7 @@ export const KEYMAP: readonly Binding[] = [
   // ids, wired to real actions); the labels describe what you see instead.
   {
     id: "split-v",
-    keys: "Ctrl-a |",
+    keys: "Ctrl-Space |",
     label: "Split pane left / right",
     section: "Panes",
     source: "tmux",
@@ -267,7 +267,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "split-h",
-    keys: "Ctrl-a -",
+    keys: "Ctrl-Space -",
     label: "Split pane top / bottom",
     section: "Panes",
     source: "tmux",
@@ -291,7 +291,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "browser-pane",
-    keys: "Ctrl-a b",
+    keys: "Ctrl-Space b",
     label: "Open browser pane",
     section: "Panes",
     source: "jmux",
@@ -316,7 +316,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "resize-left",
-    keys: "Ctrl-a Left",
+    keys: "Ctrl-Space Left",
     label: "Resize pane left (hold to repeat)",
     section: "Panes",
     source: "tmux",
@@ -324,7 +324,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "resize-down",
-    keys: "Ctrl-a Down",
+    keys: "Ctrl-Space Down",
     label: "Resize pane down (hold to repeat)",
     section: "Panes",
     source: "tmux",
@@ -332,7 +332,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "resize-up",
-    keys: "Ctrl-a Up",
+    keys: "Ctrl-Space Up",
     label: "Resize pane up (hold to repeat)",
     section: "Panes",
     source: "tmux",
@@ -340,7 +340,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "resize-right",
-    keys: "Ctrl-a Right",
+    keys: "Ctrl-Space Right",
     label: "Resize pane right (hold to repeat)",
     section: "Panes",
     source: "tmux",
@@ -348,14 +348,14 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "zoom-pane",
-    keys: "Ctrl-a z",
+    keys: "Ctrl-Space z",
     label: "Zoom pane to full window (press again to restore)",
     section: "Panes",
     source: "tmux-default",
   },
   {
     id: "clear-pane",
-    keys: "Ctrl-a k",
+    keys: "Ctrl-Space k",
     label: "Clear pane and scrollback",
     section: "Panes",
     source: "tmux",
@@ -363,7 +363,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "copy-pane",
-    keys: "Ctrl-a y",
+    keys: "Ctrl-Space y",
     label: "Copy whole pane to clipboard",
     section: "Panes",
     source: "tmux",
@@ -373,7 +373,7 @@ export const KEYMAP: readonly Binding[] = [
   // --- Info panel ---
   {
     id: "diff-toggle",
-    keys: "Ctrl-a g",
+    keys: "Ctrl-Space g",
     label: "Toggle info panel",
     section: "Info panel",
     source: "jmux",
@@ -382,7 +382,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "diff-zoom",
-    keys: "Ctrl-a z",
+    keys: "Ctrl-Space z",
     label: "Zoom panel (split ↔ full)",
     section: "Info panel",
     source: "jmux",
@@ -392,7 +392,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "panel-focus-toggle",
-    keys: "Ctrl-a Tab",
+    keys: "Ctrl-Space Tab",
     label: "Switch focus between terminal and panel",
     section: "Info panel",
     source: "jmux",
@@ -401,7 +401,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "diff-send-review",
-    keys: "Ctrl-a r",
+    keys: "Ctrl-Space r",
     label: "Send your review notes to this session's agent",
     section: "Info panel",
     source: "jmux",
@@ -410,7 +410,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "diff-view-picker",
-    keys: "Ctrl-a v",
+    keys: "Ctrl-Space v",
     label: "Choose what the Diff tab shows",
     section: "Info panel",
     source: "jmux",
@@ -573,7 +573,7 @@ export const KEYMAP: readonly Binding[] = [
   // --- Work pipeline ---
   {
     id: "workflow-screen",
-    keys: "Ctrl-a W",
+    keys: "Ctrl-Space W",
     label: "Workflow screen (stages, statuses, parking)",
     section: "Work pipeline",
     source: "jmux",
@@ -582,7 +582,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "capture-issue",
-    keys: "Ctrl-a a",
+    keys: "Ctrl-Space a",
     label: "Capture a new issue",
     section: "Work pipeline",
     source: "jmux",
@@ -591,7 +591,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "start-up-next",
-    keys: "Ctrl-a u",
+    keys: "Ctrl-Space u",
     label: "Start the next issue in your rotation",
     section: "Work pipeline",
     source: "jmux",
@@ -600,7 +600,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "undo-transition",
-    keys: "Ctrl-a Z",
+    keys: "Ctrl-Space Z",
     label: "Undo the last status write",
     section: "Work pipeline",
     source: "jmux",
@@ -609,7 +609,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "fix-workflow-drift",
-    keys: "Ctrl-a m",
+    keys: "Ctrl-Space m",
     label: "Move the issue where the workflow says it should be",
     section: "Work pipeline",
     source: "jmux",
@@ -618,7 +618,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "toggle-session-issues",
-    keys: "Ctrl-a e",
+    keys: "Ctrl-Space e",
     label: "Expand this session's issues in the sidebar",
     section: "Work pipeline",
     source: "jmux",
@@ -629,7 +629,7 @@ export const KEYMAP: readonly Binding[] = [
   // --- Command Center ---
   {
     id: "cc-toggle",
-    keys: "Ctrl-a C",
+    keys: "Ctrl-Space C",
     label: "Toggle the Command Center",
     section: "Command Center",
     source: "jmux",
@@ -637,11 +637,11 @@ export const KEYMAP: readonly Binding[] = [
     arms: ["ordinary", "glass"],
     // Shadows tmux's stock `bind-key -T prefix C customize-mode -Z` — accepted,
     // on the precedent `?` already set against list-keys and `s` against
-    // choose-session: jmux ships Ctrl-a I / Ctrl-a i in customize-mode's place.
+    // choose-session: jmux ships Ctrl-Space I / Ctrl-Space i in customize-mode's place.
   },
   {
     id: "cc-view-n",
-    keys: "Ctrl-a 1…9",
+    keys: "Ctrl-Space 1…9",
     label: "Switch to view N",
     section: "Command Center",
     source: "jmux",
@@ -649,7 +649,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "cc-view-prev",
-    keys: "Ctrl-a [",
+    keys: "Ctrl-Space [",
     label: "Previous view",
     section: "Command Center",
     source: "jmux",
@@ -659,7 +659,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "cc-view-next",
-    keys: "Ctrl-a ]",
+    keys: "Ctrl-Space ]",
     label: "Next view",
     section: "Command Center",
     source: "jmux",
@@ -669,7 +669,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "cc-open-focused",
-    keys: "Ctrl-a Enter",
+    keys: "Ctrl-Space Enter",
     label: "Open the focused tile's session full-size, on its displayed pane",
     section: "Command Center",
     source: "jmux",
@@ -679,7 +679,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "cc-cycle-face",
-    keys: "Ctrl-a x",
+    keys: "Ctrl-Space x",
     label: "Cycle the focused tile's face",
     section: "Command Center",
     source: "jmux",
@@ -689,7 +689,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "cc-zoom-tile",
-    keys: "Ctrl-a z",
+    keys: "Ctrl-Space z",
     label: "Zoom the focused tile to full size (press again to restore)",
     section: "Command Center",
     source: "jmux",
@@ -699,7 +699,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "cc-toggle-pin",
-    keys: "Ctrl-a P",
+    keys: "Ctrl-Space P",
     label: "Remove the focused session from the grid, or add the current pane to it",
     section: "Command Center",
     source: "jmux",
@@ -708,7 +708,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "cc-detach",
-    keys: "Ctrl-a d",
+    keys: "Ctrl-Space d",
     label: "Detach jmux (not the focused tile)",
     section: "Command Center",
     source: "jmux",
@@ -718,7 +718,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "group-cycle-grid",
-    keys: "Ctrl-a G",
+    keys: "Ctrl-Space G",
     label: "Cycle Command Center grouping",
     section: "Command Center",
     source: "jmux",
@@ -728,7 +728,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "sort-cycle-grid",
-    keys: "Ctrl-a s",
+    keys: "Ctrl-Space s",
     label: "Cycle Command Center sort",
     section: "Command Center",
     source: "jmux",
@@ -738,7 +738,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "filter-cycle-grid",
-    keys: "Ctrl-a f",
+    keys: "Ctrl-Space f",
     label: "Cycle Command Center filter",
     section: "Command Center",
     source: "jmux",
@@ -748,13 +748,13 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "density-cycle-grid",
-    keys: "Ctrl-a D",
+    keys: "Ctrl-Space D",
     label: "Toggle Command Center tile density (Fit / Focus)",
     section: "Command Center",
     source: "jmux",
     prefixKey: "D",
     // Capital D, not lowercase d (glass detach): shadows tmux's stock
-    // choose-client, accepted on the same precedent as Ctrl-a z shadowing
+    // choose-client, accepted on the same precedent as Ctrl-Space z shadowing
     // resize-pane -Z — there is no client to choose from inside the grid.
     context: IN_GLASS,
     arms: ["glass"],
@@ -763,7 +763,7 @@ export const KEYMAP: readonly Binding[] = [
   // --- Settings ---
   {
     id: "settings",
-    keys: "Ctrl-a i",
+    keys: "Ctrl-Space i",
     label: "Settings palette (quick toggles)",
     section: "Settings",
     source: "jmux",
@@ -772,7 +772,7 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "settings-screen",
-    keys: "Ctrl-a I",
+    keys: "Ctrl-Space I",
     label: "Settings screen",
     section: "Settings",
     source: "jmux",

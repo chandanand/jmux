@@ -48,8 +48,8 @@ export interface ToolbarConfig {
 //
 // The set is deliberately small: the four actions whose target is the surface
 // the toolbar sits on — the window strip and the pane grid beneath it — plus
-// the keyboard-help button. Everything else lives in the palette (`^a p`) or
-// the settings screen (`^a i`); a glyph here has to earn its column by being
+// the keyboard-help button. Everything else lives in the palette (`^Space p`) or
+// the settings screen (`^Space i`); a glyph here has to earn its column by being
 // something you reach for mid-flow, not merely something jmux can do.
 // Launching Claude and opening settings are both once-per-session actions with
 // keyboard homes, so they no longer occupy toolbar columns. `help` earns its
@@ -82,7 +82,7 @@ export function buildToolbarButtons(opts: {
    * than shown-and-refusing, because unlike the other four this one depends on
    * a program jmux does not ship: an affordance that is only ever going to
    * explain why it doesn't work has no business taking a column from the ones
-   * that do. `Ctrl-a b` still answers, and says what to install.
+   * that do. `Ctrl-Space b` still answers, and says what to install.
    */
   browserAvailable?: boolean;
   /**
@@ -185,7 +185,7 @@ interface ToolbarLayout {
 
 /**
  * Fit a hovered button's hint into `slack` columns, shrinking rather than
- * overflowing: "Split pane left / right · ^a |" → "^a |" → nothing.
+ * overflowing: "Split pane left / right · ^Space |" → "^Space |" → nothing.
  *
  * The ladder exists because the hint must never cost a window tab. packChips
  * drops whole tabs, so a hint competing with them for width would make a tab
@@ -509,7 +509,7 @@ export function compositeGrids(
   // `return main` — every other piece of chrome (toolbar, rules, diff panel,
   // modal overlay, footer) skipped along with it — which was survivable only
   // while the single way to lose the sidebar was a terminal too narrow to
-  // carry chrome anyway. `Ctrl-a \` made it reachable on a 200-column screen,
+  // carry chrome anyway. `Ctrl-Space \` made it reachable on a 200-column screen,
   // where it read as the diff panel, the palette and the toolbar all being
   // broken at once.
   //

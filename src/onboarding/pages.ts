@@ -100,7 +100,7 @@ export const PAGES: Record<PageId, PageDef> = {
     counts: true,
     body: () => [
       "jmux works one repository at a time — a session, a worktree and an agent per piece of work.",
-      "Point it at a directory and it will offer the repositories underneath when you press Ctrl-a n.",
+      "Point it at a directory and it will offer the repositories underneath when you press Ctrl-Space n.",
     ],
   },
 
@@ -180,8 +180,8 @@ export const PAGES: Record<PageId, PageDef> = {
         : [
             "Your tracker's statuses group into three stages, which drive the sidebar's bands and the info panel's tabs.",
             status.steps.workflow.state === "satisfied"
-              ? "Change these any time in the workflow screen — Ctrl-a W."
-              : "Accept these to get started. You can change them any time in the workflow screen — Ctrl-a W.",
+              ? "Change these any time in the workflow screen — Ctrl-Space W."
+              : "Accept these to get started. You can change them any time in the workflow screen — Ctrl-Space W.",
           ],
   },
 

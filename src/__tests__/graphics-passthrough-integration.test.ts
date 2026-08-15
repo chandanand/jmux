@@ -200,11 +200,11 @@ describe("graphics drawn inside a pane", () => {
         // still names an image and the terminal would draw it over the modal.
         //
         // Measured only from frames painted *after* the modal is up. Slicing
-        // from before the keystroke also catches the repaint `\x01` triggers on
+        // from before the keystroke also catches the repaint `\x00` triggers on
         // its own — a legitimate pre-modal frame, with its placeholders intact —
         // and counting that as a failure made this pass or fail on how quickly
         // the machine got between the two bytes.
-        for (const ch of "\x01p") { // Ctrl-a p — command palette
+        for (const ch of "\x00p") { // Ctrl-Space p — command palette
           pty.write(ch);
           await Bun.sleep(60);
         }

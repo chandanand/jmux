@@ -638,7 +638,7 @@ describe("the tile label", () => {
     expect(labelRow(view)).toContain("api TRA-412 · dev server");
   });
 
-  test("appends the pane's identity after a live Ctrl-a x cycle override", () => {
+  test("appends the pane's identity after a live Ctrl-Space x cycle override", () => {
     const { view } = makeView();
     view.resize(40, 10);
     view.setTiles(
@@ -675,7 +675,7 @@ describe("the tile label", () => {
   });
 
   test("the suffix survives a cycle that wraps back to the first pane", () => {
-    // Ctrl-a x has no "un-cycle": the override is sticky per session until
+    // Ctrl-Space x has no "un-cycle": the override is sticky per session until
     // that pane dies (design.md's "Logical tile identity" section). Landing
     // back on %1 by wrapping is still a live override, not the election
     // deciding on its own — so the suffix correctly still names the pane,
@@ -814,7 +814,7 @@ describe("density resizes tiles that are scrolled out of view", () => {
 
 describe("the empty state's two counts are disjoint", () => {
   // Counting a hidden session in both rendered "3 not shown  3 hidden" for the
-  // same three sessions, sending the user to ^a f for something no filter can
+  // same three sessions, sending the user to ^Space f for something no filter can
   // recover. Each session is reported once, under the clause whose remedy works.
   test("a hidden session is reported once, under 'hidden'", () => {
     const { view } = makeView();

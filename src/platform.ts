@@ -46,7 +46,7 @@ export function openUrl(
 }
 
 /**
- * The clipboard-copy command tmux's `C-a y` bind pipes into, as a shell
+ * The clipboard-copy command tmux's `C-Space y` bind pipes into, as a shell
  * fragment. Exported to the tmux server as `$JMUX_COPY`; empty when nothing
  * suitable exists, which the bind reports rather than swallowing.
  *

@@ -35,7 +35,7 @@ export const GENERATION_OPTION = "@jmux-config-generation";
  * show the notice twice.
  *
  * A jmux session is one window holding one pane, so anything that closes that
- * pane — `Ctrl-a x`, `Ctrl-d`, typing `exit` — destroys the session. At tmux's
+ * pane — `Ctrl-Space x`, `Ctrl-d`, typing `exit` — destroys the session. At tmux's
  * default (`on`) the client on it then *detaches*, which closes jmux's pty and
  * drops the whole TUI while every other session keeps running. At `off` tmux
  * moves the client to another session, which is what the sidebar is built

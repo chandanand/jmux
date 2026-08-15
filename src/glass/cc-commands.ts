@@ -57,7 +57,7 @@ export function buildCcCommands(input: CcCommandInput): PaletteCommand[] {
   }
 
   // View CRUD acts on the active view, so it only makes sense while looking
-  // at the grid — the same reason Ctrl-a G/s/f (the axes these views name)
+  // at the grid — the same reason Ctrl-Space G/s/f (the axes these views name)
   // are glass-only chords.
   if (input.inGlass) {
     cmds.push({ id: "save-cc-view", label: "Save current axes as view…", category: "command center" });
@@ -79,7 +79,7 @@ export function buildCcCommands(input: CcCommandInput): PaletteCommand[] {
   });
 
   // A hidden session is discoverable, not silent: this is the only way to
-  // undo a hide for a session that isn't the one currently focused (Ctrl-a P
+  // undo a hide for a session that isn't the one currently focused (Ctrl-Space P
   // only acts on that one).
   if (input.hiddenSessions.length > 0) {
     cmds.push({

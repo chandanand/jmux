@@ -9,6 +9,7 @@ import {
   BREADCRUMB_ATTRS, NO_MATCHES_ATTRS, BG_ATTRS, SELECTED_BG_ATTRS,
   modalContentRect, drawModalChrome, type ModalChrome,
 } from "./modal";
+import { PREFIX_BYTE } from "./prefix";
 
 export { fuzzyMatch, type FuzzyResult } from "./fuzzy";
 
@@ -29,7 +30,7 @@ export class CommandPalette {
   private scrollOffset = 0;
   private commands: PaletteCommand[] = [];
   private filtered: FilteredItem[] = [];
-  private ctrlABuffered = false;
+  private prefixBuffered = false;
 
   // Sub-list state
   private sublistParent: PaletteCommand | null = null;
@@ -50,7 +51,7 @@ export class CommandPalette {
     this.query = "";
     this.selectedIndex = 0;
     this.scrollOffset = 0;
-    this.ctrlABuffered = false;
+    this.prefixBuffered = false;
     this.sublistParent = null;
     this.savedQuery = "";
     this.savedIndex = 0;
@@ -64,7 +65,7 @@ export class CommandPalette {
     this.scrollOffset = 0;
     this.commands = [];
     this.filtered = [];
-    this.ctrlABuffered = false;
+    this.prefixBuffered = false;
     this.sublistParent = null;
   }
 
@@ -114,9 +115,9 @@ export class CommandPalette {
   }
 
   handleInput(data: string): PaletteAction {
-    // Handle Ctrl-a buffering
-    if (this.ctrlABuffered) {
-      this.ctrlABuffered = false;
+    // Handle prefix buffering
+    if (this.prefixBuffered) {
+      this.prefixBuffered = false;
       if (data === "p") {
         this.close();
         return CLOSED;
@@ -125,9 +126,9 @@ export class CommandPalette {
       return CONSUMED;
     }
 
-    // Ctrl-a: buffer it
-    if (data === "\x01") {
-      this.ctrlABuffered = true;
+    // Ctrl-Space: buffer it
+    if (data === PREFIX_BYTE) {
+      this.prefixBuffered = true;
       return CONSUMED;
     }
 

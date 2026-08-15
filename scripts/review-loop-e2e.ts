@@ -113,9 +113,9 @@ try {
   term.write("\x1b");
   await Bun.sleep(1200);
 
-  // --- open the diff panel: Ctrl-a g ---
+  // --- open the diff panel: Ctrl-Space g ---
   out = "";
-  await type("\x01g");
+  await type("\x00g");
   await Bun.sleep(4000);
 
   // Find our hunk through the daemon, keyed on the scratch repo. A `ps` grep
@@ -162,9 +162,9 @@ try {
   await tmux(["set-option", "-t", "livetest", "@jmux-agent-pane", pane]);
   await Bun.sleep(400);
 
-  // --- Ctrl-a r: the review send ---
+  // --- Ctrl-Space r: the review send ---
   out = "";
-  await type("\x01r");
+  await type("\x00r");
   await Bun.sleep(2500);
   const confirmScreen = plain();
   const title = /Send \d+ review notes?/.exec(confirmScreen)?.[0] ?? "";
@@ -187,7 +187,7 @@ try {
 
   // --- the shared notice modal: a second send with nothing left to send ---
   out = "";
-  await type("\x01r");
+  await type("\x00r");
   await Bun.sleep(2000);
   const notice = plain();
   check("a send with no notes explains itself", /No review to send/.test(notice) && /Press c in the diff panel/.test(notice),
@@ -195,9 +195,9 @@ try {
   term.write("\x1b");
   await Bun.sleep(800);
 
-  // --- Ctrl-a v: the view picker ---
+  // --- Ctrl-Space v: the view picker ---
   out = "";
-  await type("\x01v");
+  await type("\x00v");
   await Bun.sleep(2000);
   const picker = plain();
   check("view picker offers the changesets", /Working tree/.test(picker) && /Staged/.test(picker) && /Last commit/.test(picker),

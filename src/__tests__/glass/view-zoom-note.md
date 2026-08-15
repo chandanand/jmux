@@ -12,19 +12,19 @@ actually seen.
 Run it by hand after any change to `GlassView`, `glass/representative.ts`, or
 the reconcile wiring in `main.ts`.
 
-## 1. Two agent panes in one window — `Ctrl-a x` cycles them in one tile
+## 1. Two agent panes in one window — `Ctrl-Space x` cycles them in one tile
 
 Setup: one session, `tmux split-window` so it has two panes in one window; get
 both panes reporting an agent kind (or `jmux ctl pane pin --target <id>` on
 both, to force-on both — either qualifies them for the cycle).
 
-- Open the Command Center (`Ctrl-a C`). **One tile appears, not two** — a tile
+- Open the Command Center (`Ctrl-Space C`). **One tile appears, not two** — a tile
   is a session, so the second pane is another face for the same tile, not a
   tile of its own. It renders full-bleed.
-- Focus the tile and press `Ctrl-a x`. The tile keeps its place, size and
+- Focus the tile and press `Ctrl-Space x`. The tile keeps its place, size and
   border; only the picture inside it changes, and the bottom border's hint
   updates its position (`⌃a x agent 2/3`). Press again to cycle back.
-- Leave the Command Center (`Ctrl-a C` again). **No window is left zoomed** —
+- Leave the Command Center (`Ctrl-Space C` again). **No window is left zoomed** —
   both panes are side-by-side again, exactly as before entering. This is the
   one that catches a retarget that unzoomed the wrong pane — teardown must
   undo the zoom the tile *ended* on, not the one it started on.
@@ -35,7 +35,7 @@ both, to force-on both — either qualifies them for the cycle).
 Repeat with the session's two agent panes in *different* windows (`tmux
 new-window` inside the session rather than a split).
 
-- Same as above: one tile, `Ctrl-a x` cycles between the two panes. Cycling
+- Same as above: one tile, `Ctrl-Space x` cycles between the two panes. Cycling
   changes which window the session has selected — after cycling, the pane you
   were on before is no longer the one showing.
 - Leave the Command Center. The session's currently-selected window has nothing
@@ -51,7 +51,7 @@ view's filter.
 
 - Open the Command Center. Only `maxTiles` tiles render. The strip shows
   `+N not shown` for the rest — never silent truncation.
-- Pin one of the excluded sessions (`Ctrl-a P` from inside it, or `jmux ctl
+- Pin one of the excluded sessions (`Ctrl-Space P` from inside it, or `jmux ctl
   pane pin`). It should now be admitted ahead of an unpinned session at the
   boundary — forced (pinned) tiles are kept first under overflow — without the
   rest of the grid visibly reordering itself.
@@ -59,10 +59,10 @@ view's filter.
   reconcile it should be replaced by one of the previously dropped sessions,
   and `+N not shown` should decrement.
 
-## 4. `Ctrl-a ↵` lands on the displayed pane
+## 4. `Ctrl-Space ↵` lands on the displayed pane
 
 With at least one multi-pane-agent tile from step 1 or 2, cycle its face with
-`Ctrl-a x` to the *non-default* pane, then focus it and press `Ctrl-a ↵`
+`Ctrl-Space x` to the *non-default* pane, then focus it and press `Ctrl-Space ↵`
 (Enter).
 
 - jmux should leave the grid and land you directly on the pane the tile was
@@ -70,17 +70,17 @@ With at least one multi-pane-agent tile from step 1 or 2, cycle its face with
   window.
 - Repeat after killing the pane the tile was showing (from another window,
   `tmux kill-pane -t <id>`) while still in the grid, *then* pressing
-  `Ctrl-a ↵` on that tile. It should fall back to the session and its current
+  `Ctrl-Space ↵` on that tile. It should fall back to the session and its current
   active pane, with a notice rather than an error, rather than pointing at a
   pane that no longer exists.
 
-## 5. `Ctrl-a C` with the pre-glass session killed
+## 5. `Ctrl-Space C` with the pre-glass session killed
 
-Enter the Command Center from a specific session (`Ctrl-a C`), then — from
+Enter the Command Center from a specific session (`Ctrl-Space C`), then — from
 another terminal or `jmux ctl session kill` — kill that originating session
 while still in the grid.
 
-- Press `Ctrl-a C` to leave. jmux must not strand the client on the internal
+- Press `Ctrl-Space C` to leave. jmux must not strand the client on the internal
   `__jmux_park` session (an empty screen with no chrome). It should land on
   another live session (first in the current sidebar order) and show a notice
   that the original session is gone, or — if no session exists at all — stay in

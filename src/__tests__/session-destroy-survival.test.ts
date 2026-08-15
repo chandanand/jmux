@@ -7,7 +7,7 @@ import { join } from "path";
 // Does jmux survive its own session being destroyed?
 //
 // A jmux-provisioned session is one window holding one pane, so anything that
-// closes that pane — `Ctrl-a x`, `Ctrl-d`, typing `exit` — destroys the
+// closes that pane — `Ctrl-Space x`, `Ctrl-d`, typing `exit` — destroys the
 // *session*, not a pane. `core.conf` sets `detach-on-destroy off` precisely so
 // that tmux then moves the client to another session instead of detaching it;
 // with tmux's default (`on`) the client detaches, the pty closes, and jmux

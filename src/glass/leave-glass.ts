@@ -4,7 +4,7 @@
 // somewhere real — is a unit-testable seam rather than something only a live
 // tmux server could exercise.
 //
-// The race it closes: `Ctrl-a C` and `Ctrl-a ↵` both pre-check a target
+// The race it closes: `Ctrl-Space C` and `Ctrl-Space ↵` both pre-check a target
 // session's liveness against a cached session list before calling this, but
 // that list is a snapshot — a session can die in the window between the
 // check and the `switch-client` command actually landing on the control
@@ -41,7 +41,7 @@ export async function commitLeaveGlass(
 }
 
 /**
- * `Ctrl-a C`'s target resolution: try each candidate in order (typically
+ * `Ctrl-Space C`'s target resolution: try each candidate in order (typically
  * `preGlassSessionId` then the sidebar's own first session), skipping
  * duplicates, until one actually lands. A single stale liveness check picked
  * one candidate and gave up if reality had already moved on by the time the

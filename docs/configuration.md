@@ -34,7 +34,7 @@ Layer 3 protects the handful of settings jmux cannot run without, but everything
 
 Leave it unset for the auto-detection above.
 
-Also reachable from the settings screen (`Ctrl-a i` → **tmux** → *Source tmux config*), where the value is `auto`, `off`, or a path.
+Also reachable from the settings screen (`Ctrl-Space i` → **tmux** → *Source tmux config*), where the value is `auto`, `off`, or a path.
 
 **This only takes effect when the tmux server starts.** tmux reads its config file once, at server start, and ignores it on every later attach — so changing this setting while a server is running does nothing at all. jmux notices and says so, both in the settings row (`restart to apply`) and with a notice on the next attach. To apply it, exit every jmux session and run:
 
@@ -51,18 +51,16 @@ jmux's defaults are sourced first, then your `~/.tmux.conf` overrides them. Anyt
 vim ~/.tmux.conf
 ```
 
-### Changing the Prefix Key
+### Prefix Key
 
-```tmux
-# ~/.tmux.conf
-set -g prefix C-b
-unbind C-a
-bind-key C-b send-prefix
-```
+jmux reserves `Ctrl-Space` as its prefix. The outer input router recognizes the
+NUL byte terminals emit for that chord, and `config/core.conf` applies the
+matching `C-Space` tmux setting after your config is sourced. A `prefix` value
+in `~/.tmux.conf` is therefore intentionally overridden so jmux and tmux never
+disagree about which key starts a chord.
 
-jmux's `prefix + n` (new session) still works — it uses whatever prefix you set.
-
-> **Note:** `Ctrl-Shift-Up/Down` for session switching is handled by jmux directly and doesn't use the prefix. It always works regardless of your prefix setting.
+`Ctrl-Shift-Up/Down` for session switching is handled directly and does not use
+the prefix.
 
 ### Adding Keybindings
 
@@ -109,10 +107,11 @@ These settings are required for jmux to function. They're applied last and overr
 |---------|-------|-----|
 | `detach-on-destroy` | `off` | Switch to next session on kill instead of exiting jmux |
 | `mouse` | `on` | Sidebar and toolbar click/hover handling |
-| `prefix + n` | New session modal | jmux's native session creation |
+| `prefix` | `C-Space` | Must match jmux's outer input router |
 | `status` | `off` | jmux renders its own toolbar with window tabs |
 
-If you bind `n` to something in `~/.tmux.conf`, jmux's core will override it. All other keys are yours.
+jmux application chords are intercepted before tmux sees their second key. All
+other prefix-table keys still come from tmux and your config.
 
 ## Keys Handled by jmux (Not tmux)
 
@@ -144,7 +143,7 @@ Changes here persist until you update jmux. For durable customizations, prefer `
 
 ## jmux Application Config
 
-jmux's own settings (not tmux settings) live in `~/.config/jmux/config.json`. Edit it directly or use the settings screen (`Ctrl-a I` — capital I; lowercase `Ctrl-a i` opens the shorter settings palette). The file is watched and changes are hot-reloaded.
+jmux's own settings (not tmux settings) live in `~/.config/jmux/config.json`. Edit it directly or use the settings screen (`Ctrl-Space I` — capital I; lowercase `Ctrl-Space i` opens the shorter settings palette). The file is watched and changes are hot-reloaded.
 
 **`adapters` is the exception.** A live adapter owns polling state and in-flight
 requests, so jmux builds the pair once at startup and the watcher deliberately
@@ -224,7 +223,7 @@ theme at all and leave hunk's own config in charge. See
 `showUnstartedInSidebar` decides how many unstarted issues each workflow stage
 shows in the sidebar as startable rows: a count, `"all"`, or `null` for off.
 Per-stage exceptions (`inSidebar`, `showUnstarted`) live on the stage's own entry
-in `panelViews`. Both are edited on the workflow screen (`Ctrl-a W`) — see
+in `panelViews`. Both are edited on the workflow screen (`Ctrl-Space W`) — see
 [Unstarted work in the sidebar](workflow.md#unstarted-work-in-the-sidebar).
 
 `images` controls inline pictures in issue previews. `enabled` is deliberately
@@ -251,14 +250,14 @@ resolve to one entry. jmux migrates older configs into this shape once, on
 first launch — the previous `claudeCommand` / `wtmIntegration` top-level keys
 and the `issueWorkflow` workflow keys move to `repoDefaults` automatically.
 
-The settings screen (`Ctrl-a I`) shows both tiers: the global rows under
+The settings screen (`Ctrl-Space I`) shows both tiers: the global rows under
 **Repo**, and a **This repo** category for the repo your active session lives
 in, where each row is marked `(inherited)` or `(override)` and `d` clears an
 override back to inherited.
 
 The transition states (`onSessionStartState`, `onMrOpenState`,
 `onMrMergedState`) are per-repo too, but they are edited on the workflow screen
-(`Ctrl-a W`) alongside everything else the pipeline does. It shows the value in
+(`Ctrl-Space W`) alongside everything else the pipeline does. It shows the value in
 force for the repo you are in, with the same `(inherited)` / `(override)`
 markers; `g` switches to the global defaults.
 
@@ -277,7 +276,7 @@ handle is the separator line you would expect:
 - **The sidebar border** — the line between the sidebar and the terminal.
   Drag left/right.
 - **The panel divider** — the line between the terminal and the diff/info
-  panel, when the panel is docked in split mode (`Ctrl-a g`). Drag left/right.
+  panel, when the panel is docked in split mode (`Ctrl-Space g`). Drag left/right.
   In full-width mode there is no divider, so there is nothing to drag.
 - **The panel's list/detail split** — the horizontal line between the item
   list and the detail pane in the Issues / MRs / Review views. Drag up/down.
@@ -304,7 +303,7 @@ had reached, rather than snapping back.
 
 ### Browser panes (`browser`)
 
-Settings for `Ctrl-a b`. All optional; the defaults are what jmux uses when the
+Settings for `Ctrl-Space b`. All optional; the defaults are what jmux uses when the
 key is absent.
 
 ```json
@@ -348,7 +347,7 @@ breakdown, and the Command Center tile borders. Each value is a named ANSI color
 `bright*` variants (e.g. `brightblue`). Unset or unrecognized names fall back to
 the defaults (`running` green, `waiting` yellow, `complete` blue). The bold/dim
 emphasis per state is fixed; only the hue is configurable. Set these from the
-settings screen (`Ctrl-a I` → Display) or the command palette (`Ctrl-a p`).
+settings screen (`Ctrl-Space I` → Display) or the command palette (`Ctrl-Space p`).
 
 ### Command Center views (`commandCenterViews` / `commandCenterActiveViewId` / `commandCenterAxes` / `commandCenter.maxTiles`)
 
@@ -382,7 +381,7 @@ id (an unknown or missing id falls back to the first view — there is no
 protected default id, since a view has no members to strand if it's deleted).
 
 **`commandCenterAxes` is the live, possibly-*dirty* set of axes** — what
-`Ctrl-a G` / `s` / `f` actually edit while you're in the grid. Selecting a view
+`Ctrl-Space G` / `s` / `f` actually edit while you're in the grid. Selecting a view
 adopts its axes outright and discards whatever was dirty; a view chip in the
 strip shows a `·` marker when the live axes have since drifted from what the
 active view has saved, and **Save current axes as view…** in the palette is how
@@ -405,10 +404,10 @@ optimization. `planTiles` floors it at 1 regardless of what's stored here, so a
 mistyped `0` can't blank the grid outright. Sessions the cap drops are reported,
 never silently: the strip shows `+N not shown`.
 
-Manage views from the command palette (`Ctrl-a p`): **Save current axes as
+Manage views from the command palette (`Ctrl-Space p`): **Save current axes as
 view…**, **Rename view…**, **Delete view**, **Switch view…**. While the Command
-Center is open, switch views with `Ctrl-a <number>` (jump to view N) or
-`Ctrl-a [` / `Ctrl-a ]` (previous / next, wrapping) — these chords are scoped to
+Center is open, switch views with `Ctrl-Space <number>` (jump to view N) or
+`Ctrl-Space [` / `Ctrl-Space ]` (previous / next, wrapping) — these chords are scoped to
 the grid, so they don't affect tmux copy-mode/paste in normal panes. Deleting the
 active view falls back to the previous view by index (or re-seeds the default if
 it was the last one left); deleting a view that isn't active leaves the current
@@ -430,7 +429,7 @@ for why hiding a session always beats a pin left on one of its panes.
 ### Session titles (`sessionTitle`)
 
 Row 1 of a session normally shows its tmux session name — a slug like
-`tra-123`, or whatever you typed at `Ctrl-a n`. Set `sessionTitle.command` and
+`tra-123`, or whatever you typed at `Ctrl-Space n`. Set `sessionTitle.command` and
 jmux asks a model to name the session instead, from whatever it knows about
 the work:
 
@@ -560,7 +559,7 @@ each print one line to stderr and to `jmux.log` and leave naming off. Without
 that check all three fail the same way a working setup that simply hasn't
 named anything yet looks — nothing on screen, ever, with no way to tell which.
 
-Renaming a session by hand (`Ctrl-a p` → **Rename session**) always wins: it
+Renaming a session by hand (`Ctrl-Space p` → **Rename session**) always wins: it
 clears any generated title and marks the session so titling never overwrites
 your name again, even across a restart.
 

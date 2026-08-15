@@ -206,7 +206,7 @@ describe("computeFrameLayout — sidebar auto-hidden on narrow terminal", () => 
   });
 });
 
-describe("computeFrameLayout — sidebar hidden by the user (Ctrl-a \\)", () => {
+describe("computeFrameLayout — sidebar hidden by the user (Ctrl-Space \\)", () => {
   const wide = {
     termCols: 120,
     termRows: 40,

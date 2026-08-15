@@ -32,8 +32,8 @@ describe("buildFooter", () => {
     const model = buildFooter({ snapshotChip: null, version: "1.2.3", updateAvailable: null });
     expect(model.left).toEqual([
       { key: "↵", label: "open" },
-      { key: "^a p", label: "palette" },
-      { key: "^a n", label: "new" },
+      { key: "^Space p", label: "palette" },
+      { key: "^Space n", label: "new" },
       { key: "?", label: "keys" },
     ]);
   });
@@ -68,7 +68,7 @@ describe("layoutFooter — left dialect colours", () => {
   test("multiple left segments and separators actually appear, in order", () => {
     const flat = flatten(cells);
     expect(flat).toContain("↵ open");
-    expect(flat.indexOf("↵ open")).toBeLessThan(flat.indexOf("^a p palette"));
+    expect(flat.indexOf("↵ open")).toBeLessThan(flat.indexOf("^Space p palette"));
   });
 });
 
@@ -102,24 +102,24 @@ describe("layoutFooter — right side never truncates", () => {
 });
 
 describe("layoutFooter — left drops whole segments, lowest priority first", () => {
-  test("at a width that only fits two hints, '? keys' and '^a n new' are dropped first", () => {
+  test("at a width that only fits two hints, '? keys' and '^Space n new' are dropped first", () => {
     const model: FooterModel = {
       left: [
         { key: "↵", label: "open" },
-        { key: "^a p", label: "palette" },
-        { key: "^a n", label: "new" },
+        { key: "^Space p", label: "palette" },
+        { key: "^Space n", label: "new" },
         { key: "?", label: "keys" },
       ],
       right: [{ label: "v1.2.3", onClick: "changelog" }],
     };
-    // "↵ open" (6) + " · " (3) + "^a p palette" (12) = 21 cols, plus a
+    // "↵ open" (6) + " · " (3) + "^Space p palette" (16) = 25 cols, plus a
     // reserved blank + "v1.2.3" (6) on the right — pick a width that fits
     // exactly the first two hints and nothing more.
-    const { cells } = layoutFooter(model, 30);
+    const { cells } = layoutFooter(model, 32);
     const flat = flatten(cells);
     expect(flat).toContain("↵ open");
-    expect(flat).toContain("^a p palette");
-    expect(flat).not.toContain("^a n new");
+    expect(flat).toContain("^Space p palette");
+    expect(flat).not.toContain("^Space n new");
     expect(flat).not.toContain("? keys");
   });
 
@@ -127,15 +127,15 @@ describe("layoutFooter — left drops whole segments, lowest priority first", ()
     const model: FooterModel = {
       left: [
         { key: "↵", label: "open" },
-        { key: "^a p", label: "palette" },
+        { key: "^Space p", label: "palette" },
       ],
       right: [{ label: "v1.2.3", onClick: "changelog" }],
     };
-    // Just short of fitting "^a p palette" whole.
-    const { cells } = layoutFooter(model, 20);
+    // Just short of fitting "^Space p palette" whole.
+    const { cells } = layoutFooter(model, 31);
     const flat = flatten(cells);
     expect(flat).toContain("↵ open");
-    expect(flat).not.toContain("^a p");
+    expect(flat).not.toContain("^Space p");
     expect(flat).not.toContain("palette");
   });
 
@@ -144,7 +144,7 @@ describe("layoutFooter — left drops whole segments, lowest priority first", ()
     const { cells } = layoutFooter(model, 80);
     const flat = flatten(cells);
     let survivors = 0;
-    for (const hint of ["↵ open", "^a p palette", "^a n new", "? keys"]) {
+    for (const hint of ["↵ open", "^Space p palette", "^Space n new", "? keys"]) {
       if (flat.includes(hint)) survivors++;
     }
     expect(survivors).toBeGreaterThanOrEqual(2);

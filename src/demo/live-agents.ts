@@ -137,7 +137,7 @@ export async function acceptWorkspaceTrust(
  * long as the demo runs. Returns a stop function.
  *
  * The one-shot pass above only covers the sessions that exist at startup. But
- * the flow this mode most needs to demonstrate — `Ctrl-a u`, and `n` in the
+ * the flow this mode most needs to demonstrate — `Ctrl-Space u`, and `n` in the
  * issue panel — *creates* sessions in *new* worktree directories, and Claude
  * asks about each one. Without a standing watcher, the headline "one keystroke
  * from ticket to briefed agent" ends on a modal asking whether the directory

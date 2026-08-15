@@ -120,13 +120,13 @@ they bound what the footage can contain.
   shell. This rules out `Ctrl-Shift-Up/Down` (session switching) and the glass
   `Shift+arrow` tile navigation.
 
-  **Tapes use `Ctrl-a p` (command palette) to switch sessions.** This is not a
+  **Tapes use `Ctrl-Space p` (command palette) to switch sessions.** This is not a
   workaround with a cost: the palette is a real feature, and a viewer can see
   what is happening, which a bare keychord doesn't convey. Captions must
   describe the palette, not a binding the footage doesn't show.
 
-- **`Ctrl-a <key>` does work.** The soft prefix intercept survives VHS's timing —
-  `Ctrl-a g`, `Ctrl-a W`, `Ctrl-a o` all confirmed.
+- **`Ctrl-Space <key>` does work.** The soft prefix intercept survives VHS's timing —
+  `Ctrl-Space g`, `Ctrl-Space W`, `Ctrl-Space o` all confirmed.
 
 - **No mouse.** VHS has no pointer input, so anything reachable only by click
   (dragging the sidebar border, the ghost-row click path) cannot be filmed.

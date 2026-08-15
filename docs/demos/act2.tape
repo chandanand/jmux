@@ -23,7 +23,7 @@ Enter
 Sleep 58s
 Sleep 4s
 # Open the panel in the preamble, where a swallowed keystroke can be given time
-# rather than filmed. `Ctrl-a g` is not reliable once a pane has an interactive
+# rather than filmed. `Ctrl-Space g` is not reliable once a pane has an interactive
 # widget up — an agent asking a multiple-choice question ate it outright — so it
 # is never the on-camera beat.
 Ctrl+a

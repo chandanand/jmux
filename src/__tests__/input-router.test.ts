@@ -441,7 +441,7 @@ describe("diff panel routing", () => {
     expect(diffData).toBe("");
   });
 
-  test("Ctrl-a Tab toggles diff panel focus", () => {
+  test("Ctrl-Space Tab toggles diff panel focus", () => {
     let focusToggled = false;
     const router = new InputRouter(
       {
@@ -452,7 +452,7 @@ describe("diff panel routing", () => {
       baseLayout(4, "split", 10),
     );
     router.setPanelFocused(false);
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("\t");
     expect(focusToggled).toBe(true);
   });
@@ -469,7 +469,7 @@ describe("diff panel routing", () => {
       baseLayout(4, "split", 10),
     );
     router.setPanelFocused(true);
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     expect(ptyData).toBe("");
     expect(diffData).toBe("");
     router.handleInput("x");
@@ -477,7 +477,7 @@ describe("diff panel routing", () => {
     expect(diffData).toBe("");
   });
 
-  test("Ctrl-a g still intercepted when diff panel is focused", () => {
+  test("Ctrl-Space g still intercepted when diff panel is focused", () => {
     let toggleCalled = false;
     const router = new InputRouter(
       {
@@ -489,12 +489,12 @@ describe("diff panel routing", () => {
       baseLayout(4, "split", 10),
     );
     router.setPanelFocused(true);
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("g");
     expect(toggleCalled).toBe(true);
   });
 
-  test("Ctrl-a G cycles the sidebar group mode, case-distinct from Ctrl-a g diff toggle", () => {
+  test("Ctrl-Space G cycles the sidebar group mode, case-distinct from Ctrl-Space g diff toggle", () => {
     let groupCycled = false;
     let diffToggled = false;
     const router = new InputRouter(
@@ -506,13 +506,13 @@ describe("diff panel routing", () => {
       },
       baseLayout(4),
     );
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("G");
     expect(groupCycled).toBe(true);
     expect(diffToggled).toBe(false); // uppercase G must not fall through to lowercase g
   });
 
-  test("Ctrl-a \\ toggles the sidebar, and the backslash never reaches the pty", () => {
+  test("Ctrl-Space \\ toggles the sidebar, and the backslash never reaches the pty", () => {
     let toggled = 0;
     let ptyData = "";
     const router = new InputRouter(
@@ -523,12 +523,12 @@ describe("diff panel routing", () => {
       },
       baseLayout(4),
     );
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("\\");
     expect(toggled).toBe(1);
     // The prefix itself is forwarded (tmux's other binds must keep working);
     // the chord byte is not.
-    expect(ptyData).toBe("\x01");
+    expect(ptyData).toBe("\x00");
   });
 
   test("prefix+d detaches jmux when the Command Center is active", () => {
@@ -543,7 +543,7 @@ describe("diff panel routing", () => {
       },
       baseLayout(4),
     );
-    router.handleInput("\x01"); // prefix is buffered (not forwarded) in glass
+    router.handleInput("\x00"); // prefix is buffered (not forwarded) in glass
     router.handleInput("d");
     expect(detachCalled).toBe(true);
     expect(ptyData).toBe(""); // buffered prefix dropped, not forwarded
@@ -561,10 +561,10 @@ describe("diff panel routing", () => {
       },
       baseLayout(4),
     );
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("d");
     expect(detachCalled).toBe(false);
-    expect(ptyData).toBe("\x01d"); // tmux receives prefix+d → its own detach binding
+    expect(ptyData).toBe("\x00d"); // tmux receives prefix+d → its own detach binding
   });
 
   test("Shift+Left from focused diff panel toggles focus back to tmux", () => {
@@ -764,20 +764,20 @@ describe("chrome chords on a full-screen surface", () => {
     return router;
   };
 
-  test("Ctrl-a \\ toggles the sidebar instead of reaching the surface", () => {
+  test("Ctrl-Space \\ toggles the sidebar instead of reaching the surface", () => {
     let toggled = 0;
     let surfaceSaw = "";
     const router = surfaceRouter({
       onSidebarToggle: () => { toggled += 1; },
       onModalInput: (d) => { surfaceSaw += d; },
     });
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("\\");
     expect(toggled).toBe(1);
     expect(surfaceSaw).toBe("");
   });
 
-  test("Ctrl-a g asks for the panel instead of reaching the surface", () => {
+  test("Ctrl-Space g asks for the panel instead of reaching the surface", () => {
     // The swap itself (leave the surface, then show the panel) is main.ts's
     // requestDiffPanel; the router's whole job here is not to swallow the key.
     let diffToggles = 0;
@@ -786,7 +786,7 @@ describe("chrome chords on a full-screen surface", () => {
       onDiffToggle: () => { diffToggles += 1; },
       onModalInput: (d) => { surfaceSaw += d; },
     });
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("g");
     expect(diffToggles).toBe(1);
     expect(surfaceSaw).toBe("");
@@ -801,10 +801,10 @@ describe("chrome chords on a full-screen surface", () => {
       // Wired, and must not fire: a surface owns everything but the chrome.
       onNewSession: () => { throw new Error("new-session must not fire on a surface"); },
     });
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("n");
     expect(toggled).toBe(0);
-    expect(surfaceSaw).toBe("\x01n");
+    expect(surfaceSaw).toBe("\x00n");
   });
 
   test("a bare key still reaches the surface untouched", () => {
@@ -828,10 +828,10 @@ describe("chrome chords on a full-screen surface", () => {
       baseLayout(24),
     );
     router.setModalOpen(true);
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("\\");
     expect(toggled).toBe(0);
-    expect(modalSaw).toBe("\x01\\");
+    expect(modalSaw).toBe("\x00\\");
   });
 
   test("nothing leaks to the pty while a surface owns input", () => {
@@ -841,9 +841,9 @@ describe("chrome chords on a full-screen surface", () => {
       onSidebarToggle: () => {},
       onModalInput: () => {},
     });
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("\\");
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("n");
     expect(ptyData).toBe("");
   });
@@ -851,7 +851,7 @@ describe("chrome chords on a full-screen surface", () => {
 
 describe("mouse routing with no sidebar", () => {
   // The whole mouse block used to be gated on `layout.sidebar`, on the reading
-  // that null meant "terminal too narrow for chrome". `Ctrl-a \` hides the
+  // that null meant "terminal too narrow for chrome". `Ctrl-Space \` hides the
   // sidebar with the toolbar and panel still on screen, and that gate sent
   // every click straight to the pty — the buttons, the panel tabs and the
   // divider drag all dead while it was hidden.
@@ -1513,8 +1513,8 @@ describe("panel filter mode", () => {
   });
 });
 
-describe("glass-buffered prefix + Ctrl-a <n>", () => {
-  test("Ctrl-a then digit switches views and forwards nothing to the tile", () => {
+describe("glass-buffered prefix + Ctrl-Space <n>", () => {
+  test("Ctrl-Space then digit switches views and forwards nothing to the tile", () => {
     const sent: string[] = [];
     const switched: number[] = [];
     const router = new InputRouter({
@@ -1523,25 +1523,25 @@ describe("glass-buffered prefix + Ctrl-a <n>", () => {
       glassActive: () => true,
       onGlassViewSwitch: (n) => switched.push(n),
     }, baseLayout(26));
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("2");
     expect(switched).toEqual([2]);
     expect(sent).toEqual([]); // neither byte reached the tile
   });
 
-  test("Ctrl-a then an unrecognized key flushes prefix + key to the tile", () => {
+  test("Ctrl-Space then an unrecognized key flushes prefix + key to the tile", () => {
     const sent: string[] = [];
     const router = new InputRouter({
       onPtyData: (d) => sent.push(d),
       onSidebarClick: () => {},
       glassActive: () => true,
     }, baseLayout(26));
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("k"); // not a glass chord → flushed to the tile
-    expect(sent).toEqual(["\x01", "k"]);
+    expect(sent).toEqual(["\x00", "k"]);
   });
 
-  test("Ctrl-a then [ / ] switch to prev/next view and forward nothing", () => {
+  test("Ctrl-Space then [ / ] switch to prev/next view and forward nothing", () => {
     const sent: string[] = [];
     const deltas: number[] = [];
     const router = new InputRouter({
@@ -1550,15 +1550,15 @@ describe("glass-buffered prefix + Ctrl-a <n>", () => {
       glassActive: () => true,
       onGlassViewRelative: (delta) => deltas.push(delta),
     }, baseLayout(26));
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("[");
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("]");
     expect(deltas).toEqual([-1, 1]);
     expect(sent).toEqual([]); // nothing leaked to the tile
   });
 
-  test("Ctrl-a then d detaches jmux and forwards nothing", () => {
+  test("Ctrl-Space then d detaches jmux and forwards nothing", () => {
     const sent: string[] = [];
     let detached = 0;
     const router = new InputRouter({
@@ -1567,13 +1567,13 @@ describe("glass-buffered prefix + Ctrl-a <n>", () => {
       glassActive: () => true,
       onGlassDetach: () => detached++,
     }, baseLayout(26));
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("d");
     expect(detached).toBe(1);
     expect(sent).toEqual([]); // buffered prefix dropped, not forwarded
   });
 
-  test("Ctrl-a C toggles the Command Center from inside the grid", () => {
+  test("Ctrl-Space C toggles the Command Center from inside the grid", () => {
     const sent: string[] = [];
     let toggled = 0;
     const router = new InputRouter({
@@ -1582,13 +1582,13 @@ describe("glass-buffered prefix + Ctrl-a <n>", () => {
       glassActive: () => true,
       onGlassToggle: () => toggled++,
     }, baseLayout(26));
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("C");
     expect(toggled).toBe(1);
     expect(sent).toEqual([]);
   });
 
-  test("Ctrl-a P removes the focused session from the grid", () => {
+  test("Ctrl-Space P removes the focused session from the grid", () => {
     const sent: string[] = [];
     let pinned = 0;
     const router = new InputRouter({
@@ -1597,13 +1597,13 @@ describe("glass-buffered prefix + Ctrl-a <n>", () => {
       glassActive: () => true,
       onGlassPinToggle: () => pinned++,
     }, baseLayout(26));
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("P");
     expect(pinned).toBe(1);
     expect(sent).toEqual([]);
   });
 
-  test("Ctrl-a Enter opens the focused tile full-size", () => {
+  test("Ctrl-Space Enter opens the focused tile full-size", () => {
     const sent: string[] = [];
     let opened = 0;
     const router = new InputRouter({
@@ -1612,13 +1612,13 @@ describe("glass-buffered prefix + Ctrl-a <n>", () => {
       glassActive: () => true,
       onGlassOpenFocused: () => opened++,
     }, baseLayout(26));
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("\r");
     expect(opened).toBe(1);
     expect(sent).toEqual([]);
   });
 
-  test("Ctrl-a x cycles the focused tile's face", () => {
+  test("Ctrl-Space x cycles the focused tile's face", () => {
     const sent: string[] = [];
     let cycled = 0;
     const router = new InputRouter({
@@ -1627,13 +1627,13 @@ describe("glass-buffered prefix + Ctrl-a <n>", () => {
       glassActive: () => true,
       onGlassCycleFace: () => cycled++,
     }, baseLayout(26));
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("x");
     expect(cycled).toBe(1);
     expect(sent).toEqual([]);
   });
 
-  test("Ctrl-a z zooms the focused tile", () => {
+  test("Ctrl-Space z zooms the focused tile", () => {
     const sent: string[] = [];
     let zoomed = 0;
     const router = new InputRouter({
@@ -1642,13 +1642,13 @@ describe("glass-buffered prefix + Ctrl-a <n>", () => {
       glassActive: () => true,
       onGlassZoom: () => zoomed++,
     }, baseLayout(26));
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("z");
     expect(zoomed).toBe(1);
     expect(sent).toEqual([]);
   });
 
-  test("Ctrl-a G/s/f cycle the grid's own axes in glass, not the sidebar's", () => {
+  test("Ctrl-Space G/s/f cycle the grid's own axes in glass, not the sidebar's", () => {
     const sent: string[] = [];
     let glassGroup = 0;
     let glassSort = 0;
@@ -1667,11 +1667,11 @@ describe("glass-buffered prefix + Ctrl-a <n>", () => {
       onSortCycle: () => sidebarSort++,
       onFilterCycle: () => sidebarFilter++,
     }, baseLayout(26));
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("G");
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("s");
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("f");
     expect([glassGroup, glassSort, glassFilter]).toEqual([1, 1, 1]);
     expect([sidebarGroup, sidebarSort, sidebarFilter]).toEqual([0, 0, 0]);
@@ -1679,27 +1679,27 @@ describe("glass-buffered prefix + Ctrl-a <n>", () => {
   });
 });
 
-describe("Ctrl-a C / Ctrl-a P outside the grid", () => {
-  test("Ctrl-a C toggles the Command Center from a normal session", () => {
+describe("Ctrl-Space C / Ctrl-Space P outside the grid", () => {
+  test("Ctrl-Space C toggles the Command Center from a normal session", () => {
     let toggled = 0;
     const router = new InputRouter({
       onPtyData: () => {},
       onSidebarClick: () => {},
       onGlassToggle: () => toggled++,
     }, baseLayout(26));
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("C");
     expect(toggled).toBe(1);
   });
 
-  test("Ctrl-a P force-ons the current pane from a normal session", () => {
+  test("Ctrl-Space P force-ons the current pane from a normal session", () => {
     let pinned = 0;
     const router = new InputRouter({
       onPtyData: () => {},
       onSidebarClick: () => {},
       onGlassPinToggle: () => pinned++,
     }, baseLayout(26));
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput("P");
     expect(pinned).toBe(1);
   });
@@ -2196,7 +2196,7 @@ describe("panel split handle", () => {
 
 // --- Work-pipeline prefix chords ---
 //
-// The soft prefix intercept swallows whatever byte follows Ctrl-a, so every
+// The soft prefix intercept swallows whatever byte follows Ctrl-Space, so every
 // chord added here is a key taken away from tmux. These tests pin both halves:
 // the chords jmux claims, and — more importantly — the high-traffic tmux keys
 // it must NOT claim. `c` is tmux's new-window and `z` is pane zoom; an earlier
@@ -2221,48 +2221,48 @@ describe("work-pipeline prefix chords", () => {
   const chord = (key: string) => {
     const sink = { calls: [] as string[], pty: [] as string[] };
     const router = pipelineRouter(sink);
-    router.handleInput("\x01");
+    router.handleInput("\x00");
     router.handleInput(key);
     return sink;
   };
 
-  test("Ctrl-a a opens the capture composer", () => {
+  test("Ctrl-Space a opens the capture composer", () => {
     expect(chord("a").calls).toEqual(["capture"]);
   });
 
-  test("Ctrl-a u starts the next queued issue", () => {
+  test("Ctrl-Space u starts the next queued issue", () => {
     expect(chord("u").calls).toEqual(["upnext"]);
   });
 
-  test("Ctrl-a Z undoes the last status write", () => {
+  test("Ctrl-Space Z undoes the last status write", () => {
     expect(chord("Z").calls).toEqual(["undo"]);
   });
 
-  test("Ctrl-a c is left to tmux (new window), not stolen for capture", () => {
+  test("Ctrl-Space c is left to tmux (new window), not stolen for capture", () => {
     const sink = chord("c");
     expect(sink.calls).toEqual([]);
     expect(sink.pty.join("")).toContain("c");
   });
 
-  test("Ctrl-a z is left to tmux (pane zoom), not stolen for undo", () => {
+  test("Ctrl-Space z is left to tmux (pane zoom), not stolen for undo", () => {
     const sink = chord("z");
     expect(sink.calls).toEqual([]);
     expect(sink.pty.join("")).toContain("z");
   });
 
-  test("Ctrl-a W opens the workflow screen", () => {
+  test("Ctrl-Space W opens the workflow screen", () => {
     expect(chord("W").calls).toEqual(["workflow"]);
   });
 
-  test("Ctrl-a w is left to tmux (choose-tree), not stolen for the workflow screen", () => {
+  test("Ctrl-Space w is left to tmux (choose-tree), not stolen for the workflow screen", () => {
     // Uppercase deliberately: tmux binds `w` by default and jmux has never
-    // unbound it, so claiming it would repeat the Ctrl-a c / Ctrl-a z mistake.
+    // unbound it, so claiming it would repeat the Ctrl-Space c / Ctrl-Space z mistake.
     const sink = chord("w");
     expect(sink.calls).toEqual([]);
     expect(sink.pty.join("")).toContain("w");
   });
 
-  test("Ctrl-a I still opens the settings screen alongside it", () => {
+  test("Ctrl-Space I still opens the settings screen alongside it", () => {
     expect(chord("I").calls).toEqual(["settings"]);
   });
 });

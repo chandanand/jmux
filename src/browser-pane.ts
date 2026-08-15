@@ -6,7 +6,7 @@
 // which would have terminal-browser run `tmux split-window` on its own. Both
 // end at the same place, but only the first goes through the control connection
 // every other jmux-initiated split uses, so window events fire the way they do
-// for `Ctrl-a |` and the new pane inherits `#{pane_current_path}` like the
+// for `Ctrl-Space |` and the new pane inherits `#{pane_current_path}` like the
 // Claude button's does.
 //
 // Nothing here draws anything. The picture arrives because the pane's graphics

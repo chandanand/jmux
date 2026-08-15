@@ -74,7 +74,7 @@ function seedRepo(dir: string, project: DemoProject, sessionName: string): void 
  * merge request, a CI glyph — and yet `git add -A && git commit` left every one
  * of them pristine. That is internally inconsistent (an agent four minutes into
  * a job has changed something), and it is why `jmux --demo` could not
- * demonstrate the diff panel at all: `Ctrl-a g` → Diff spawns hunk against a
+ * demonstrate the diff panel at all: `Ctrl-Space g` → Diff spawns hunk against a
  * clean tree and draws an empty changeset.
  *
  * Deliberately small, and deliberately more than one file: hunk's file list is
@@ -142,7 +142,7 @@ const TEAM_PROJECTS: Record<string, DemoProject> = {
 };
 
 /**
- * Create one base repo per team, for `Ctrl-a u` and the issue panel's `n` to
+ * Create one base repo per team, for `Ctrl-Space u` and the issue panel's `n` to
  * cut worktrees from.
  *
  * Without these, `startWorkOnIssue` finds no `teamRepoMap` entry and the single
@@ -342,7 +342,7 @@ export function setupDemo(opts: DemoOptions = {}): DemoContext {
     // about: ghosts under each stage, including stages holding only ghosts.
     sidebarGroupBy: "stage",
     // Maps each demo team onto a base repo inside the demo's own tmpdir, so
-    // `Ctrl-a u` and the panel's `n` cut a real worktree and launch a real
+    // `Ctrl-Space u` and the panel's `n` cut a real worktree and launch a real
     // agent without touching anything outside it.
     issueWorkflow: { teamRepoMap },
     repoDefaults: {

@@ -67,7 +67,7 @@ tmux PTY bytes → ScreenBridge (@xterm/headless) → CellGrid → Renderer → 
 
   **Drift is the level `transitions.ts` refuses to act on.** Transitions fire on edges only — a condition already true at startup must not replay history into a shared tracker — so every missed edge (a restart, a session adopted after its MR merged, a failed write, an unconfigured event) leaves a permanent silent divergence. jmux writes on edges and reads on levels. An issue drifts when its stage *rank* is behind the configured target's, which is why a ticket moved past the target isn't flagged; where either side can't be ranked, the answer is an honest blank rather than a guess. The strongest event that actually produces a move wins — falling through `mr-merged` when it has no target configured, rather than letting it mask a correctly-configured `session-start` underneath.
 
-  **`Ctrl-a m` and the marker read the same function.** `detectDrift` serves both, so the key cannot move a set the row never claimed — the same construction as `itemsInGroup` reading its answer back off `buildViewNodes`. It writes through `applyStatusPick`, not `applyTransition`: the target was named on screen before the key was pressed, so this is a status the user picked and `transitionConfirm` does not gate it (the reasoning `ctl issue move` already uses). The optimistic update that primitive carries is what clears the marker on the next frame instead of the next poll. The minimal drift form is `!` and not `⚠`, whose width varies between terminals — exactly the class of drift against `cellWidth` that leaves ghost gaps. **`workflowFieldText` returns `{ text, terse }` rather than a bare string** because the field's last-resort forms are markers, not words: `·` is both the `backlog`/`unknown` glyph *and* the character inside the ` · ` separator, so a terse field followed by the word separator renders `· · feat/x` — three visual tokens on a row saying two things. Reachable whenever the badge and the right-hand timer/MR cluster leave less room than the stage label needs, which "In Progress" and "In Review" both can hit at the sidebar's default width.
+  **`Ctrl-Space m` and the marker read the same function.** `detectDrift` serves both, so the key cannot move a set the row never claimed — the same construction as `itemsInGroup` reading its answer back off `buildViewNodes`. It writes through `applyStatusPick`, not `applyTransition`: the target was named on screen before the key was pressed, so this is a status the user picked and `transitionConfirm` does not gate it (the reasoning `ctl issue move` already uses). The optimistic update that primitive carries is what clears the marker on the next frame instead of the next poll. The minimal drift form is `!` and not `⚠`, whose width varies between terminals — exactly the class of drift against `cellWidth` that leaves ghost gaps. **`workflowFieldText` returns `{ text, terse }` rather than a bare string** because the field's last-resort forms are markers, not words: `·` is both the `backlog`/`unknown` glyph *and* the character inside the ` · ` separator, so a terse field followed by the word separator renders `· · feat/x` — three visual tokens on a row saying two things. Reachable whenever the badge and the right-hand timer/MR cluster leave less room than the stage label needs, which "In Progress" and "In Review" both can hit at the sidebar's default width.
 - **Session titles (`src/session-title/`)** — row 1 shows a model-generated phrase in front of the session name, which never changes: `resolveIssueSessionName` still owns the name, the branch and the worktree directory, and the title is a second string layered over it. Four rules are easy to undo:
 
   **The options are the protocol**, for the same reason as the agent-state options: `ctl` has no IPC into the running TUI, so anything both halves need to agree on has to live where tmux holds it. `@jmux-session-title` and `@jmux-title-signature` are **session**-scoped — one session, one row, one name, nothing to roll up — unlike `@jmux-agent-state`, which is pane-scoped because several agents can share a session and a session-scoped write would let the last one clobber its siblings. `@jmux-prompt` is **pane**-scoped for exactly that reason in reverse: the `UserPromptSubmit` hook that writes it knows a pane and nothing else.
@@ -92,8 +92,8 @@ tmux PTY bytes → ScreenBridge (@xterm/headless) → CellGrid → Renderer → 
 
   **The capture is gated on `@jmux-title-capture`**, a global option jmux writes at startup from `sessionTitle.command`. Hooks are installed once and cannot read jmux's config, so the option is how they ask. Without it, installing agent hooks would store a user's first prompt whether or not they use titling at all — a user who has never configured `sessionTitle` never has a prompt captured, full stop.
 
-  **`@jmux-title-signature` carries the literal `manual` for a hand-renamed session**, which is what makes "a rename wins" survive a restart: the sentinel lives in a tmux option rather than an in-memory set, and `requestSessionTitles` skips any session carrying it, unconditionally. `Ctrl-a p` → **Rename session** stamps it; only the retitle command above ever clears it, because asking for a generated title is the one action that means to supersede an explicit one.
-- **The issue disclosure** — a session carrying more than one issue expands in place to list them, on a click of its badge or `Ctrl-a e`. The badge's `+N` says how many; this says which, without leaving the one surface always on screen. Four rules:
+  **`@jmux-title-signature` carries the literal `manual` for a hand-renamed session**, which is what makes "a rename wins" survive a restart: the sentinel lives in a tmux option rather than an in-memory set, and `requestSessionTitles` skips any session carrying it, unconditionally. `Ctrl-Space p` → **Rename session** stamps it; only the retitle command above ever clears it, because asking for a generated title is the one action that means to supersede an explicit one.
+- **The issue disclosure** — a session carrying more than one issue expands in place to list them, on a click of its badge or `Ctrl-Space e`. The badge's `+N` says how many; this says which, without leaving the one surface always on screen. Four rules:
 
   **The rows are sub-rows, not peers.** They are absent from `displayOrder` (the session cycle) and from `getNavOrder()` — Ctrl-Shift-Down walking through five tickets to reach the next session would break navigation in exactly the sessions the feature is for. Contrast ghost rows, which *are* nav stops: a ghost is somewhere to go, a disclosed issue is a detail of somewhere you already are. Clicking one still switches to its session and puts *that* issue in the panel, which is what makes the row worth drawing.
 
@@ -119,7 +119,7 @@ tmux PTY bytes → ScreenBridge (@xterm/headless) → CellGrid → Renderer → 
 
   **Whether ghosts are emitted is a question of two axes, which is why `filterShowsGhosts` exists** rather than the `filterMode === "all"` equality it replaced. `attention`/`active` select on agent state, which a ghost has none of — it can neither match one nor be honestly excluded by one — so they suppress ghosts on every axis. `started` is a statement about the *stage* axis alone, where ghosts interleave into every band and there is otherwise no way to read the stage layout of the work that exists; on the other axes ghosts are already gathered into one flat `Up next` band, so there it is deliberately identical to `all`. The rule lives in `sidebar-sort.ts` beside the rest of the filter policy so it is testable without a grid, and takes the group mode as an argument rather than reading it back off the sidebar — `buildRenderPlan` is pure in both.
 
-  **A mode that can be inert owes the same disclosure `showUnstartedInSidebar` does.** Choosing `started` off the stage axis draws an unchanged sidebar under a header chip reading `Started` — a filter announcing it is filtering while filtering nothing, and worse than the silent `g`-on-a-sectioned-view case because the chip actively says the opposite. So `applySidebarFilter` toasts, and both entry points (`Ctrl-a f` and the palette submenu) route through it so they cannot disagree about whether the disclosure appears. It does **not** refuse the mode the way `sectionedViewNotice` does: this one is not permanently inert — it starts acting the moment the axis changes — and refusing would mean the filter could not be armed before switching. Cycling the *group* axis afterwards is silent by contrast, because there the ghost rows visibly appear or disappear, which is its own feedback.
+  **A mode that can be inert owes the same disclosure `showUnstartedInSidebar` does.** Choosing `started` off the stage axis draws an unchanged sidebar under a header chip reading `Started` — a filter announcing it is filtering while filtering nothing, and worse than the silent `g`-on-a-sectioned-view case because the chip actively says the opposite. So `applySidebarFilter` toasts, and both entry points (`Ctrl-Space f` and the palette submenu) route through it so they cannot disagree about whether the disclosure appears. It does **not** refuse the mode the way `sectionedViewNotice` does: this one is not permanently inert — it starts acting the moment the axis changes — and refusing would mean the filter could not be armed before switching. Cycling the *group* axis afterwards is silent by contrast, because there the ghost rows visibly appear or disappear, which is its own feedback.
 - **Ghost preview (`src/ghost-preview.ts`)** — the fourth full-area surface, alongside settings, workflow and glass. Shows an unstarted issue *and* its pre-flight: the session/branch name, worktree path, base branch, worktree tool and agent that Start would use, all resolved by `ghost-preflight.ts` before anything is provisioned. The primary action reads Start / Resume / Switch from the same three states `startWorkOnIssue` branches on, so the label cannot disagree with the behaviour.
 
   Four rules hold it together, and each was a bug first:
@@ -141,7 +141,7 @@ Rendering is coalesced via `scheduleRender()`, at `RENDER_INTERVAL_ACTIVE` while
 **`src/input-router.ts`** sits between raw stdin and the PTY. It:
 
 - Parses SGR mouse sequences (`\x1b[<...M`) and dispatches clicks/hovers to sidebar / toolbar / main area based on x-coordinate relative to `sidebarCols`. Mouse events in the main area have their x translated and forwarded to tmux so tmux's own mouse support keeps working.
-- Implements a **soft prefix intercept**: `Ctrl-a` is forwarded to tmux as normal, *but* if the next byte is `p` / `n` / `i` within a short window, jmux intercepts it to open the palette / new-session modal / settings instead of letting tmux handle it. This is why the prefix key is still customizable via `~/.tmux.conf` — we piggyback on whatever tmux's prefix is by listening for the literal `\x01` byte that `Ctrl-a` produces. If a user rebinds their tmux prefix, the intercept needs to be thought about.
+- Implements a **soft prefix intercept**: terminals encode `Ctrl-Space` as the NUL byte (`\x00`). The router forwards that byte to tmux as normal, but intercepts recognized second bytes for jmux actions. `config/core.conf` enforces the matching `C-Space` tmux prefix after the user's config is sourced; letting those two values drift would split jmux and tmux chords across different prefixes.
 - Handles `Ctrl-Shift-Up/Down` (`\x1b[1;6A` / `\x1b[1;6B`) directly for session switching — these never reach tmux.
 - **Row 0 has two owners, and the column decides between them.** The info panel's tab strip is painted into the *toolbar row* over the panel's columns (`renderer.ts` blits it at `destY 0`), so it must be hit-tested *before* the toolbar branch — that branch claims the whole row whatever the column, and for a long time swallowed every tab click while hover still worked, because it ignores motion. The strip only owns those columns while it is drawn: in full mode `panel.x === main.x`, so claiming them unconditionally would make the toolbar unclickable whenever the strip hides itself for a lone Diff tab. `panelTabBarShown()` reads `InfoPanel.tabBarShown` — the same predicate the renderer paints from, rather than a second copy that could route clicks to an owner it isn't painting.
 - Owns **drag** on three resize handles via `src/drag.ts`: the sidebar border column, the split panel divider, and the info panel's list/detail separator. The first two are vertical lines that move horizontally; the third is horizontal and moves vertically (`handleAxis`), which is why the controller tracks a single scalar `pos` rather than a column. Three invariants hold this together and are easy to break by accident:
@@ -317,7 +317,7 @@ The skill file `skills/jmux-control.md` documents usage patterns for agents — 
 
 ### Command Center (`src/glass/`)
 
-The grid of live, drivable session tiles (`Ctrl-a C`), rewritten from
+The grid of live, drivable session tiles (`Ctrl-Space C`), rewritten from
 hand-placed pins to derived membership — full record in
 `docs/adr/0005-derived-command-center-membership.md`. The rules that are easy to
 undo:
@@ -328,7 +328,7 @@ current window, and `resize-pane -Z` zooms the whole window — two tiles cannot
 show two panes of one session full-bleed at once, by any arrangement of pins.
 `TileKey` (`glass/tile-plan.ts`) is `session:$id` and only that; there is no
 second kind of key. A session with several agent panes still shows one at a
-time, elected by `glass/representative.ts`, with `Ctrl-a x` cycling within the
+time, elected by `glass/representative.ts`, with `Ctrl-Space x` cycling within the
 one tile rather than adding a second.
 
 **`orderSessions` (`src/session-order.ts`) is the shared membership-and-order
@@ -361,7 +361,7 @@ answers "who represents this session *right now*" from live urgency alone, with
 no memory of what was shown last frame — re-electing on every reconcile would
 mean a sibling agent going from complete to running yanks the picture out from
 under someone typing into the tile. Stickiness — a tile keeps its pane until
-that pane dies, the user cycles it (`Ctrl-a x`), or the force-on set changes —
+that pane dies, the user cycles it (`Ctrl-Space x`), or the force-on set changes —
 lives in `GlassView.resolveDisplayedRepresentative`, layered *over* the
 stateless election, never folded inside it. `resolveAgentPane` (`main.ts`)
 calls the stateless election directly: "which pane wrote this diff, so I can
@@ -538,7 +538,7 @@ came from: issue text is written by anyone who can comment.
 
 `src/images/passthrough.ts` is the mirror image of everything above. There jmux
 authors the picture; here it is a courier for one drawn by a program in a pane —
-terminal-browser (`Ctrl-a b`, `src/browser-pane.ts`), but equally an image
+terminal-browser (`Ctrl-Space b`, `src/browser-pane.ts`), but equally an image
 previewer or a plotting library. **Nothing in the relay is browser-specific**,
 which is why the module is named for the mechanism and not the feature.
 
@@ -705,7 +705,7 @@ the user's tmux config ← user overrides, and opt-out-able
 config/core.conf       ← jmux requirements, sourced LAST, always wins
 ```
 
-See `config/tmux.conf` for the loader. `core.conf` enforces the small set of settings jmux depends on: `mouse on`, `detach-on-destroy off`, `status off` (we render our own toolbar), pane border titles, and auto window naming. Do not add new settings to `core.conf` unless they're genuinely required for jmux to function.
+See `config/tmux.conf` for the loader. `core.conf` enforces the small set of settings jmux depends on: the `C-Space` prefix (matching the input router's NUL byte), `mouse on`, `detach-on-destroy off`, `status off` (we render our own toolbar), pane border titles, and auto window naming. Do not add new settings to `core.conf` unless they're genuinely required for jmux to function.
 
 **Step 2 is a setting, and the decision is made in TypeScript.** `core.conf` only protects what jmux *requires*; everything else jmux ships is presentation the user may override, which is how an elaborate `~/.tmux.conf` lands its own chrome on top of jmux's UI. `userTmuxConfig` (`string | false`, unset = auto-detect) is the opt-out, and four things hold it together:
 

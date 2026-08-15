@@ -7,8 +7,9 @@ import {
   MATCH_ATTRS, CATEGORY_ATTRS, NO_MATCHES_ATTRS, DIM_ATTRS, BG_ATTRS,
   modalContentRect, drawModalChrome, type ModalChrome, type ModalAction,
 } from "./modal";
+import { PREFIX_BYTE } from "./prefix";
 
-// The `Ctrl-a ?` overlay — the in-app keyboard reference. Also what footer.ts's
+// The `Ctrl-Space ?` overlay — the in-app keyboard reference. Also what footer.ts's
 // `? keys` hint points at, and the toolbar's `?` button.
 //
 // Deliberately read-only: Enter runs nothing. About half of KEYMAP is tmux
@@ -100,7 +101,7 @@ export class HelpModal {
   }
 
   handleInput(data: string): ModalAction {
-    // Ctrl-a ? toggles closed, mirroring the palette's Ctrl-a p. The prefix
+    // Ctrl-Space ? toggles closed, mirroring the palette's Ctrl-Space p. The prefix
     // has to be buffered rather than treating a bare `?` as "close": once a
     // modal is open the router forwards *every* byte here, so a bare `?` is a
     // user filtering for the sort-order key, not asking to leave. Collapsing
@@ -114,7 +115,7 @@ export class HelpModal {
       }
       return { type: "consumed" }; // discard both bytes, as the palette does
     }
-    if (data === "\x01") {
+    if (data === PREFIX_BYTE) {
       this.prefixBuffered = true;
       return { type: "consumed" };
     }
@@ -179,8 +180,8 @@ export class HelpModal {
       return;
     }
 
-    // Match against the label *and* both key spellings, so "split", "^a |"
-    // and "Ctrl-a |" all find the same row. Only the label's match indices
+    // Match against the label *and* both key spellings, so "split", "^Space |"
+    // and "Ctrl-Space |" all find the same row. Only the label's match indices
     // are kept for highlighting — highlighting a key against a query that
     // matched its long form would light up the wrong glyphs in the short one.
     const scored: Array<{ binding: Binding; match: FuzzyResult }> = [];

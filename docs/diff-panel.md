@@ -8,16 +8,16 @@ the code, and nothing else in the system knows both.
 
 ## The loop
 
-1. `Ctrl-a g` opens the panel on the current session's working tree. The tab
+1. `Ctrl-Space g` opens the panel on the current session's working tree. The tab
    reads `Diff +142 −38`.
 2. `c` in the panel writes a note on the hunk under the cursor. The tab picks up
    a `●2` count.
-3. `Ctrl-a r` shows exactly what will be sent and to which pane. Enter types it
+3. `Ctrl-Space r` shows exactly what will be sent and to which pane. Enter types it
    into the agent as a single paste.
 4. The sent notes are deleted from hunk, so `●N` always means *written but not
    sent yet* rather than *notes exist*.
 
-`Ctrl-a v` repoints the panel: working tree (with or without untracked files),
+`Ctrl-Space v` repoints the panel: working tree (with or without untracked files),
 staged, the last commit, or `base...HEAD` — everything the branch has added
 since it forked, which is usually the whole of an agent's work rather than
 whatever happens to be uncommitted.
@@ -110,7 +110,7 @@ no tracker configured, which is everyone on their first run.
 jmux's, with a short jmux-specific addendum. An agent in a jmux session can then
 navigate the diff its human is reading (`hunk session navigate`) and leave its
 own inline notes (`hunk session comment apply`). Notes an agent writes are
-tagged `agent` and are never included in `Ctrl-a r` — echoing an agent's own
+tagged `agent` and are never included in `Ctrl-Space r` — echoing an agent's own
 notes back at it would be a loop carrying no new information.
 
 ## Settings

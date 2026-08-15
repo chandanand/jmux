@@ -87,7 +87,7 @@ export function resolveTarget(
   if (!picked) {
     throw new CliError(
       "No browser pane is open. Open one with `jmux ctl browser open <url>`, " +
-        "or Ctrl-a b in the TUI.",
+        "or Ctrl-Space b in the TUI.",
     );
   }
   return picked;

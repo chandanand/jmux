@@ -25,7 +25,7 @@ export function paneIdentity(input: PaneIdentityInput): string {
  * A Command Center tile's full label: the session's own identity (name plus
  * issue badge, built by the caller), with the displayed pane's identity
  * appended only when that pane is not the session's natural first choice — a
- * force-on pin or a live `Ctrl-a x` cycle override. Without the suffix there
+ * force-on pin or a live `Ctrl-Space x` cycle override. Without the suffix there
  * is nothing on screen saying which of a session's panes a tile is showing
  * once a cycle has moved it off the election's own answer.
  */

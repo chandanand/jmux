@@ -48,8 +48,8 @@ export interface FooterLayout {
  * exactly like the toolbar's own hint conventions. */
 const LEFT_KEYBINDS: readonly FooterSegment[] = [
   { key: "↵", label: "open" },       // ↵ open
-  { key: "^a p", label: "palette" },
-  { key: "^a n", label: "new" },
+  { key: "^Space p", label: "palette" },
+  { key: "^Space n", label: "new" },
   { key: "?", label: "keys" },
 ];
 
