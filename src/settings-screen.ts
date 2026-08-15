@@ -44,7 +44,7 @@ export interface SettingDef {
    */
   onTextCommit?: (value: string) => string | null | void;
   /**
-   * Nudge the value one place with ◂ ▸, without opening an editor.
+   * Nudge the value one place with h/l, without opening an editor.
    *
    * Only for values on an ordered ladder the user can walk — a count, a
    * duration. Deliberately NOT how `list` settings work: those choose among
@@ -243,7 +243,7 @@ type SettingsNode =
 
 type PickerItem = { id: string; label: string };
 
-// There is no inline list mode. A `list` row cycles in place with ◂ ▸ and opens
+// There is no inline list mode. A `list` row cycles in place with h/l and opens
 // the picker on Enter, so the two-step "enter a mode, cycle, confirm" edit that
 // used to sit here has no remaining caller.
 type EditState =
@@ -386,8 +386,8 @@ export class SettingsScreen {
         this.clampSelection();
         return { type: "none" };
       }
-      if (data === "\x1b[A") { this.moveUp(); return { type: "none" }; }
-      if (data === "\x1b[B") { this.moveDown(); return { type: "none" }; }
+      if (data === "\x1b[A" || data === "\x10") { this.moveUp(); return { type: "none" }; }
+      if (data === "\x1b[B" || data === "\x0e") { this.moveDown(); return { type: "none" }; }
       if (data.length === 1 && data.charCodeAt(0) >= 32) {
         this.filter += data;
         this.clampSelection();
@@ -406,12 +406,12 @@ export class SettingsScreen {
     if (data === "\x1b[A" || data === "k") { this.moveUp(); return { type: "none" }; }
     if (data === "\x1b[B" || data === "j") { this.moveDown(); return { type: "none" }; }
 
-    // ◂ ▸ always change the selected row's value. Enter is only for values you
+    // h/l always change the selected row's value. Enter is only for values you
     // must type or search. A row with no ordered ladder — text, multiselect,
     // map — declines rather than pretending, and the hint line reflects that,
     // so a row never advertises a key it does not answer.
-    if (data === "\x1b[D") { this.stepSelected(-1); return { type: "none" }; }
-    if (data === "\x1b[C") { this.stepSelected(1); return { type: "none" }; }
+    if (data === "\x1b[D" || data === "h") { this.stepSelected(-1); return { type: "none" }; }
+    if (data === "\x1b[C" || data === "l") { this.stepSelected(1); return { type: "none" }; }
 
     if (data === "\r") {
       return this.handleEnter();
@@ -519,7 +519,7 @@ export class SettingsScreen {
 
   /**
    * The keys the *selected* row actually takes. Varying it is the half that
-   * makes "◂ ▸ always change the value" honest: a row with no ladder to walk
+   * makes "h/l always change the value" honest: a row with no ladder to walk
    * must not advertise the keys, and a read-only row must not claim an edit —
    * three Diagnostics rows said "↵ edit" while Enter did nothing at all.
    */
@@ -527,11 +527,18 @@ export class SettingsScreen {
     if (this.editState) {
       return [{ key: "↵", label: "confirm" }, { key: "esc", label: "cancel" }];
     }
-    const groups: Array<{ key: string; label: string }> = [{ key: "↑↓", label: "navigate" }];
+    if (this.filtering) {
+      return [
+        { key: "Ctrl-P/N", label: "navigate" },
+        { key: "↵", label: "done" },
+        { key: "esc", label: "clear" },
+      ];
+    }
+    const groups: Array<{ key: string; label: string }> = [{ key: "j/k", label: "navigate" }];
 
     if (node?.kind === "setting") {
       const setting = node.setting;
-      if (this.canStep(setting)) groups.push({ key: "◂▸", label: "change" });
+      if (this.canStep(setting)) groups.push({ key: "h/l", label: "change" });
       if (setting.type === "number" || setting.type === "text") {
         if (setting.onTextCommit) groups.push({ key: "↵", label: "type a value" });
       } else if (setting.type === "list" || setting.type === "multiselect") {
@@ -751,11 +758,11 @@ export class SettingsScreen {
         }
         return { type: "none" };
       }
-      if (data === "\x1b[D") { // Left
+      if (data === "\x1b[D" || data === "\x02") { // Left / Ctrl-B
         if (state.cursorPos > 0) state.cursorPos--;
         return { type: "none" };
       }
-      if (data === "\x1b[C") { // Right
+      if (data === "\x1b[C" || data === "\x06") { // Right / Ctrl-F
         if (state.cursorPos < state.buffer.length) state.cursorPos++;
         return { type: "none" };
       }
@@ -782,11 +789,11 @@ export class SettingsScreen {
         this.editState = null;
         return { type: "none" };
       }
-      if (data === "\x1b[A") { // Up
+      if (data === "\x1b[A" || data === "\x10") { // Up / Ctrl-P
         if (state.selectedIndex > 0) state.selectedIndex--;
         return { type: "none" };
       }
-      if (data === "\x1b[B") { // Down
+      if (data === "\x1b[B" || data === "\x0e") { // Down / Ctrl-N
         if (state.selectedIndex < state.filtered.length - 1) state.selectedIndex++;
         return { type: "none" };
       }
@@ -844,7 +851,7 @@ export class SettingsScreen {
         return { type: "none" };
       }
 
-      // A number is a text row that also steps: ◂ ▸ cover the nudges, Enter
+      // A number is a text row that also steps: h/l cover the nudges, Enter
       // covers the jumps. getEditValue, never getValue — the display form is
       // prose ("auto") and seeding the buffer with it is what produced
       // "auto55", a commit that parsed to nothing and reported nothing.
@@ -856,7 +863,7 @@ export class SettingsScreen {
 
       // The picker, not an inline cycle. These rows choose among every tracker
       // state, and walking twenty-five of them one press at a time is why
-      // nobody found them; ◂ ▸ still cycles for the short lists.
+      // nobody found them; h/l still cycle the short lists.
       if (setting.type === "list" && setting.options && setting.onOptionSelect) {
         const select = setting.onOptionSelect;
         const items = setting.options.map((o) => ({ id: o, label: o }));
@@ -999,7 +1006,7 @@ export class SettingsScreen {
     }
   }
 
-  /** Whether ◂ ▸ do anything on this row — the hint line asks before offering. */
+  /** Whether h/l do anything on this row — the hint line asks before offering. */
   private canStep(setting: SettingDef): boolean {
     if (setting.onStep) return true;
     if (setting.type === "boolean") return !!setting.onToggle;
@@ -1136,8 +1143,8 @@ export class SettingsScreen {
       hintRow,
       pad,
       state.multi
-        ? "↑↓ select  ·  Enter toggle  ·  Esc done  ·  type to filter"
-        : "↑↓ select  ·  Enter confirm  ·  Esc cancel  ·  type to filter",
+        ? "^p/^n select  ·  Enter toggle  ·  Esc done  ·  type to filter"
+        : "^p/^n select  ·  Enter confirm  ·  Esc cancel  ·  type to filter",
       HINT_ATTRS,
     );
 

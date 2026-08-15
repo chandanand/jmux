@@ -65,7 +65,7 @@ function confBinds(): string[] {
  * sequences) and range comparisons are not single keys and are excluded by the
  * regex requiring exactly one character or one escape.
  */
-function routerPrefixKeys(arm: "prefix" | "glass-prefix" | "surface-prefix"): string[] {
+function routerPrefixKeys(arm: "prefix" | "glass-prefix" | "surface-prefix" | "modal-prefix"): string[] {
   const text = readFileSync(INPUT_ROUTER, "utf-8");
   const start = text.indexOf(`--- keymap:${arm} start ---`);
   const end = text.indexOf(`--- keymap:${arm} end ---`);
@@ -92,7 +92,7 @@ function routerPrefixKeys(arm: "prefix" | "glass-prefix" | "surface-prefix"): st
 
 const GLASS_CONTEXT = "Command Center open";
 
-const tmuxBindings = KEYMAP.filter((b) => b.source === "tmux");
+const tmuxBindings = KEYMAP.filter((b) => b.source === "tmux" || b.source === "jmux+tmux");
 const prefixBindings = KEYMAP.filter((b) => b.prefixKey !== undefined);
 const glassPrefixBindings = prefixBindings.filter((b) => b.context === GLASS_CONTEXT);
 
@@ -110,13 +110,13 @@ describe("keymap ↔ defaults.conf", () => {
   test("every tmux binding in the table is bound in defaults.conf", () => {
     const bound = new Set(confBinds());
     const undocumented = tmuxBindings
-      .filter((b) => !bound.has(b.conf!))
-      .map((b) => `${b.keys} (conf: ${b.conf})`);
+      .flatMap((b) => [b.conf!, ...(b.confAliases ?? [])].filter((key) => !bound.has(key))
+        .map((key) => `${b.keys} (conf: ${key})`));
     expect(undocumented).toEqual([]);
   });
 
   test("every bind in defaults.conf appears in the table", () => {
-    const tabled = new Set(tmuxBindings.map((b) => b.conf));
+    const tabled = new Set(tmuxBindings.flatMap((b) => [b.conf, ...(b.confAliases ?? [])]));
     const missing = confBinds().filter((k) => !tabled.has(k));
     expect(missing).toEqual([]);
   });
@@ -143,11 +143,12 @@ describe("keymap ↔ input-router", () => {
   // the glass arm; a same-key row without that context only counts as
   // reaching the glass arm if no Command-Center-context row has already
   // claimed the byte there.
-  type Arm = "prefix" | "glass-prefix" | "surface-prefix";
+  type Arm = "prefix" | "glass-prefix" | "surface-prefix" | "modal-prefix";
   const armBytes: Record<Arm, ReadonlySet<string>> = {
     prefix: new Set(routerPrefixKeys("prefix")),
     "glass-prefix": new Set(routerPrefixKeys("glass-prefix")),
     "surface-prefix": new Set(routerPrefixKeys("surface-prefix")),
+    "modal-prefix": new Set(routerPrefixKeys("modal-prefix")),
   };
   const glassClaimedKeys = new Set(
     prefixBindings.filter((b) => b.context === GLASS_CONTEXT).map((b) => b.prefixKey!),
@@ -161,6 +162,7 @@ describe("keymap ↔ input-router", () => {
     }
     if (armBytes["prefix"].has(b.prefixKey!)) out.add("prefix");
     if (armBytes["surface-prefix"].has(b.prefixKey!)) out.add("surface-prefix");
+    if (armBytes["modal-prefix"].has(b.prefixKey!)) out.add("modal-prefix");
     if (armBytes["glass-prefix"].has(b.prefixKey!) && !glassClaimedKeys.has(b.prefixKey!)) {
       out.add("glass-prefix");
     }
@@ -177,6 +179,7 @@ describe("keymap ↔ input-router", () => {
       ordinary: "prefix",
       glass: "glass-prefix",
       surface: "surface-prefix",
+      modal: "modal-prefix",
     };
     const mismatches: string[] = [];
     for (const b of prefixBindings) {
@@ -234,11 +237,21 @@ describe("keymap ↔ input-router", () => {
     expect(missing).toEqual([]);
   });
 
-  test("the surface arm stays a strict subset of the ordinary prefix chain", () => {
-    // A chord live on a surface but not on the normal frame would be
-    // unreachable from the place users actually learn it.
+  test("every key the ordinary-modal arm intercepts is declared for that arm", () => {
+    const declared = new Set(
+      prefixBindings.filter((b) => (b.arms ?? []).includes("modal")).map((b) => b.prefixKey),
+    );
+    const missing = routerPrefixKeys("modal-prefix").filter((k) => !declared.has(k));
+    expect(missing).toEqual([]);
+  });
+
+  test("the surface arm contains only ordinary jmux chords or shipped tmux bindings", () => {
+    // Most surface chords are ordinary jmux actions. Resize keys are the one
+    // exception: ordinary frames pass them through to tmux, while a surface
+    // must explicitly replay them because it owns keyboard input.
     const plain = new Set(routerPrefixKeys("prefix"));
-    const stray = routerPrefixKeys("surface-prefix").filter((k) => !plain.has(k));
+    const tmux = new Set(tmuxBindings.flatMap((b) => [b.conf, ...(b.confAliases ?? [])]));
+    const stray = routerPrefixKeys("surface-prefix").filter((k) => !plain.has(k) && !tmux.has(k));
     expect(stray).toEqual([]);
   });
 

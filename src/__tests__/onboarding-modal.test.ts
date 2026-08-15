@@ -106,6 +106,20 @@ describe("OnboardingModal — intent", () => {
     expect(modal.currentPageId()).toBe("tracker");
   });
 
+  test("j/k choose an intent and h/l change pages", () => {
+    const { port } = makePort();
+    const modal = new OnboardingModal(port);
+    modal.open();
+    modal.handleInput("j");
+    modal.handleInput("k");
+    modal.handleInput("\r");
+    expect(modal.currentPageId()).toBe("projects");
+    modal.handleInput("l");
+    expect(modal.currentPageId()).not.toBe("projects");
+    modal.handleInput("h");
+    expect(modal.currentPageId()).toBe("projects");
+  });
+
   test("the third intent lands on the map with nothing configured", () => {
     const { port, calls } = makePort();
     const modal = new OnboardingModal(port);

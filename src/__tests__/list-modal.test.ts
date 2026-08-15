@@ -79,6 +79,17 @@ describe("ListModal", () => {
     expect(grid2.cells[firstResultRow][1].char).toBe("▸");
   });
 
+  test("Ctrl-N and Ctrl-P move the selection", () => {
+    const modal = new ListModal({ header: "Pick One", items: testItems });
+    modal.open();
+    modal.handleInput("\x0e");
+    let grid = modal.getGrid(50);
+    expect(grid.cells[3][1].char).toBe("▸");
+    modal.handleInput("\x10");
+    grid = modal.getGrid(50);
+    expect(grid.cells[2][1].char).toBe("▸");
+  });
+
   test("Enter returns { type: 'result', value: selectedItem }", () => {
     const modal = new ListModal({ header: "Pick One", items: testItems });
     modal.open();

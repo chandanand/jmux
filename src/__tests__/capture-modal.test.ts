@@ -72,6 +72,19 @@ describe("CaptureModal fields", () => {
     expect(r).toEqual({ mode: "start", teamId: "t-web", title: "abc", description: "hello" });
   });
 
+  test("h/k and j/l cycle teams", () => {
+    const m = modal("t-plat");
+    m.handleInput("\t");
+    m.handleInput("l");
+    expect(m.currentTeamId()).toBe("t-web");
+    m.handleInput("h");
+    expect(m.currentTeamId()).toBe("t-plat");
+    m.handleInput("j");
+    expect(m.currentTeamId()).toBe("t-web");
+    m.handleInput("k");
+    expect(m.currentTeamId()).toBe("t-plat");
+  });
+
   test("Shift-Tab moves focus backwards", () => {
     const m = modal("t-plat");
     m.handleInput("\t");
@@ -244,9 +257,9 @@ describe("CaptureModal field affordances", () => {
 
   test("the team field shows its cycle affordance only when focused", () => {
     const m = modal("t-plat");
-    expect(findRow(m.getGrid(70), "Team")).not.toContain("◂");
+    expect(findRow(m.getGrid(70), "Team")).not.toContain("h/l");
     m.handleInput("\t");
-    expect(findRow(m.getGrid(70), "Team")).toContain("◂");
+    expect(findRow(m.getGrid(70), "Team")).toContain("h/l");
   });
 
   test("an empty description shows a placeholder", () => {

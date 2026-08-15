@@ -133,8 +133,8 @@ export class TextAreaModal {
       return { type: "consumed" };
     }
 
-    // Arrow left
-    if (data === "\x1b[D") {
+    // Arrow left / Ctrl-B
+    if (data === "\x1b[D" || data === "\x02") {
       if (this.cursorCol > 0) {
         this.cursorCol--;
       } else if (this.cursorRow > 0) {
@@ -144,8 +144,8 @@ export class TextAreaModal {
       return { type: "consumed" };
     }
 
-    // Arrow right
-    if (data === "\x1b[C") {
+    // Arrow right / Ctrl-F
+    if (data === "\x1b[C" || data === "\x06") {
       if (this.cursorCol < this.lines[this.cursorRow].length) {
         this.cursorCol++;
       } else if (this.cursorRow < this.lines.length - 1) {
@@ -155,8 +155,8 @@ export class TextAreaModal {
       return { type: "consumed" };
     }
 
-    // Arrow up
-    if (data === "\x1b[A") {
+    // Arrow up / Ctrl-P
+    if (data === "\x1b[A" || data === "\x10") {
       if (this.cursorRow > 0) {
         this.cursorRow--;
         this.cursorCol = Math.min(this.cursorCol, this.lines[this.cursorRow].length);
@@ -164,8 +164,8 @@ export class TextAreaModal {
       return { type: "consumed" };
     }
 
-    // Arrow down
-    if (data === "\x1b[B") {
+    // Arrow down / Ctrl-N
+    if (data === "\x1b[B" || data === "\x0e") {
       if (this.cursorRow < this.lines.length - 1) {
         this.cursorRow++;
         this.cursorCol = Math.min(this.cursorCol, this.lines[this.cursorRow].length);

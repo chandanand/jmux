@@ -39,7 +39,7 @@ define workflow stages in `Ctrl-Space W`, **the issue tabs become your stages** 
 A tab appears only if the adapter behind it authenticated: no tracker means no
 issue tabs at all, rather than an empty one. Only **Diff** is unconditional.
 
-Click the panel or press `Shift-Right` to focus it. Use `h` and `l` to cycle
+Click the panel or press `Ctrl-Space l` from the rightmost pane to focus it. Use `h` and `l` to cycle
 between tabs (`[` and `]` also work).
 
 ### Navigation

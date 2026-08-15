@@ -171,6 +171,30 @@ describe("Ctrl-Shift arrow detection", () => {
     router.handleInput("\x1b[1;6B");
     expect(ptyData).toBe("");
   });
+
+  test("Ctrl-Space parentheses switch sessions", () => {
+    const calls: string[] = [];
+    const router = new InputRouter({
+      onPtyData: () => {},
+      onSidebarClick: () => {},
+      onSessionPrev: () => { calls.push("prev"); },
+      onSessionNext: () => { calls.push("next"); },
+    }, baseLayout(24));
+    router.handleInput("\x00"); router.handleInput("(");
+    router.handleInput("\x00"); router.handleInput(")");
+    expect(calls).toEqual(["prev", "next"]);
+  });
+
+  test("Ctrl-Space h/j/k/l moves pane focus", () => {
+    const calls: string[] = [];
+    const router = new InputRouter({
+      onPtyData: () => {},
+      onSidebarClick: () => {},
+      onPaneFocusMove: (dir) => { calls.push(dir); },
+    }, baseLayout(24));
+    for (const key of "hjkl") { router.handleInput("\x00"); router.handleInput(key); }
+    expect(calls).toEqual(["left", "down", "up", "right"]);
+  });
 });
 
 describe("passthrough", () => {
@@ -807,6 +831,30 @@ describe("chrome chords on a full-screen surface", () => {
     expect(surfaceSaw).toBe("\x00n");
   });
 
+  test("Ctrl-Space h/j/k/l moves pane focus instead of changing the surface", () => {
+    const calls: string[] = [];
+    let surfaceSaw = "";
+    const router = surfaceRouter({
+      onPaneFocusMove: (dir) => { calls.push(dir); },
+      onModalInput: (d) => { surfaceSaw += d; },
+    });
+    for (const key of "hjkl") { router.handleInput("\x00"); router.handleInput(key); }
+    expect(calls).toEqual(["left", "down", "up", "right"]);
+    expect(surfaceSaw).toBe("");
+  });
+
+  test("Ctrl-Space H/J/K/L reaches tmux instead of changing the surface", () => {
+    let ptySaw = "";
+    let surfaceSaw = "";
+    const router = surfaceRouter({
+      onPtyData: (d) => { ptySaw += d; },
+      onModalInput: (d) => { surfaceSaw += d; },
+    });
+    for (const key of "HJKL") { router.handleInput("\x00"); router.handleInput(key); }
+    expect(ptySaw).toBe("\x00H\x00J\x00K\x00L");
+    expect(surfaceSaw).toBe("");
+  });
+
   test("a bare key still reaches the surface untouched", () => {
     let surfaceSaw = "";
     const router = surfaceRouter({ onModalInput: (d) => { surfaceSaw += d; } });
@@ -814,7 +862,7 @@ describe("chrome chords on a full-screen surface", () => {
     expect(surfaceSaw).toBe("\\");
   });
 
-  test("an ordinary modal is not a surface — the chord stays dead there", () => {
+  test("an ordinary modal keeps non-session prefix chords local", () => {
     let toggled = 0;
     let modalSaw = "";
     const router = new InputRouter(
@@ -832,6 +880,27 @@ describe("chrome chords on a full-screen surface", () => {
     router.handleInput("\\");
     expect(toggled).toBe(0);
     expect(modalSaw).toBe("\x00\\");
+  });
+
+  test("Ctrl-Space parentheses switch sessions while an ordinary modal is open", () => {
+    const calls: string[] = [];
+    let modalSaw = "";
+    const router = new InputRouter(
+      {
+        onPtyData: () => {},
+        onSidebarClick: () => {},
+        onModalInput: (d) => { modalSaw += d; },
+        onSessionPrev: () => { calls.push("prev"); },
+        onSessionNext: () => { calls.push("next"); },
+        fullScreenSurfaceActive: () => false,
+      },
+      baseLayout(24),
+    );
+    router.setModalOpen(true);
+    router.handleInput("\x00"); router.handleInput("(");
+    router.handleInput("\x00"); router.handleInput(")");
+    expect(calls).toEqual(["prev", "next"]);
+    expect(modalSaw).toBe("");
   });
 
   test("nothing leaks to the pty while a surface owns input", () => {
@@ -1447,6 +1516,15 @@ describe("panel filter mode", () => {
     expect(calls).toEqual(["selectPrev", "selectNext"]);
   });
 
+  test("Ctrl-P and Ctrl-N navigate the filtered list", () => {
+    const { router, calls } = makeFilterRouter();
+    router.handleInput("/");
+    calls.length = 0;
+    router.handleInput("\x10");
+    router.handleInput("\x0e");
+    expect(calls).toEqual(["selectPrev", "selectNext"]);
+  });
+
   test("tab switch clears filter mode", () => {
     const prevTabCalls: string[] = [];
     const { router, calls } = makeFilterRouter({
@@ -1537,8 +1615,20 @@ describe("glass-buffered prefix + Ctrl-Space <n>", () => {
       glassActive: () => true,
     }, baseLayout(26));
     router.handleInput("\x00");
-    router.handleInput("k"); // not a glass chord → flushed to the tile
-    expect(sent).toEqual(["\x00", "k"]);
+    router.handleInput("e"); // not a glass chord → flushed to the tile
+    expect(sent).toEqual(["\x00", "e"]);
+  });
+
+  test("Ctrl-Space h/j/k/l moves glass focus", () => {
+    const moves: string[] = [];
+    const sent: string[] = [];
+    const router = new InputRouter({
+      onPtyData: (d) => sent.push(d), onSidebarClick: () => {}, glassActive: () => true,
+      onGlassFocusMove: (dir) => moves.push(dir),
+    }, baseLayout(26));
+    for (const key of "hjkl") { router.handleInput("\x00"); router.handleInput(key); }
+    expect(moves).toEqual(["left", "down", "up", "right"]);
+    expect(sent).toEqual([]);
   });
 
   test("Ctrl-Space then [ / ] switch to prev/next view and forward nothing", () => {

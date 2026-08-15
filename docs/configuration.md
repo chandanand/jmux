@@ -59,8 +59,8 @@ matching `C-Space` tmux setting after your config is sourced. A `prefix` value
 in `~/.tmux.conf` is therefore intentionally overridden so jmux and tmux never
 disagree about which key starts a chord.
 
-`Ctrl-Shift-Up/Down` for session switching is handled directly and does not use
-the prefix.
+The preferred session-switching chords are `Ctrl-Space (` / `Ctrl-Space )`.
+Their direct `Ctrl-Shift-Up/Down` compatibility aliases are handled without the prefix.
 
 ### Adding Keybindings
 
@@ -119,8 +119,10 @@ These are intercepted by jmux's input router before reaching tmux. They cannot b
 
 | Key | Action |
 |-----|--------|
-| `Ctrl-Shift-Up` | Switch to previous session |
-| `Ctrl-Shift-Down` | Switch to next session |
+| `Ctrl-Space (` | Switch to previous session |
+| `Ctrl-Space )` | Switch to next session |
+| `Ctrl-Space h/j/k/l` | Focus panes left/down/up/right |
+| `Ctrl-Shift-Up/Down` | Compatibility aliases for session switching |
 | Mouse clicks in sidebar | Switch to that session |
 | Mouse clicks on toolbar tabs | Switch to that window |
 | Mouse clicks on toolbar buttons | New window, split horizontal, split vertical, toggle panel |

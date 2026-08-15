@@ -224,7 +224,7 @@ export class ContentModal {
       ? 100
       : Math.round(((this.scrollOffset + contentAreaRows) / lines.length) * 100);
     const clampedPct = Math.min(100, pct);
-    const statusText = `  \u2191\u2193/jk scroll  q close    ${clampedPct}%`;
+    const statusText = `  j/k scroll  q close    ${clampedPct}%`;
     writeString(grid, statusRow, 0, statusText, DIM_ATTRS);
 
     return grid;

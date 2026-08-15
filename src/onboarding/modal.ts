@@ -243,8 +243,8 @@ export class OnboardingModal implements Modal {
       return { type: "consumed" };
     }
 
-    if (data === "\x1b[C") { this.notice = undefined; this.flow.next(); return { type: "consumed" }; }
-    if (data === "\x1b[D") { this.notice = undefined; this.flow.back(); return { type: "consumed" }; }
+    if (data === "\x1b[C" || data === "l") { this.notice = undefined; this.flow.next(); return { type: "consumed" }; }
+    if (data === "\x1b[D" || data === "h") { this.notice = undefined; this.flow.back(); return { type: "consumed" }; }
     if (data === "\r") { void this.activate(); return { type: "consumed" }; }
     return { type: "consumed" };
   }

@@ -150,6 +150,16 @@ describe("HelpModal input", () => {
     for (let i = 0; i < 500; i++) modal.handleInput("\x1b[A");
     expect(rowText(modal, 60, 3).trim().length).toBeGreaterThan(0);
   });
+
+  test("Ctrl-N and Ctrl-P scroll without changing the filter", () => {
+    const modal = opened(20);
+    const before = rowText(modal, 60, 3);
+    modal.handleInput("\x0e");
+    expect(rowText(modal, 60, 3)).not.toBe(before);
+    modal.handleInput("\x10");
+    expect(rowText(modal, 60, 3)).toBe(before);
+    expect(modal.getQuery()).toBe("");
+  });
 });
 
 describe("HelpModal layout", () => {

@@ -9,7 +9,7 @@ Quick reference for all keybindings and features. The default prefix is `Ctrl-Sp
 | Action | How |
 |--------|-----|
 | Switch session | Click a session in the sidebar |
-| Next/prev session | `Ctrl-Shift-Down` / `Ctrl-Shift-Up` |
+| Next/prev session | `Ctrl-Space )` / `Ctrl-Space (` |
 | Scroll sidebar | Mouse wheel over the sidebar |
 | Hide / show the sidebar | `Ctrl-Space \` — the panes take the whole terminal |
 | Mouse select & copy | Click-drag in the main area to select, copies to clipboard |
@@ -85,7 +85,8 @@ Four bands sit outside the grouping, in fixed positions:
   | `↵` | Start / Resume / Switch — whichever the pre-flight says applies |
   | `s` | Change the issue's status (park it, or move it along) |
   | `o` | Open the issue in your browser |
-  | `↑` `↓` `PgUp` `PgDn` | Scroll the issue body |
+  | `j` / `k`, `Ctrl-D` / `Ctrl-U` | Scroll by line / half-page |
+  | `g` / `G` | Jump to top / bottom |
   | `Ctrl-Space \` | Hide / show the sidebar, as anywhere else |
   | `Ctrl-Space g` | Leave the preview and open the panel — the two can't share the frame |
   | `Esc` / `q` | Back to what you were doing |
@@ -106,15 +107,16 @@ Four bands sit outside the grouping, in fixed positions:
 
 | Key | Action |
 |-----|--------|
-| `Ctrl-Shift-Up` | Move to previous sidebar row |
-| `Ctrl-Shift-Down` | Move to next sidebar row |
+| `Ctrl-Space (` | Move to previous sidebar row |
+| `Ctrl-Space )` | Move to next sidebar row |
 | `Ctrl-Space n` | New session / new worktree (auto-detects wtm projects) |
 | `Ctrl-Space p` → "Rename session" | Rename current session |
 | `Ctrl-Space p` → "Move window to session" | Move current window to another session |
 
-`Ctrl-Shift-Up` / `Ctrl-Shift-Down` walk every row the sidebar draws, not only
+`Ctrl-Space (` / `Ctrl-Space )` walk every row the sidebar draws, not only
 sessions: landing on a session switches to it, landing on an unstarted issue
 opens its preview (below). The Command Center is the first stop in the cycle.
+`Ctrl-Shift-Up` / `Ctrl-Shift-Down` remain compatibility aliases.
 
 Park a handed-off session (or bring one back) from the palette: **Park session**
 / **Unpark session**. Parked sessions collapse into a single row at the bottom of
@@ -142,12 +144,14 @@ you — see [Parking](workflow.md#parking-the-back-burner).
 | `Ctrl-Space \|` | Split pane left / right |
 | `Ctrl-Space -` | Split pane top / bottom |
 | `Ctrl-Space b` | Open browser pane |
-| `Shift-Left/Right/Up/Down` | Navigate between panes |
-| `Ctrl-Space Left/Right/Up/Down` | Resize pane (repeatable) |
+| `Ctrl-Space h/j/k/l` | Navigate left/down/up/right between panes |
+| `Ctrl-Space H/J/K/L` | Resize left/down/up/right (repeatable) |
 | `Ctrl-Space z` | Toggle pane zoom (⤢ shown in tab) |
 
 
 Pane borders auto-show when a window has multiple panes and hide for single-pane windows.
+`Shift-Left/Right/Up/Down` and prefix + arrow keys remain aliases for pane focus
+and resize respectively.
 
 ### Browser panes
 
@@ -233,7 +237,8 @@ Nothing about this is browser-specific — jmux relays terminal graphics from an
 pane, so image previews in file managers, plotting libraries and `imgcat` all
 work in a pane too.
 
-Shift-arrow pane navigation is smart-splits.nvim aware — if the active pane is running vim/neovim, the key is forwarded to vim instead.
+The Shift-arrow compatibility aliases are smart-splits.nvim aware — if the
+active pane is running vim/neovim, the key is forwarded to vim instead.
 
 ---
 
@@ -258,7 +263,7 @@ sidebar, or `Ctrl-Space C` from anywhere.
 | `Ctrl-Space 1…9` | in the grid | Switch to view N |
 | `Ctrl-Space [` / `Ctrl-Space ]` | in the grid | Previous / next view, wrapping |
 | `Ctrl-Space d` | in the grid | Detach jmux (not the focused tile) |
-| Shift-arrows | in the grid | Move focus between tiles |
+| `Ctrl-Space h/j/k/l` | in the grid | Move focus between tiles |
 | Click a view chip | in the grid | Switch to that view |
 | Mouse wheel | in the grid | Scroll the tile under the cursor |
 
@@ -305,7 +310,7 @@ Press `Ctrl-Space p` to open the command palette — a floating overlay for fuzz
 | Key | Action (inside palette) |
 |-----|--------|
 | Type | Fuzzy filter commands |
-| `↑` / `↓` | Navigate results (scrolls with long lists) |
+| `Ctrl-P` / `Ctrl-N` | Navigate results (scrolls with long lists) |
 | `Enter` | Execute command or drill into setting sub-list |
 | `Escape` | Back out of sub-list, or close palette |
 | `Ctrl-Space p` | Close palette |
@@ -335,8 +340,8 @@ reaching for the palette once you have learned the chord.
 | `Ctrl-Space Tab` | Switch focus between tmux and panel |
 | `Ctrl-Space v` | Choose what the Diff tab shows |
 | `Ctrl-Space r` | Send your review notes to this session's agent |
-| `Shift-Right` | Focus panel from rightmost pane |
-| `Shift-Left` | Return focus to tmux from panel |
+| `Ctrl-Space l` | Focus panel from the rightmost pane |
+| `Ctrl-Space h` | Return focus to tmux from panel |
 | Click panel | Focus panel for keyboard navigation |
 | Click divider | Toggle focus between panels |
 
@@ -390,7 +395,7 @@ See [connecting.md](connecting.md) for setup, [issue-tracking.md](issue-tracking
 |-----|--------|
 | `Ctrl-Space ?` | Keyboard shortcuts — every binding on this page, in the app |
 | `Ctrl-Space p` | Command palette (fuzzy search all actions) |
-| `Ctrl-Space k` | Clear pane content + scrollback |
+| `Ctrl-Space Ctrl-l` | Clear pane content + scrollback |
 | `Ctrl-Space y` | Copy entire pane content to clipboard |
 | `Ctrl-Space i` | Settings palette (quick one-shot toggles) |
 | `Ctrl-Space I` | Settings screen (display, integrations, repo, project) |
@@ -420,19 +425,19 @@ On a **stage** row:
 | Key | Action |
 |-----|--------|
 | `↵` | Rename the stage |
-| `⇧↑` `⇧↓` | Reorder it — this order drives the panel's tabs and the sidebar's bands |
+| `K` / `J` | Reorder it — this order drives the panel's tabs and the sidebar's bands |
 | `s` | Show / hide the stage in the sidebar (its sessions stay either way) |
 | `space` | Show / hide its unstarted work as startable rows |
 | `u` | Add to / drop from the `Ctrl-Space u` rotation |
 | `d` | Delete the stage (asks first) |
 
-`◂` `▸` step a counted setting in place — including **how many unstarted issues
+`h` / `l` step a counted setting in place — including **how many unstarted issues
 each stage shows**, under the *Unstarted work* band.
 
 A stage holding more than one status groups its issues under those status names
 in the panel; a stage holding one draws no subheading. Nothing to configure.
 
-With the info panel focused (`Shift-Right`), `F` narrows the focused tab by
+With the info panel focused (`Ctrl-Space l`), `F` narrows the focused tab by
 label or priority, and the palette's **Save current view as tab** clones it
 under a new name.
 

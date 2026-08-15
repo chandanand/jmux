@@ -511,6 +511,15 @@ describe("WorkflowScreen navigation", () => {
     expect(rows.filter(isSelectable).some((r) => r.kind === "band")).toBe(false);
   });
 
+  test("j and k move between selectable rows", () => {
+    const { screen } = open();
+    const first = text(screen.render(100, 40), findRow(screen.render(100, 40), "Urgent"));
+    screen.handleInput("j");
+    expect(text(screen.render(100, 40), findRow(screen.render(100, 40), "Urgent"))).not.toBe(first);
+    screen.handleInput("k");
+    expect(text(screen.render(100, 40), findRow(screen.render(100, 40), "Urgent"))).toBe(first);
+  });
+
   test("Escape closes", () => {
     const { screen } = open();
     screen.handleInput("\x1b");
@@ -712,6 +721,15 @@ describe("WorkflowScreen stages", () => {
       .toEqual(["QA (PROD WEB)", "Dev Confirm"]);
   });
 
+  test("J/K reorder without Shift-arrow", () => {
+    const { screen, h } = open();
+    selectRow(screen, "Urgent");
+    screen.handleInput("J");
+    expect(h.current().map((v) => v.id)).toEqual(["post-merge", "urgent", "my-mrs"]);
+    screen.handleInput("K");
+    expect(h.current().map((v) => v.id)).toEqual(["urgent", "post-merge", "my-mrs"]);
+  });
+
   test("an MR tab cannot be renamed, deleted or expanded from here", () => {
     const { screen, h } = open();
     selectRow(screen, "My MRs");
@@ -800,6 +818,15 @@ describe("WorkflowScreen behaviour bands", () => {
     expect(steps).toEqual([1, 1, -1]);
     // No prompt was opened — the value changes on the row itself.
     expect(screen.render(80, 24)).toBeDefined();
+  });
+
+  test("h/l step a setting without arrow keys", () => {
+    const steps: number[] = [];
+    const { screen } = open({ getBands: () => [band({ onStep: (d) => { steps.push(d); } })] });
+    selectRow(screen, "Park idle sessions after");
+    screen.handleInput("l");
+    screen.handleInput("h");
+    expect(steps).toEqual([1, -1]);
   });
 
   test("left/right do nothing on a setting that isn't stepped", () => {

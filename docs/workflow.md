@@ -72,7 +72,7 @@ Workflow                                    Linear · 25 statuses · 9 unmapped
     Backlog                    —                                     5
 
   QA (RELEASE BR) · 8 issues · Waiting · parks its sessions (3 now)
-  ↑↓ move · ↵ stage · space parks · d remove · ⇧↑↓ order · esc close
+  j/k move · ↵ stage · space parks · d remove · J/K order · esc close
 ```
 
 On a stage row the keys and the explain line change to match:
@@ -80,7 +80,7 @@ On a stage row the keys and the explain line change to match:
 ```
   Waiting · 4th of 5 · 8 statuses · 61 issues · in the sidebar, without its
   unstarted work · not in Up next
-  ↑↓ move · ⇧↑↓ order · ↵ rename · s hide · space unstarted · u up next · d delete
+  j/k move · J/K order · ↵ rename · s hide · space unstarted · u up next · d delete
 ```
 
 Every row in the table is the same kind of thing and takes the same keys. The
@@ -89,14 +89,14 @@ including when it will do nothing.
 
 | Key | In **Statuses** | In **Your workflow** | On a setting |
 |-----|-----------------|----------------------|--------------|
-| `↑` `↓` | move the cursor | | |
+| `j` `k` | move the cursor | | |
 | `Enter` | choose its stage | rename the stage | edit |
 | `space` | park / don't park | show / hide its unstarted work | — |
 | `s` | — | show / hide the stage in the sidebar | — |
 | `u` | — | add to / drop from the `Ctrl-Space u` rotation | — |
 | `d` | take it out of its stage | delete the stage (asks first) | clear a repo override |
-| `⇧↑` `⇧↓` | reorder within its stage | reorder the stage | — |
-| `◂` `▸` | — | — | step a counted value (e.g. how many unstarted) |
+| `J` `K` | reorder within its stage | reorder the stage | — |
+| `h` `l` | — | — | step a counted value (e.g. how many unstarted) |
 | `g` | | | switch between this repo and the global defaults |
 | `Esc` | close | | |
 
@@ -327,8 +327,8 @@ touched. `Ctrl-Space u` still starts the top item of your first non-empty queue 
 one gesture, without previewing — it is an explicit start command, and what
 changed here is only that *selecting* a row no longer provisions.
 
-Unstarted rows are also reachable from the keyboard: `Ctrl-Shift-Up` /
-`Ctrl-Shift-Down` walk them alongside your sessions, so you can read down your
+Unstarted rows are also reachable from the keyboard: `Ctrl-Space (` /
+`Ctrl-Space )` walk them alongside your sessions, so you can read down your
 backlog without touching the mouse.
 
 Work started by an agent counts as started. `jmux ctl issue start` provisions
@@ -347,11 +347,11 @@ unstarted work. And a stage whose work is all in flight simply shows no `○` ro
 
   Top 3 unstarted issues in each stage, under its own band. 1 stage opted out
   (space above).
-  ↑↓ move · ◂▸ change · ↵ edit · esc close
+  j/k move · h/l change · ↵ edit · esc close
 ```
 
 Off by default — the sidebar is otherwise a truthful mirror of tmux, and rows for
-sessions that don't exist are something you opt into. `◂` `▸` walk
+sessions that don't exist are something you opt into. `h` / `l` walk
 `never → 1 → 2 … → 99 → all` and wrap, so `all` is one press left of `never`;
 `Enter` takes a typed number for anything else. The count is **per stage**, so
 `3` with four stages showing is up to twelve rows.
@@ -409,7 +409,7 @@ so a stage you switched off cannot come back through the other placement:
 ```
 
 Ghost rows behave the same in both placements: clicking one previews it, and
-`Ctrl-Shift-↑`/`↓` walks it alongside your sessions.
+`Ctrl-Space (` / `Ctrl-Space )` walks it alongside your sessions.
 
 `Ctrl-Space f` hides them, and which mode does depends on the axis:
 

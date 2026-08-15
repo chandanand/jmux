@@ -587,7 +587,7 @@ function buildRenderPlan(
 
   const items: RenderItem[] = [];
   const displayOrder: number[] = [];
-  // Ctrl-Shift-Up/Down's stops, in render order. Ghosts belong here now that
+  // Session-navigation stops, in render order. Ghosts belong here now that
   // landing on one previews rather than provisions — see the note on the flat
   // band below for the history.
   const navOrder: NavTarget[] = [];
@@ -1189,7 +1189,7 @@ export class Sidebar {
   }
 
   /**
-   * Every row Ctrl-Shift-Up/Down can land on, in render order — sessions and
+   * Every row session navigation can land on, in render order — sessions and
    * ghosts interleaved exactly as drawn. Rows inside a collapsed band, or
    * removed by a filter, are absent because they were never emitted.
    */

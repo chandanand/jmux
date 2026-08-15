@@ -182,8 +182,14 @@ export class CaptureModal {
     if (data === "\x13") return this.commit("start");
 
     if (this.field === "team") {
-      if (data === "\x1b[C" || data === "\x1b[B") { this.cycleTeam(1); return { type: "consumed" }; }
-      if (data === "\x1b[D" || data === "\x1b[A") { this.cycleTeam(-1); return { type: "consumed" }; }
+      if (data === "\x1b[C" || data === "\x1b[B" || data === "l" || data === "j") {
+        this.cycleTeam(1);
+        return { type: "consumed" };
+      }
+      if (data === "\x1b[D" || data === "\x1b[A" || data === "h" || data === "k") {
+        this.cycleTeam(-1);
+        return { type: "consumed" };
+      }
       if (data === "\r") return this.commit("capture");
       return { type: "consumed" };
     }
@@ -319,7 +325,7 @@ export class CaptureModal {
       this.currentTeamName(),
       this.field === "team",
       "",
-      this.field === "team" ? "◂ ▸" : "",
+      this.field === "team" ? "h/l" : "",
     );
 
     const bodyFocused = this.field === "description";

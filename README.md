@@ -93,7 +93,7 @@ Workflow                             Linear · 25 statuses · 8 unmapped
     Show unstarted work in the sidebar ··············· ◂ 3 per stage ▸
 
   Awaiting QA Sign-off · 19 issues · Waiting · parks its sessions (3 now)
-  ↑↓ move · ↵ stage · space parks · d remove · ⇧↑↓ order · esc close
+  j/k move · ↵ stage · space parks · d remove · J/K order · esc close
 ```
 
 Two blocks: your stages, then a table of every status your tracker offers. Each status has exactly two settings — which stage it belongs to (`Enter`) and whether it parks (`space`) — and they're independent, so a status can park while belonging to no stage at all. The line above the keys tells you what the selected row will actually do, including when it will do nothing.
@@ -152,7 +152,7 @@ jmux answers that at a glance. The **sidebar** lists every session with live ind
 - **Green `●`** — new output.  **Orange `!`** — an agent finished and needs your review.
 - **Pipeline glyphs** — `✓` passed, `⟳` running, `✗` failed, `◆` merged, right in the sidebar.
 - **The Command Center fills itself** — no pinning. Narrow it with saved **views** (`Active`, `Needs you`, …); pin a pane to keep its session on the grid and choose the face it shows, or hide a session you don't want. Panes stay in their own session, never moved or broken.
-- **Jump between sessions** with `Ctrl-Shift-Up/Down`. Sessions sharing a project are grouped automatically.
+- **Jump between sessions** with `Ctrl-Space (` / `Ctrl-Space )`. Sessions sharing a project are grouped automatically; `Ctrl-Shift-Up/Down` remain aliases.
 
 <details>
 <summary><b>Setup</b> — live agent state for Claude Code, Codex and pi</summary>
@@ -238,7 +238,7 @@ See [Browser panes](docs/browser-panes.md).
 
 | Key | Action |
 |-----|--------|
-| `Ctrl-Shift-Up/Down` | Switch to prev/next session |
+| `Ctrl-Space (` / `Ctrl-Space )` | Switch to prev/next session |
 | `Ctrl-Space n` | New session / worktree |
 | `Ctrl-Space p` | Command palette |
 | `Ctrl-Space g` | Toggle info panel (Diff / Issues / MRs / Review) |
@@ -247,6 +247,8 @@ See [Browser panes](docs/browser-panes.md).
 | `Ctrl-Space W` | Workflow screen — your stages, their statuses, parking |
 | `Ctrl-Space \|` / `Ctrl-Space -` | Split pane horizontal / vertical |
 | `Ctrl-Space b` | Open a browser pane |
+| `Ctrl-Space h/j/k/l` | Focus panes left/down/up/right |
+| `Ctrl-Space H/J/K/L` | Resize panes left/down/up/right |
 | `Ctrl-Space z` | Zoom pane or diff panel |
 
 **Full keybinding reference → [docs/cheat-sheet.md](docs/cheat-sheet.md)**

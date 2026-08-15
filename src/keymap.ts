@@ -24,6 +24,7 @@
  *
  * - `jmux`   — intercepted by src/input-router.ts before tmux sees it.
  * - `tmux`   — a bind jmux ships in config/defaults.conf.
+ * - `jmux+tmux` — one displayed action has aliases owned by both layers.
  * - `tmux-default` — tmux's own stock binding, which jmux deliberately does
  *   not unbind. These appear in no jmux file at all, which is exactly why they
  *   need a row: `Ctrl-Space z` has been in jmux's cheat sheet and `--help` for as
@@ -31,17 +32,18 @@
  *   keymap.test.ts holds them to every rule except the defaults.conf match,
  *   which they would fail by definition.
  */
-export type KeySource = "jmux" | "tmux" | "tmux-default";
+export type KeySource = "jmux" | "tmux" | "jmux+tmux" | "tmux-default";
 
 /**
  * Which post-prefix arm(s) of input-router.ts a chord is reachable from — the
- * ordinary arm, the Command Center's, or the full-screen-surface arm. Only
- * meaningful alongside `prefixKey`; keymap.test.ts asserts each declared set
- * against the arms that actually intercept the byte, which is what makes a
- * chord added to only one arm (or removed from one without updating this) a
- * build failure instead of a silent gap.
+ * ordinary arm, the Command Center's, the full-screen-surface arm, or the
+ * narrow ordinary-modal arm. Only meaningful alongside `prefixKey`;
+ * keymap.test.ts asserts each declared set against the arms that actually
+ * intercept the byte, which is what makes a chord added to only one arm (or
+ * removed from one without updating this) a build failure instead of a silent
+ * gap.
  */
-export type Arm = "ordinary" | "glass" | "surface";
+export type Arm = "ordinary" | "glass" | "surface" | "modal";
 
 export interface Binding {
   /**
@@ -64,12 +66,13 @@ export interface Binding {
   section: string;
   source: KeySource;
   /**
-   * For a jmux prefix chord: the literal byte the router matches after the
-   * prefix. keymap.test.ts compares these against the `data === "…"` chain it
-   * reads out of input-router.ts, so a chord added to the router without a row
-   * here (or vice versa) fails the build. Absent on jmux bindings that are
-   * *not* single-byte prefix chords — the Ctrl-Shift-Up/Down session walk is
-   * matched as a whole escape sequence, and the Command Center's view-switch
+   * For a single-byte prefix chord intercepted by the router in at least one
+   * context: the literal byte it matches after the prefix. keymap.test.ts
+   * compares these against the `data === "…"` chains in input-router.ts, so a
+   * chord added to the router without a row here (or vice versa) fails the
+   * build. Absent on bindings the router never intercepts, and on jmux
+   * bindings that are not single-byte prefix chords — Ctrl-Shift-Up/Down is
+   * matched as a whole escape sequence, while Command Center view-switch
    * digits are matched as a range rather than byte by byte.
    */
   prefixKey?: string;
@@ -82,6 +85,8 @@ export interface Binding {
    * Compared against a parse of that file in both directions.
    */
   conf?: string;
+  /** Additional config/defaults.conf aliases for the same action. */
+  confAliases?: readonly string[];
   /**
    * When the binding is only live in a particular mode. A binding with no
    * context is always available. The help overlay renders this after the label
@@ -136,17 +141,21 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "session-prev",
-    keys: "Ctrl-Shift-Up",
+    keys: "Ctrl-Space (",
     label: "Previous session",
     section: "Getting around",
     source: "jmux",
+    prefixKey: "(",
+    arms: ["ordinary", "glass", "surface", "modal"],
   },
   {
     id: "session-next",
-    keys: "Ctrl-Shift-Down",
+    keys: "Ctrl-Space )",
     label: "Next session",
     section: "Getting around",
     source: "jmux",
+    prefixKey: ")",
+    arms: ["ordinary", "glass", "surface", "modal"],
   },
 
   // --- Sessions ---
@@ -275,19 +284,23 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "pane-left",
-    keys: "Shift-Left",
+    keys: "Ctrl-Space h",
     label: "Focus pane left",
     section: "Panes",
-    source: "tmux",
+    source: "jmux+tmux",
     conf: "S-Left",
+    prefixKey: "h",
+    arms: ["ordinary", "glass", "surface"],
   },
   {
     id: "pane-right",
-    keys: "Shift-Right",
+    keys: "Ctrl-Space l",
     label: "Focus pane right",
     section: "Panes",
-    source: "tmux",
+    source: "jmux+tmux",
     conf: "S-Right",
+    prefixKey: "l",
+    arms: ["ordinary", "glass", "surface"],
   },
   {
     id: "browser-pane",
@@ -300,51 +313,67 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "pane-up",
-    keys: "Shift-Up",
+    keys: "Ctrl-Space k",
     label: "Focus pane up",
     section: "Panes",
-    source: "tmux",
+    source: "jmux+tmux",
     conf: "S-Up",
+    prefixKey: "k",
+    arms: ["ordinary", "glass", "surface"],
   },
   {
     id: "pane-down",
-    keys: "Shift-Down",
+    keys: "Ctrl-Space j",
     label: "Focus pane down",
     section: "Panes",
-    source: "tmux",
+    source: "jmux+tmux",
     conf: "S-Down",
+    prefixKey: "j",
+    arms: ["ordinary", "glass", "surface"],
   },
   {
     id: "resize-left",
-    keys: "Ctrl-Space Left",
+    keys: "Ctrl-Space H",
     label: "Resize pane left (hold to repeat)",
     section: "Panes",
     source: "tmux",
     conf: "Left",
+    confAliases: ["H"],
+    prefixKey: "H",
+    arms: ["surface"],
   },
   {
     id: "resize-down",
-    keys: "Ctrl-Space Down",
+    keys: "Ctrl-Space J",
     label: "Resize pane down (hold to repeat)",
     section: "Panes",
     source: "tmux",
     conf: "Down",
+    confAliases: ["J"],
+    prefixKey: "J",
+    arms: ["surface"],
   },
   {
     id: "resize-up",
-    keys: "Ctrl-Space Up",
+    keys: "Ctrl-Space K",
     label: "Resize pane up (hold to repeat)",
     section: "Panes",
     source: "tmux",
     conf: "Up",
+    confAliases: ["K"],
+    prefixKey: "K",
+    arms: ["surface"],
   },
   {
     id: "resize-right",
-    keys: "Ctrl-Space Right",
+    keys: "Ctrl-Space L",
     label: "Resize pane right (hold to repeat)",
     section: "Panes",
     source: "tmux",
     conf: "Right",
+    confAliases: ["L"],
+    prefixKey: "L",
+    arms: ["surface"],
   },
   {
     id: "zoom-pane",
@@ -355,11 +384,11 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "clear-pane",
-    keys: "Ctrl-Space k",
+    keys: "Ctrl-Space Ctrl-l",
     label: "Clear pane and scrollback",
     section: "Panes",
     source: "tmux",
-    conf: "k",
+    conf: "C-l",
   },
   {
     id: "copy-pane",

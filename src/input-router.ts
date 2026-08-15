@@ -132,7 +132,9 @@ export interface InputRouterOptions {
   glassActive?: () => boolean;                       // true while the glass is shown
   onGlassClick?: (x: number, y: number) => void;     // content-relative click → focus tile
   onGlassMouse?: (x: number, y: number, button: number, release: boolean) => void; // wheel/scroll → tile under cursor
-  onGlassFocusMove?: (dir: "left" | "right" | "up" | "down") => void; // Shift+arrows
+  onGlassFocusMove?: (dir: "left" | "right" | "up" | "down") => void; // prefix h/j/k/l or Shift+arrows
+  /** Prefix h/j/k/l outside glass: focus a tmux pane or the docked panel. */
+  onPaneFocusMove?: (dir: "left" | "right" | "up" | "down") => void;
   onGlassDetach?: () => void;                        // prefix+d in glass → detach jmux, not the focused tile
   onGlassViewSwitch?: (index: number) => void;      // glass-only Ctrl-Space <n> → switch view
   onGlassViewRelative?: (delta: number) => void;    // glass-only Ctrl-Space [ / ] → prev/next view
@@ -231,6 +233,7 @@ export class InputRouter {
   private prefixTimer: ReturnType<typeof setTimeout> | null = null;
   private glassPrefixDeferred = false;
   private surfacePrefixDeferred = false;
+  private modalPrefixDeferred = false;
   private diffPanelFocused = false;
   private panelTabsActive = false;
   private panelFilterActive = false;
@@ -464,15 +467,31 @@ export class InputRouter {
     // defensible place for it to. Those surfaces therefore get their own
     // narrow arm below (the Command Center has had one all along).
     const surfaceActive = this.modalOpen && this.opts.fullScreenSurfaceActive?.() === true;
-    if (!this.modalOpen || surfaceActive) {
+    // Every context participates in prefix decoding. Ordinary modals only
+    // claim the two always-available session chords; every other chord is
+    // replayed to the modal unchanged. Full-screen surfaces and the Command
+    // Center have their wider, explicitly documented arms below.
+    if (this.prefixSeen || data === PREFIX_BYTE) {
       if (this.prefixSeen) {
         this.prefixSeen = false;
         if (this.prefixTimer) { clearTimeout(this.prefixTimer); this.prefixTimer = null; }
 
-        // Full-screen surface: only the chrome chords intercept. Anything
-        // else flushes the deferred prefix and the key to the surface, so it
-        // sees exactly the bytes it would have seen — same shape as the glass
-        // arm below, and delimited for keymap.test.ts the same way.
+        if (this.modalOpen && !surfaceActive) {
+          const deferred = this.modalPrefixDeferred;
+          this.modalPrefixDeferred = false;
+          // --- keymap:modal-prefix start ---
+          if (data === "(") { this.opts.onSessionPrev?.(); return; }
+          if (data === ")") { this.opts.onSessionNext?.(); return; }
+          // --- keymap:modal-prefix end ---
+          if (deferred) this.opts.onModalInput?.(PREFIX_BYTE);
+          this.opts.onModalInput?.(data);
+          return;
+        }
+
+        // Full-screen surface: chrome and pane chords intercept. Anything else
+        // flushes the deferred prefix and the key to the surface, so it sees
+        // exactly the bytes it would have seen — same shape as the glass arm
+        // below, and delimited for keymap.test.ts the same way.
         if (surfaceActive) {
           const deferred = this.surfacePrefixDeferred;
           this.surfacePrefixDeferred = false;
@@ -484,6 +503,20 @@ export class InputRouter {
           // panel leaves the surface. Doing nothing (today's behaviour) is the
           // one option that answers neither.
           if (data === "g") { this.opts.onDiffToggle?.(); return; }
+          if (data === "(") { this.opts.onSessionPrev?.(); return; }
+          if (data === ")") { this.opts.onSessionNext?.(); return; }
+          if (data === "h") { this.opts.onPaneFocusMove?.("left"); return; }
+          if (data === "j") { this.opts.onPaneFocusMove?.("down"); return; }
+          if (data === "k") { this.opts.onPaneFocusMove?.("up"); return; }
+          if (data === "l") { this.opts.onPaneFocusMove?.("right"); return; }
+          // Resizing is implemented by tmux. The surface deferred the prefix,
+          // so replay both bytes to the pty rather than leaking the letter to
+          // settings/workflow input.
+          if (data === "H" || data === "J" || data === "K" || data === "L") {
+            if (deferred) this.opts.onPtyData(PREFIX_BYTE);
+            this.opts.onPtyData(data);
+            return;
+          }
           // --- keymap:surface-prefix end ---
           if (deferred) this.opts.onModalInput?.(PREFIX_BYTE);
           this.opts.onModalInput?.(data);
@@ -509,6 +542,12 @@ export class InputRouter {
           // --- keymap:glass-prefix start ---
           if (data === "[") { this.opts.onGlassViewRelative?.(-1); return; }
           if (data === "]") { this.opts.onGlassViewRelative?.(1); return; }
+          if (data === "h") { this.opts.onGlassFocusMove?.("left"); return; }
+          if (data === "j") { this.opts.onGlassFocusMove?.("down"); return; }
+          if (data === "k") { this.opts.onGlassFocusMove?.("up"); return; }
+          if (data === "l") { this.opts.onGlassFocusMove?.("right"); return; }
+          if (data === "(") { this.opts.onSessionPrev?.(); return; }
+          if (data === ")") { this.opts.onSessionNext?.(); return; }
           if (data === "d") { this.opts.onGlassDetach?.(); return; }
           if (data === "?") { this.opts.onHelp?.(); return; }
           if (data === "p") { this.opts.onModalToggle?.(); return; }
@@ -555,6 +594,30 @@ export class InputRouter {
         }
         if (data === "p") {
           this.opts.onModalToggle?.();
+          return;
+        }
+        if (data === "h") {
+          this.opts.onPaneFocusMove?.("left");
+          return;
+        }
+        if (data === "j") {
+          this.opts.onPaneFocusMove?.("down");
+          return;
+        }
+        if (data === "k") {
+          this.opts.onPaneFocusMove?.("up");
+          return;
+        }
+        if (data === "l") {
+          this.opts.onPaneFocusMove?.("right");
+          return;
+        }
+        if (data === "(") {
+          this.opts.onSessionPrev?.();
+          return;
+        }
+        if (data === ")") {
+          this.opts.onSessionNext?.();
           return;
         }
         if (data === "n") {
@@ -682,11 +745,20 @@ export class InputRouter {
           this.prefixTimer = null;
           this.glassPrefixDeferred = false;
           this.surfacePrefixDeferred = false;
+          if (this.modalPrefixDeferred) {
+            this.modalPrefixDeferred = false;
+            this.opts.onModalInput?.(PREFIX_BYTE);
+          }
         }, 2000);
         if (surfaceActive) {
           // Same deferral as glass: the next byte decides whether this was a
           // chrome chord or a key the surface itself wanted.
           this.surfacePrefixDeferred = true;
+        } else if (this.modalOpen) {
+          // Parentheses switch sessions even while a transient modal is open.
+          // Defer the prefix just long enough to distinguish those two chords;
+          // an unknown second byte (or the timeout above) replays it verbatim.
+          this.modalPrefixDeferred = true;
         } else if (this.opts.glassActive?.()) {
           // In glass, defer the prefix: the next byte decides whether it's a
           // jmux action, a tab digit, or a real in-tile prefix chord.
@@ -974,9 +1046,10 @@ export class InputRouter {
 
       // Filter mode — captures all input when active
       if (this.panelTabsActive && this.panelFilterActive) {
-        // Arrow navigation still works during filter
-        if (data === "\x1b[A" && this.opts.onPanelSelectPrev) { this.opts.onPanelSelectPrev(); return; }
-        if (data === "\x1b[B" && this.opts.onPanelSelectNext) { this.opts.onPanelSelectNext(); return; }
+        // Arrow navigation and picker-style Ctrl-P/N still work during filter;
+        // bare k/j remain query text.
+        if ((data === "\x1b[A" || data === "\x10") && this.opts.onPanelSelectPrev) { this.opts.onPanelSelectPrev(); return; }
+        if ((data === "\x1b[B" || data === "\x0e") && this.opts.onPanelSelectNext) { this.opts.onPanelSelectNext(); return; }
         // Enter confirms filter — exit input capture but keep filterQuery
         if (data === "\r") { this.panelFilterActive = false; return; }
         // Esc clears filter and exits filter mode

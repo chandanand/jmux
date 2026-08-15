@@ -143,6 +143,15 @@ describe("CommandPalette", () => {
     expect(palette.getSelectedIndex()).toBe(testCommands.length - 1);
   });
 
+  test("Ctrl-N and Ctrl-P move without arrow keys", () => {
+    const palette = new CommandPalette();
+    palette.open(testCommands);
+    palette.handleInput("\x0e");
+    expect(palette.getSelectedIndex()).toBe(1);
+    palette.handleInput("\x10");
+    expect(palette.getSelectedIndex()).toBe(0);
+  });
+
   test("enter on regular command returns result", () => {
     const palette = new CommandPalette();
     palette.open(testCommands);

@@ -136,8 +136,9 @@ export class ListModal {
       return { type: "consumed" };
     }
 
-    // Arrow down
-    if (data === "\x1b[B") {
+    // Arrow down / Ctrl-N. ListModal is always filterable, so bare j must stay
+    // printable query text.
+    if (data === "\x1b[B" || data === "\x0e") {
       if (this.filtered.length > 0) {
         this.selectedIndex = (this.selectedIndex + 1) % this.filtered.length;
         this.adjustScroll();
@@ -145,8 +146,8 @@ export class ListModal {
       return { type: "consumed" };
     }
 
-    // Arrow up
-    if (data === "\x1b[A") {
+    // Arrow up / Ctrl-P.
+    if (data === "\x1b[A" || data === "\x10") {
       if (this.filtered.length > 0) {
         this.selectedIndex =
           (this.selectedIndex - 1 + this.filtered.length) % this.filtered.length;

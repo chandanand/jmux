@@ -125,8 +125,10 @@ export class HelpModal {
       return { type: "closed" };
     }
 
-    if (data === "\x1b[B") { this.scrollBy(1); return { type: "consumed" }; }
-    if (data === "\x1b[A") { this.scrollBy(-1); return { type: "consumed" }; }
+    // The help overlay is always filterable, so j/k remain query text and the
+    // arrow-free result navigation uses the picker convention: Ctrl-N/P.
+    if (data === "\x1b[B" || data === "\x0e") { this.scrollBy(1); return { type: "consumed" }; }
+    if (data === "\x1b[A" || data === "\x10") { this.scrollBy(-1); return { type: "consumed" }; }
     if (data === "\x1b[6~") { this.scrollBy(this.contentRows); return { type: "consumed" }; }
     if (data === "\x1b[5~") { this.scrollBy(-this.contentRows); return { type: "consumed" }; }
 
@@ -229,7 +231,7 @@ export class HelpModal {
       count: `${n} shortcut${n === 1 ? "" : "s"}`,
       hints: [
         { key: "type", label: "filter" },
-        { key: "↑↓", label: "scroll" },
+        { key: "^p/^n", label: "scroll" },
         { key: "esc", label: "close" },
       ],
       hairlineAfterInput: true,

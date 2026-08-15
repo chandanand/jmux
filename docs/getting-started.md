@@ -94,11 +94,11 @@ jmux uses `Ctrl-Space` as the **prefix key**. Some actions require pressing `Ctr
 
 | Action | Keys |
 |--------|------|
-| Next session | `Ctrl-Shift-Down` |
-| Previous session | `Ctrl-Shift-Up` |
+| Next session | `Ctrl-Space` then `)` |
+| Previous session | `Ctrl-Space` then `(` |
 | Switch to session | Click it in the sidebar |
 
-No prefix key needed — these work instantly.
+`Ctrl-Shift-Down/Up` remain direct compatibility aliases.
 
 ### Creating things
 
@@ -121,8 +121,8 @@ talking.
 |--------|------|
 | Next window | `Ctrl-Right` |
 | Previous window | `Ctrl-Left` |
-| Switch pane | `Shift-Arrow` (any direction) |
-| Resize pane | `Ctrl-Space` then arrow keys (repeatable) |
+| Switch pane | `Ctrl-Space` then `h/j/k/l` (left/down/up/right) |
+| Resize pane | `Ctrl-Space` then `H/J/K/L` (repeatable) |
 | Toggle pane zoom | `Ctrl-Space` then `z` |
 
 ### Info panel
@@ -133,8 +133,8 @@ talking.
 | Cycle tabs (Diff/Issues/MRs/Review) | `[` / `]` (when panel is focused) |
 | Zoom panel (split ↔ full) | `Ctrl-Space` then `z` (when panel is focused) |
 | Switch focus (tmux ↔ panel) | `Ctrl-Space` then `Tab` |
-| Focus panel from rightmost pane | `Shift-Right` |
-| Return focus to tmux | `Shift-Left` (from panel) |
+| Focus panel from rightmost pane | `Ctrl-Space` then `l` |
+| Return focus to tmux | `Ctrl-Space` then `h` (from panel) |
 
 The Diff tab is powered by [hunk](https://github.com/modem-dev/hunk) — install with `npm i -g hunkdiff`. It's the only tab that needs no setup; the Issues and MRs tabs appear once an adapter connects — see [connecting.md](connecting.md).
 
@@ -145,7 +145,7 @@ The Diff tab is powered by [hunk](https://github.com/modem-dev/hunk) — install
 | Keyboard shortcuts | `Ctrl-Space` then `?` (or click `?` in the toolbar) |
 | Command palette | `Ctrl-Space` then `p` |
 | Settings | `Ctrl-Space` then `i` |
-| Clear pane | `Ctrl-Space` then `k` |
+| Clear pane | `Ctrl-Space` then `Ctrl-l` |
 | Copy pane to clipboard | `Ctrl-Space` then `y` |
 | Rename session | `Ctrl-Space` then `p`, "Rename session" |
 | Move window to session | `Ctrl-Space` then `p`, "Move window to session" |
@@ -172,7 +172,7 @@ Now you have one project with an editor, an agent, and a dev server — each in 
 2. Pick a project directory, name the session
 3. Set up windows for that project (editor, agent, etc.)
 4. Repeat for more projects
-5. Switch between projects with `Ctrl-Shift-Up/Down` or click the sidebar
+5. Switch between projects with `Ctrl-Space (` / `Ctrl-Space )` or click the sidebar
 
 ### Parallel agents with worktrees (recommended)
 
@@ -221,7 +221,7 @@ When an agent finishes work and the `!` flag appears:
 
 1. Switch to that session
 2. Press `Ctrl-Space g` to open the info panel in split mode — you'll see the agent's terminal on the left and its code changes on the right (Diff tab)
-3. Click the panel or press `Shift-Right` to focus it, then use `j`/`k` to scroll and `[`/`]` to jump between hunks — or between tabs
+3. Click the panel or press `Ctrl-Space l` from the rightmost pane to focus it, then use `j`/`k` to scroll and `h`/`l` to jump between tabs
 4. Press `Ctrl-Space z` to zoom the panel to full-screen for thorough review
 5. Press `Ctrl-Space z` again to unzoom, or `Ctrl-Space g` to close the panel entirely
 
@@ -363,7 +363,7 @@ the row reads `restart to apply` until you relaunch.
 - **Click the version** at the bottom of the sidebar to see release notes
 - **Mouse selection** works — click and drag to select text, it copies to your clipboard
 - **Your tmux config** still works. If you have `~/.tmux.conf` (or `~/.config/tmux/tmux.conf`), jmux loads it. Your plugins, themes, and custom bindings carry over — and `userTmuxConfig: false` turns that off if its chrome collides with jmux's
-- **Resize panes** with `Ctrl-Space` then arrow keys (hold for continuous resize)
+- **Resize panes** with `Ctrl-Space` then `H/J/K/L` (hold for continuous resize)
 - **Zoom a pane** with `Ctrl-Space` then `z` — the tab shows ⤢ when zoomed, press again to unzoom
 - **Pane borders** auto-show when a window has multiple panes and hide for single-pane windows
 

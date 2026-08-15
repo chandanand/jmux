@@ -282,6 +282,23 @@ describe("scrolling", () => {
     expect(extractText(screen.render(80, 24))).toBe(top);
   });
 
+  test("j/k, Ctrl-D/U, and g/G scroll without arrow keys", () => {
+    const { screen } = opened({ getIssue: () => longIssue });
+    const top = extractText(screen.render(80, 24));
+    screen.handleInput("j");
+    expect(extractText(screen.render(80, 24))).not.toBe(top);
+    screen.handleInput("k");
+    expect(extractText(screen.render(80, 24))).toBe(top);
+    screen.handleInput("\x04");
+    expect(extractText(screen.render(80, 24))).not.toBe(top);
+    screen.handleInput("\x15");
+    expect(extractText(screen.render(80, 24))).toBe(top);
+    screen.handleInput("G");
+    expect(extractText(screen.render(80, 24))).not.toBe(top);
+    screen.handleInput("g");
+    expect(extractText(screen.render(80, 24))).toBe(top);
+  });
+
   test("page keys move by a screenful", () => {
     const { screen } = opened({ getIssue: () => longIssue });
     screen.render(80, 24);

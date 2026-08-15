@@ -3060,7 +3060,7 @@ otelReceiver.onUpdate = (sessionName) => {
 };
 
 /**
- * Ctrl-Shift-Up/Down through `[Overview, ...sidebar rows]`.
+ * Session navigation through `[Overview, ...sidebar rows]`.
  *
  * Rows are sessions *and* ghosts: landing on a session switches to it, landing
  * on a ghost previews it. Ghosts were excluded while selecting one provisioned
@@ -5587,6 +5587,35 @@ const inputRouter = new InputRouter(
       glassView?.moveFocus(dir);
       scheduleRender();
     },
+    onPaneFocusMove: (dir) => {
+      void (async () => {
+        // The panel is a jmux surface rather than a tmux pane. Moving left
+        // from it returns to tmux; the other three directions have nowhere to
+        // go inside a right-docked panel.
+        if (diffPanelFocused) {
+          if (dir === "left") setDiffFocus(false);
+          return;
+        }
+
+        // Moving right from the rightmost tmux pane enters the panel. Anywhere
+        // else — or when the panel is closed — this is ordinary tmux focus.
+        if (dir === "right" && layout.panel !== null) {
+          try {
+            const lines = await control.sendCommand("display-message -p '#{pane_at_right}'");
+            if ((lines[0] || "").trim() === "1") {
+              setDiffFocus(true);
+              return;
+            }
+          } catch {
+            // Fall through to tmux navigation; losing the control query should
+            // not turn a directional key into a dead key.
+          }
+        }
+
+        const flag = dir === "left" ? "L" : dir === "right" ? "R" : dir === "up" ? "U" : "D";
+        await control.sendCommand(`select-pane -${flag}`).catch(() => {});
+      })();
+    },
     // The strip is always visible in the grid now — no view count to gate on.
     glassStripRows: () => (inGlass ? STRIP_ROWS : 0),
     onGlassViewClick: (x) => { const id = chipAtCol(currentStripChips, x); if (id) switchGlassView(id); },
@@ -7190,7 +7219,7 @@ function titleSettings(): SettingDef[] {
       describe: () => {
         const preset = presetForCommand(titleCommand());
         if (preset === TITLE_OFF) {
-          return "Sessions keep their own names. ◂ ▸ for a ready-made command, or ↵ to type one.";
+          return "Sessions keep their own names. h/l for a ready-made command, or ↵ to type one.";
         }
         const hit = TITLE_PRESETS.find((p) => p.id === preset);
         return hit
@@ -7434,7 +7463,7 @@ function buildSettingsCategories(): SettingsCategory[] {
           // so the accepted forms are stated where the user is looking rather
           // than only in docs/configuration.md. A bare text box for a setting
           // whose two common answers are words is the wrong control.
-          describe: () => "◂ ▸ switches between auto-detect and none. Enter to type a path instead.",
+          describe: () => "h/l switches between auto-detect and none. Enter to type a path instead.",
           // ◂ ▸ walks the two answers almost everyone wants; Enter still takes a
           // path, so the escape hatch costs nothing and the common case costs
           // one keypress. Same construction as the ghost-cap row.
@@ -7911,7 +7940,7 @@ function workflowBands(tier: SettingsTier): WorkflowBand[] {
             // takes a word as well — so the accepted forms are spelled out here,
             // on the line the user is reading when they press Enter.
             if (n === 0) {
-              return `◂ ▸ to set a count, or "${GHOST_CAP_ALL}" for every one. Off, no stage shows unstarted work.`;
+              return `h/l to set a count, or "${GHOST_CAP_ALL}" for every one. Off, no stage shows unstarted work.`;
             }
             // The noun rides along with the quantity so it agrees with it —
             // "Top 3 unstarted issue" read as a typo in every case but n=1.

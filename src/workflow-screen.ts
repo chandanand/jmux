@@ -169,7 +169,7 @@ export type WorkflowRow =
       kind: "tab"; viewId: string; label: string; source: "issues" | "mrs";
       statuses: number; parks: number; issues: number; upNextRank: number | null;
       /** 1-based position among the issues stages, and how many there are.
-       * Carried so `explainRow` can state the thing ⇧↑↓ changes. */
+       * Carried so `explainRow` can state the thing J/K changes. */
       position: number; stageCount: number;
       /** Sidebar visibility, and whether unstarted work shows under it. */
       inSidebar: boolean; showUnstarted: boolean;
@@ -219,7 +219,7 @@ export function buildRows(port: WorkflowPort, tier: SettingsTier): WorkflowRow[]
     // sidebar's stage bands — but nothing about a static list says it can be
     // rearranged, so the key is named here rather than left to the footer,
     // where it sits fifth in a six-segment run and reads as noise.
-    hint: "The stages you work in, top to bottom in priority order — ⇧↑↓ to rearrange. Each is a tab in the info panel.",
+    hint: "The stages you work in, top to bottom in priority order — J/K to rearrange. Each is a tab in the info panel.",
   });
   const stageCount = views.filter((v) => v.source === "issues").length;
   // Loop-invariant: the master switch is one value for the whole screen.
@@ -305,7 +305,7 @@ export function explainRow(row: WorkflowRow | undefined): string {
 
     case "tab": {
       if (row.source === "mrs") return `${row.label} · a merge-request tab, not a workflow stage.`;
-      // Position leads: it is what ⇧↑↓ changes, and what the panel's tab order
+      // Position leads: it is what J/K changes, and what the panel's tab order
       // and the sidebar's stage bands both follow.
       const parts = [
         `${row.label} · ${ordinal(row.position)} of ${row.stageCount}`,
@@ -557,19 +557,19 @@ export class WorkflowScreen {
     if (this.overlay) { this.handleOverlayInput(data); return; }
 
     if (data === "\x1b" || data === "q") { this.close(); return; }
-    if (data === "\x1b[A") { this.move(-1); return; }
-    if (data === "\x1b[B") { this.move(1); return; }
-    if (data === "\x1b[1;2A") { this.reorder(-1); return; }
-    if (data === "\x1b[1;2B") { this.reorder(1); return; }
+    if (data === "\x1b[A" || data === "k") { this.move(-1); return; }
+    if (data === "\x1b[B" || data === "j") { this.move(1); return; }
+    if (data === "\x1b[1;2A" || data === "K") { this.reorder(-1); return; }
+    if (data === "\x1b[1;2B" || data === "J") { this.reorder(1); return; }
 
     const row = this.rows()[this.selectedIndex];
     if (!row) return;
 
-    // ◂ ▸ nudge a stepped setting in place. Checked before the row actions so a
+    // h/l nudge a stepped setting in place. Checked before the row actions so a
     // steppable row consumes them; every other row ignores left/right entirely,
     // which is what they did before this existed.
-    if (data === "\x1b[D") { this.step(row, -1); return; }
-    if (data === "\x1b[C") { this.step(row, 1); return; }
+    if (data === "\x1b[D" || data === "h") { this.step(row, -1); return; }
+    if (data === "\x1b[C" || data === "l") { this.step(row, 1); return; }
 
     if (data === "\r") { this.activate(row); return; }
     // `space` is the toggle key on both row kinds: the status table's parks
@@ -614,8 +614,10 @@ export class WorkflowScreen {
         }
         return;
       }
-      if (data === "\x1b[D") { overlay.cursor = prevBoundary(overlay.buffer, overlay.cursor); return; }
-      if (data === "\x1b[C") { overlay.cursor = nextBoundary(overlay.buffer, overlay.cursor); return; }
+      if (data === "\x1b[D" || data === "\x02") { overlay.cursor = prevBoundary(overlay.buffer, overlay.cursor); return; }
+      if (data === "\x1b[C" || data === "\x06") { overlay.cursor = nextBoundary(overlay.buffer, overlay.cursor); return; }
+      if (data === "\x01") { overlay.cursor = 0; return; }
+      if (data === "\x05") { overlay.cursor = overlay.buffer.length; return; }
       if (data === "\x15") { overlay.buffer = ""; overlay.cursor = 0; return; }
       const typed = printableText(data);
       if (typed) {
@@ -626,8 +628,8 @@ export class WorkflowScreen {
     }
 
     // Picker
-    if (data === "\x1b[A") { overlay.index = Math.max(0, overlay.index - 1); return; }
-    if (data === "\x1b[B") { overlay.index = Math.min(overlay.filtered.length - 1, overlay.index + 1); return; }
+    if (data === "\x1b[A" || data === "\x10") { overlay.index = Math.max(0, overlay.index - 1); return; }
+    if (data === "\x1b[B" || data === "\x0e") { overlay.index = Math.min(overlay.filtered.length - 1, overlay.index + 1); return; }
     if (data === "\r") {
       const item = overlay.filtered[overlay.index];
       if (!item) return;
@@ -709,7 +711,7 @@ export class WorkflowScreen {
       return;
     }
 
-    // A list is a filterable picker here, not an inline ◂ ▸ cycle: these rows
+    // A list is a filterable picker here, not an inline h/l cycle: these rows
     // choose among every tracker state, and cycling 25 of them one at a time
     // is why nobody found them.
     if (def.type === "list" && def.options && def.onOptionSelect) {
@@ -1102,22 +1104,22 @@ export class WorkflowScreen {
       writeString(grid, row, left, msg, WARN_ATTRS);
       return;
     }
-    const segments: FooterSegment[] = [{ key: "↑↓", label: "move" }];
+    const segments: FooterSegment[] = [{ key: "j/k", label: "move" }];
     switch (selected?.kind) {
       case "status":
         // Every row in the table takes the same two keys; the rest only apply
         // once a status is actually in a tab.
         segments.push({ key: "↵", label: "stage" }, { key: "space", label: "parks" });
         if (selected.viewId !== null) {
-          segments.push({ key: "d", label: "remove" }, { key: "⇧↑↓", label: "order" });
+          segments.push({ key: "d", label: "remove" }, { key: "J/K", label: "order" });
         }
         break;
       case "tab":
         if (selected.source === "issues") {
-          // `⇧↑↓ order` sits second, right beside the ↑↓ it varies: the footer
+          // `J/K order` sits second, right beside the j/k it varies: the footer
           // drops segments from the back, so the least discoverable key was also
           // the first to disappear on a narrow terminal.
-          segments.push({ key: "⇧↑↓", label: "order" }, { key: "↵", label: "rename" },
+          segments.push({ key: "J/K", label: "order" }, { key: "↵", label: "rename" },
             { key: "s", label: selected.inSidebar ? "hide" : "show" },
             { key: "space", label: "unstarted" },
             { key: "u", label: "up next" }, { key: "d", label: "delete" });
@@ -1125,7 +1127,7 @@ export class WorkflowScreen {
         break;
       case "setting":
         segments.push(
-          ...(selected.def.onStep ? [{ key: "◂▸", label: "change" }] : []),
+          ...(selected.def.onStep ? [{ key: "h/l", label: "change" }] : []),
           { key: "↵", label: "edit" },
           ...(selected.def.getScope?.() === "override" ? [{ key: "d", label: "clear" }] : []));
         break;
@@ -1171,8 +1173,8 @@ export class WorkflowScreen {
     if (overlay.filtered.length === 0) writeString(grid, startRow, pad + 2, "No matches", DIM_ATTRS);
 
     writeString(grid, rows - 1, pad, checked
-      ? "↑↓ select  ·  ↵ toggle  ·  esc done  ·  type to filter"
-      : "↑↓ select  ·  ↵ choose  ·  esc cancel  ·  type to filter", DIM_ATTRS);
+      ? "^p/^n select  ·  ↵ toggle  ·  esc done  ·  type to filter"
+      : "^p/^n select  ·  ↵ choose  ·  esc cancel  ·  type to filter", DIM_ATTRS);
     return grid;
   }
 
@@ -1224,4 +1226,3 @@ export function buildRowPlan(rows: WorkflowRow[]): RenderRow[] {
 }
 
 export const TRANSITIONS_BAND = "Writes to your tracker";
-

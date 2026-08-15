@@ -1,6 +1,6 @@
 // src/nav-order.ts
 //
-// Ctrl-Shift-Up/Down stepping over the sidebar's navigable rows.
+// Session navigation stepping over the sidebar's navigable rows.
 //
 // Extracted from main.ts because the cycle has three edge cases that are easy
 // to get wrong from memory and impossible to unit-test in place: an empty
@@ -12,7 +12,7 @@
 // on one provisioned a worktree; now that selecting a ghost only previews it,
 // the exclusion has no remaining justification.
 
-/** A row Ctrl-Shift-Up/Down can land on. */
+/** A row session navigation can land on. */
 export type NavTarget =
   | { type: "session"; sessionId: string }
   | { type: "ghost"; issueId: string };

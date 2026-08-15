@@ -109,6 +109,23 @@ describe("TextAreaModal", () => {
     expect(modal.getValue()).toBe("aXbc");
   });
 
+  test("Ctrl-B/F/P/N move the cursor without arrow keys", () => {
+    const modal = new TextAreaModal({ header: "Description" });
+    modal.open();
+    modal.handleInput("a");
+    modal.handleInput("b");
+    modal.handleInput("\r");
+    modal.handleInput("c");
+    modal.handleInput("d");
+    modal.handleInput("\x10"); // Ctrl-P
+    modal.handleInput("\x02"); // Ctrl-B
+    modal.handleInput("X");
+    modal.handleInput("\x0e"); // Ctrl-N
+    modal.handleInput("\x06"); // Ctrl-F
+    modal.handleInput("Y");
+    expect(modal.getValue()).toBe("aXb\ncdY");
+  });
+
   test("Ctrl-A moves to start of line", () => {
     const modal = new TextAreaModal({ header: "Description" });
     modal.open();

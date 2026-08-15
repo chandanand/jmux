@@ -90,6 +90,8 @@ export class GhostPreview {
   private starting = false;
   /** Rows the last frame had, so paging can move by a screenful. */
   private lastBodyRows = 10;
+  /** Upper bound from the last render, used by the Vim `G` shortcut. */
+  private lastMaxScroll = 0;
 
   get isOpen(): boolean { return this._open; }
 
@@ -105,6 +107,7 @@ export class GhostPreview {
     this.port = port;
     this.target = target;
     this.scrollOffset = 0;
+    this.lastMaxScroll = 0;
     this.starting = false;
     this._open = true;
   }
@@ -125,10 +128,15 @@ export class GhostPreview {
 
     if (data === "\x1b" || data === "q") { this.close(); return; }
 
-    if (data === "\x1b[A") { this.scrollBy(-1); return; }
-    if (data === "\x1b[B") { this.scrollBy(1); return; }
+    if (data === "\x1b[A" || data === "k") { this.scrollBy(-1); return; }
+    if (data === "\x1b[B" || data === "j") { this.scrollBy(1); return; }
     if (data === "\x1b[5~") { this.scrollBy(-this.lastBodyRows); return; }
     if (data === "\x1b[6~") { this.scrollBy(this.lastBodyRows); return; }
+    const halfPage = Math.max(1, Math.floor(this.lastBodyRows / 2));
+    if (data === "\x15") { this.scrollBy(-halfPage); return; } // Ctrl-U
+    if (data === "\x04") { this.scrollBy(halfPage); return; }  // Ctrl-D
+    if (data === "g") { this.scrollOffset = 0; return; }
+    if (data === "G") { this.scrollOffset = this.lastMaxScroll; return; }
 
     // Every action below needs the issue to still exist. The gone state is a
     // dead end by design: nothing to start, nothing to re-status, nothing to
@@ -202,7 +210,8 @@ export class GhostPreview {
     // description and comments re-wrap) and on the content (a poll can drop
     // comments), so an offset that was valid last frame can be past the end of
     // this one. Without this a resize leaves the body blank.
-    this.scrollOffset = Math.min(this.scrollOffset, maxDetailScroll(lines.length, bodyRows));
+    this.lastMaxScroll = maxDetailScroll(lines.length, bodyRows);
+    this.scrollOffset = Math.min(this.scrollOffset, this.lastMaxScroll);
 
     paintDetailLines(grid, bodyStart, 0, contentCols, bodyRows, lines, this.scrollOffset);
     this.renderActionBar(grid, rows - 1, pf);

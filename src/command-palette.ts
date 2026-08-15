@@ -186,8 +186,10 @@ export class CommandPalette {
       };
     }
 
-    // Arrow down
-    if (data === "\x1b[B") {
+    // Arrow down / Ctrl-N. Plain j stays query text: the palette is always in
+    // filter mode, so control keys are the only aliases that do not make a
+    // command containing j impossible to find.
+    if (data === "\x1b[B" || data === "\x0e") {
       if (this.filtered.length > 0) {
         this.selectedIndex = (this.selectedIndex + 1) % this.filtered.length;
         this.adjustScroll();
@@ -195,8 +197,9 @@ export class CommandPalette {
       return CONSUMED;
     }
 
-    // Arrow up
-    if (data === "\x1b[A") {
+    // Arrow up / Ctrl-P — the conventional previous-result companion to
+    // Ctrl-N in fuzzy pickers.
+    if (data === "\x1b[A" || data === "\x10") {
       if (this.filtered.length > 0) {
         this.selectedIndex =
           (this.selectedIndex - 1 + this.filtered.length) % this.filtered.length;
@@ -249,7 +252,7 @@ export class CommandPalette {
 
   /**
    * The palette's ModalChrome: a "Commands" title, the live result count,
-   * and the flagship hint footer (↑↓ move · ↵ run · esc close) in the
+   * and the flagship hint footer (^p/^n move · ↵ run · esc close) in the
    * shared dialect. A hairline separates the input line from the results.
    */
   private buildChrome(): ModalChrome {
@@ -258,7 +261,7 @@ export class CommandPalette {
       title: "Commands",
       count: `${n} result${n === 1 ? "" : "s"}`,
       hints: [
-        { key: "↑↓", label: "move" },
+        { key: "^p/^n", label: "move" },
         { key: "↵", label: "run" },
         { key: "esc", label: "close" },
       ],

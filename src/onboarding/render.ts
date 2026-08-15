@@ -137,14 +137,14 @@ const MAP_LABELS: Record<StepId, string> = {
 };
 
 const HINTS: Record<PageId | "map", string> = {
-  map: "↑↓ move   ↵ open   esc close",
-  welcome: "↑↓ choose   ↵ start",
-  projects: "↵ add a directory   → next   ← back   esc overview",
-  agents: "↵ set these up   → next   ← back   esc overview",
-  naming: "↵ choose   → next   ← back   esc overview",
-  tracker: "↵ paste a token   → next   ← back   esc overview",
-  team: "→ next   ← back   esc overview",
-  workflow: "↵ use these   → next   ← back   esc overview",
+  map: "j/k move   ↵ open   esc close",
+  welcome: "j/k choose   ↵ start",
+  projects: "↵ add a directory   l next   h back   esc overview",
+  agents: "↵ set these up   l next   h back   esc overview",
+  naming: "↵ choose   l next   h back   esc overview",
+  tracker: "↵ paste a token   l next   h back   esc overview",
+  team: "l next   h back   esc overview",
+  workflow: "↵ use these   l next   h back   esc overview",
   done: "↵ start your first session      esc close",
 };
 
@@ -213,7 +213,7 @@ export interface RenderExtras {
   /**
    * Which map row the cursor is on.
    *
-   * Without it the map's ↑↓ move a cursor nobody can see and ↵ opens a step
+   * Without it the map's j/k move a cursor nobody can see and ↵ opens a step
    * the user did not knowingly choose — a key with no visible effect being
    * indistinguishable from a key that is broken.
    */
@@ -383,7 +383,7 @@ export function renderFlow(
   const nothingToSeed = page.id === "workflow" && !status.facts.trackerAuthed;
   const nothingToName = page.id === "naming" && status.facts.namingAvailable.length === 0;
   const hints = installed || noAgents || nothingToSeed || nothingToName
-    ? "→ next   ← back   esc overview"
+    ? "l next   h back   esc overview"
     : HINTS[page.id];
   paintActionBar(grid, width, height, hints);
   return grid;

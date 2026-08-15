@@ -614,7 +614,7 @@ describe("SettingsScreen explain line", () => {
 
 // --- Navigation parity ---
 //
-// j/k work in the setup modal and the workflow screen; ◂ ▸ drive onStep on the
+// j/k work in the setup modal and the workflow screen; h/l drive onStep on the
 // workflow screen. This screen took neither, so muscle memory from either did
 // nothing here.
 describe("SettingsScreen navigation parity", () => {
@@ -647,6 +647,14 @@ describe("SettingsScreen navigation parity", () => {
     s.handleInput("\x1b[B");
     s.handleInput("\x1b[C");
     s.handleInput("\x1b[D");
+    expect(deltas).toEqual([1, -1]);
+  });
+
+  test("l and h call onStep with +1 and -1", () => {
+    const deltas: number[] = [];
+    const s = steppedScreen((d) => deltas.push(d));
+    s.handleInput("l");
+    s.handleInput("h");
     expect(deltas).toEqual([1, -1]);
   });
 
@@ -757,6 +765,15 @@ describe("SettingsScreen search", () => {
     s.handleInput("q");
     s.handleInput("d");
     expect(s.isOpen).toBe(true);
+  });
+
+  test("filter mode advertises Ctrl-P/N navigation instead of printable j/k", () => {
+    const s = new SettingsScreen();
+    s.open(searchable());
+    s.handleInput("/");
+    const hint = fullRow(s.render(80, 24), 23);
+    expect(hint).toContain("Ctrl-P/N navigate");
+    expect(hint).not.toContain("j/k navigate");
   });
 
   test("a filter matching nothing says so", () => {
@@ -1058,9 +1075,9 @@ describe("SettingsScreen info rows", () => {
 });
 
 describe("SettingsScreen hint line follows the selected row", () => {
-  test("a stepped row advertises ◂▸, a text row does not", () => {
+  test("a stepped row advertises h/l, a text row does not", () => {
     const stepped = steppedScreen(() => {}).render(80, 24);
-    expect(rowText(stepped, 23, 0, 80)).toContain("◂▸");
+    expect(rowText(stepped, 23, 0, 80)).toContain("h/l");
 
     const screen = new SettingsScreen();
     screen.open([{
@@ -1068,7 +1085,7 @@ describe("SettingsScreen hint line follows the selected row", () => {
       settings: [{ id: "t", label: "Regex", type: "text", getValue: () => "x", onTextCommit: () => {} }],
     }]);
     screen.handleInput("\x1b[B");
-    expect(rowText(screen.render(80, 24), 23, 0, 80)).not.toContain("◂▸");
+    expect(rowText(screen.render(80, 24), 23, 0, 80)).not.toContain("h/l");
   });
 });
 
