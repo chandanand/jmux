@@ -17,17 +17,31 @@ export interface NewSessionProviders {
    * indistinguishable at the moment the user has to choose. The `dir` is still
    * what everything downstream consumes.
    */
-  scanProjectDirs: () => Array<{ dir: string; label?: string }>;
+  scanProjectDirs: () => NewSessionDir[];
   isBareRepo: (dir: string) => boolean;
   getWorktrees: (dir: string) => Array<{ name: string; path: string }>;
   getRemoteBranches: (dir: string) => string[];
   getDefaultBranch: (dir: string) => string;
 }
 
+/**
+ * One directory choice in the first step.
+ *
+ * `projectId` distinguishes a configured Project from a bare path, and also
+ * distinguishes two Projects that deliberately share one directory. The id
+ * has to survive the picker: it is what the creator stamps onto the tmux
+ * session so every later Project lookup is unambiguous.
+ */
+export interface NewSessionDir {
+  dir: string;
+  label?: string;
+  projectId?: string;
+}
+
 export type NewSessionResult =
-  | { type: "standard"; dir: string; name: string }
-  | { type: "existing_worktree"; dir: string; path: string; branch: string }
-  | { type: "new_worktree"; dir: string; baseBranch: string; name: string };
+  | { type: "standard"; dir: string; name: string; projectId?: string }
+  | { type: "existing_worktree"; dir: string; path: string; branch: string; projectId?: string }
+  | { type: "new_worktree"; dir: string; baseBranch: string; name: string; projectId?: string };
 
 type StepId = "dir" | "worktree" | "base_branch" | "name";
 
@@ -47,8 +61,11 @@ export class NewSessionModal {
 
   // Accumulated selections as we advance through steps
   private selectedDir = "";
+  private selectedProjectId: string | undefined;
   private selectedBranch = "";
   private isBare = false;
+  /** Opaque ListModal id -> the full choice it represents. */
+  private dirChoices = new Map<string, NewSessionDir>();
 
   constructor(providers: NewSessionProviders) {
     this.providers = providers;
@@ -58,6 +75,7 @@ export class NewSessionModal {
     this._open = true;
     this.stepStack = [];
     this.selectedDir = "";
+    this.selectedProjectId = undefined;
     this.selectedBranch = "";
     this.isBare = false;
     this.currentStep = "dir";
@@ -71,6 +89,7 @@ export class NewSessionModal {
     this.currentInner = null;
     this.stepStack = [];
     this.selectedDir = "";
+    this.selectedProjectId = undefined;
     this.selectedBranch = "";
     this.isBare = false;
   }
@@ -91,15 +110,12 @@ export class NewSessionModal {
     return this.currentInner!.getGrid(width);
   }
 
-  updateProjectDirs(dirs: Array<{ dir: string; label?: string }>): void {
+  updateProjectDirs(dirs: NewSessionDir[]): void {
     if (!this._open) return;
     if (this.currentStep !== "dir") return;
     const inner = this.currentInner;
     if (!(inner instanceof ListModal)) return;
-    const items: ListItem[] = dirs.map(({ dir, label }) => ({
-      id: dir,
-      label: label ?? this.shortenPath(dir),
-    }));
+    const items = this.setDirChoices(dirs);
     inner.updateItems(items);
   }
 
@@ -114,6 +130,7 @@ export class NewSessionModal {
         // Restore accumulated state based on what step we're returning to
         if (prev.stepId === "dir") {
           this.selectedDir = "";
+          this.selectedProjectId = undefined;
           this.isBare = false;
         } else if (prev.stepId === "worktree") {
           this.selectedBranch = "";
@@ -145,7 +162,10 @@ export class NewSessionModal {
     switch (this.currentStep) {
       case "dir": {
         const item = value as ListItem;
-        this.selectedDir = item.id;
+        const choice = this.dirChoices.get(item.id);
+        if (!choice) return { type: "consumed" };
+        this.selectedDir = choice.dir;
+        this.selectedProjectId = choice.projectId;
         this.isBare = this.providers.isBareRepo(this.selectedDir);
 
         if (this.isBare) {
@@ -186,6 +206,7 @@ export class NewSessionModal {
           dir: this.selectedDir,
           path: wt?.path ?? "",
           branch: item.id,
+          ...(this.selectedProjectId ? { projectId: this.selectedProjectId } : {}),
         };
         this.close();
         return { type: "result", value: result };
@@ -210,6 +231,7 @@ export class NewSessionModal {
             dir: this.selectedDir,
             baseBranch: this.selectedBranch,
             name,
+            ...(this.selectedProjectId ? { projectId: this.selectedProjectId } : {}),
           };
           this.close();
           return { type: "result", value: result };
@@ -219,6 +241,7 @@ export class NewSessionModal {
           type: "standard",
           dir: this.selectedDir,
           name,
+          ...(this.selectedProjectId ? { projectId: this.selectedProjectId } : {}),
         };
         this.close();
         return { type: "result", value: result };
@@ -262,14 +285,27 @@ export class NewSessionModal {
 
   private createDirPicker(): ListModal {
     const dirs = this.providers.scanProjectDirs();
-    const items: ListItem[] = dirs.map(({ dir, label }) => ({
-      id: dir,
-      label: label ?? this.shortenPath(dir),
-    }));
+    const items = this.setDirChoices(dirs);
     return new ListModal({
       header: "New Session",
       subheader: "Pick a directory",
       items,
+    });
+  }
+
+  /**
+   * Give each first-step row a unique opaque id while retaining its Project
+   * identity. A path cannot be the list id: two Projects may share it.
+   */
+  private setDirChoices(dirs: NewSessionDir[]): ListItem[] {
+    this.dirChoices.clear();
+    return dirs.map((choice, index) => {
+      const id = `dir-choice:${index}`;
+      this.dirChoices.set(id, choice);
+      return {
+        id,
+        label: choice.label ?? this.shortenPath(choice.dir),
+      };
     });
   }
 

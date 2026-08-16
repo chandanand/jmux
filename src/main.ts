@@ -65,6 +65,7 @@ import {
   tq,
   type NewSessionResult,
   type NewSessionProviders,
+  type NewSessionDir,
 } from "./new-session-modal";
 import { CaptureModal, type CaptureResult } from "./capture-modal";
 import { buildPinCommands } from "./cli/pane";
@@ -3032,6 +3033,8 @@ const sessionDetailsCache = new Map<string, {
   path?: string;
   gitBranch?: string;
   project?: string;
+  /** Git worktree's repository root, used to resolve an unstamped Project. */
+  projectRoot?: string;
 }>();
 
 /**
@@ -4398,11 +4401,26 @@ function refreshSessionProjects(sessions: SessionInfo[]): void {
   const titles = applySessionProjects(
     sessions,
     configStore.config.projects ?? [],
-    (session) => sessionDetailsCache.get(session.id)?.path,
+    (session) => {
+      const cached = sessionDetailsCache.get(session.id);
+      // Prefer an exact Project for the worktree itself, then the repository
+      // root Git says owns it. The second candidate is what identifies an
+      // existing `/repo/feature` worktree against a Project configured at
+      // `/repo` when the session predates @jmux-project.
+      return [cached?.path, cached?.projectRoot];
+    },
     (id) => cachedTeams.find((t) => t.id === id)?.name ?? null,
   );
   sidebar.setSessionProjects(titles);
   recomputeSessionBands();
+}
+
+/** Stamp the configured Project onto a newly-created tmux session. */
+async function stampSessionProject(sessionName: string, projectId?: string): Promise<void> {
+  if (!projectId || !isWritableProjectId(projectId)) return;
+  await control.sendCommand(
+    `set-option -t ${tq(sessionName)} ${PROJECT_OPTION} ${tq(projectId)}`,
+  );
 }
 
 /**
@@ -8620,11 +8638,7 @@ async function provisionIssueSession(o: {
     // Stamp the Project before anything reads the session. Path containment
     // cannot substitute: two Projects may share a directory, so a session in
     // one is indistinguishable from a session in the other without this.
-    if (o.projectId && isWritableProjectId(o.projectId)) {
-      await control
-        .sendCommand(`set-option -t ${tq(o.session)} ${PROJECT_OPTION} ${tq(o.projectId)}`)
-        .catch(() => {});
-    }
+    await stampSessionProject(o.session, o.projectId).catch(() => {});
 
     await control.sendCommand(`switch-client -c ${ptyClientName} -t ${tq(o.session)}`);
     for (const issue of o.issues) {
@@ -8746,20 +8760,19 @@ async function startWorkOnIssue(
         });
         return "failed";
       }
-      const repoDir = startOutcome.kind === "resolved" ? startOutcome.project.dir : undefined;
-
       // Automated path: routing resolved this issue to a project
-      if (repoDir) {
+      if (startOutcome.kind === "resolved") {
         if (!ptyClientName) await resolveClientName();
         if (!ptyClientName) return "failed";
 
         const session = resolveIssueSessionName(issue);
         if (!session) return "failed";
 
+        const repoDir = startOutcome.project.dir;
         const expandedDir = repoDir.replace("~", homedir());
         // Settings resolve against the *issue's* repo, not the session the user
         // happens to be sitting in — the issue panel is a cross-repo union.
-        const settings = repoSettingsFor(expandedDir);
+        const settings = repoSettingsFor(expandedDir, startOutcome.project.id);
         const baseBranch = settings.defaultBaseBranch;
 
         return provisionIssueSession({
@@ -8771,6 +8784,7 @@ async function startWorkOnIssue(
           worktreeExists: issueState === "worktree",
           prompt: (tracker) => tracker.buildPrompt(issue),
           failureSubject: issue.identifier,
+          projectId: startOutcome.project.id,
         });
       }
 
@@ -8793,6 +8807,7 @@ async function startWorkOnIssue(
             case "standard": {
               const s = sanitizeTmuxSessionName(result.name);
               await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${s}`)} -s ${tq(s)} -c ${tq(result.dir)}`);
+              await stampSessionProject(s, result.projectId);
               await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(s)}`);
               sessionState.addLink(s, { type: "issue", id: issue.id });
               break;
@@ -8800,6 +8815,25 @@ async function startWorkOnIssue(
             case "existing_worktree": {
               const s = sanitizeTmuxSessionName(result.branch);
               await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${s}`)} -s ${tq(s)} -c ${tq(result.path)}`);
+              await stampSessionProject(s, result.projectId);
+              await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(s)}`);
+              sessionState.addLink(s, { type: "issue", id: issue.id });
+              break;
+            }
+            case "new_worktree": {
+              const s = sanitizeTmuxSessionName(result.name);
+              const wtPath = `${result.dir}/${s}`;
+              const createCmd = buildWorktreeCommand({
+                wtm: repoSettingsFor(result.dir, result.projectId).wtmIntegration,
+                session: s,
+                baseBranch: result.baseBranch,
+                noShell: true,
+              });
+              const cmd = `${createCmd}; cd ${s}; exec $SHELL`;
+              await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${s}`)} -s ${tq(s)} -c ${tq(result.dir)} ${tq(cmd)}`);
+              await stampSessionProject(s, result.projectId);
+              const waitCmd = `while [ ! -d ${tq(wtPath)} ]; do sleep 0.2; done; cd ${tq(wtPath)} && exec $SHELL`;
+              await control.sendCommand(`split-window -h -d -t ${tq(s)} -c ${tq(result.dir)} ${tq(waitCmd)}`);
               await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(s)}`);
               sessionState.addLink(s, { type: "issue", id: issue.id });
               break;
@@ -9216,6 +9250,7 @@ async function startIssueGroup(
       worktreeExists: existsSync(issueWorktreePath(repoDir, session)),
       prompt: (tracker) => tracker.buildGroupPrompt(fresh, label),
       failureSubject: label || `${fresh.length} issues`,
+      projectId: groupProjectId,
     });
   });
 }
@@ -9662,12 +9697,13 @@ function focusPanelOnIssue(issueId: string): void {
  * no Project still appears, from the scan cache, so Projects never become
  * mandatory before jmux is usable.
  *
- * Deduplicated by path: several Projects may share a directory, and offering it
- * twice would ask the user to choose between two identical rows.
+ * Scanned paths are deduplicated against Projects. Configured Projects are not
+ * deduplicated against each other: two may share a directory, and their ids
+ * are what lets the picker preserve the user's actual choice.
  */
-function newSessionDirs(): Array<{ dir: string; label?: string }> {
+function newSessionDirs(): NewSessionDir[] {
   const live = (configStore.config.projects ?? []).filter((p) => p.deletedAt === undefined);
-  const out: Array<{ dir: string; label?: string }> = [];
+  const out: NewSessionDir[] = [];
   // Projects first, and each is its own row even when two share a directory:
   // that is the monorepo-serving-two-teams shape, and collapsing them to one
   // path makes them indistinguishable at the moment the user has to choose.
@@ -9676,6 +9712,7 @@ function newSessionDirs(): Array<{ dir: string; label?: string }> {
     out.push({
       dir: p.dir,
       label: projectLabel(p, live, (id) => cachedTeams.find((t) => t.id === id)?.name ?? null),
+      projectId: p.id,
     });
   }
   // Then whatever the scan found, minus anything a Project already offered —
@@ -9975,12 +10012,14 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
             case "standard": {
               const session = sanitizeTmuxSessionName(result.name);
               await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(result.dir)}`);
+              await stampSessionProject(session, result.projectId);
               await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(session)}`);
               break;
             }
             case "existing_worktree": {
               const session = sanitizeTmuxSessionName(result.branch);
               await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(result.path)}`);
+              await stampSessionProject(session, result.projectId);
               await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(session)}`);
               break;
             }
@@ -9992,13 +10031,14 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
               const session = sanitizeTmuxSessionName(result.name);
               const wtPath = `${result.dir}/${session}`;
               const createCmd = buildWorktreeCommand({
-                wtm: repoSettingsFor(result.dir).wtmIntegration,
+                wtm: repoSettingsFor(result.dir, result.projectId).wtmIntegration,
                 session,
                 baseBranch: result.baseBranch,
                 noShell: true,
               });
               const cmd = `${createCmd}; cd ${session}; exec $SHELL`;
               await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(result.dir)} ${tq(cmd)}`);
+              await stampSessionProject(session, result.projectId);
               const waitCmd = `while [ ! -d ${tq(wtPath)} ]; do sleep 0.2; done; cd ${tq(wtPath)} && exec $SHELL`;
               await control.sendCommand(`split-window -h -d -t ${tq(session)} -c ${tq(result.dir)} ${tq(waitCmd)}`);
               await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(session)}`);
@@ -11177,7 +11217,7 @@ control.onEvent((event: ControlEvent) => {
         void fetchAgentState();
       } else if (event.name === "windows") {
         fetchWindows();
-      } else if (event.name === "session-titles") {
+      } else if (event.name === "session-titles" || event.name === "session-projects") {
         fetchSessions();
       } else if (event.name === "grid-exceptions" || event.name === "grid-hidden") {
         // `@jmux-pinned` (pane) and `@jmux-grid-hidden` (session) — the two
@@ -11209,6 +11249,7 @@ async function lookupSessionDetails(sessions: SessionInfo[]): Promise<void> {
 
       // Detect wtm worktree — .git is a file pointing to a bare repo
       let project: string | undefined;
+      let projectRoot: string | undefined;
       try {
         const commonDir = await $`git -C ${cwd} rev-parse --git-common-dir`
           .text()
@@ -11222,13 +11263,20 @@ async function lookupSessionDetails(sessions: SessionInfo[]): Promise<void> {
           const resolved = resolve(cwd, commonDir.trim());
           const bareRoot = dirname(resolved);
           project = bareRoot.split("/").pop();
+          projectRoot = bareRoot;
         }
       } catch {
         // Not a worktree
       }
 
       // Write to persistent cache
-      sessionDetailsCache.set(session.id, { directory, path: cwd, gitBranch, project });
+      sessionDetailsCache.set(session.id, {
+        directory,
+        path: cwd,
+        gitBranch,
+        project,
+        projectRoot,
+      });
       session.directory = directory;
       session.gitBranch = gitBranch;
       session.repoName = project;
@@ -12483,6 +12531,16 @@ async function start(): Promise<void> {
     "session-titles",
     1,
     "#{S:#{session_id}=#{@jmux-session-title} }",
+  );
+
+  // Project identity is also written after session creation (including by the
+  // standalone CLI). `%sessions-changed` can arrive before that second write,
+  // so treating the option itself as a trigger closes the race where the first
+  // snapshot permanently kept an otherwise-correct new session unstamped.
+  await control.registerSubscription(
+    "session-projects",
+    1,
+    `#{S:#{session_id}=#{${PROJECT_OPTION}} }`,
   );
 
   // Subscribe to window count + active window + name — fires on add/remove/switch/rename

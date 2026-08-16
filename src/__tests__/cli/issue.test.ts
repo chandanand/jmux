@@ -7,6 +7,7 @@ import {
   decideStartReuse,
   startSessionName,
   matchStatus,
+  resolveRepoContextForIssue,
   resolveRepoForIssue,
   expandTilde,
   validateIssueCreate,
@@ -241,6 +242,36 @@ describe("resolveRepoForIssue", () => {
   test("resolves through the issue's team id", () => {
     expect(resolveRepoForIssue({}, issue({ team: "Platform", teamId: "T1" }), config))
       .toBe("/repos/backend");
+  });
+
+  test("retains the routed Project id for provisioning", () => {
+    expect(resolveRepoContextForIssue(
+      {},
+      issue({ team: "Platform", teamId: "T1" }),
+      config,
+    )).toEqual({ repo: "/repos/backend", projectId: "backend" });
+  });
+
+  test("infers an unambiguous Project for an explicit repo", () => {
+    expect(resolveRepoContextForIssue(
+      { repo: "/repos/backend" },
+      null,
+      config,
+    )).toEqual({ repo: "/repos/backend", projectId: "backend" });
+  });
+
+  test("does not guess a Project when an explicit repo is shared", () => {
+    const shared: JmuxConfig = {
+      projects: [
+        { id: "api", title: "API", dir: "/repos/mono" },
+        { id: "web", title: "Web", dir: "/repos/mono" },
+      ],
+    };
+    expect(resolveRepoContextForIssue(
+      { repo: "/repos/mono" },
+      null,
+      shared,
+    )).toEqual({ repo: "/repos/mono", projectId: null });
   });
 
   // A name is not unique across workspaces; routing must not fall back to it.

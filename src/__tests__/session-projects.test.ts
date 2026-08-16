@@ -33,6 +33,19 @@ describe("applySessionProjects", () => {
     expect(sessions[0]!.projectName).toBe("API");
   });
 
+  test("falls back from a worktree path to its Git repository root", () => {
+    const sessions = [session()];
+
+    const labels = applySessionProjects(
+      sessions,
+      PROJECTS,
+      () => ["/code/api/feature-auth", "/code/api"],
+    );
+
+    expect(labels).toEqual(new Map([["api", "API"]]));
+    expect(sessions[0]!.projectName).toBe("API");
+  });
+
   test("an explicit Project stamp wins when a directory is shared", () => {
     const projects: ProjectConfig[] = [
       { id: "core", title: "Platform", dir: "/code/mono", teamId: "T1" },

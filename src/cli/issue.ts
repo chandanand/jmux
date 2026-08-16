@@ -10,7 +10,13 @@ import {
   type JmuxConfig,
 } from "../config";
 import { RepoFactsCache } from "../repo-settings";
-import { resolveSettingsFor, type ResolvedProjectSettings } from "../project";
+import {
+  PROJECT_OPTION,
+  isWritableProjectId,
+  projectForDir,
+  resolveSettingsFor,
+  type ResolvedProjectSettings,
+} from "../project";
 import { resolveIssueProject } from "../project-routing";
 import {
   resolveIssueSessionName,
@@ -216,12 +222,26 @@ export function expandTilde(p: string): string {
  * keyed by the issue's team. Returns null when nothing resolves — the caller
  * turns that into an actionable error rather than guessing.
  */
-export function resolveRepoForIssue(
+export interface IssueRepoContext {
+  repo: string;
+  projectId: string | null;
+}
+
+/** Resolve both the filesystem repo and the Project identity to stamp. */
+export function resolveRepoContextForIssue(
   flags: ParsedCtlArgs["flags"],
   issue: Issue | null,
   config: JmuxConfig,
-): string | null {
-  if (typeof flags.repo === "string") return expandTilde(flags.repo);
+): IssueRepoContext | null {
+  if (typeof flags.repo === "string") {
+    const repo = expandTilde(flags.repo);
+    return {
+      repo,
+      // An explicit path does not choose between two Projects sharing it.
+      // Preserve that ambiguity instead of stamping whichever appears first.
+      projectId: projectForDir(config.projects ?? [], repo)?.id ?? null,
+    };
+  }
   if (!issue) return null;
   // Through the same router the TUI uses. teamRepoMap is deleted by the
   // Projects migration, so reading it here answered null for every issue and
@@ -237,7 +257,18 @@ export function resolveRepoForIssue(
     config.projects ?? [],
     config.routes ?? {},
   );
-  return outcome.kind === "resolved" ? outcome.project.dir : null;
+  return outcome.kind === "resolved"
+    ? { repo: outcome.project.dir, projectId: outcome.project.id }
+    : null;
+}
+
+/** Backwards-compatible path-only view used by callers that do not provision. */
+export function resolveRepoForIssue(
+  flags: ParsedCtlArgs["flags"],
+  issue: Issue | null,
+  config: JmuxConfig,
+): string | null {
+  return resolveRepoContextForIssue(flags, issue, config)?.repo ?? null;
 }
 
 export interface IssueCreateArgs {
@@ -720,18 +751,23 @@ async function issueStart(
     }
   }
 
-  const repo = resolveRepoForIssue(flags, issue, config);
-  if (!repo) {
+  const repoContext = resolveRepoContextForIssue(flags, issue, config);
+  if (!repoContext) {
     throw new CliError(
       `could not resolve a project for "${issueId}". Pass --repo <path>, or attach its team to a project.`,
     );
   }
+  const { repo, projectId } = repoContext;
   if (!existsSync(repo)) {
     throw new CliError(`repo path does not exist: ${repo}`);
   }
 
   // Settings resolve against the repo this issue routes to, not the CLI's cwd.
-  const repoSettings = resolveSettingsFor(config, { dir: repo, bare: new RepoFactsCache().get(repo).bare });
+  const repoSettings = resolveSettingsFor(config, {
+    dir: repo,
+    projectId,
+    bare: new RepoFactsCache().get(repo).bare,
+  });
   const sessionName = startSessionName(issueId, issue, repoSettings.sessionNameTemplate);
 
   const reused = decideStartReuse(rows, issueId, sessionName);
@@ -748,6 +784,12 @@ async function issueStart(
       ],
       ctx.socket,
     );
+    if (projectId && isWritableProjectId(projectId)) {
+      runTmuxDirect(
+        ["set-option", "-t", sessionName, PROJECT_OPTION, projectId],
+        ctx.socket,
+      );
+    }
     return reuse(reused.row, linkId);
   }
 
@@ -819,6 +861,12 @@ async function issueStart(
     ["set-option", "-t", sessionName, "@jmux-repo-path", repo],
     ctx.socket,
   );
+  if (projectId && isWritableProjectId(projectId)) {
+    runTmuxDirect(
+      ["set-option", "-t", sessionName, PROJECT_OPTION, projectId],
+      ctx.socket,
+    );
+  }
 
   const setupPane = plan.setupCommand
     ? openSetupPane(ctx, { session: sessionName, repo, command: plan.setupCommand })

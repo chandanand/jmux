@@ -87,6 +87,48 @@ describe("NewSessionModal", () => {
     }
   });
 
+  test("carries the selected Project id into a standard-session result", () => {
+    const modal = new NewSessionModal(makeProviders({
+      scanProjectDirs: () => [
+        { dir: "/home/user/project-a", label: "API", projectId: "api" },
+      ],
+    }));
+    modal.open();
+    modal.handleInput("\r");
+
+    const action = modal.handleInput("\r");
+    expect(action.type).toBe("result");
+    if (action.type === "result") {
+      expect(action.value).toMatchObject({
+        type: "standard",
+        dir: "/home/user/project-a",
+        projectId: "api",
+      });
+    }
+  });
+
+  test("keeps same-directory Projects distinct", () => {
+    const modal = new NewSessionModal(makeProviders({
+      scanProjectDirs: () => [
+        { dir: "/home/user/mono", label: "Platform · API", projectId: "api" },
+        { dir: "/home/user/mono", label: "Platform · Web", projectId: "web" },
+      ],
+    }));
+    modal.open();
+    modal.handleInput("\x1b[B");
+    modal.handleInput("\r");
+
+    const action = modal.handleInput("\r");
+    expect(action.type).toBe("result");
+    if (action.type === "result") {
+      expect(action.value).toMatchObject({
+        type: "standard",
+        dir: "/home/user/mono",
+        projectId: "web",
+      });
+    }
+  });
+
   test("bare repo flow: select bare-repo → worktree picker → select existing → result", () => {
     const modal = new NewSessionModal(makeProviders());
     modal.open();
@@ -113,6 +155,27 @@ describe("NewSessionModal", () => {
         expect(result.path).toBe("/home/user/bare-repo/main");
         expect(result.branch).toBe("main");
       }
+    }
+  });
+
+  test("carries the selected Project id into an existing-worktree result", () => {
+    const modal = new NewSessionModal(makeProviders({
+      scanProjectDirs: () => [
+        { dir: "/home/user/bare-repo", label: "API", projectId: "api" },
+      ],
+    }));
+    modal.open();
+    modal.handleInput("\r");
+    modal.handleInput("\x1b[B");
+
+    const action = modal.handleInput("\r");
+    expect(action.type).toBe("result");
+    if (action.type === "result") {
+      expect(action.value).toMatchObject({
+        type: "existing_worktree",
+        branch: "main",
+        projectId: "api",
+      });
     }
   });
 
@@ -156,6 +219,28 @@ describe("NewSessionModal", () => {
         expect(result.baseBranch).toBe("develop");
         expect(result.name).toBe("fix");
       }
+    }
+  });
+
+  test("carries the selected Project id into a new-worktree result", () => {
+    const modal = new NewSessionModal(makeProviders({
+      scanProjectDirs: () => [
+        { dir: "/home/user/bare-repo", label: "API", projectId: "api" },
+      ],
+    }));
+    modal.open();
+    modal.handleInput("\r");
+    modal.handleInput("\r");
+    modal.handleInput("\r");
+    modal.handleInput("f");
+
+    const action = modal.handleInput("\r");
+    expect(action.type).toBe("result");
+    if (action.type === "result") {
+      expect(action.value).toMatchObject({
+        type: "new_worktree",
+        projectId: "api",
+      });
     }
   });
 
