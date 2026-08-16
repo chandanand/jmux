@@ -92,6 +92,14 @@ import { ImagePlane } from "./images/plane";
 import { scanForGraphics, scanForTerminalQueries, PlacementTracker } from "./images/passthrough";
 import { PtyPixels } from "./pty-pixels";
 import { devServerUrl, scanDevServers, type DevServerDeps } from "./dev-servers";
+import {
+  AUTO_WINDOW_TITLE_OPTION,
+  deriveAutomaticWindowTitle,
+  needsWindowProcessArgv,
+  parseWindowProcesses,
+  windowProcessArgv,
+  type WindowProcess,
+} from "./window-title";
 import { BROWSER_BINARY, BROWSER_PANE_OPTION, BROWSER_PANE_FORMAT, BROWSER_RUNTIME_OPTION, browserSplitCommand, browserRuntimeBase, browserRuntimeDir, runtimeDirFits, browserActionArgv, browserActionEnv, parseBrowserPanes, pickBrowserPane, type BrowserPane } from "./browser-pane";
 import { StoreImagePort, setImagePort } from "./images/port";
 import { TmuxControl, type ControlEvent } from "./tmux-control";
@@ -1436,11 +1444,15 @@ async function performBoot(opts: {
     // Re-stamp @jmux-project before anything resolves Project-scoped settings
     // or polls: tmux options die with the server, so without this every
     // restored session reads as unstamped and falls back to the global tier.
-    projectIdSink: (name, projectId) => {
+    projectIdSink: async (name, projectId) => {
       if (!projectId || !isWritableProjectId(projectId)) return;
-      void control
-        .sendCommand(`set-option -t ${tq(name)} ${PROJECT_OPTION} ${tq(projectId)}`)
-        .catch(() => {});
+      // Restore runs before the interactive/control clients are constructed,
+      // so the boot runner is the only tmux transport available here. Await
+      // the write as well: Project-scoped settings must not resolve against a
+      // restored session until its durable identity is back on the server.
+      await runner
+        .run(["set-option", "-t", name, PROJECT_OPTION, projectId])
+        .catch(() => undefined);
     },
     pinnedSink: (name, pinned) => {
       if (pinned && !opts.pinnedSessions.has(name)) {
@@ -10061,7 +10073,8 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       await handleToolbarAction("new-window");
       return;
     case "rename-window": {
-      const currentName = currentWindows.find(w => w.active)?.name ?? "";
+      const currentWindow = currentWindows.find(w => w.active);
+      const currentName = currentWindow?.name ?? "";
       const modal = new InputModal({
         header: "Rename Window",
         subheader: `Current: ${currentName}`,
@@ -10069,7 +10082,15 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       });
       modal.open();
       openModal(modal, async (name) => {
-        await control.sendCommand(`rename-window ${tq(name as string)}`);
+        if (!currentWindow) return;
+        // A hand-written name wins. `rename-window` turns automatic-rename off
+        // for this window; clearing our derived option also means explicitly
+        // re-enabling it later starts from the live command rather than a stale
+        // classifier result.
+        await control.sendCommand(
+          `set-option -w -q -u -t ${tq(currentWindow.windowId)} ${AUTO_WINDOW_TITLE_OPTION} ; ` +
+            `rename-window -t ${tq(currentWindow.windowId)} ${tq(name as string)}`,
+        );
         fetchWindows();
       });
       return;
@@ -11274,25 +11295,142 @@ async function lookupSessionDetails(sessions: SessionInfo[]): Promise<void> {
 
 // --- Window tabs ---
 
+const WINDOW_LIST_FORMAT = [
+  "#{window_id}",
+  "#{window_index}",
+  "#{window_name}",
+  "#{window_active}",
+  "#{window_bell_flag}",
+  "#{window_zoomed_flag}",
+  "#{automatic-rename}",
+  "#{pane_current_command}",
+  "#{pane_current_path}",
+  "#{pane_pid}",
+  `#{${AUTO_WINDOW_TITLE_OPTION}}`,
+].join(US);
+
+interface WindowNamingRow {
+  tab: WindowTab;
+  automaticRename: boolean;
+  command: string;
+  cwd: string;
+  panePid: number;
+  derivedTitle: string;
+}
+
+/** One bounded process snapshot, and only when an ambiguous runner needs it. */
+async function readWindowProcesses(): Promise<WindowProcess[]> {
+  try {
+    const proc = Bun.spawn(["ps", "-Ao", "pid=,ppid=,args="], {
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    const timer = setTimeout(() => proc.kill(), 2_000);
+    try {
+      const output = await new Response(proc.stdout).text();
+      await proc.exited;
+      return proc.exitCode === 0 ? parseWindowProcesses(output) : [];
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Keep automatically named windows aligned with their active pane.
+ *
+ * `rename-window` normally disables tmux automatic naming. For a derived write
+ * we deliberately turn it back on in the same command block; a human rename
+ * leaves it off and this function skips that window forever unless the human
+ * explicitly re-enables it.
+ */
+async function applyAutomaticWindowTitles(rows: WindowNamingRow[]): Promise<void> {
+  const auto = rows.filter((row) => row.automaticRename);
+  const needsArgv = auto.some((row) => needsWindowProcessArgv(row.command));
+  const processes = needsArgv ? await readWindowProcesses() : [];
+
+  for (const row of rows) {
+    const target = tq(row.tab.windowId);
+    if (!row.automaticRename) {
+      // Manual rename after an automatic one: retire the now-stale classifier
+      // value without touching the name the human chose.
+      if (row.derivedTitle) {
+        await control
+          .sendCommand(`set-option -w -q -u -t ${target} ${AUTO_WINDOW_TITLE_OPTION}`)
+          .catch(() => {});
+      }
+      continue;
+    }
+
+    const argv = needsWindowProcessArgv(row.command)
+      ? windowProcessArgv(row.panePid, row.command, processes)
+      : null;
+    const title = deriveAutomaticWindowTitle({ command: row.command, cwd: row.cwd, argv });
+    if (!title || (title === row.derivedTitle && title === row.tab.name)) continue;
+
+    try {
+      await control.sendCommand(
+        `set-option -w -t ${target} ${AUTO_WINDOW_TITLE_OPTION} ${tq(title)} ; ` +
+          `rename-window -t ${target} ${tq(title)} ; ` +
+          `set-option -w -t ${target} automatic-rename on`,
+      );
+      // Do not wait for the resulting %window-renamed event to make this pass
+      // truthful; the event's fetch is the confirming second read.
+      row.tab.name = title;
+      row.derivedTitle = title;
+    } catch {
+      // A pane/window can disappear between list-windows and the write.
+    }
+  }
+}
+
 async function fetchWindows(): Promise<void> {
   try {
     const target = currentSessionId ? `-t '${currentSessionId}'` : "";
     const lines = await control.sendCommand(
-      `list-windows ${target} -F '#{window_id}:#{window_index}:#{window_name}:#{window_active}:#{window_bell_flag}:#{window_zoomed_flag}'`,
+      `list-windows ${target} -F '${WINDOW_LIST_FORMAT}'`,
     );
-    const windows: import("./types").WindowTab[] = lines
+    const namingRows: WindowNamingRow[] = lines
       .filter((l) => l.length > 0)
       .map((line) => {
-        const [windowId, index, name, active, bell, zoomed] = line.split(":");
-        return {
+        const [
           windowId,
-          index: parseInt(index, 10),
+          index,
           name,
-          active: active === "1",
-          bell: bell === "1",
-          zoomed: zoomed === "1",
+          active,
+          bell,
+          zoomed,
+          automaticRename,
+          command,
+          cwd,
+          panePid,
+          derivedTitle,
+        ] = splitFields(line);
+        return {
+          tab: {
+            windowId,
+            index: parseInt(index, 10),
+            name,
+            active: active === "1",
+            bell: bell === "1",
+            zoomed: zoomed === "1",
+          },
+          automaticRename: automaticRename === "1" || automaticRename === "on",
+          command,
+          cwd,
+          panePid: parseInt(panePid, 10),
+          derivedTitle,
         };
       });
+    const windows = namingRows.map((row) => row.tab);
+
+    // Internal park/tile sessions are deliberately absent from currentSessions
+    // and have no user-facing tab to name.
+    if (currentSessionId && currentSessions.some((session) => session.id === currentSessionId)) {
+      await applyAutomaticWindowTitles(namingRows);
+    }
 
     if (windowBranchesEnabled) {
       // Resolve each window's cwd serially — concurrent control-mode commands
@@ -12508,11 +12646,15 @@ async function start(): Promise<void> {
     `#{S:#{session_id}=#{${PROJECT_OPTION}} }`,
   );
 
-  // Subscribe to window count + active window + name — fires on add/remove/switch/rename
+  // Window tabs and deterministic names. The window loop is load-bearing: a
+  // flat pane_current_command sees only the control client's active window, so
+  // a test runner starting in a background tab would otherwise stay named for
+  // the shell until the user selected it.
   await control.registerSubscription(
     "windows",
     1,
-    "#{session_windows} #{window_index} #{window_name} #{window_zoomed_flag}",
+    `#{W:#{window_id}=#{window_name}=#{automatic-rename}=#{${AUTO_WINDOW_TITLE_OPTION}}=` +
+      "#{pane_current_command}=#{pane_current_path} }",
   );
 
   // The grid's two exceptions. Nested for the same reason as agent-state

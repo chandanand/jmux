@@ -51,6 +51,7 @@ const fullSnap: SnapshotFile = {
       cwd: "/ok",
       worktreePath: null,
       projectGroup: null,
+      projectId: "payments",
       pinned: true,
       attention: true,
       permissionMode: "plan",
@@ -137,10 +138,21 @@ describe("Restorer — every sink dispatches", () => {
       permissionModeSink: () => events.push("permissionMode"),
       otelSink: () => events.push("otel"),
       pinnedSink: () => events.push("pinned"),
+      projectIdSink: async () => {
+        await Bun.sleep(1);
+        events.push("projectId");
+      },
       agentStateSink: () => events.push("agentState"),
     });
     await r.run(fullSnap);
-    expect(events.sort()).toEqual(["agentState", "links", "otel", "permissionMode", "pinned"]);
+    expect(events.sort()).toEqual([
+      "agentState",
+      "links",
+      "otel",
+      "permissionMode",
+      "pinned",
+      "projectId",
+    ]);
   });
 
   test("no sinks fire for a skipped session", async () => {
@@ -158,6 +170,7 @@ describe("Restorer — every sink dispatches", () => {
       permissionModeSink: () => events.push("permissionMode"),
       otelSink: () => events.push("otel"),
       pinnedSink: () => events.push("pinned"),
+      projectIdSink: () => { events.push("projectId"); },
       agentStateSink: () => events.push("agentState"),
     });
     await r.run(fullSnap);

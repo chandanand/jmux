@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import { basename, join } from "path";
 import { Terminal as Headless } from "@xterm/headless";
 import { PARK_SESSION } from "../glass/internal-sessions";
+import { AUTO_WINDOW_TITLE_OPTION } from "../window-title";
 
 // The startup regressions in this file are invisible to every unit test either
 // side of main.ts: the wrong `new-session -A` target fabricates session 0 before
@@ -34,6 +35,7 @@ afterAll(killServer);
 
 interface Session {
   home: string;
+  exitCode(): number | null;
   write(data: string): void;
   press(data: string): Promise<void>;
   resize(cols: number, rows: number): void;
@@ -63,6 +65,22 @@ function tmux(args: string[]): string {
   }).stdout.toString().trim();
 }
 
+async function tmuxAsync(args: string[], timeoutMs = 2_000): Promise<string> {
+  if (!TMUX) return "";
+  const proc = Bun.spawn([TMUX, "-L", SOCKET, ...args], {
+    stdout: "pipe",
+    stderr: "ignore",
+  });
+  const timer = setTimeout(() => proc.kill(), timeoutMs);
+  try {
+    const output = await new Response(proc.stdout).text();
+    await proc.exited;
+    return proc.exitCode === 0 ? output.trim() : "";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function boot(cols = 120, rows = 40, options: BootOptions = {}): Promise<Session> {
   const home = mkdtempSync(join(tmpdir(), "jmux-onboarding-"));
   if (options.configured) {
@@ -82,6 +100,7 @@ async function boot(cols = 120, rows = 40, options: BootOptions = {}): Promise<S
     );
   }
   const screen = new Headless({ cols, rows, allowProposedApi: true });
+  let exitCode: number | null = null;
 
   const pty = new Terminal(
     process.execPath,
@@ -107,6 +126,7 @@ async function boot(cols = 120, rows = 40, options: BootOptions = {}): Promise<S
     },
   );
   pty.onData((d: string) => { screen.write(d); });
+  pty.onExit((event: { exitCode: number }) => { exitCode = event.exitCode; });
 
   const frame = (): string => {
     const buf = screen.buffer.active;
@@ -119,6 +139,7 @@ async function boot(cols = 120, rows = 40, options: BootOptions = {}): Promise<S
 
   const session: Session = {
     home,
+    exitCode: () => exitCode,
     // Escape sequences go out in a SINGLE write: byte-by-byte makes a lone
     // \x1b read as Escape, which would close the flow instead of moving in it.
     write: (data) => { pty.write(data); },
@@ -331,6 +352,67 @@ describe.skipIf(!TMUX)("onboarding, under a real pty", () => {
     }
   }, 60_000);
 
+  test("automatic window names follow the foreground command and a manual name wins", async () => {
+    const sessionName = "window-title";
+    const session = await boot(120, 40, {
+      configured: true,
+      sessionName,
+    });
+    const waitForWindowName = async (target: string, expected: string, timeoutMs = 10_000) => {
+      const deadline = Date.now() + timeoutMs;
+      let lastState = "window unavailable";
+      while (Date.now() < deadline) {
+        if (session.exitCode() !== null) {
+          throw new Error(`jmux exited with ${session.exitCode()} while waiting for ${expected}`);
+        }
+        lastState = await tmuxAsync([
+          "display-message",
+          "-p",
+          "-t",
+          target,
+          `#{window_name}\t#{pane_current_command}\t#{automatic-rename}\t#{${AUTO_WINDOW_TITLE_OPTION}}`,
+        ]);
+        if (lastState.split("\t", 1)[0] === expected) return;
+        await Bun.sleep(120);
+      }
+      throw new Error(`timed out waiting for window name ${expected}; last state: ${lastState}`);
+    };
+
+    try {
+      await session.waitFor(sessionName);
+      // An explicit command avoids depending on the developer's interactive
+      // shell startup (which may itself be waiting on a trust/setup prompt).
+      await tmuxAsync(["set-option", "-g", "default-shell", "/bin/sh"]);
+      const windowId = await tmuxAsync([
+        "new-window",
+        "-dP",
+        "-F",
+        "#{window_id}",
+        "-t",
+        `${sessionName}:`,
+        "--",
+        "sleep 30",
+      ]);
+      expect(windowId).toStartWith("@");
+      await waitForWindowName(windowId, "sleep");
+
+      // tmux disables automatic-rename for this window. jmux observes that,
+      // retires its derived option, and never overwrites the human's choice.
+      await tmuxAsync(["rename-window", "-t", windowId, "hand-written"]);
+      await waitForWindowName(windowId, "hand-written");
+      await Bun.sleep(1_500);
+
+      expect(await tmuxAsync(["display-message", "-p", "-t", windowId, "#{window_name}"]))
+        .toBe("hand-written");
+      expect(await tmuxAsync(["show-option", "-wqv", "-t", windowId, "automatic-rename"]))
+        .toBe("off");
+      expect(await tmuxAsync(["show-option", "-wqv", "-t", windowId, AUTO_WINDOW_TITLE_OPTION]))
+        .toBe("");
+    } finally {
+      session.dispose();
+    }
+  }, 60_000);
+
   test("a restorable snapshot still wins over the empty Command Center path", async () => {
     const home = mkdtempSync(join(tmpdir(), "jmux-snapshot-cwd-"));
     const capturedAt = "2026-08-15T12:00:00.000Z";
@@ -345,6 +427,7 @@ describe.skipIf(!TMUX)("onboarding, under a real pty", () => {
         cwd: home,
         worktreePath: null,
         projectGroup: null,
+        projectId: "payments",
         pinned: false,
         permissionMode: null,
         otel: null,
@@ -370,6 +453,8 @@ describe.skipIf(!TMUX)("onboarding, under a real pty", () => {
       expect(session.sessionNames()).toEqual([PARK_SESSION, "remembered"].sort());
       expect(session.sessionNames()).not.toContain("0");
       expect(session.clientRows()).toContain("0:remembered");
+      expect(tmux(["show-option", "-qv", "-t", "remembered", "@jmux-project"]))
+        .toBe("payments");
       expect(session.frame()).not.toContain("No sessions yet");
     } finally {
       session.dispose();

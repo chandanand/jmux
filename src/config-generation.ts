@@ -22,6 +22,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { AUTOMATIC_WINDOW_TITLE_FORMAT } from "./window-title";
 
 export const GENERATION_OPTION = "@jmux-config-generation";
 
@@ -40,7 +41,7 @@ export const CORE_OPTION_REQUIREMENTS = [
   { option: "mouse", expected: "on" },
   { option: "allow-rename", expected: "off" },
   { option: "automatic-rename", expected: "on" },
-  { option: "automatic-rename-format", expected: "#{b:pane_current_path}" },
+  { option: "automatic-rename-format", expected: AUTOMATIC_WINDOW_TITLE_FORMAT },
   { option: "status", expected: "off" },
 ] as const;
 
