@@ -47,7 +47,7 @@ bucket into headers, sorting decides the order *within* a bucket.
 | `Ctrl-Space s` | Cycle sort within a group | `Name` → `Activity` → `Status` |
 | `Ctrl-Space f` | Cycle filter | `All` → `Started` → `Needs you` → `Active` |
 
-The current modes show as chips at the top of the sidebar (`⊞ Status  ⇅ Activity`),
+The current modes show as chips at the top of the sidebar (`☰ Status  ⇅ Activity`),
 alongside a count of sessions wanting your attention. `Ctrl-Space s` deliberately
 shadows tmux's `choose-session`, which the sidebar already replaces.
 

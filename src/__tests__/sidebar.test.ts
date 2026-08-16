@@ -36,7 +36,7 @@ describe("Sidebar", () => {
     const grid = sidebar.getGrid();
     const header = Array.from({ length: SIDEBAR_WIDTH }, (_, i) => grid.cells[0][i].char).join("");
     // Defaults: group by project, sort by name — chips lead the header, no "Sessions" word.
-    expect(header).toContain("⊞ Project");
+    expect(header).toContain("☰ Project");
     expect(header).toContain("⇅ Name");
     expect(header).not.toContain("Sessions");
   });
@@ -59,7 +59,7 @@ describe("Sidebar", () => {
     expect(header).toContain("1!");
     expect(header).toContain("1✓");
     // The control chips are untouched on the left.
-    expect(header).toContain("⊞ Project");
+    expect(header).toContain("☰ Project");
   });
 
   test("header rollup omits states with no sessions, and vanishes when none are promoted", () => {
@@ -67,7 +67,7 @@ describe("Sidebar", () => {
     sidebar.updateSessions(makeSessions([{ name: "a" }, { name: "b" }]));
     // Nothing promoted → no rollup; header is just the group + sort chips.
     let header = Array.from({ length: SIDEBAR_WIDTH }, (_, i) => sidebar.getGrid().cells[0][i].char).join("");
-    expect(header).toContain("⊞");
+    expect(header).toContain("☰");
     expect(header).toContain("⇅");
     expect(header).not.toContain("⏵"); // no rollup counts
     expect(header).not.toContain("✓");
@@ -1836,10 +1836,10 @@ describe("Sidebar — sort & filter", () => {
     const header = () => Array.from({ length: 40 }, (_, i) => sb.getGrid().cells[0][i].char).join("");
     // Defaults: group by project, sort by name — no "Sessions" word.
     expect(header()).not.toContain("Sessions");
-    expect(header()).toContain("⊞ Project");
+    expect(header()).toContain("☰ Project");
     expect(header()).toContain("⇅ Name");
     sb.setGroupMode("status");
-    expect(header()).toContain("⊞ Status");
+    expect(header()).toContain("☰ Status");
     sb.setSortMode("activity");
     expect(header()).toContain("⇅ Activity");
     sb.setFilterMode("attention");
@@ -1954,7 +1954,7 @@ describe("Sidebar — sort & filter", () => {
     const sb = seeded();
     sb.setGroupMode("stage");
     const header = Array.from({ length: WIDTH }, (_, i) => sb.getGrid().cells[0][i].char).join("");
-    expect(header).toContain("⊞ Stage");
+    expect(header).toContain("☰ Stage");
   });
 
   // --- Up next: unstarted issues as ghost rows ---
@@ -2323,12 +2323,12 @@ describe("Sidebar — sort & filter", () => {
     const sb = seeded();
     const header = () => Array.from({ length: WIDTH }, (_, i) => sb.getGrid().cells[0][i].char).join("");
     const row0 = header();
-    expect(row0).toContain("⊞ Project"); // group chip + current mode name
+    expect(row0).toContain("☰ Project"); // group chip + current mode name
     expect(row0).toContain("⇅ Name");    // sort chip + current mode name
 
     // Each glyph plus its trailing mode name is that axis's click target; the
     // other chip and non-header rows are not.
-    const groupCol = [...row0].findIndex((c) => c === "⊞");
+    const groupCol = [...row0].findIndex((c) => c === "☰");
     const sortCol = [...row0].findIndex((c) => c === "⇅");
     expect(sb.headerGroupToggleHit(0, groupCol)).toBe(true);      // group glyph
     expect(sb.headerGroupToggleHit(0, groupCol + 2)).toBe(true);  // group mode name

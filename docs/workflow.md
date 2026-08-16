@@ -148,7 +148,7 @@ left rail reads as your pipeline, with the work in progress under `In Progress`
 and the handed-off work under `Waiting`:
 
 ```
-  ⊞ Stage  ⇅ Name
+  ☰ Stage  ⇅ Name
 
   URGENT (1)
     Retry the payment webhook on 5xx
@@ -265,7 +265,7 @@ work sitting in each stage that **nobody has picked up** — issues with no sess
 — as dimmed rows you can click to start:
 
 ```
-  ⊞ Stage  ⇅ Name
+  ☰ Stage  ⇅ Name
 
   URGENT (2)
   ● Retry the payment webhook on 5xx

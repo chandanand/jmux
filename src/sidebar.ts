@@ -1315,7 +1315,7 @@ export class Sidebar {
     }
   }
 
-  /** Column ranges (inclusive, 0-indexed) of the clickable "⊞ <Group>" and
+  /** Column ranges (inclusive, 0-indexed) of the clickable "☰ <Group>" and
    * "⇅ <Sort>" chips on the header row, recomputed each render; [-1,-1] when a
    * chip isn't drawn. */
   private groupToggleStart = -1;
@@ -1324,7 +1324,7 @@ export class Sidebar {
   private sortToggleEnd = -1;
 
   /**
-   * Header row: two clickable chips — `⊞ <Group>` then `⇅ <Sort>` — naming the
+   * Header row: two clickable chips — `☰ <Group>` then `⇅ <Sort>` — naming the
    * current grouping and member-sort, then (when filtered) a dim `· <Filter>`
    * suffix, then the right-aligned state rollup. The "Sessions" word is dropped:
    * the sidebar is unambiguously the session list and the chips need the room.
@@ -1337,7 +1337,7 @@ export class Sidebar {
       fgMode: tokens.accentMuted.fgMode,
     };
 
-    const groupChip = `⊞ ${groupModeShort(this.groupMode)}`;
+    const groupChip = `☰ ${groupModeShort(this.groupMode)}`;
     const groupCol = 1;
     this.groupToggleStart = groupCol;
     this.groupToggleEnd = groupCol + textCols(groupChip) - 1;
