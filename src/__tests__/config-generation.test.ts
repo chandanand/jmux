@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import {
+  clearStampCommand,
+  compareCoreOptions,
   compareGeneration,
   confTag,
+  CORE_OPTION_REQUIREMENTS,
+  generationAction,
   GENERATION_OPTION,
   hashOf,
   stampCommand,
   staleGenerationNotice,
+  unhealthyCoreNotice,
 } from "../config-generation";
 
 const DIR = "/home/u/.local/share/jmux/assets/96cac232fb21da7c";
@@ -46,6 +51,38 @@ describe("stampCommand", () => {
 
   test("records 'none' when jmux sourced no user config", () => {
     expect(stampCommand(DIR, "")).toBe(`set-option -g ${GENERATION_OPTION} ${ASSETS}.none`);
+  });
+
+  test("can clear a stamp that falsely claims an unhealthy server is current", () => {
+    expect(clearStampCommand()).toBe(`set-option -gu ${GENERATION_OPTION}`);
+  });
+});
+
+const HEALTHY_CORE = Object.fromEntries(
+  CORE_OPTION_REQUIREMENTS.map(({ option, expected }) => [option, expected]),
+);
+
+describe("compareCoreOptions", () => {
+  test("accepts every option sourced last by core.conf", () => {
+    expect(compareCoreOptions(HEALTHY_CORE)).toEqual({ kind: "healthy" });
+  });
+
+  test("reports the half-loaded prefix and status that break forwarded shortcuts", () => {
+    expect(compareCoreOptions({ ...HEALTHY_CORE, prefix: "C-b", status: "2" })).toEqual({
+      kind: "unhealthy",
+      mismatches: [
+        { option: "prefix", expected: "C-Space", running: "C-b" },
+        { option: "status", expected: "off", running: "2" },
+      ],
+    });
+  });
+
+  test("treats a missing required option as unhealthy", () => {
+    const { mouse: _, ...missingMouse } = HEALTHY_CORE;
+    expect(compareCoreOptions(missingMouse)).toMatchObject({
+      kind: "unhealthy",
+      mismatches: [{ option: "mouse", expected: "on", running: "" }],
+    });
   });
 });
 
@@ -136,5 +173,42 @@ describe("staleGenerationNotice", () => {
   test("says nothing when there is nothing wrong", () => {
     expect(staleGenerationNotice({ kind: "current" })).toEqual([]);
     expect(staleGenerationNotice({ kind: "unstamped" })).toEqual([]);
+  });
+});
+
+describe("generationAction", () => {
+  const healthy = compareCoreOptions(HEALTHY_CORE);
+  const unhealthy = compareCoreOptions({ ...HEALTHY_CORE, prefix: "C-b" });
+
+  test("only stamps an unstamped server after its core options are healthy", () => {
+    expect(generationAction({ kind: "unstamped" }, healthy)).toBe("stamp");
+    expect(generationAction({ kind: "unstamped" }, unhealthy)).toBe("keep");
+  });
+
+  test("never overwrites a stale stamp", () => {
+    const stale = compareGeneration("old", DIR, DOT);
+    expect(generationAction(stale, healthy)).toBe("keep");
+    expect(generationAction(stale, unhealthy)).toBe("keep");
+  });
+
+  test("clears a current stamp when live core options are unhealthy", () => {
+    expect(generationAction({ kind: "current" }, unhealthy)).toBe("clear");
+    expect(generationAction({ kind: "current" }, healthy)).toBe("keep");
+  });
+});
+
+describe("unhealthyCoreNotice", () => {
+  test("names wrong options and covers a command queue that cannot kill itself", () => {
+    const notice = unhealthyCoreNotice(
+      compareCoreOptions({ ...HEALTHY_CORE, prefix: "C-b", status: "2" }),
+    ).join("\n");
+    expect(notice).toContain("prefix: expected C-Space, found C-b");
+    expect(notice).toContain("status: expected off, found 2");
+    expect(notice).toContain("tmux kill-server");
+    expect(notice).toContain("If that command hangs");
+  });
+
+  test("says nothing when core.conf is healthy", () => {
+    expect(unhealthyCoreNotice(compareCoreOptions(HEALTHY_CORE))).toEqual([]);
   });
 });

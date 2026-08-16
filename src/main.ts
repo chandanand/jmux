@@ -5,12 +5,19 @@ import { MIN_TMUX_VERSION, tmuxVersionOk } from "./tmux-version";
 import { configFileIn, materializeAssets, skillIn } from "./assets";
 import { currentChannel, upgradeCommand } from "./channel";
 import {
+  clearStampCommand,
   compareGeneration,
+  compareCoreOptions,
+  CORE_OPTION_REQUIREMENTS,
   DETACH_ON_DESTROY_COMMAND,
+  generationAction,
   GENERATION_OPTION,
   stampCommand,
   staleGenerationNotice,
   staleGenerationTitle,
+  unhealthyCoreNotice,
+  UNHEALTHY_CORE_TITLE,
+  type CoreOptionValues,
 } from "./config-generation";
 import {
   editableUserTmuxConfig,
@@ -11804,11 +11811,10 @@ async function start(): Promise<void> {
     logError("core-options", `detach-on-destroy: ${(err as Error).message}`);
   });
 
-  // Config generation. `-f` is honored only when tmux *starts* a server, so
-  // attaching to a server left running by an older jmux silently keeps that
-  // version's bindings — and one started under a different `userTmuxConfig`
-  // silently keeps sourcing what it sourced then. Read the stamp before writing
-  // ours, or every server looks current.
+  // Config health and generation. `-f` is honored only when tmux *starts* a
+  // server, and a nested user config can also block before core.conf runs. The
+  // stamp identifies what should have loaded; the live core options prove that
+  // it actually did. Neither signal may overwrite the other as evidence.
   try {
     const running = await control.sendCommand(`show-option -gqv ${GENERATION_OPTION}`);
     const verdict = compareGeneration(
@@ -11816,21 +11822,54 @@ async function start(): Promise<void> {
       jmuxDir,
       userTmuxConfPath,
     );
-    if (verdict.kind === "stale") {
-      const notice = staleGenerationNotice(verdict);
+
+    const coreValues: CoreOptionValues = {};
+    for (const { option } of CORE_OPTION_REQUIREMENTS) {
+      const value = await control.sendCommand(`show-option -gqv ${option}`);
+      coreValues[option] = Array.isArray(value) ? value.join("") : String(value ?? "");
+    }
+    const coreHealth = compareCoreOptions(coreValues);
+
+    let notice: string[] = [];
+    let title = "";
+    if (coreHealth.kind === "unhealthy") {
+      notice = unhealthyCoreNotice(coreHealth);
+      title = UNHEALTHY_CORE_TITLE;
+      logError(
+        "core-options",
+        coreHealth.mismatches
+          .map(({ option, expected, running }) => `${option}: ${running || "<unset>"} != ${expected}`)
+          .join(", "),
+      );
+    } else if (verdict.kind === "stale") {
+      notice = staleGenerationNotice(verdict);
+      title = staleGenerationTitle(verdict);
       logError("config-generation", `server ${verdict.running} != ${verdict.expected} (${verdict.cause})`);
-      // Shown once, on the surface the user is already looking at. Silently
-      // logging it would reproduce the original bug: the upgrade appears to
-      // have worked and none of the new bindings do anything.
+    }
+
+    if (notice.length > 0) {
+      // Keep the warning on the surface the user is already looking at.
+      // Silently logging it reproduces the original failure: jmux appears to
+      // start normally while only some of its shortcuts reach tmux.
       const lines: StyledLine[] = notice.map((text) => [
         { text, attrs: { bg: theme.surface, bgMode: 2 } },
       ]);
-      const modal = new ContentModal({ lines, title: staleGenerationTitle(verdict) });
+      const modal = new ContentModal({ lines, title });
       modal.setTermRows(process.stdout.rows || 24);
       modal.open();
       openModal(modal, () => {});
     }
-    await control.sendCommand(stampCommand(jmuxDir, userTmuxConfPath));
+
+    switch (generationAction(verdict, coreHealth)) {
+      case "stamp":
+        await control.sendCommand(stampCommand(jmuxDir, userTmuxConfPath));
+        break;
+      case "clear":
+        await control.sendCommand(clearStampCommand());
+        break;
+      case "keep":
+        break;
+    }
   } catch (err) {
     // A server that won't answer about its generation is not a reason to fail
     // startup — the check is a courtesy, not a dependency. But swallowing the

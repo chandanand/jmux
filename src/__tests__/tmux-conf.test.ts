@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { DETACH_ON_DESTROY_COMMAND } from "../config-generation";
+import { CORE_OPTION_REQUIREMENTS, DETACH_ON_DESTROY_COMMAND } from "../config-generation";
 import { PREFIX_BYTE, TMUX_PREFIX_KEY } from "../prefix";
 
 // The .conf files are the one part of jmux tmux executes directly, so nothing
@@ -136,6 +136,24 @@ describe("tmux config files", () => {
     ];
     const unexpected = settings.filter((line) => !allowed.some((s) => line.includes(s)));
     expect(unexpected).toEqual([]);
+  });
+
+  test("the runtime health check covers every core.conf option exactly", () => {
+    const text = confText("core.conf");
+    const configured = Object.fromEntries(
+      text.split("\n").flatMap((line) => {
+        const match = line.match(/^set(?:-option)? -g (\S+) (.+)$/);
+        if (!match) return [];
+        return [[match[1], match[2].replace(/^"(.*)"$/, "$1")]];
+      }),
+    );
+    for (const { option, expected } of CORE_OPTION_REQUIREMENTS) {
+      expect(configured[option]).toBe(expected);
+    }
+
+    expect(Object.keys(configured).sort()).toEqual(
+      CORE_OPTION_REQUIREMENTS.map(({ option }) => option).sort(),
+    );
   });
 
   // One of those settings is also written from TypeScript, because a server

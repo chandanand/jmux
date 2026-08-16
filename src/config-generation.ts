@@ -26,6 +26,47 @@ import { createHash } from "node:crypto";
 export const GENERATION_OPTION = "@jmux-config-generation";
 
 /**
+ * Settings that prove config/core.conf ran to completion.
+ *
+ * The generation stamp alone cannot prove this. jmux writes that stamp after
+ * attaching, so a user config that blocks halfway through loading can still
+ * have the current asset hash while tmux retains its default prefix and status
+ * bar. These are all of core.conf's options; checking the complete set also
+ * catches a later reload that only partially overwrote jmux's invariants.
+ */
+export const CORE_OPTION_REQUIREMENTS = [
+  { option: "prefix", expected: "C-Space" },
+  { option: "detach-on-destroy", expected: "off" },
+  { option: "mouse", expected: "on" },
+  { option: "allow-rename", expected: "off" },
+  { option: "automatic-rename", expected: "on" },
+  { option: "automatic-rename-format", expected: "#{b:pane_current_path}" },
+  { option: "status", expected: "off" },
+] as const;
+
+export type CoreOptionName = (typeof CORE_OPTION_REQUIREMENTS)[number]["option"];
+export type CoreOptionValues = Partial<Record<CoreOptionName, string>>;
+
+export interface CoreOptionMismatch {
+  option: CoreOptionName;
+  expected: string;
+  running: string;
+}
+
+export type CoreConfigHealth =
+  | { kind: "healthy" }
+  | { kind: "unhealthy"; mismatches: CoreOptionMismatch[] };
+
+/** Compare live tmux options with the invariants sourced last by core.conf. */
+export function compareCoreOptions(values: CoreOptionValues): CoreConfigHealth {
+  const mismatches = CORE_OPTION_REQUIREMENTS.flatMap(({ option, expected }) => {
+    const running = (values[option] ?? "").trim();
+    return running === expected ? [] : [{ option, expected, running }];
+  });
+  return mismatches.length === 0 ? { kind: "healthy" } : { kind: "unhealthy", mismatches };
+}
+
+/**
  * The one `core.conf` setting jmux writes again on attach rather than reporting
  * as stale.
  *
@@ -55,6 +96,11 @@ export const DETACH_ON_DESTROY_COMMAND = "set-option -g detach-on-destroy off";
 /** The tmux command that stamps this jmux's generation onto the server. */
 export function stampCommand(jmuxDir: string, userConfPath: string): string {
   return `set-option -g ${GENERATION_OPTION} ${generationOf(jmuxDir, userConfPath)}`;
+}
+
+/** Remove a stamp that claims the current assets produced an unhealthy server. */
+export function clearStampCommand(): string {
+  return `set-option -gu ${GENERATION_OPTION}`;
 }
 
 /** The hash component of a materialized asset dir. */
@@ -94,12 +140,29 @@ export type GenerationVerdict =
       expected: string;
     };
 
+export type GenerationAction = "stamp" | "clear" | "keep";
+
+/**
+ * Decide how the server stamp may change after inspecting both signals.
+ *
+ * A stale stamp is evidence and must remain stale until a real restart or
+ * repair. A current stamp on unhealthy core options is actively misleading,
+ * so remove it. Only an unstamped, healthy server earns the current stamp.
+ */
+export function generationAction(
+  verdict: GenerationVerdict,
+  health: CoreConfigHealth,
+): GenerationAction {
+  if (health.kind === "unhealthy") return verdict.kind === "current" ? "clear" : "keep";
+  return verdict.kind === "unstamped" ? "stamp" : "keep";
+}
+
 /**
  * Compare the stamp a server carries against the config this jmux would use.
  *
  * An unstamped server is *not* reported as stale. jmux may legitimately be the
- * first to attach to a server a user started themselves, and crying wolf on a
- * server that was never ours would train the warning to be ignored.
+ * first to attach to a server a user started themselves. The independent core
+ * health check still reports one whose required settings are not active.
  *
  * A stamp with no user-config half was written before that half existed, and
  * cannot say what the server sourced. It is judged on its assets alone rather
@@ -167,3 +230,21 @@ export function staleGenerationTitle(verdict: GenerationVerdict): string {
     ? "tmux is running a different config"
     : "tmux is running an older config";
 }
+
+/** Explain a half-loaded or subsequently overwritten core configuration. */
+export function unhealthyCoreNotice(health: CoreConfigHealth): string[] {
+  if (health.kind === "healthy") return [];
+  return [
+    "tmux did not finish loading jmux's required configuration.",
+    "The following required settings are wrong:",
+    ...health.mismatches.map(({ option, expected, running }) =>
+      `  ${option}: expected ${expected}, found ${running || "<unset>"}`
+    ),
+    "",
+    "Exit every jmux session, then restart tmux:",
+    "  tmux kill-server",
+    "If that command hangs, terminate the tmux server process from another shell.",
+  ];
+}
+
+export const UNHEALTHY_CORE_TITLE = "tmux configuration is incomplete";

@@ -1,8 +1,9 @@
 import { describe, expect, test, afterAll, beforeAll } from "bun:test";
 import { Terminal } from "bun-pty";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, readdirSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { bundleHash } from "../assets";
 
 // Does the *compiled binary* start?
 //
@@ -22,6 +23,10 @@ import { join } from "path";
 const TMUX = Bun.which("tmux");
 const SOCKET = `jmux-binary-smoke-${process.pid}`;
 const BINARY = join(tmpdir(), `jmux-smoke-${process.pid}`);
+const BUILD_SCRATCH_RE = /^\.[0-9a-f]+-00000000\.bun-build$/;
+const PREEXISTING_BUILD_SCRATCH = new Set(
+  readdirSync(process.cwd()).filter((name) => BUILD_SCRATCH_RE.test(name)),
+);
 
 function killServer(): void {
   if (!TMUX) return;
@@ -53,6 +58,16 @@ afterAll(() => {
   try {
     rmSync(BINARY, { force: true });
   } catch {}
+  // `bun build --compile` stages its Mach-O in cwd and can leave it behind
+  // after the outfile is installed. Remove only files this test introduced;
+  // a pre-existing scratch file may belong to another concurrent build.
+  for (const name of readdirSync(process.cwd())) {
+    if (BUILD_SCRATCH_RE.test(name) && !PREEXISTING_BUILD_SCRATCH.has(name)) {
+      try {
+        rmSync(join(process.cwd(), name), { force: true });
+      } catch {}
+    }
+  }
 });
 
 /** Boot the compiled binary under a pty and report whether it survived. */
@@ -67,6 +82,7 @@ async function boot(home: string, extraEnv: Record<string, string> = {}) {
     env: {
       ...process.env,
       HOME: home,
+      XDG_CONFIG_HOME: join(home, ".config"),
       XDG_DATA_HOME: join(home, ".local", "share"),
       TERM: "xterm-256color",
       JMUX: "",
@@ -136,7 +152,7 @@ describe("the compiled binary boots", () => {
   );
 
   test.skipIf(!TMUX)(
-    "survives attaching to a server started by a different generation",
+    "preserves a stale stamp until the server is genuinely repaired",
     async () => {
       expect(compiled).toBe(true);
       const home = mkdtempSync(join(tmpdir(), "jmux-bingen-"));
@@ -156,7 +172,9 @@ describe("the compiled binary boots", () => {
 
       const { alive, exitCode, output } = await boot(home);
 
-      // Having noticed, it restamps — so the next attach is quiet.
+      // Merely noticing must not overwrite the evidence. The server still has
+      // the default prefix and status bar, so a current stamp would make the
+      // next attach quiet while its forwarded shortcuts remain broken.
       const stamp = Bun.spawnSync(
         [TMUX!, "-L", SOCKET, "show-options", "-gqv", "@jmux-config-generation"],
         { stdout: "pipe", stderr: "pipe" },
@@ -167,8 +185,47 @@ describe("the compiled binary boots", () => {
       rmSync(home, { recursive: true, force: true });
 
       expect({ alive, exitCode, tail: output.slice(-400) }).toMatchObject({ alive: true });
-      expect(generation).not.toBe("deadbeefdeadbeef");
-      expect(generation.length).toBeGreaterThan(0);
+      expect(generation).toBe("deadbeefdeadbeef");
+    },
+    60_000,
+  );
+
+  test.skipIf(!TMUX)(
+    "clears a current stamp when the live core configuration is unhealthy",
+    async () => {
+      expect(compiled).toBe(true);
+      const home = mkdtempSync(join(tmpdir(), "jmux-binhealth-"));
+      killServer();
+
+      Bun.spawnSync([TMUX!, "-L", SOCKET, "new-session", "-d", "-s", "incomplete"], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      Bun.spawnSync(
+        [
+          TMUX!,
+          "-L",
+          SOCKET,
+          "set-option",
+          "-g",
+          "@jmux-config-generation",
+          `${bundleHash()}.none`,
+        ],
+        { stdout: "ignore", stderr: "ignore" },
+      );
+
+      const { alive, exitCode, output } = await boot(home);
+      const stamp = Bun.spawnSync(
+        [TMUX!, "-L", SOCKET, "show-options", "-gqv", "@jmux-config-generation"],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const generation = new TextDecoder().decode(stamp.stdout).trim();
+
+      killServer();
+      rmSync(home, { recursive: true, force: true });
+
+      expect({ alive, exitCode, tail: output.slice(-400) }).toMatchObject({ alive: true });
+      expect(generation).toBe("");
     },
     60_000,
   );
