@@ -88,7 +88,7 @@ describe("sgrForCell", () => {
       char: " ",
       width: 1, fg: 0, bg: 0,
       fgMode: ColorMode.Default, bgMode: ColorMode.Default,
-      bold: false, italic: false, underline: false, dim: false,
+      bold: false, italic: false, underline: false, dim: false, inverse: false,
     };
     expect(sgrForCell(cell)).toBe("\x1b[0m");
   });
@@ -98,7 +98,7 @@ describe("sgrForCell", () => {
       char: "x",
       width: 1, fg: 0, bg: 0,
       fgMode: ColorMode.Default, bgMode: ColorMode.Default,
-      bold: true, italic: false, underline: false, dim: false,
+      bold: true, italic: false, underline: false, dim: false, inverse: false,
     };
     expect(sgrForCell(cell)).toBe("\x1b[0;1m");
   });
@@ -108,7 +108,7 @@ describe("sgrForCell", () => {
       char: "x",
       width: 1, fg: 1, bg: 0,
       fgMode: ColorMode.Palette, bgMode: ColorMode.Default,
-      bold: false, italic: false, underline: false, dim: false,
+      bold: false, italic: false, underline: false, dim: false, inverse: false,
     };
     expect(sgrForCell(cell)).toBe("\x1b[0;31m");
   });
@@ -118,7 +118,7 @@ describe("sgrForCell", () => {
       char: "x",
       width: 1, fg: 9, bg: 0,
       fgMode: ColorMode.Palette, bgMode: ColorMode.Default,
-      bold: false, italic: false, underline: false, dim: false,
+      bold: false, italic: false, underline: false, dim: false, inverse: false,
     };
     expect(sgrForCell(cell)).toBe("\x1b[0;91m");
   });
@@ -128,7 +128,7 @@ describe("sgrForCell", () => {
       char: "x",
       width: 1, fg: 200, bg: 0,
       fgMode: ColorMode.Palette, bgMode: ColorMode.Default,
-      bold: false, italic: false, underline: false, dim: false,
+      bold: false, italic: false, underline: false, dim: false, inverse: false,
     };
     expect(sgrForCell(cell)).toBe("\x1b[0;38;5;200m");
   });
@@ -138,7 +138,7 @@ describe("sgrForCell", () => {
       char: "x",
       width: 1, fg: 0xFF8800, bg: 0,
       fgMode: ColorMode.RGB, bgMode: ColorMode.Default,
-      bold: false, italic: false, underline: false, dim: false,
+      bold: false, italic: false, underline: false, dim: false, inverse: false,
     };
     expect(sgrForCell(cell)).toBe("\x1b[0;38;2;255;136;0m");
   });
@@ -148,7 +148,7 @@ describe("sgrForCell", () => {
       char: "x",
       width: 1, fg: 0, bg: 4,
       fgMode: ColorMode.Default, bgMode: ColorMode.Palette,
-      bold: false, italic: false, underline: false, dim: false,
+      bold: false, italic: false, underline: false, dim: false, inverse: false,
     };
     expect(sgrForCell(cell)).toBe("\x1b[0;44m");
   });
@@ -158,9 +158,20 @@ describe("sgrForCell", () => {
       char: "x",
       width: 1, fg: 2, bg: 0,
       fgMode: ColorMode.Palette, bgMode: ColorMode.Default,
-      bold: true, italic: true, underline: false, dim: false,
+      bold: true, italic: true, underline: false, dim: false, inverse: false,
     };
     expect(sgrForCell(cell)).toBe("\x1b[0;1;3;32m");
+  });
+
+  test("encodes inverse video", () => {
+    const cell: Cell = {
+      char: "x",
+      width: 1, fg: 0, bg: 0,
+      fgMode: ColorMode.Default, bgMode: ColorMode.Default,
+      bold: false, italic: false, underline: false, dim: false,
+      inverse: true,
+    };
+    expect(sgrForCell(cell)).toBe("\x1b[0;7m");
   });
 });
 

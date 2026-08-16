@@ -49,6 +49,57 @@ export interface GraphicsScan {
 }
 
 /**
+ * Terminal capability queries that a program inside tmux explicitly wrapped
+ * for passthrough to the outer terminal.
+ *
+ * tmux removes its DCS wrapper before these bytes reach jmux. Graphics APCs
+ * are recognisable and handled below, but ordinary CSI queries otherwise fall
+ * into the headless screen model and never reach the real terminal. Yazi sends
+ * XTVERSION and DA1 alongside its graphics probe; without their replies it
+ * knows kitty graphics work but cannot identify Ghostty, so it discards the
+ * tmux-safe driver and falls back to Chafa.
+ */
+const TERMINAL_QUERIES = ["\x1b[>q", "\x1b[c", "\x1b[0c"] as const;
+
+export interface TerminalQueryScan {
+  /** Queries to write directly to the outer terminal. */
+  relay: string;
+  /** Everything else, still destined for the screen model. */
+  rest: string;
+  /** A trailing query prefix split across reads. */
+  pending: string;
+}
+
+/** Lift supported terminal queries out of pane output, preserving chunk splits. */
+export function scanForTerminalQueries(pending: string, chunk: string): TerminalQueryScan {
+  const s = pending + chunk;
+  let relay = "";
+  let rest = "";
+  let plain = 0;
+
+  for (let pos = 0; pos < s.length; pos++) {
+    if (s[pos] !== "\x1b") continue;
+    const suffix = s.slice(pos);
+    const query = TERMINAL_QUERIES.find((candidate) => suffix.startsWith(candidate));
+    if (query) {
+      rest += s.slice(plain, pos);
+      relay += query;
+      pos += query.length - 1;
+      plain = pos + 1;
+      continue;
+    }
+
+    // The read ended part-way through a possible query. Release text before
+    // it immediately and reconsider only the short prefix with the next chunk.
+    if (TERMINAL_QUERIES.some((candidate) => candidate.startsWith(suffix))) {
+      return { relay, rest: rest + s.slice(plain, pos), pending: suffix };
+    }
+  }
+
+  return { relay, rest: rest + s.slice(plain), pending: "" };
+}
+
+/**
  * Split a chunk of PTY output into graphics sequences and everything else.
  *
  * Stateless in the same shape as `scanForImageProbe` and `forwardOsc52` — the

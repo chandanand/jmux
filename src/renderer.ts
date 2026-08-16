@@ -134,6 +134,7 @@ export function sgrForCell(cell: Cell): string {
   if (cell.dim) parts.push("2");
   if (cell.italic) parts.push("3");
   if (cell.underline) parts.push("4");
+  if (cell.inverse) parts.push("7");
 
   // Foreground
   if (cell.fgMode === ColorMode.Palette) {
@@ -766,7 +767,8 @@ function cellsEqual(a: Cell, b: Cell): boolean {
     a.bold === b.bold &&
     a.dim === b.dim &&
     a.italic === b.italic &&
-    a.underline === b.underline
+    a.underline === b.underline &&
+    a.inverse === b.inverse
   );
 }
 
@@ -783,6 +785,7 @@ function fullCellsEqual(a: Cell, b: Cell): boolean {
     a.dim === b.dim &&
     a.italic === b.italic &&
     a.underline === b.underline &&
+    a.inverse === b.inverse &&
     a.link === b.link
   );
 }

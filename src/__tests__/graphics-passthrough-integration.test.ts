@@ -95,6 +95,36 @@ function emitterScript(): string {
   ].join("\n");
 }
 
+/**
+ * A pane program that asks the outer terminal for its identity, device
+ * attributes, and kitty graphics support, exactly as Yazi does after detecting
+ * tmux. It prints a marker only when all three replies make the full return
+ * trip through jmux and tmux to the pane.
+ */
+function probeScript(): string {
+  return [
+    'const REPLIES = ["\\x1bP>|ghostty 1.2.3\\x1b\\\\", "\\x1b[?1;2c", "\\x1b_Gi=31;OK\\x1b\\\\"];',
+    'const QUERIES = ["\\x1b[>q", "\\x1b[c", "\\x1b_Gi=31,a=q,s=1,v=1,t=d,f=24;AAAA\\x1b\\\\"];',
+    'const wrapped = QUERIES.map((query) => "\\x1bPtmux;" + query.replaceAll("\\x1b", "\\x1b\\x1b") + "\\x1b\\\\").join("");',
+    "process.stdin.setRawMode?.(true);",
+    "process.stdin.resume();",
+    'let input = "";',
+    "let done = false;",
+    'process.stdin.on("data", (chunk) => {',
+    "  input += chunk.toString();",
+    "  if (!done && REPLIES.every((reply) => input.includes(reply))) {",
+    "    done = true;",
+    '    process.stdout.write("\\r\\nKGP-ROUNDTRIP-OK\\r\\n");',
+    "  }",
+    "});",
+    "for (let i = 0; i < 100 && !done; i++) {",
+    "  process.stdout.write(wrapped);",
+    "  await Bun.sleep(100);",
+    "}",
+    "await Bun.sleep(1000);",
+  ].join("\n");
+}
+
 /** Count U+10EEEE cells in a chunk of jmux's output. */
 function countPlaceholders(s: string): number {
   return (s.match(new RegExp(PLACEHOLDER, "gu")) ?? []).length;
@@ -127,7 +157,7 @@ describe("graphics drawn inside a pane", () => {
 
       const pty = new Terminal(
         process.execPath,
-        ["run", join(import.meta.dir, "..", "main.ts"), "--socket", SOCKET],
+        ["run", join(import.meta.dir, "..", "main.ts"), "graphics-test", "--socket", SOCKET],
         {
           name: "xterm-256color",
           cols: 120,
@@ -168,7 +198,13 @@ describe("graphics drawn inside a pane", () => {
           { stdout: "ignore", stderr: "ignore" },
         );
 
-        for (let i = 0; i < 30 && !graphicsApcs(output.slice(before)).length; i++) {
+        // The payload relay is synchronous, while the placement travels through
+        // ScreenBridge's asynchronous write before the renderer can emit it.
+        // Wait for both halves of the protocol so a fast payload cannot race
+        // the frame that makes it visible.
+        for (let i = 0; i < 30; i++) {
+          const streamed = output.slice(before);
+          if (graphicsApcs(streamed).length && countPlaceholders(streamed) >= COLS * ROWS) break;
           await Bun.sleep(500);
         }
         const drawn = output.slice(before);
@@ -223,5 +259,81 @@ describe("graphics drawn inside a pane", () => {
       }
     },
     60_000,
+  );
+
+  test.skipIf(!TMUX)(
+    "carry terminal capability queries and replies between a pane and the outer terminal",
+    async () => {
+      const home = mkdtempSync(join(tmpdir(), "jmux-gfx-probe-"));
+      scratch.push(home);
+      mkdirSync(join(home, ".config", "jmux"), { recursive: true });
+      writeFileSync(
+        join(home, ".config", "jmux", "config.json"),
+        JSON.stringify({ images: { enabled: true } }),
+      );
+      const probe = join(home, "probe.ts");
+      writeFileSync(probe, probeScript());
+
+      let output = "";
+      let exitCode: number | null = null;
+      const pty = new Terminal(
+        process.execPath,
+        ["run", join(import.meta.dir, "..", "main.ts"), "graphics-probe-test", "--socket", SOCKET],
+        {
+          name: "xterm-ghostty",
+          cols: 120,
+          rows: 40,
+          env: {
+            ...process.env,
+            HOME: home,
+            TERM: "xterm-ghostty",
+            TERM_PROGRAM: "ghostty",
+            JMUX: "",
+            TMUX: "",
+            TMUX_PANE: "",
+          },
+        },
+      );
+      pty.onData((d: string) => { output += d; });
+      pty.onExit((e: { exitCode: number }) => { exitCode = e.exitCode; });
+
+      try {
+        await Bun.sleep(7000);
+        expect(exitCode).toBeNull();
+
+        const clients = Bun.spawnSync([TMUX!, "-L", SOCKET, "list-clients", "-F", "#{client_name}"]);
+        const ptyClient = new TextDecoder()
+          .decode(clients.stdout)
+          .split("\n")
+          .find((name) => name.startsWith("/dev/"));
+        expect(ptyClient).toBeTruthy();
+
+        const before = output.length;
+        Bun.spawnSync(
+          [TMUX!, "-L", SOCKET, "split-window", "-h", "-t", ptyClient!,
+           `${process.execPath} run ${probe}`],
+          { stdout: "ignore", stderr: "ignore" },
+        );
+
+        let answered = false;
+        for (let i = 0; i < 40; i++) {
+          const streamed = output.slice(before);
+          const kgp = graphicsApcs(streamed).some((s) => s.includes("i=31,a=q"));
+          if (kgp && streamed.includes("\x1b[>q") && streamed.includes("\x1b[c") && !answered) {
+            answered = true;
+            pty.write("\x1bP>|ghostty 1.2.3\x1b\\\x1b[?1;2c\x1b_Gi=31;OK\x1b\\");
+          }
+          if (output.slice(before).includes("KGP-ROUNDTRIP-OK")) break;
+          await Bun.sleep(250);
+        }
+
+        expect(answered).toBe(true);
+        expect(output.slice(before)).toContain("KGP-ROUNDTRIP-OK");
+      } finally {
+        try { pty.kill(); } catch {}
+        killServer();
+      }
+    },
+    30_000,
   );
 });

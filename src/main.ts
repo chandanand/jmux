@@ -89,7 +89,7 @@ import { StdinGate } from "./stdin-gate";
 import { GRAPHICS_PROBE, CELL_SIZE_PROBE, DEFAULT_CELL_PIXELS, type CellPixels } from "./images/kitty";
 import { ImageStore } from "./images/store";
 import { ImagePlane } from "./images/plane";
-import { scanForGraphics, PlacementTracker } from "./images/passthrough";
+import { scanForGraphics, scanForTerminalQueries, PlacementTracker } from "./images/passthrough";
 import { PtyPixels } from "./pty-pixels";
 import { devServerUrl, scanDevServers, type DevServerDeps } from "./dev-servers";
 import { BROWSER_BINARY, BROWSER_PANE_OPTION, BROWSER_PANE_FORMAT, BROWSER_RUNTIME_OPTION, browserSplitCommand, browserRuntimeBase, browserRuntimeDir, runtimeDirFits, browserActionArgv, browserActionEnv, parseBrowserPanes, pickBrowserPane, type BrowserPane } from "./browser-pane";
@@ -10749,6 +10749,7 @@ function forwardOsc52(data: string): void {
 // placeholder cells that travel the ordinary path and get composited like any
 // other text. See src/images/passthrough.ts.
 let graphicsPending = "";
+let terminalQueryPending = "";
 /**
  * Geometry of every virtual placement being relayed, so a re-transmit that
  * changes shape is preceded by the delete that makes the terminal adopt it.
@@ -10761,7 +10762,11 @@ pty.onData((data: string) => {
 
   let feed = data;
   if (imagesOn()) {
-    const scan = scanForGraphics(graphicsPending, data);
+    const queryScan = scanForTerminalQueries(terminalQueryPending, data);
+    terminalQueryPending = queryScan.pending;
+    if (queryScan.relay) process.stdout.write(queryScan.relay);
+
+    const scan = scanForGraphics(graphicsPending, queryScan.rest);
     graphicsPending = scan.pending;
     feed = scan.rest;
     // Straight to stdout rather than through the renderer's frame buffer, which
@@ -10773,12 +10778,13 @@ pty.onData((data: string) => {
     // next repaint risks relaying a pointer to pixels that have already been
     // overwritten.
     if (scan.relay) process.stdout.write(placementTracker.normalise(scan.relay));
-  } else if (graphicsPending) {
+  } else if (graphicsPending || terminalQueryPending) {
     // Capability went away mid-sequence (config toggle, or a probe that came
     // back negative). Release what was held rather than dropping it: these
     // bytes are unreadable to the terminal but losing them silently would take
     // the pane's real output with them.
-    feed = graphicsPending + data;
+    feed = terminalQueryPending + graphicsPending + data;
+    terminalQueryPending = "";
     graphicsPending = "";
   }
 

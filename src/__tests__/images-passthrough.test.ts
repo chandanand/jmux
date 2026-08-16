@@ -1,5 +1,10 @@
 import { describe, test, expect } from "bun:test";
-import { scanForGraphics, MAX_PENDING, PlacementTracker } from "../images/passthrough";
+import {
+  scanForGraphics,
+  scanForTerminalQueries,
+  MAX_PENDING,
+  PlacementTracker,
+} from "../images/passthrough";
 
 /** A virtual-placement transmit of the shape terminal-browser emits under tmux. */
 const TRANSMIT = "\x1b_Ga=T,f=32,s=800,v=600,t=s,i=4207,U=1,c=80,r=24,q=2;L3B4LTEyMy0w\x1b\\";
@@ -18,6 +23,44 @@ function scanByteByByte(stream: string) {
   }
   return { relay, rest, pending };
 }
+
+describe("scanForTerminalQueries", () => {
+  test("lifts Yazi's XTVERSION and DA1 queries out of pane output", () => {
+    const out = scanForTerminalQueries("", "before\x1b[>qmid\x1b[cafter");
+    expect(out.relay).toBe("\x1b[>q\x1b[c");
+    expect(out.rest).toBe("beforemidafter");
+    expect(out.pending).toBe("");
+  });
+
+  test("accepts the explicit DA1 zero parameter", () => {
+    const out = scanForTerminalQueries("", "\x1b[0c");
+    expect(out.relay).toBe("\x1b[0c");
+    expect(out.rest).toBe("");
+  });
+
+  test("leaves ordinary CSI output untouched", () => {
+    const input = "\x1b[31mred\x1b[0m";
+    const out = scanForTerminalQueries("", input);
+    expect(out.relay).toBe("");
+    expect(out.rest).toBe(input);
+    expect(out.pending).toBe("");
+  });
+
+  test("reassembles a query delivered one byte at a time", () => {
+    let pending = "";
+    let relay = "";
+    let rest = "";
+    for (const byte of "head\x1b[>qtail") {
+      const out = scanForTerminalQueries(pending, byte);
+      pending = out.pending;
+      relay += out.relay;
+      rest += out.rest;
+    }
+    expect(relay).toBe("\x1b[>q");
+    expect(rest).toBe("headtail");
+    expect(pending).toBe("");
+  });
+});
 
 describe("scanForGraphics", () => {
   test("passes ordinary output through untouched", () => {

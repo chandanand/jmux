@@ -10,7 +10,7 @@ function makeCell(char: string, width: number = 1): Cell {
     char, width,
     fg: 0, bg: 0,
     fgMode: ColorMode.Default, bgMode: ColorMode.Default,
-    bold: false, italic: false, underline: false, dim: false,
+    bold: false, italic: false, underline: false, dim: false, inverse: false,
   };
 }
 

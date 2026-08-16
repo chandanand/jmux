@@ -74,6 +74,7 @@ export class ScreenBridge {
         cell.italic = xtermCell.isItalic() !== 0;
         cell.underline = xtermCell.isUnderline() !== 0;
         cell.dim = xtermCell.isDim() !== 0;
+        cell.inverse = xtermCell.isInverse() !== 0;
       }
     }
 

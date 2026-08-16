@@ -12,6 +12,7 @@ export const DEFAULT_CELL: Readonly<Cell> = {
   italic: false,
   underline: false,
   dim: false,
+  inverse: false,
   link: undefined,
   image: undefined,
 };

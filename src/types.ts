@@ -35,6 +35,7 @@ export interface Cell {
   italic: boolean;
   underline: boolean;
   dim: boolean;
+  inverse: boolean;
   /**
    * Set only on cells reserved for an image. Painting text over a cell clears
    * it, which is what makes occlusion self-reporting rather than something the

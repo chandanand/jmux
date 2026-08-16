@@ -33,6 +33,15 @@ describe("ScreenBridge", () => {
     expect(grid.cells[0][3].bold).toBe(true);
   });
 
+  test("captures inverse-video SGR attribute", async () => {
+    const bridge = new ScreenBridge(10, 3);
+    await bridge.write("\x1b[7mSelected\x1b[0m");
+    const grid = bridge.getGrid();
+    expect(grid.cells[0][0].char).toBe("S");
+    expect(grid.cells[0][0].inverse).toBe(true);
+    expect(grid.cells[0][8].inverse).toBe(false);
+  });
+
   test("captures foreground palette color", async () => {
     const bridge = new ScreenBridge(10, 3);
     // SGR 31 = red foreground (ANSI color 1)
