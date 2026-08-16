@@ -1,10 +1,10 @@
 // The pure provisioning decision for the directory-first New Session wizard.
 //
-// Issue-driven starts already run through issue-provision.ts, where the agent
-// receives a tracker prompt. The generic wizard has no prompt to seed, but it
-// still knows the selected Project and therefore its resolved agent settings.
-// Keeping that decision here makes all three wizard outcomes agree about
-// autoLaunchAgent instead of leaving the command construction buried in
+// The generic wizard normally has no prompt to seed, but it still knows the
+// selected Project and therefore its resolved agent settings. The manual
+// fallback from an issue start uses this wizard too and supplies that issue's
+// prompt. Keeping the decision here makes all three wizard outcomes agree
+// about autoLaunchAgent instead of leaving command construction buried in
 // main.ts's modal callback.
 
 import { sanitizeTmuxSessionName } from "./config";
@@ -34,6 +34,7 @@ export interface NewSessionPlan {
 export function buildNewSessionPlan(
   result: NewSessionResult,
   settings: ResolvedProjectSettings,
+  promptFile: string | null = null,
 ): NewSessionPlan {
   const session = sanitizeTmuxSessionName(
     result.type === "existing_worktree" ? result.branch : result.name,
@@ -49,7 +50,7 @@ export function buildNewSessionPlan(
       wtm: settings.wtmIntegration,
       worktreeExists: false,
       agentCommand,
-      promptFile: null,
+      promptFile,
     });
     return {
       session,
@@ -63,7 +64,7 @@ export function buildNewSessionPlan(
   return {
     session,
     sessionCwd: result.type === "existing_worktree" ? result.path : result.dir,
-    mainCommand: buildAgentFragment(agentCommand, null),
+    mainCommand: buildAgentFragment(agentCommand, promptFile),
     setupCommand: null,
     setupCwd: null,
   };

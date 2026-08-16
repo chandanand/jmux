@@ -4422,13 +4422,25 @@ async function stampSessionProject(sessionName: string, projectId?: string): Pro
   );
 }
 
+/** Persist one agent seed long enough for the new pane to consume it. */
+function writeAgentPrompt(prompt: string): string {
+  const rand = Math.random().toString(36).slice(2);
+  const path = `/tmp/jmux-prompt-${Date.now()}-${rand}.md`;
+  writeFileSync(path, prompt);
+  return path;
+}
+
 /** Create and enter one session returned by the directory-first wizard. */
 async function createNewSession(
   result: NewSessionResult,
   parentClient: string,
+  prompt?: string,
 ): Promise<string> {
   const settings = repoSettingsFor(result.dir, result.projectId);
-  const plan = buildNewSessionPlan(result, settings);
+  const promptFile = settings.autoLaunchAgent && prompt
+    ? writeAgentPrompt(prompt)
+    : null;
+  const plan = buildNewSessionPlan(result, settings, promptFile);
 
   await control.sendCommand(
     `new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${plan.session}`)} -s ${tq(plan.session)} -c ${tq(plan.sessionCwd)} ${tq(plan.mainCommand)}`,
@@ -8618,12 +8630,7 @@ async function provisionIssueSession(o: {
     const shouldLaunchAgent = o.settings.autoLaunchAgent && !!adapters.issueTracker;
     let promptTmp: string | null = null;
     if (shouldLaunchAgent) {
-      // Random suffix as well as the timestamp: the main pane `cat`s this file
-      // and then deletes it, so two starts landing in the same millisecond
-      // would have one seeding the other's agent. Matches `ctl issue start`.
-      const rand = Math.random().toString(36).slice(2);
-      promptTmp = `/tmp/jmux-prompt-${Date.now()}-${rand}.md`;
-      writeFileSync(promptTmp, o.prompt(adapters.issueTracker!));
+      promptTmp = writeAgentPrompt(o.prompt(adapters.issueTracker!));
     }
 
     // Every session gets a worktree; `wtmIntegration` picks the mechanism only,
@@ -8824,7 +8831,8 @@ async function startWorkOnIssue(
         const parentClient = ptyClientName;
         if (!parentClient) return;
         try {
-          const session = await createNewSession(result, parentClient);
+          const prompt = adapters.issueTracker?.buildPrompt(issue);
+          const session = await createNewSession(result, parentClient, prompt);
           sessionState.addLink(session, { type: "issue", id: issue.id });
         } catch (err) {
           showNewSessionError(result, err);

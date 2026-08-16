@@ -45,6 +45,19 @@ describe("buildNewSessionPlan", () => {
     expect(plan.setupCommand).toBeNull();
   });
 
+  test("seeds issue context when the wizard was opened from an issue start", () => {
+    const plan = buildNewSessionPlan(
+      { type: "standard", dir: "/repo", name: "issue" },
+      SETTINGS,
+      "/tmp/jmux-prompt-1.md",
+    );
+
+    expect(plan.mainCommand).toContain(
+      `codex --model gpt-5 "$(cat /tmp/jmux-prompt-1.md)"`,
+    );
+    expect(plan.mainCommand).toContain("rm -f /tmp/jmux-prompt-1.md");
+  });
+
   test("leaves a plain shell when auto-launch is disabled", () => {
     const plan = buildNewSessionPlan(
       { type: "standard", dir: "/repo", name: "shell" },

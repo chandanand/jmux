@@ -273,7 +273,12 @@ Five rules are easy to undo:
 
 The naming step reuses `TITLE_PRESETS` (`session-title/presets.ts`) rather than a second table, and offers only presets whose binary is on `PATH` — the presets *are* the agent CLIs, so a machine with neither says so and opens no picker. A hand-written command is listed as its own row: without one nothing ticks, and choosing a preset silently replaced a command the user wrote.
 
-Session creation is deliberately **not** in the flow. The generic path launches no agent and failed provisioning leaves debris by design, so the finish page hands off to `NewSessionModal` rather than growing a second implementation of it. `onboarding-integration.test.ts` drives a real pty and asserts no installer output reaches the frame — the regression that caused the rebuild is invisible to every unit test either side of it.
+Session creation is deliberately **not** in the flow. `NewSessionModal` owns
+the full provisioning path, including the configured agent launch, and failed
+provisioning leaves debris by design, so the finish page hands off to it rather
+than growing a second implementation. `onboarding-integration.test.ts` drives
+a real pty and asserts no installer output reaches the frame — the regression
+that caused the rebuild is invisible to every unit test either side of it.
 The same real-pty harness guards the cold-start park target, the useful empty
 grid, the onboarding-to-first-session handoff, explicit names and snapshot
 restoration; those decisions live in `main.ts` wiring and cannot be proven by
