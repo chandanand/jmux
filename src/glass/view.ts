@@ -1059,6 +1059,18 @@ export class GlassView {
    */
   private drawEmptyState(grid: CellGrid): void {
     const { viewName, excludedCount, hiddenCount } = this.emptyContext;
+    const noSessionsExist = excludedCount === 0 && hiddenCount === 0;
+    if (noSessionsExist) {
+      const line1 = "No sessions yet";
+      const line2 = "Ctrl-Space n  new session";
+      const blockCols = Math.max(textCols(line1), textCols(line2));
+      const col = Math.max(0, Math.floor((this.width - blockCols) / 2));
+      const row = Math.max(0, Math.floor(this.height / 2) - 1);
+      const attrs = { fgMode: ColorMode.Palette, fg: 8 } as const;
+      writeString(grid, row, col, line1, attrs);
+      writeString(grid, row + 1, col, line2, attrs);
+      return;
+    }
     const line1 = viewName ? `No sessions match "${viewName}"` : "No sessions to show";
     // "not shown", not "hidden" — the strip's own word for the same idea
     // (`+N not shown`), because "hidden" already names the `@jmux-grid-hidden`

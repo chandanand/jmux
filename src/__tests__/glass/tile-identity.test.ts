@@ -715,10 +715,14 @@ describe("the empty state", () => {
     expect(text).toContain("switch view");
   });
 
-  test("omits the excluded clause when nothing was excluded", () => {
+  test("a genuine zero-session grid offers the first useful action", () => {
     const { view } = makeView();
     view.setTiles([], { viewName: "Active", excludedCount: 0, hiddenCount: 0 });
-    expect(gridText(view)).not.toContain("not shown");
+    const text = gridText(view);
+    expect(text).toContain("No sessions yet");
+    expect(text).toContain("Ctrl-Space n");
+    expect(text).toContain("new session");
+    expect(text).not.toContain("not shown");
   });
 });
 

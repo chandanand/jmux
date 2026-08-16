@@ -201,6 +201,7 @@ import {
   DEFAULT_STATE_COLORS,
 } from "./state-colors";
 import { INTERNAL_SESSION_FILTER, PARK_SESSION } from "./glass/internal-sessions";
+import { decideStartup, sessionNamesFromProbe } from "./startup-decision";
 import { PinnedPaneTracker } from "./glass/pinned-pane-tracker";
 import type { PaneLocation } from "./glass/types";
 import { US, splitFields } from "./tmux-fields";
@@ -365,7 +366,7 @@ Options:
   -h, --help               Show this help
 
 Examples:
-  jmux                     Start with default session
+  jmux                     Open existing sessions, or an empty Command Center
   jmux my-project          Start with named session
   jmux -L work             Use isolated tmux server
   jmux --install-agent-hooks  Set up agent state tracking
@@ -1636,29 +1637,44 @@ try {
 }
 
 // Core components
-let attachMode: "strictAttach" | "createOrAttach" = "createOrAttach";
 let attachSessionName = boot.attachSessionName ?? undefined;
+const { ProductionTmuxRunner: BootRunner } = await import("./snapshot");
+const bootRunner = new BootRunner(socketName || null);
 if (boot.attachSessionName) {
   // Confirm the restored session still exists before committing to strictAttach.
   // There is a window between performBoot and TmuxPty construction where the session
   // could have been destroyed, which would cause tmux attach-session to exit immediately.
-  const { ProductionTmuxRunner: BootRunner } = await import("./snapshot");
-  const check = await new BootRunner(socketName || null).run(["has-session", "-t", boot.attachSessionName]);
-  if (check.exitCode === 0) {
-    attachMode = "strictAttach";
-  } else {
+  const check = await bootRunner.run(["has-session", "-t", boot.attachSessionName]);
+  if (check.exitCode !== 0) {
     // session vanished post-restore — fall back, let tmux pick a session
     attachSessionName = undefined;
   }
 }
+
+// Decide before constructing the PTY. Untargeted `new-session -A` creates a
+// user-visible session named `0` when no server exists, so a genuinely empty
+// start has to name the internal park session on the command that bootstraps
+// the server. The probe is read-only and includes internal sessions: the pure
+// decision owns the distinction between "server exists" and "user work
+// exists", so an old park session is still an empty first-launch surface.
+const existingSessionProbe = await bootRunner.run([
+  "list-sessions",
+  "-F",
+  "#{session_name}",
+]);
+const startupDecision = decideStartup({
+  restoredSessionName: attachSessionName,
+  explicitSessionName: sessionName,
+  existingSessionNames: sessionNamesFromProbe(existingSessionProbe),
+});
 const pty = new TmuxPty({
-  sessionName: attachSessionName ?? sessionName,
+  sessionName: startupDecision.sessionName,
   socketName,
   configFile,
   jmuxDir,
   cols: mainCols,
   rows: layout.ptyRows,
-  attachMode,
+  attachMode: startupDecision.attachMode,
 });
 const bridge = new ScreenBridge(mainCols, layout.ptyRows);
 const renderer = new Renderer();
@@ -11894,8 +11910,9 @@ async function start(): Promise<void> {
   // sidebar has no sessions until the user creates, renames or kills one —
   // silently, because an empty reply is not an error and nothing throws.
   //
-  // Empty is definitionally wrong at this point: jmux attached with
-  // `new-session -A`, so the server has at least one non-internal session. The
+  // Empty is expected only on the Command-Center-first path: there the PTY
+  // deliberately bootstrapped the server on the internal park session. On
+  // every other path at least one user session should exist. Either way the
   // reply can still come back empty when the control client has not finished
   // attaching — `TmuxControl` only accepts blocks with `flags=1`, and a command
   // sent too early is answered by a block that doesn't carry it.
@@ -11926,7 +11943,7 @@ async function start(): Promise<void> {
       pty.onData(handler);
     });
   }
-  if (currentSessions.length === 0) {
+  if (currentSessions.length === 0 && !startupDecision.enterCommandCenter) {
     logError("jmux", "startup: session list still empty after retries");
   }
 
@@ -11954,6 +11971,12 @@ async function start(): Promise<void> {
   await fetchAgentState();
   await ensureParkSession();
   invalidateGrid();
+  if (startupDecision.enterCommandCenter) {
+    // The PTY is already on PARK_SESSION, so this is a surface transition, not
+    // a disposable-session handoff. On first run the onboarding modal opens
+    // over this later; when setup is skipped, the useful empty grid remains.
+    await enterGlass();
+  }
 
   // One-time legacy migration: previous jmux versions wrote @jmux-attention=1
   // via a Stop hook. That option is now an orchestrator/human-gate signal owned

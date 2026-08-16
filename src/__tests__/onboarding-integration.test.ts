@@ -1,15 +1,16 @@
 import { describe, expect, test, afterAll } from "bun:test";
 import { Terminal } from "bun-pty";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { basename, join } from "path";
 import { Terminal as Headless } from "@xterm/headless";
+import { PARK_SESSION } from "../glass/internal-sessions";
 
-// The regression that started this rebuild is invisible to every unit test
-// either side of it: `installSkill()` printed with console.log, and on an alt
-// screen those lines land on the rendered frame over whatever was there. The
-// only place that is observable is a real pty with a real screen model, so
-// that is where it is asserted.
+// The startup regressions in this file are invisible to every unit test either
+// side of main.ts: the wrong `new-session -A` target fabricates session 0 before
+// the control channel exists, and `installSkill()` output on an alt screen lands
+// directly over the rendered frame. A real pty with a real tmux server and
+// screen model is the only place those boundaries are observable.
 //
 // Skipped rather than failed without tmux, for the reason boot-smoke states:
 // this must never be why a clean checkout cannot run its tests.
@@ -32,21 +33,60 @@ function killServer(): void {
 afterAll(killServer);
 
 interface Session {
+  home: string;
   write(data: string): void;
   press(data: string): Promise<void>;
   resize(cols: number, rows: number): void;
   frame(): string;
   waitFor(text: string, timeoutMs?: number): Promise<void>;
+  sessionNames(): string[];
+  clientRows(): string[];
   dispose(): void;
 }
 
-async function boot(cols = 120, rows = 40): Promise<Session> {
+interface BootOptions {
+  /** Put config.json on disk so onboarding is skipped. */
+  configured?: boolean;
+  /** Positional `jmux SESSION`. */
+  sessionName?: string;
+  /** A durable snapshot to place where this socket will restore it. */
+  snapshot?: object;
+}
+
+function tmux(args: string[]): string {
+  if (!TMUX) return "";
+  return Bun.spawnSync([TMUX, "-L", SOCKET, ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+  }).stdout.toString().trim();
+}
+
+async function boot(cols = 120, rows = 40, options: BootOptions = {}): Promise<Session> {
   const home = mkdtempSync(join(tmpdir(), "jmux-onboarding-"));
+  if (options.configured) {
+    const configDir = join(home, ".config", "jmux");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, "config.json"), "{}\n");
+  }
+  if (options.snapshot) {
+    const snapshotDir = join(home, ".local", "share", "jmux", "snapshot", SOCKET);
+    mkdirSync(snapshotDir, { recursive: true });
+    writeFileSync(
+      join(snapshotDir, "state.json"),
+      JSON.stringify(options.snapshot, null, 2) + "\n",
+    );
+  }
   const screen = new Headless({ cols, rows, allowProposedApi: true });
 
   const pty = new Terminal(
     process.execPath,
-    ["run", join(import.meta.dir, "..", "main.ts"), "--socket", SOCKET],
+    [
+      "run",
+      join(import.meta.dir, "..", "main.ts"),
+      ...(options.sessionName ? [options.sessionName] : []),
+      "--socket",
+      SOCKET,
+    ],
     {
       name: "xterm-256color",
       cols,
@@ -73,6 +113,7 @@ async function boot(cols = 120, rows = 40): Promise<Session> {
   };
 
   const session: Session = {
+    home,
     // Escape sequences go out in a SINGLE write: byte-by-byte makes a lone
     // \x1b read as Escape, which would close the flow instead of moving in it.
     write: (data) => { pty.write(data); },
@@ -90,6 +131,18 @@ async function boot(cols = 120, rows = 40): Promise<Session> {
       }
       throw new Error(`timed out waiting for ${JSON.stringify(text)}\n--- frame ---\n${frame()}`);
     },
+    sessionNames: () => {
+      const output = tmux(["list-sessions", "-F", "#{session_name}"]);
+      return output ? output.split("\n").sort() : [];
+    },
+    clientRows: () => {
+      const output = tmux([
+        "list-clients",
+        "-F",
+        "#{client_control_mode}:#{client_session}",
+      ]);
+      return output ? output.split("\n") : [];
+    },
     dispose: () => {
       try { pty.kill(); } catch {}
       killServer();
@@ -101,6 +154,18 @@ async function boot(cols = 120, rows = 40): Promise<Session> {
 }
 
 describe.skipIf(!TMUX)("onboarding, under a real pty", () => {
+  test("a configured cold start is an empty Command Center with no session 0", async () => {
+    const session = await boot(120, 40, { configured: true });
+    try {
+      await session.waitFor("No sessions yet");
+      expect(session.frame()).toContain("Ctrl-Space n  new session");
+      expect(session.sessionNames()).toEqual([PARK_SESSION]);
+      expect(session.sessionNames()).not.toContain("0");
+    } finally {
+      session.dispose();
+    }
+  }, 60_000);
+
   test("first run opens the flow, and no installer output reaches the frame", async () => {
     const session = await boot();
     try {
@@ -108,6 +173,10 @@ describe.skipIf(!TMUX)("onboarding, under a real pty", () => {
       await session.waitFor("Run several coding agents at once");
       expect(session.frame()).toContain("What do you want to set up?");
       expect(session.frame()).toContain("Just run agents");
+      // The modal is hosted over the same park-backed Command Center as a
+      // configured empty start. No disposable user session was made beneath it.
+      expect(session.sessionNames()).toEqual([PARK_SESSION]);
+      expect(session.sessionNames()).not.toContain("0");
 
       await session.press("\r");
       await session.waitFor("Where your code lives");
@@ -184,6 +253,96 @@ describe.skipIf(!TMUX)("onboarding, under a real pty", () => {
       expect(session.frame()).not.toContain("Where your code lives");
     } finally {
       session.dispose();
+    }
+  }, 60_000);
+
+  test("finishing onboarding hands the existing New Session flow to the first real session", async () => {
+    const session = await boot();
+    try {
+      await session.waitFor("Run several coding agents at once");
+      await session.press("\r"); // Just run agents
+      await session.waitFor("Where your code lives");
+      await session.press("\x1b[C"); // agents
+      await session.press("\x1b[C"); // naming
+      await session.press("\x1b[C"); // done
+      await session.waitFor("You're set up");
+
+      await session.press("\r");
+      await session.waitFor("Pick a directory");
+      await session.press("\r"); // scratch HOME, the cold-start fallback
+      await Bun.sleep(300);
+      await session.press("\r"); // accept its basename as the session name
+
+      const expected = basename(session.home);
+      await session.waitFor(expected);
+      expect(session.sessionNames()).toEqual([PARK_SESSION, expected].sort());
+      expect(session.sessionNames()).not.toContain("0");
+      expect(session.clientRows()).toContain(`0:${expected}`);
+      expect(session.frame()).not.toContain("No sessions yet");
+    } finally {
+      session.dispose();
+    }
+  }, 60_000);
+
+  test("an explicit cold-start name bypasses Command Center", async () => {
+    const session = await boot(120, 40, {
+      configured: true,
+      sessionName: "named-cold-start",
+    });
+    try {
+      await session.waitFor("named-cold-start");
+      expect(session.sessionNames()).toEqual([PARK_SESSION, "named-cold-start"].sort());
+      expect(session.sessionNames()).not.toContain("0");
+      expect(session.clientRows()).toContain("0:named-cold-start");
+      expect(session.frame()).not.toContain("No sessions yet");
+    } finally {
+      session.dispose();
+    }
+  }, 60_000);
+
+  test("a restorable snapshot still wins over the empty Command Center path", async () => {
+    const home = mkdtempSync(join(tmpdir(), "jmux-snapshot-cwd-"));
+    const capturedAt = "2026-08-15T12:00:00.000Z";
+    const snapshot = {
+      formatVersion: 1,
+      jmuxVersion: "test",
+      capturedAt,
+      tmuxSocket: SOCKET,
+      lastFocusedSession: "remembered",
+      sessions: [{
+        name: "remembered",
+        cwd: home,
+        worktreePath: null,
+        projectGroup: null,
+        pinned: false,
+        permissionMode: null,
+        otel: null,
+        links: [],
+        windows: [{
+          index: 1,
+          name: "shell",
+          layout: "even-horizontal",
+          active: true,
+          panes: [{
+            index: 1,
+            cwd: home,
+            command: process.env.SHELL ?? "/bin/sh",
+            kind: "shell",
+            scrollbackFile: null,
+          }],
+        }],
+      }],
+    };
+    const session = await boot(120, 40, { configured: true, snapshot });
+    try {
+      await session.waitFor("remembered");
+      expect(session.sessionNames()).toEqual([PARK_SESSION, "remembered"].sort());
+      expect(session.sessionNames()).not.toContain("0");
+      expect(session.clientRows()).toContain("0:remembered");
+      expect(session.frame()).not.toContain("No sessions yet");
+    } finally {
+      session.dispose();
+      rmSync(home, { recursive: true, force: true });
     }
   }, 60_000);
 });

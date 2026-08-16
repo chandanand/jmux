@@ -29,7 +29,7 @@ Terminal (Ghostty, iTerm, etc.)
 
 Every running jmux instance talks to tmux in two ways at once:
 
-1. **PTY client** — spawns `tmux new-session -A` in a real pty. This is the interactive client that receives keystrokes and produces the terminal bytes the user sees.
+1. **PTY client** — spawns `tmux new-session -A` in a real pty. Restored and explicitly named sessions are targeted directly; with no user sessions, the target is the hidden `__jmux_park` session so jmux can open the Command Center without fabricating a visible session `0`. This is the interactive client that receives keystrokes and produces the terminal bytes the user sees.
 2. **Control client** — a separate `tmux -C attach` subprocess speaking tmux's control-mode protocol. Used for structured metadata (list-sessions, list-windows) and real-time events.
 
 These are two different tmux *clients* attached to the same *server*.

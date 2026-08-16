@@ -46,17 +46,24 @@ jmux
 You'll see a terminal split into two areas:
 
 ```
-+--sidebar--+--main area---------------------+
++--sidebar--+--Command Center----------------+
 | jmux      |                                 |
-| ────────  |  Your shell prompt is here.     |
-|           |  This is a normal terminal.     |
-| ▎ default |  Everything works like usual.   |
-|            |                                 |
-+------------+---------------------------------+
+| ────────  |        No sessions yet          |
+|           |                                 |
+| Overview  |  Ctrl-Space n  new session      |
+|           |                                 |
++-----------+---------------------------------+
 ```
 
-- **Sidebar** (left): shows all your sessions, grouped by project
-- **Main area** (right): your normal terminal — run commands, edit files, whatever you'd normally do
+On a true first run, the setup flow appears over this surface. You can complete
+it or skip it; either way, jmux does not create a throwaway session named `0`.
+Press `Ctrl-Space n` to create your first real session. Once you choose its
+directory and name, jmux lands in that session and the main area becomes your
+normal terminal.
+
+- **Sidebar** (left): shows all your real sessions, grouped by project
+- **Command Center** (right, while empty): creates or surveys sessions
+- **Main area** (after choosing a session): your normal terminal — run commands, edit files, whatever you'd normally do
 
 ---
 
