@@ -12,6 +12,7 @@ import {
   type SessionManager,
 } from "../session-ownership";
 import { assertGroundcrewDoesNotOwn } from "./ownership";
+import { planSessionCleanup, removeSessionWorktree } from "./session-cleanup";
 
 export interface SessionEntry {
   id: string;
@@ -312,6 +313,57 @@ export function handleSession(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
       return { killed: target };
     }
 
+    case "cleanup": {
+      if (!flags.target || typeof flags.target !== "string") {
+        throw new CliError("--target is required");
+      }
+      const target = flags.target;
+      const force = flags.force === true;
+      assertGroundcrewDoesNotOwn(target, ctx, "cleanup-session");
+
+      // Unlike `session kill --force`, cleanup still has work to do after the
+      // session is gone. If this process lives in the target session, tmux
+      // kills it before it can remove the worktree or report the result.
+      const current = resolveCurrentSession(ctx);
+      if (current === target) {
+        throw new CliError(
+          `Refusing to clean current session "${target}". Run cleanup from another session or an external shell.`,
+        );
+      }
+
+      const sessionResult = runTmuxDirect(
+        ["list-sessions", "-F", SESSION_FIELDS_FORMAT, "-f", `#{==:#{session_name},${target}}`],
+        ctx.socket,
+      );
+      tmuxOrThrow(sessionResult);
+      const session = parseSessionListOutput(sessionResult.lines)[0];
+      if (!session) throw new CliError(`session "${target}" not found`);
+
+      if (!force) {
+        const listResult = runTmuxDirect(
+          ["list-sessions", "-f", INTERNAL_SESSION_FILTER, "-F", "#{session_name}"],
+          ctx.socket,
+        );
+        if (listResult.ok && listResult.lines.length <= 1) {
+          throw new CliError(
+            `Refusing to kill the last session "${target}". Use --force to override.`,
+          );
+        }
+      }
+
+      // Every destructive worktree check happens before the session is killed.
+      // A removal failure after this point is reported as a partial cleanup;
+      // recreating a killed session is neither safe nor an honest rollback.
+      const plan = planSessionCleanup(session.path, force);
+      tmuxOrThrow(runTmuxDirect(["kill-session", "-t", target], ctx.socket));
+      removeSessionWorktree(plan, force);
+      return {
+        cleaned: target,
+        worktree: plan.worktreePath,
+        discardedChanges: force && plan.dirty,
+      };
+    }
+
     case "rename": {
       if (!flags.target || typeof flags.target !== "string") {
         throw new CliError("--target is required");
@@ -381,7 +433,7 @@ export function handleSession(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
 
     default:
       throw new CliError(
-        `Unknown session action "${action}". Known actions: list, create, info, switch, kill, rename, attention, hide, unhide, hidden`,
+        `Unknown session action "${action}". Known actions: list, create, info, switch, kill, cleanup, rename, attention, hide, unhide, hidden`,
       );
   }
 }

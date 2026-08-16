@@ -87,7 +87,7 @@ USAGE
   jmux ctl [GLOBAL FLAGS] <group> [action] [FLAGS] [args...]
 
 GROUPS
-  session    Manage tmux sessions (incl. attention set/clear, hide/unhide/hidden)
+  session    Manage tmux sessions (incl. cleanup, attention, hide/unhide/hidden)
   window     Manage tmux windows
   pane       Manage tmux panes (incl. pin/unpin/pinned)
   run-claude Run a Claude Code agent in a session
@@ -132,12 +132,20 @@ FLAGS
                        Off by default: the session and agent are created up
                        front and the worktree lands in a setup pane beside
                        them. Bounded — a timeout returns, it does not fail.
-  --force              Skip confirmation prompts
+  --force              Allow guarded destructive actions (including dirty cleanup)
   --no-enter           Don't send Enter after keys
   --enter              Send Enter after keys
   --raw                Raw output mode
   --clear              Clear before running
   --stdin              Read from stdin
+
+SESSION CLEANUP
+  jmux ctl session cleanup --target <name> [--force]
+
+  Kills the target session, then removes its linked git worktree. The branch
+  and its commits are kept. Refuses the current session, a primary checkout,
+  and dirty worktrees unless --force is given. Run it from another session or
+  an external shell.
 `.trim();
 
 export function parseCtlArgs(argv: string[]): ParsedCtlArgs {

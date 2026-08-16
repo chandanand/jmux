@@ -8,6 +8,7 @@ export type SessionManager = "groundcrew";
 
 export type GroundcrewGuardedAction =
   | "kill-session"
+  | "cleanup-session"
   | "rename-session"
   | "close-window"
   | "move-window"
@@ -43,7 +44,7 @@ export function groundcrewActionGuidance(
     };
   }
 
-  const message = action === "kill-session"
+  const message = action === "kill-session" || action === "cleanup-session"
     ? `Groundcrew owns the session and worktree for ${task}.`
     : `Groundcrew owns the tmux topology for ${task}.`;
   return {

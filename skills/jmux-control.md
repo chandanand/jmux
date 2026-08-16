@@ -24,6 +24,7 @@ If not set, you're outside jmux and most commands require explicit `--session` f
 | `jmux ctl session create --name N --dir PATH` | Create new session |
 | `jmux ctl session info --target NAME` | Session details |
 | `jmux ctl session kill --target NAME` | Kill a session |
+| `jmux ctl session cleanup --target NAME` | Kill a session and remove its linked worktree |
 | `jmux ctl session rename --target NAME --name NEW` | Rename a session |
 | `jmux ctl session switch --target NAME` | Switch to a session |
 | `jmux ctl run-claude --name N --dir PATH --message "..."` | Launch Claude Code |
@@ -73,6 +74,11 @@ If not set, you're outside jmux and most commands require explicit `--session` f
 
 3. **Don't kill what you didn't create.** Only kill sessions/panes you spawned.
    Kill commands refuse to destroy your own session/pane without `--force`.
+
+   `session cleanup` is stricter: run it from another session or an external
+   shell, because it must keep running after the target session dies. It checks
+   for a linked worktree and refuses dirty work unless `--force` explicitly
+   permits discarding it. The branch and its commits are kept.
 
 4. **Prefer structured state over pane scraping.** To know whether an agent is
    working, waiting for permission, or done, read `jmux ctl agent state` or

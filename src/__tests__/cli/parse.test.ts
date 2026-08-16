@@ -44,6 +44,13 @@ describe("parseCtlArgs", () => {
     expect(result.flags.force).toBe(true);
   });
 
+  test("parses session cleanup with its destructive opt-in", () => {
+    const result = parseCtlArgs(["session", "cleanup", "--target", "foo", "--force"]);
+    expect(result.action).toBe("cleanup");
+    expect(result.flags.target).toBe("foo");
+    expect(result.flags.force).toBe(true);
+  });
+
   test("parses --no-enter flag", () => {
     const result = parseCtlArgs(["pane", "send-keys", "--target", "%5", "--no-enter"]);
     expect(result.flags["no-enter"]).toBe(true);

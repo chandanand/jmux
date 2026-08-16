@@ -101,8 +101,17 @@ export function resolveTitleConfig(
     );
     return null;
   }
-  if (cfg.command.length === 0 || !cfg.command.every((a) => typeof a === "string" && a.length > 0)) {
-    warn("jmux: sessionTitle.command must be a non-empty array of non-empty strings — session naming is off");
+  // Only argv[0] must be non-empty. Empty later arguments are valid argv and
+  // sometimes meaningful — the shipped Claude preset uses `--tools ""` to
+  // disable tools. Rejecting that argument made the preset disable the title
+  // generator it was meant to configure.
+  if (
+    cfg.command.length === 0 ||
+    typeof cfg.command[0] !== "string" ||
+    cfg.command[0].length === 0 ||
+    !cfg.command.every((a) => typeof a === "string")
+  ) {
+    warn("jmux: sessionTitle.command must have a non-empty executable followed by string arguments — session naming is off");
     return null;
   }
 

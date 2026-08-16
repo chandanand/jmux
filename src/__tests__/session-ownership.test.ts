@@ -25,6 +25,12 @@ describe("groundcrewActionGuidance", () => {
     expect(guidance.paletteHint).toContain("crewop stop ALF-123");
   });
 
+  test("cleanup observes ownership of both the session and worktree", () => {
+    const guidance = groundcrewActionGuidance("cleanup-session", "ALF-123");
+    expect(guidance.message).toContain("owns the session and worktree");
+    expect(guidance.hint).toContain("crewop stop ALF-123");
+  });
+
   test("explains that a Groundcrew session name is task identity", () => {
     const guidance = groundcrewActionGuidance("rename-session", "ALF-123");
     expect(guidance.message).toContain("task and session identity");

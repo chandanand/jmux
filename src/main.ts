@@ -69,6 +69,7 @@ import {
 import { CaptureModal, type CaptureResult } from "./capture-modal";
 import { buildPinCommands } from "./cli/pane";
 import { buildGridHiddenCommands } from "./cli/session";
+import { planSessionCleanup, removeSessionWorktree } from "./cli/session-cleanup";
 import type { CellAttrs } from "./cell-grid";
 import { createGrid } from "./cell-grid";
 import type { Modal } from "./modal";
@@ -229,6 +230,7 @@ import {
   type ProjectConfig,
   type ResolvedProjectSettings,
 } from "./project";
+import { applySessionProjects } from "./session-projects";
 import {
   PANE_ROW_FORMAT,
   parsePaneRowLines,
@@ -3134,10 +3136,11 @@ function getDiffPanelCols(): number {
   return layout.panel?.w ?? 0;
 }
 
-async function getSessionCwd(): Promise<string | null> {
+async function getSessionCwd(sessionId = currentSessionId): Promise<string | null> {
+  if (!sessionId) return null;
   try {
     const lines = await control.sendCommand(
-      `display-message -t ${tq(currentSessionId!)} -p '#{pane_current_path}'`,
+      `display-message -t ${tq(sessionId)} -p '#{pane_current_path}'`,
     );
     const cwd = (lines[0] || "").trim();
     return cwd || null;
@@ -4346,28 +4349,7 @@ async function fetchSessions(): Promise<void> {
       if (!knownSessions.has(name)) pollCoordinator.removeSession(name);
     }
     sidebar.setSessionContexts(pollCoordinator.getAllContexts());
-    // Resolved here, not in the sidebar: it knows nothing about config or the
-    // @jmux-project stamp. Same boundary as setSessionWorkflow.
-    const allProjects = configStore.config.projects ?? [];
-    const liveProjectList = allProjects.filter((p) => p.deletedAt === undefined);
-    const titles = new Map<string, string>();
-    for (const sess of sessions) {
-      const project = projectById(allProjects, sess.projectId ?? null)
-        ?? projectForDir(allProjects, sessionDir(sess.name));
-      if (!project) continue;
-      // projectLabel, not project.title: two Projects on one repo is the
-      // intended shape, and both migrate titled from the directory basename —
-      // so the bare title produced two identical sidebar bands, exactly as it
-      // produced two identical settings headers.
-      const label = projectLabel(project, liveProjectList,
-        (id) => cachedTeams.find((t) => t.id === id)?.name ?? null);
-      titles.set(sess.name, label);
-      // Stamped on the session too, so session-order's grouping and the
-      // sidebar's bands read one resolution rather than two.
-      sess.projectName = label;
-    }
-    sidebar.setSessionProjects(titles);
-    recomputeSessionBands();
+    refreshSessionProjects(sessions);
 
     // Prune state for dead sessions
     const liveNames = sessions.map((s) => s.name);
@@ -4403,6 +4385,24 @@ async function fetchSessions(): Promise<void> {
   } catch {
     // tmux server may be shutting down
   }
+}
+
+/**
+ * Re-resolve the Project fields the sidebar consumes.
+ *
+ * This runs once for the list-sessions snapshot and again after cwd discovery:
+ * an unstamped session can only use the directory fallback after the async
+ * lookup has populated `sessionDetailsCache`.
+ */
+function refreshSessionProjects(sessions: SessionInfo[]): void {
+  const titles = applySessionProjects(
+    sessions,
+    configStore.config.projects ?? [],
+    (session) => sessionDetailsCache.get(session.id)?.path,
+    (id) => cachedTeams.find((t) => t.id === id)?.name ?? null,
+  );
+  sidebar.setSessionProjects(titles);
+  recomputeSessionBands();
 }
 
 /**
@@ -6622,11 +6622,154 @@ function guardGroundcrewAction(action: GroundcrewGuardedAction): boolean {
   return true;
 }
 
+function cleanupErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Preflight the attached session's worktree and put the destructive boundary
+ * on screen. The TUI process lives outside tmux, so unlike `jmux ctl` it can
+ * safely finish removing the worktree after its attached session is killed.
+ *
+ * A dirty tree changes the confirmation itself: Enter explicitly authorizes
+ * discarding it. Clean trees are rechecked without force immediately before
+ * the kill, so a file written while this modal is open stops cleanup instead
+ * of being swept up by stale consent.
+ */
+async function openSessionCleanupConfirm(): Promise<void> {
+  if (guardGroundcrewAction("cleanup-session")) return;
+
+  const session = currentSessions.find((s) => s.id === currentSessionId);
+  if (!session) {
+    showNotice({
+      title: "No session to clean up",
+      message: "The Command Center is not a work session.",
+      hint: "Switch to the session whose linked worktree you want to remove.",
+      tone: "warn",
+    });
+    return;
+  }
+
+  const cwd = await getSessionCwd(session.id);
+  if (!cwd) {
+    showNotice({
+      title: `Can't clean up ${session.name}`,
+      message: "jmux could not resolve this session's working directory.",
+      hint: "The session and its files were left untouched.",
+      tone: "error",
+    });
+    return;
+  }
+
+  let preview: ReturnType<typeof planSessionCleanup>;
+  try {
+    // `true` only asks preflight to report dirtiness. Nothing is mutated until
+    // the confirmation callback below runs.
+    preview = planSessionCleanup(cwd, true);
+  } catch (err) {
+    showNotice({
+      title: `Can't clean up ${session.name}`,
+      message: cleanupErrorMessage(err),
+      hint: "The session and its files were left untouched.",
+      tone: "error",
+    });
+    return;
+  }
+
+  const onSurface = { bg: theme.surface, bgMode: 2 as const };
+  const normal = { ...neutralFg(7), ...onSurface };
+  const dim = { ...neutralFg(8), dim: true, ...onSurface };
+  const warning = { fg: 1, fgMode: 1 as const, bold: true, ...onSurface };
+  const lines: StyledLine[] = [
+    [],
+    [{ text: `  ${preview.worktreePath}`, attrs: normal }],
+    [],
+    [{ text: "  The branch and every committed change will be kept.", attrs: dim }],
+  ];
+  if (preview.dirty) {
+    lines.push([], [{
+      text: "  Uncommitted and untracked changes will be permanently discarded.",
+      attrs: warning,
+    }]);
+  }
+  lines.push([], [{ text: "  Enter to clean up · Esc to cancel", attrs: dim }]);
+
+  const modal = new ContentModal({
+    lines,
+    title: preview.dirty
+      ? `Discard changes and clean up ${session.name}?`
+      : `Clean up ${session.name}?`,
+    confirmOnEnter: true,
+  });
+  modal.setTermRows(process.stdout.rows || 24);
+  modal.open();
+  openModal(modal, (confirmed) => {
+    if (confirmed !== true) return;
+    void finishSessionCleanup(session.id, session.name, cwd, preview.dirty);
+  });
+  scheduleRender();
+}
+
+async function finishSessionCleanup(
+  sessionId: string,
+  sessionName: string,
+  sessionPath: string,
+  discardChanges: boolean,
+): Promise<void> {
+  let plan: ReturnType<typeof planSessionCleanup>;
+  try {
+    // Recheck at the point of mutation. When the confirmed tree was clean,
+    // force stays off and any newly-written file aborts before the session dies.
+    plan = planSessionCleanup(sessionPath, discardChanges);
+  } catch (err) {
+    showNotice({
+      title: `Cleanup stopped for ${sessionName}`,
+      message: cleanupErrorMessage(err),
+      hint: "The session and its files were left untouched.",
+      tone: "error",
+    });
+    return;
+  }
+
+  try {
+    await control.sendCommand(`kill-session -t ${tq(sessionId)}`);
+  } catch (err) {
+    showNotice({
+      title: `Cleanup stopped for ${sessionName}`,
+      message: cleanupErrorMessage(err),
+      hint: "The worktree was not removed.",
+      tone: "error",
+    });
+    return;
+  }
+
+  try {
+    removeSessionWorktree(plan, discardChanges);
+  } catch (err) {
+    // removeSessionWorktree's message states the partial result: the session
+    // is already gone. Never imply a rollback we cannot honestly perform.
+    showNotice({
+      title: `Worktree cleanup failed for ${sessionName}`,
+      message: cleanupErrorMessage(err),
+      hint: "The branch and its commits are still intact.",
+      tone: "error",
+    });
+    return;
+  }
+
+  showToast(
+    plan.dirty
+      ? `Cleaned up ${sessionName} and discarded its uncommitted changes`
+      : `Cleaned up ${sessionName}; branch kept`,
+  );
+}
+
 function buildPaletteCommands(): PaletteCommand[] {
   const commands: PaletteCommand[] = [];
 
   const cfg = configStore.config;
   const groundcrewSession = currentGroundcrewSession();
+  const currentSession = currentSessions.find((s) => s.id === currentSessionId) ?? null;
 
   const ownedCommand = (
     action: GroundcrewGuardedAction,
@@ -6697,7 +6840,7 @@ function buildPaletteCommands(): PaletteCommand[] {
 
   // Dynamic: pin/unpin current session
   {
-    const currentName = currentSessions.find(s => s.id === currentSessionId)?.name;
+    const currentName = currentSession?.name;
     if (currentName) {
       if (pinnedSessions.has(currentName)) {
         commands.push({
@@ -6756,9 +6899,23 @@ function buildPaletteCommands(): PaletteCommand[] {
   }
 
   // Static commands
+  const cleanupCommand: PaletteCommand = currentSession
+    ? ownedCommand(
+        "cleanup-session",
+        `Clean up session and worktree: ${currentSession.name}`,
+        "session",
+      )
+    : {
+        id: "cleanup-session",
+        label: "Clean up session and worktree",
+        category: "session",
+        disabled: true,
+        hint: "No active session in the Command Center",
+      };
   commands.push(
     { id: "new-session", label: "New session", category: "session" },
     ownedCommand("kill-session", "Kill session", "session"),
+    cleanupCommand,
     ownedCommand("rename-session", "Rename session", "session"),
     { id: "retitle-session", label: "Re-name session with the model", category: "session" },
     { id: "new-window", label: "New window", category: "window" },
@@ -9861,6 +10018,9 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       if (guardGroundcrewAction("kill-session")) return;
       await control.sendCommand(`kill-session -t ${tq(currentSessionId!)}`);
       return;
+    case "cleanup-session":
+      await openSessionCleanupConfirm();
+      return;
     case "rename-session": {
       if (guardGroundcrewAction("rename-session")) return;
       const currentName = currentSessions.find(s => s.id === currentSessionId)?.name ?? "";
@@ -11082,6 +11242,10 @@ async function lookupSessionDetails(sessions: SessionInfo[]): Promise<void> {
     return cached ? { ...s, ...cached } : s;
   });
   sidebar.updateSessions(currentSessions);
+  // The first project pass ran before this function knew the cwd. Without a
+  // second pass, a newly discovered session stayed project-less until an
+  // unrelated session create/destroy event triggered fetchSessions again.
+  refreshSessionProjects(currentSessions);
   // Project resolution is async and lands well after the session list did, so
   // the grid has to be told: `groupBy: "project"` buckets on exactly the field
   // this loop just filled in, and until now it only repainted the sidebar.

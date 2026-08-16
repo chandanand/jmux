@@ -285,6 +285,13 @@ describe("keymap ↔ command palette", () => {
     const missing = PALETTE_BACKED_IDS.filter((id) => !mainSource.includes(`id: "${id}"`));
     expect(missing).toEqual([]);
   });
+
+  test("session cleanup is listed, dispatched, and confirmed", () => {
+    expect(mainSource).toContain('id: "cleanup-session"');
+    expect(mainSource).toContain('case "cleanup-session":');
+    expect(mainSource).toContain("await openSessionCleanupConfirm()");
+    expect(mainSource).toContain("void finishSessionCleanup(");
+  });
 });
 
 describe("keymap ↔ toolbar buttons", () => {

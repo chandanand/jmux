@@ -3,6 +3,7 @@ import {
   TITLE_PRESETS, TITLE_OFF, TITLE_CUSTOM,
   presetForCommand, commandForPreset, titlePresetOptions, formatTitleCommand, parseTitleCommand,
 } from "../session-title/presets";
+import { resolveTitleConfig } from "../session-title/generator";
 
 describe("presetForCommand", () => {
   test("no command configured reads as off — the whole off switch is an absent command", () => {
@@ -105,6 +106,19 @@ describe("formatTitleCommand / parseTitleCommand", () => {
 });
 
 describe("shipped presets", () => {
+  test("every preset passes the title command validator", () => {
+    for (const preset of TITLE_PRESETS) {
+      const warnings: string[] = [];
+      const resolved = resolveTitleConfig(
+        { command: [...preset.command] },
+        (message) => warnings.push(message),
+        (command) => `/usr/bin/${command}`,
+      );
+      expect(resolved?.command).toEqual(preset.command);
+      expect(warnings).toEqual([]);
+    }
+  });
+
   test("codex skips the git repo check, because the runner's cwd is tmpdir", () => {
     // titleRunnerCwd() returns tmpdir(), which is not a repository, and codex
     // refuses to run in one without this flag.

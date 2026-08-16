@@ -250,11 +250,17 @@ describe("resolveTitleConfig", () => {
     expect(warnings[0]).toContain("argv array");
   });
 
-  test("an empty or non-string array is refused", () => {
+  test("an empty array, blank executable, or non-string argument is refused", () => {
     expect(collect({ command: [] }).cfg).toBeNull();
     expect(collect({ command: [""] }).cfg).toBeNull();
     expect(collect({ command: ["claude", 3] }).cfg).toBeNull();
     expect(collect({ command: [] }).warnings.length).toBe(1);
+  });
+
+  test("an empty argument after the executable is preserved", () => {
+    const { cfg, warnings } = collect({ command: ["claude", "-p", "--tools", ""] });
+    expect(cfg?.command).toEqual(["claude", "-p", "--tools", ""]);
+    expect(warnings).toEqual([]);
   });
 
   test("a command missing from PATH still runs, but warns — it can never succeed", () => {
