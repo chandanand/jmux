@@ -198,11 +198,10 @@ import { ConfigStore, ConfigCorruptError, sanitizeTmuxSessionName, DEFAULT_IMAGE
 import {
   RepoFactsCache,
   canonicalizeRepoPath,
-  buildWorktreeCommand,
-  type RepoSettings,
   type WorkStage,
 } from "./repo-settings";
 import { buildProvisionPlan, SETUP_PANE_SIZE } from "./issue-provision";
+import { buildNewSessionPlan } from "./new-session-plan";
 import {
   resolveStateColors,
   STATE_COLOR_NAMES,
@@ -4423,6 +4422,28 @@ async function stampSessionProject(sessionName: string, projectId?: string): Pro
   );
 }
 
+/** Create and enter one session returned by the directory-first wizard. */
+async function createNewSession(
+  result: NewSessionResult,
+  parentClient: string,
+): Promise<string> {
+  const settings = repoSettingsFor(result.dir, result.projectId);
+  const plan = buildNewSessionPlan(result, settings);
+
+  await control.sendCommand(
+    `new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${plan.session}`)} -s ${tq(plan.session)} -c ${tq(plan.sessionCwd)} ${tq(plan.mainCommand)}`,
+  );
+  await stampSessionProject(plan.session, result.projectId);
+  if (plan.setupCommand && plan.setupCwd) {
+    await control.sendCommand(
+      `split-window -h -d -l ${SETUP_PANE_SIZE} -t ${tq(plan.session)} -c ${tq(plan.setupCwd)} ${tq(plan.setupCommand)}`,
+    );
+    repoFacts.clear();
+  }
+  await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(plan.session)}`);
+  return plan.session;
+}
+
 /**
  * A git-tier answer, and whether the branch settles it for good.
  *
@@ -7139,7 +7160,7 @@ const REPO_SETTING_ROWS: RepoRow[] = [
   { id: "wtm", label: "wtm integration", field: "wtmIntegration", kind: "boolean", group: "workflow",
     describe: "On uses `wtm create`, which manages the bare repo. Off uses plain `git worktree add`." },
   { id: "auto-agent", label: "Auto-launch agent", field: "autoLaunchAgent", kind: "boolean", group: "workflow",
-    describe: "Whether starting work on an issue also starts the agent, or leaves you a shell." },
+    describe: "Whether creating a session starts the agent, or leaves you a shell." },
 
   { id: "on-start", label: "On session start", field: "onSessionStartState", kind: "state", group: "transitions",
     describe: "The status to move an issue to when you start work on it. Never writes until you name one." },
@@ -8803,42 +8824,8 @@ async function startWorkOnIssue(
         const parentClient = ptyClientName;
         if (!parentClient) return;
         try {
-          switch (result.type) {
-            case "standard": {
-              const s = sanitizeTmuxSessionName(result.name);
-              await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${s}`)} -s ${tq(s)} -c ${tq(result.dir)}`);
-              await stampSessionProject(s, result.projectId);
-              await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(s)}`);
-              sessionState.addLink(s, { type: "issue", id: issue.id });
-              break;
-            }
-            case "existing_worktree": {
-              const s = sanitizeTmuxSessionName(result.branch);
-              await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${s}`)} -s ${tq(s)} -c ${tq(result.path)}`);
-              await stampSessionProject(s, result.projectId);
-              await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(s)}`);
-              sessionState.addLink(s, { type: "issue", id: issue.id });
-              break;
-            }
-            case "new_worktree": {
-              const s = sanitizeTmuxSessionName(result.name);
-              const wtPath = `${result.dir}/${s}`;
-              const createCmd = buildWorktreeCommand({
-                wtm: repoSettingsFor(result.dir, result.projectId).wtmIntegration,
-                session: s,
-                baseBranch: result.baseBranch,
-                noShell: true,
-              });
-              const cmd = `${createCmd}; cd ${s}; exec $SHELL`;
-              await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${s}`)} -s ${tq(s)} -c ${tq(result.dir)} ${tq(cmd)}`);
-              await stampSessionProject(s, result.projectId);
-              const waitCmd = `while [ ! -d ${tq(wtPath)} ]; do sleep 0.2; done; cd ${tq(wtPath)} && exec $SHELL`;
-              await control.sendCommand(`split-window -h -d -t ${tq(s)} -c ${tq(result.dir)} ${tq(waitCmd)}`);
-              await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(s)}`);
-              sessionState.addLink(s, { type: "issue", id: issue.id });
-              break;
-            }
-          }
+          const session = await createNewSession(result, parentClient);
+          sessionState.addLink(session, { type: "issue", id: issue.id });
         } catch (err) {
           showNewSessionError(result, err);
         }
@@ -10008,43 +9995,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
         const parentClient = ptyClientName;
         if (!parentClient) return;
         try {
-          switch (result.type) {
-            case "standard": {
-              const session = sanitizeTmuxSessionName(result.name);
-              await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(result.dir)}`);
-              await stampSessionProject(session, result.projectId);
-              await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(session)}`);
-              break;
-            }
-            case "existing_worktree": {
-              const session = sanitizeTmuxSessionName(result.branch);
-              await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(result.path)}`);
-              await stampSessionProject(session, result.projectId);
-              await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(session)}`);
-              break;
-            }
-            case "new_worktree": {
-              // Use one sanitized name everywhere so the worktree directory,
-              // the `wtm create` argument, and the tmux session all agree —
-              // otherwise a user-typed name like `foo.bar` creates a `foo.bar`
-              // directory but a `foo_bar` session, drifting the two apart.
-              const session = sanitizeTmuxSessionName(result.name);
-              const wtPath = `${result.dir}/${session}`;
-              const createCmd = buildWorktreeCommand({
-                wtm: repoSettingsFor(result.dir, result.projectId).wtmIntegration,
-                session,
-                baseBranch: result.baseBranch,
-                noShell: true,
-              });
-              const cmd = `${createCmd}; cd ${session}; exec $SHELL`;
-              await control.sendCommand(`new-session -d -e ${tq(`OTEL_RESOURCE_ATTRIBUTES=tmux_session_name=${session}`)} -s ${tq(session)} -c ${tq(result.dir)} ${tq(cmd)}`);
-              await stampSessionProject(session, result.projectId);
-              const waitCmd = `while [ ! -d ${tq(wtPath)} ]; do sleep 0.2; done; cd ${tq(wtPath)} && exec $SHELL`;
-              await control.sendCommand(`split-window -h -d -t ${tq(session)} -c ${tq(result.dir)} ${tq(waitCmd)}`);
-              await control.sendCommand(`switch-client -c ${parentClient} -t ${tq(session)}`);
-              break;
-            }
-          }
+          await createNewSession(result, parentClient);
           // When launched from the Command Center, drop the overview chrome now
           // that the client has switched onto the freshly created session.
           exitGlass();

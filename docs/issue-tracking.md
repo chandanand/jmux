@@ -263,7 +263,7 @@ The most powerful feature: select an issue in the panel and press `n` to create 
 | `teamRepoMap` | global | `{}` | Maps Linear team names to local repo directories |
 | `defaultBaseBranch` | per-repo | `"main"` | Branch to create worktrees from |
 | `wtmIntegration` | per-repo | bare-repo detection | `true` → `wtm create`; `false` → `git worktree add` |
-| `autoLaunchAgent` | per-repo | `true` | Launch Claude Code with issue context |
+| `autoLaunchAgent` | per-repo | `true` | Launch the configured agent in new sessions; issue starts seed it with issue context |
 | `sessionNameTemplate` | per-repo | `"{identifier}"` | Template for session names. Supports `{identifier}` and `{title}` |
 | `claudeCommand` | per-repo | `"claude"` | Command used to launch the agent |
 
