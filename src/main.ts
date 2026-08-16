@@ -4782,6 +4782,14 @@ function computeModalOverlay(activeLayout: FrameLayout): {
 function renderFrame(): void {
   if (writesPending > 0) return;
 
+  // Paint and hit-testing must use the same frame geometry. Surface
+  // transitions normally keep the router current through applyChromeLayout(),
+  // but a missed/asynchronous transition used to leave the normal toolbar
+  // visible while its rows were still classified with the frameless layout.
+  // Reassert the active layout at the render boundary: if a frame is visible,
+  // its mouse targets are now guaranteed to match it.
+  inputRouter.setLayout(activeChromeLayout());
+
   // The footer is disabled (footerEnabled: false — see footer-removal notes),
   // so layout.footerRow is always null and the renderer never paints it.
   // Skip building it each frame; footer.ts stays intact for a trivial re-enable.

@@ -131,8 +131,8 @@ talking.
 
 | Action | Keys |
 |--------|------|
-| Next window | `Ctrl-Right` |
-| Previous window | `Ctrl-Left` |
+| Next window | `Ctrl-Right` or `Ctrl-Space` then `N` |
+| Previous window | `Ctrl-Left` or `Ctrl-Space` then `B` |
 | Switch pane | `Ctrl-Space` then `h/j/k/l` (left/down/up/right) |
 | Resize pane | `Ctrl-Space` then `H/J/K/L` (repeatable) |
 | Toggle pane zoom | `Ctrl-Space` then `z` |

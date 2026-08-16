@@ -225,19 +225,21 @@ export const KEYMAP: readonly Binding[] = [
   },
   {
     id: "window-next",
-    keys: "Ctrl-Right",
+    keys: "Ctrl-Right / Ctrl-Space N",
     label: "Next window",
     section: "Windows",
     source: "tmux",
     conf: "C-Right",
+    confAliases: ["N"],
   },
   {
     id: "window-prev",
-    keys: "Ctrl-Left",
+    keys: "Ctrl-Left / Ctrl-Space B",
     label: "Previous window",
     section: "Windows",
     source: "tmux",
     conf: "C-Left",
+    confAliases: ["B"],
   },
   {
     id: "window-move-left",

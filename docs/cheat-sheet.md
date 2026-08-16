@@ -130,8 +130,8 @@ you — see [Parking](workflow.md#parking-the-back-burner).
 | Key | Action |
 |-----|--------|
 | `Ctrl-Space c` | New window (starts in `~`) |
-| `Ctrl-Right` | Next window |
-| `Ctrl-Left` | Previous window |
+| `Ctrl-Right` or `Ctrl-Space N` | Next window |
+| `Ctrl-Left` or `Ctrl-Space B` | Previous window |
 | `Ctrl-Shift-Right` | Move window right |
 | `Ctrl-Shift-Left` | Move window left |
 
