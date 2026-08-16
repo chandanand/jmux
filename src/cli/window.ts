@@ -1,6 +1,7 @@
 import { runTmuxDirect } from "./tmux";
 import { resolveCurrentSession, requireSession, tmuxOrThrow, CliError, type CliContext } from "./context";
 import type { ParsedCtlArgs } from "../cli";
+import { assertGroundcrewDoesNotOwn } from "./ownership";
 
 const WINDOW_FORMAT =
   "#{window_id}:#{window_index}:#{window_name}:#{window_active}:#{window_bell_flag}:#{window_zoomed_flag}";
@@ -78,6 +79,7 @@ export function handleWindow(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
         throw new CliError("--target is required");
       }
       const target = flags.target;
+      assertGroundcrewDoesNotOwn(target, ctx, "close-window");
 
       if (!flags.force && ctx.paneId) {
         // Self-destruction guard: check if the current window matches the target

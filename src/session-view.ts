@@ -15,6 +15,7 @@ export type IndicatorKind =
   | null;
 
 export type ModeBadge = "P" | "A" | "compaction" | null;
+export type ManagerBadge = "CREW" | null;
 
 export interface SessionView {
   sessionId: string;
@@ -25,6 +26,9 @@ export interface SessionView {
 
   // Row 1, right-aligned
   modeBadge: ModeBadge;
+
+  // Row 1, right-aligned before the mode badge
+  managerBadge: ManagerBadge;
 
   /**
    * Row 1: the generated title, unprocessed, or null when the session has
@@ -257,6 +261,7 @@ export function buildSessionView(
     hasActivity: activitySet.has(session.id),
     indicatorKind,
     modeBadge,
+    managerBadge: session.managedBy === "groundcrew" ? "CREW" : null,
     branch: session.gitBranch ?? null,
     title: session.title ?? null,
     linearId,

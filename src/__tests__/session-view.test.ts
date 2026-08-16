@@ -54,6 +54,17 @@ describe("buildSessionView", () => {
     expect(view.pipelineState).toBeNull();
     expect(view.timerText).toBeNull();
     expect(view.hasActivity).toBe(false);
+    expect(view.managerBadge).toBeNull();
+  });
+
+  test("surfaces Groundcrew ownership as a provenance badge", () => {
+    const view = buildSessionView(
+      makeSession({ managedBy: "groundcrew" }),
+      undefined,
+      undefined,
+      new Set(),
+    );
+    expect(view.managerBadge).toBe("CREW");
   });
 
   // `branch` left the view when it left the sidebar — gitBranch feeds nothing

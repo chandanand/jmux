@@ -185,6 +185,12 @@ import {
 } from "./parking";
 import type { DemoContext } from "./demo/setup";
 import type { SessionInfo, WindowTab, PaletteCommand, PaletteResult, AgentState } from "./types";
+import {
+  GROUNDCREW_MANAGED_OPTION,
+  groundcrewActionGuidance,
+  sessionManagerFromGroundcrewOption,
+  type GroundcrewGuardedAction,
+} from "./session-ownership";
 import { loadProjectDirsCache, saveProjectDirsCache } from "./project-dirs-cache";
 import { ConfigStore, ConfigCorruptError, sanitizeTmuxSessionName, DEFAULT_IMAGE_MAX_ROWS, DEFAULT_BROWSER_PANE_SIZE, DEFAULT_BROWSER_DISPLAY_SCALE, DEFAULT_BROWSER_FPS, type JmuxConfig, type PipelineConfig } from "./config";
 import {
@@ -4233,6 +4239,7 @@ const SESSION_LIST_FORMAT = [
   `#{${SESSION_TITLE_OPTION}}`,
   `#{${TITLE_SIGNATURE_OPTION}}`,
   `#{${PROJECT_OPTION}}`,
+  `#{${GROUNDCREW_MANAGED_OPTION}}`,
 ].join(US);
 
 async function fetchSessions(): Promise<void> {
@@ -4250,14 +4257,25 @@ async function fetchSessions(): Promise<void> {
     const sessions: SessionInfo[] = lines
       .filter((l) => l.length > 0)
       .map((line): SessionInfo | null => {
-        const [id, name, activity, attached, windows, issueLink, title, titleSig, projectId] =
-          splitFields(line);
+        const [
+          id,
+          name,
+          activity,
+          attached,
+          windows,
+          issueLink,
+          title,
+          titleSig,
+          projectId,
+          groundcrewManaged,
+        ] = splitFields(line);
         if (!id || !name) {
           malformed.push(line);
           return null;
         }
         const cached = sessionDetailsCache.get(id);
         const issueLinks = parseIssueLinkOption(issueLink);
+        const managedBy = sessionManagerFromGroundcrewOption(groundcrewManaged);
         return {
           id,
           name,
@@ -4271,6 +4289,7 @@ async function fetchSessions(): Promise<void> {
           ...(title ? { title } : {}),
           ...(titleSig ? { titleSignature: titleSig } : {}),
           ...(projectId ? { projectId } : {}),
+          ...(managedBy ? { managedBy } : {}),
         };
       })
       .filter((x): x is SessionInfo => x !== null);
@@ -6579,10 +6598,51 @@ function openPalette(): void {
   });
 }
 
+function currentGroundcrewSession(): SessionInfo | null {
+  const session = currentSessions.find((s) => s.id === currentSessionId) ?? null;
+  return session?.managedBy === "groundcrew" ? session : null;
+}
+
+/**
+ * Runtime half of the ownership boundary. Disabled palette rows explain the
+ * common path, but keybindings and an already-open palette can still reach a
+ * command after session state changes, so every mutation checks again here.
+ */
+function guardGroundcrewAction(action: GroundcrewGuardedAction): boolean {
+  const session = currentGroundcrewSession();
+  if (!session) return false;
+
+  const guidance = groundcrewActionGuidance(action, session.name);
+  showNotice({
+    title: "Managed by Groundcrew",
+    message: guidance.message,
+    hint: guidance.hint,
+    tone: "warn",
+  });
+  return true;
+}
+
 function buildPaletteCommands(): PaletteCommand[] {
   const commands: PaletteCommand[] = [];
 
   const cfg = configStore.config;
+  const groundcrewSession = currentGroundcrewSession();
+
+  const ownedCommand = (
+    action: GroundcrewGuardedAction,
+    label: string,
+    category: string,
+  ): PaletteCommand => {
+    const guidance = groundcrewSession
+      ? groundcrewActionGuidance(action, groundcrewSession.name)
+      : null;
+    return {
+      id: action,
+      label,
+      category,
+      ...(guidance ? { disabled: true, hint: guidance.paletteHint } : {}),
+    };
+  };
 
   /**
    * Stamp each command with its keybinding, from src/keymap.ts.
@@ -6698,17 +6758,17 @@ function buildPaletteCommands(): PaletteCommand[] {
   // Static commands
   commands.push(
     { id: "new-session", label: "New session", category: "session" },
-    { id: "kill-session", label: "Kill session", category: "session" },
-    { id: "rename-session", label: "Rename session", category: "session" },
+    ownedCommand("kill-session", "Kill session", "session"),
+    ownedCommand("rename-session", "Rename session", "session"),
     { id: "retitle-session", label: "Re-name session with the model", category: "session" },
     { id: "new-window", label: "New window", category: "window" },
     { id: "rename-window", label: "Rename window", category: "window" },
-    { id: "close-window", label: "Close window", category: "window" },
-    { id: "move-window", label: "Move window to session", category: "window" },
+    ownedCommand("close-window", "Close window", "window"),
+    ownedCommand("move-window", "Move window to session", "window"),
     { id: "split-h", label: "Split horizontal", category: "pane" },
     { id: "split-v", label: "Split vertical", category: "pane" },
     { id: "zoom-pane", label: "Zoom pane", category: "pane" },
-    { id: "close-pane", label: "Close pane", category: "pane" },
+    ownedCommand("close-pane", "Close pane", "pane"),
     { id: "browser-pane", label: "Open browser pane", category: "pane" },
     { id: "dev-server", label: "Open dev server in a browser pane", category: "pane" },
     { id: "open-claude", label: "Open Claude", category: "other" },
@@ -9798,9 +9858,11 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       return;
     }
     case "kill-session":
+      if (guardGroundcrewAction("kill-session")) return;
       await control.sendCommand(`kill-session -t ${tq(currentSessionId!)}`);
       return;
     case "rename-session": {
+      if (guardGroundcrewAction("rename-session")) return;
       const currentName = currentSessions.find(s => s.id === currentSessionId)?.name ?? "";
       const modal = new InputModal({
         header: "Rename Session",
@@ -9854,17 +9916,19 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       return;
     }
     case "close-window":
+      if (guardGroundcrewAction("close-window")) return;
       await control.sendCommand("kill-window");
       fetchWindows();
       return;
     case "move-window": {
+      if (guardGroundcrewAction("move-window")) return;
       const currentWindowName = currentWindows.find(w => w.active)?.name ?? "";
       // The *target* now comes from the session id, not the label: taking a
       // tmux target off a label was only ever safe while the label happened to
       // be the raw session name, which it no longer is.
       const byId = new Map(currentSessions.map((s) => [s.id, s]));
       const sessions = currentSessions
-        .filter(s => s.id !== currentSessionId)
+        .filter(s => s.id !== currentSessionId && s.managedBy !== "groundcrew")
         .map(s => ({ id: s.id, label: sessionPickerLabel(s) }));
       if (sessions.length === 0) return;
       const modal = new ListModal({
@@ -9893,6 +9957,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       fetchWindows();
       return;
     case "close-pane":
+      if (guardGroundcrewAction("close-pane")) return;
       await control.sendCommand("kill-pane");
       return;
     case "browser-pane":

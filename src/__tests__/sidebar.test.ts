@@ -11,7 +11,13 @@ const SIDEBAR_WIDTH = 24;
 const makeBlankOtelState = makeSessionOtelState;
 
 function makeSessions(
-  entries: Array<{ name: string; directory?: string; gitBranch?: string; repoName?: string }>,
+  entries: Array<{
+    name: string;
+    directory?: string;
+    gitBranch?: string;
+    repoName?: string;
+    managedBy?: SessionInfo["managedBy"];
+  }>,
 ): SessionInfo[] {
   return entries.map((e, i) => ({
     id: `$${i}`,
@@ -22,6 +28,7 @@ function makeSessions(
     directory: e.directory,
     gitBranch: e.gitBranch,
     repoName: e.repoName,
+    managedBy: e.managedBy,
   }));
 }
 
@@ -1180,6 +1187,27 @@ describe("Sidebar", () => {
     const badgeCell = grid.cells[4][SIDEBAR_WIDTH - 2];
     expect(badgeCell.char).toBe("P");
     expect(badgeCell.fg).toBe(6); // palette cyan
+  });
+
+  test("renders a CREW provenance badge for Groundcrew-managed sessions", () => {
+    const sidebar = new Sidebar(SIDEBAR_WIDTH, 30);
+    sidebar.updateSessions(makeSessions([{ name: "ALF-123", managedBy: "groundcrew" }]));
+    const grid = sidebar.getGrid();
+
+    expect(rowText(grid, 4).slice(SIDEBAR_WIDTH - 5, SIDEBAR_WIDTH - 1)).toBe("CREW");
+    expect(grid.cells[4][SIDEBAR_WIDTH - 5].dim).toBe(true);
+  });
+
+  test("renders CREW and permission mode as separate badges", () => {
+    const sidebar = new Sidebar(SIDEBAR_WIDTH, 30);
+    sidebar.updateSessions(makeSessions([{ name: "ALF-123", managedBy: "groundcrew" }]));
+    sidebar.setSessionOtelState("$0", {
+      ...makeBlankOtelState(),
+      permissionMode: "plan",
+    });
+    const grid = sidebar.getGrid();
+
+    expect(rowText(grid, 4).slice(SIDEBAR_WIDTH - 7, SIDEBAR_WIDTH - 1)).toBe("CREW P");
   });
 
   test("renders A badge in yellow when permissionMode is accept-edits", () => {

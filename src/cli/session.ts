@@ -6,6 +6,12 @@ import type { ParsedCtlArgs } from "../cli";
 import { US, splitFields } from "../tmux-fields";
 import { SESSION_TITLE_OPTION, TITLE_SIGNATURE_OPTION, MANUAL_SIGNATURE } from "../session-title/display";
 import { isGridHiddenValue } from "../glass/exceptions";
+import {
+  GROUNDCREW_MANAGED_OPTION,
+  sessionManagerFromGroundcrewOption,
+  type SessionManager,
+} from "../session-ownership";
+import { assertGroundcrewDoesNotOwn } from "./ownership";
 
 export interface SessionEntry {
   id: string;
@@ -16,6 +22,8 @@ export interface SessionEntry {
   path: string;
   /** A model-generated phrase, additional to `name` — see displaySessionName. */
   title?: string;
+  /** The external orchestrator that owns this session's lifecycle, if any. */
+  managedBy?: SessionManager;
 }
 
 /**
@@ -35,13 +43,16 @@ export const SESSION_FIELDS_FORMAT = [
   "#{session_windows}",
   "#{pane_current_path}",
   `#{${SESSION_TITLE_OPTION}}`,
+  `#{${GROUNDCREW_MANAGED_OPTION}}`,
 ].join(US);
 
 export function parseSessionListOutput(lines: string[]): SessionEntry[] {
   return lines
     .filter((l) => l.length > 0)
     .map((line) => {
-      const [id, name, activity, attached, windows, path, title] = splitFields(line);
+      const [id, name, activity, attached, windows, path, title, groundcrewManaged] =
+        splitFields(line);
+      const managedBy = sessionManagerFromGroundcrewOption(groundcrewManaged);
       return {
         id: id ?? "",
         name: name ?? "",
@@ -50,6 +61,7 @@ export function parseSessionListOutput(lines: string[]): SessionEntry[] {
         windows: parseInt(windows ?? "0", 10),
         path: path ?? "",
         ...(title ? { title } : {}),
+        ...(managedBy ? { managedBy } : {}),
       };
     });
 }
@@ -276,6 +288,7 @@ export function handleSession(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
         throw new CliError("--target is required");
       }
       const target = flags.target;
+      assertGroundcrewDoesNotOwn(target, ctx, "kill-session");
 
       if (!flags.force) {
         // Self-destruction guard
@@ -308,6 +321,7 @@ export function handleSession(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
       }
       const target = flags.target;
       const newName = sanitizeTmuxSessionName(flags.name);
+      assertGroundcrewDoesNotOwn(target, ctx, "rename-session");
       tmuxOrThrow(runTmuxDirect(["rename-session", "-t", target, newName], ctx.socket));
       // Stamp the same sentinel the TUI's own rename does, so a title
       // generated before this rename (or one already in flight elsewhere)

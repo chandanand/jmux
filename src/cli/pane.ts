@@ -3,6 +3,7 @@ import { runTmuxDirect } from "./tmux";
 import { requireSession, tmuxOrThrow, CliError, type CliContext } from "./context";
 import type { ParsedCtlArgs } from "../cli";
 import { parsePinValue } from "../glass/pinned-pane-tracker";
+import { assertGroundcrewDoesNotOwn } from "./ownership";
 
 const PANE_FORMAT =
   "#{pane_id}:#{window_id}:#{pane_active}:#{pane_width}:#{pane_height}:#{pane_current_command}:#{pane_current_path}";
@@ -196,6 +197,7 @@ export function handlePane(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
         throw new CliError("--target is required");
       }
       const target = flags.target;
+      assertGroundcrewDoesNotOwn(target, ctx, "close-pane");
       if (!flags.force && ctx.paneId === target) {
         throw new CliError(
           `Refusing to kill current pane "${target}". Use --force to override.`,

@@ -1,3 +1,5 @@
+import type { SessionManager } from "./session-ownership";
+
 export const enum ColorMode {
   Default = 0,
   Palette = 1,
@@ -120,6 +122,8 @@ export interface SessionInfo {
    * two Projects may share a title and must not merge into one band.
    */
   projectName?: string;
+  /** The external orchestrator that owns this session's lifecycle, if any. */
+  managedBy?: SessionManager;
 }
 
 export type ErrorState = {

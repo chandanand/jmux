@@ -140,6 +140,11 @@ const MODE_ACCEPT_EDITS_ATTRS: CellAttrs = {
   fgMode: ColorMode.Palette,
 };
 const MODE_COMPACTION_ATTRS: CellAttrs = { dim: true };
+const SESSION_MANAGER_ATTRS: CellAttrs = {
+  fg: 6,
+  fgMode: ColorMode.Palette,
+  dim: true,
+};
 // The selected row's name is white-bold (textPrimary), not green — green is
 // reserved for the running state; a selected running session was previously
 // green-on-green with its own indicator dot.
@@ -1870,17 +1875,24 @@ export class Sidebar {
         ? { bg: HOVER_BG, bgMode: ColorMode.RGB }
         : {};
 
-    // --- Row 1: the session's display name (left) + mode badge (right) ---
+    // --- Row 1: display name (left) + manager/mode badges (right) ---
     //
     // The name is the generated title when there is one and the real tmux name
     // when there is not — `displaySessionName` is the only place that decides,
     // so no surface can disagree with another about what a session is called.
     // The mode badge takes the right-hand slot the issue badge used to hold;
-    // that badge is now row 2's identity field.
+    // that badge is now row 2's identity field. An external-manager badge sits
+    // immediately before it, so provenance and permission mode remain distinct.
     const nameStart = 3;
     const hasModeBadge = view.modeBadge !== null;
-    const reserveRight = this.width - 1 - (hasModeBadge ? 2 : 0);
-    const nameMaxCols = reserveRight - nameStart;
+    const hasManagerBadge = view.managerBadge !== null;
+    const badgesWidth = (hasManagerBadge ? 4 : 0) +
+      (hasManagerBadge && hasModeBadge ? 1 : 0) +
+      (hasModeBadge ? 1 : 0);
+    const badgeStart = this.width - 1 - badgesWidth;
+    const nameMaxCols = badgesWidth > 0
+      ? badgeStart - nameStart - 1
+      : this.width - 1 - nameStart;
     const displayName = truncateToCols(
       displaySessionName({ name: view.sessionName, title: view.title ?? undefined }),
       Math.max(0, nameMaxCols),
@@ -1892,6 +1904,16 @@ export class Sidebar {
         ? { ...HOVER_NAME_ATTRS }
         : { ...INACTIVE_NAME_ATTRS };
     writeString(grid, nameRow, nameStart, displayName, nameAttrs);
+
+    if (hasManagerBadge) {
+      writeString(
+        grid,
+        nameRow,
+        badgeStart,
+        view.managerBadge!,
+        { ...SESSION_MANAGER_ATTRS, ...bgAttrs },
+      );
+    }
 
     if (hasModeBadge) {
       const badgeCol = this.width - 2;
