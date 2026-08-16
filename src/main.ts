@@ -4426,7 +4426,7 @@ async function stampSessionProject(sessionName: string, projectId?: string): Pro
 function writeAgentPrompt(prompt: string): string {
   const rand = Math.random().toString(36).slice(2);
   const path = `/tmp/jmux-prompt-${Date.now()}-${rand}.md`;
-  writeFileSync(path, prompt);
+  writeFileSync(path, prompt, { mode: 0o600, flag: "wx" });
   return path;
 }
 

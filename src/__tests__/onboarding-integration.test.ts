@@ -1,6 +1,6 @@
 import { describe, expect, test, afterAll } from "bun:test";
 import { Terminal } from "bun-pty";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { basename, join } from "path";
 import { Terminal as Headless } from "@xterm/headless";
@@ -47,6 +47,8 @@ interface Session {
 interface BootOptions {
   /** Put config.json on disk so onboarding is skipped. */
   configured?: boolean;
+  /** Deterministic command for exercising the New Session launch boundary. */
+  agentCommand?: string;
   /** Positional `jmux SESSION`. */
   sessionName?: string;
   /** A durable snapshot to place where this socket will restore it. */
@@ -66,7 +68,10 @@ async function boot(cols = 120, rows = 40, options: BootOptions = {}): Promise<S
   if (options.configured) {
     const configDir = join(home, ".config", "jmux");
     mkdirSync(configDir, { recursive: true });
-    writeFileSync(join(configDir, "config.json"), "{}\n");
+    const config = options.agentCommand
+      ? { projectDefaults: { autoLaunchAgent: true, agentCommand: options.agentCommand } }
+      : {};
+    writeFileSync(join(configDir, "config.json"), JSON.stringify(config, null, 2) + "\n");
   }
   if (options.snapshot) {
     const snapshotDir = join(home, ".local", "share", "jmux", "snapshot", SOCKET);
@@ -161,6 +166,32 @@ describe.skipIf(!TMUX)("onboarding, under a real pty", () => {
       expect(session.frame()).toContain("Ctrl-Space n  new session");
       expect(session.sessionNames()).toEqual([PARK_SESSION]);
       expect(session.sessionNames()).not.toContain("0");
+    } finally {
+      session.dispose();
+    }
+  }, 60_000);
+
+  test("a generic new session launches the configured agent", async () => {
+    const marker = ".jmux-agent-launched";
+    const session = await boot(120, 40, {
+      configured: true,
+      agentCommand: `touch "$HOME/${marker}"`,
+    });
+    try {
+      await session.waitFor("No sessions yet");
+      await session.press("\x00");
+      await session.press("n");
+      await session.waitFor("Pick a directory");
+      await session.press("\r"); // scratch HOME, the cold-start fallback
+      await Bun.sleep(300);
+      await session.press("\r"); // accept its basename as the session name
+
+      const markerPath = join(session.home, marker);
+      const deadline = Date.now() + 10_000;
+      while (!existsSync(markerPath) && Date.now() < deadline) {
+        await Bun.sleep(120);
+      }
+      expect(existsSync(markerPath)).toBe(true);
     } finally {
       session.dispose();
     }
