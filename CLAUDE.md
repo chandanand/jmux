@@ -42,6 +42,7 @@ These are two different tmux *clients* attached to the same *server*. Several su
 - `%client-session-changed` is authoritative for the PTY client's current session. `%session-changed` on the control channel refers to the *control* client and is deliberately ignored during normal operation (see the event handler in `main.ts` around line 1711).
 - Session switches must target the PTY client by name: `switch-client -c <ptyClientName> -t <session>`. The name is resolved by matching `list-clients` entries against the PTY's PID in `resolveClientName()` (`main.ts:582`).
 - `refresh-client -f no-output` is sent at control startup to suppress `%output` notifications so they don't flood the parser.
+- **The filtered `fetchSessions()` snapshot owns the last-session edge.** After startup, its non-empty → empty transition calls the existing `enterGlass()` lifecycle; shell exit, Ctrl-D, final pane/window close and `kill-session` all converge there regardless of which duplicate tmux events they emit. `currentSessions` is replaced before any await, so only the first successful refresh can observe the edge. `__jmux_park` keeps the PTY alive underneath, while explicit detach/quit still closes the PTY and follows normal cleanup. A non-empty result never enters glass, preserving tmux's switch to another real session.
 
 ### The rendering pipeline
 

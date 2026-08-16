@@ -34,6 +34,13 @@ Every running jmux instance talks to tmux in two ways at once:
 
 These are two different tmux *clients* attached to the same *server*.
 
+The park session also keeps the PTY alive when the final real session is
+destroyed. `fetchSessions()` treats its filtered real-session list as the
+authority: after startup, a non-empty → empty transition enters the same
+Command Center lifecycle used by an empty cold start. If another real session
+remains, tmux selects it normally. An explicit detach still closes the PTY and
+exits jmux instead of entering Command Center.
+
 ## The rendering pipeline
 
 ```

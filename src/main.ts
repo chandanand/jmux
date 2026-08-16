@@ -4289,6 +4289,15 @@ async function fetchSessions(): Promise<void> {
 
     const previousSessions = currentSessions;
     currentSessions = sessions;
+    // A successful list-sessions reply is the authoritative real-session
+    // snapshot. Detect the edge here, after startup, rather than from any one
+    // tmux destroy event: a shell exit, Ctrl-D, a final pane/window close and
+    // kill-session all produce different event bursts, but they converge on
+    // this same filtered list. The assignment above happens before any await,
+    // so duplicate/concurrent refreshes are self-deduplicating — only the
+    // first can observe >0 -> 0; every follower observes 0 -> 0.
+    const lostLastRealSession =
+      startupComplete && previousSessions.length > 0 && sessions.length === 0;
     invalidateSessionIssueIndex();
 
     // Mark sessions with activity since last viewed
@@ -4359,6 +4368,13 @@ async function fetchSessions(): Promise<void> {
       titleGenerator?.forget(prev.name);
       gitTitleInputs.delete(prev.id);
     }
+
+    // detach-on-destroy keeps the interactive client alive by moving it to the
+    // internal park session. Turn that otherwise-blank holding shell into the
+    // useful, already-existing empty Command Center. If the user was already
+    // in Command Center, its invalidated grid will reconcile to the same empty
+    // state without re-entering and overwriting preGlassSessionId.
+    if (lostLastRealSession && !inGlass) await enterGlass();
 
     renderFrame();
 

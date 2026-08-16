@@ -65,6 +65,11 @@ normal terminal.
 - **Command Center** (right, while empty): creates or surveys sessions
 - **Main area** (after choosing a session): your normal terminal — run commands, edit files, whatever you'd normally do
 
+If you later exit or kill your final session, jmux stays open and returns to
+this same empty Command Center; setup does not run again. When another session
+still exists, tmux moves you to it as usual. `Ctrl-Space d` remains an explicit
+detach and exits jmux normally.
+
 ---
 
 ## Core concepts
