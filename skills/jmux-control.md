@@ -45,7 +45,7 @@ If not set, you're outside jmux and most commands require explicit `--session` f
 | `jmux ctl session attention clear --target N` | Clear the attention flag |
 | `jmux ctl issue create --title T [--description D] [--team T] [--start]` | File a new issue; `--start` also provisions the session |
 | `jmux ctl issue start <issue-id> [--repo P] [--wait [sec]]` | Start (or resume) work for an issue. Returns immediately; worktree setup continues in a pane |
-| `jmux ctl issue get <issue-id>` | Fetch issue details from the tracker |
+| `jmux ctl issue get <issue-id>` | Fetch issue details from the tracker — `<issue-id>` accepts either an identifier (e.g. `TRA-1866`) or the tracker's own id (the UUID `ctl status` reports for a session's linked issues) |
 | `jmux ctl issue list [--assignee viewer] [--status NAME]...` | The operator's assigned issues, with labels |
 | `jmux ctl issue move <issue-id> <status>` | Move an issue along the workflow |
 | `jmux ctl issue link <session> <issue-id>` | Add an issue to a session (a session may carry several) |

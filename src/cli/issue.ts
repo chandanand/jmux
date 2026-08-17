@@ -449,6 +449,35 @@ async function issueCreate(
   return { created: true, identifier: issue.identifier, id: issue.id, url: issue.webUrl, started };
 }
 
+/**
+ * `issue get`'s resolution order: try the branch/identifier path first — the
+ * same one every other command resolves through — and only when that yields
+ * nothing, fall back to the tracker's own id.
+ *
+ * `ctl status` reports a session's linked issues as tracker ids (Linear's
+ * `issue(id:)` accepts a UUID; `getIssueByBranch` does not), so without this
+ * fallback there was no way to go from a session's link back to its issue.
+ * The fallback is additive only: it never runs while the branch path still
+ * has an answer, so every input that resolves today keeps resolving the same
+ * way.
+ *
+ * `byId` throwing means "no issue with that id" (the tracker's own 404), the
+ * same outcome as `byBranch` returning null — both collapse to `null` here so
+ * the caller reports one clean "not found" instead of an unhandled rejection.
+ */
+export async function resolveIssueGetTarget(
+  byBranch: () => Promise<Issue | null>,
+  byId: () => Promise<Issue>,
+): Promise<Issue | null> {
+  const viaBranch = await byBranch();
+  if (viaBranch) return viaBranch;
+  try {
+    return await byId();
+  } catch {
+    return null;
+  }
+}
+
 async function fetchIssue(issueId: string): Promise<Issue | null> {
   const adapter = new LinearAdapter({});
   await adapter.authenticate();
@@ -457,8 +486,13 @@ async function fetchIssue(issueId: string): Promise<Issue | null> {
       "Linear is not configured: set LINEAR_API_KEY or LINEAR_TOKEN",
     );
   }
-  // getIssueByBranch extracts the identifier from the string and resolves it.
-  return await adapter.getIssueByBranch(issueId);
+  // getIssueByBranch extracts the identifier from the string and resolves it;
+  // pollIssue resolves by the tracker's own id, tried only if that comes up
+  // empty (see resolveIssueGetTarget).
+  return await resolveIssueGetTarget(
+    () => adapter.getIssueByBranch(issueId),
+    () => adapter.pollIssue(issueId),
+  );
 }
 
 async function issueGet(parsed: ParsedCtlArgs): Promise<unknown> {
