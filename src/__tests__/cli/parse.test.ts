@@ -166,6 +166,29 @@ describe("parseCtlArgs", () => {
   });
 });
 
+describe("repeated value flags", () => {
+  // `flags` must stay last-wins for every existing command's sake — this is
+  // the regression guard for that promise.
+  test("a value flag given twice leaves flags[name] holding the last value", () => {
+    const result = parseCtlArgs([
+      "issue", "list", "--status", "To do", "--status", "QA Failed",
+    ]);
+    expect(result.flags.status).toBe("QA Failed");
+    expect(result.repeated.status).toEqual(["To do", "QA Failed"]);
+  });
+
+  test("a value flag given once is a plain string in flags and a single-element array in repeated", () => {
+    const result = parseCtlArgs(["issue", "list", "--status", "To do"]);
+    expect(result.flags.status).toBe("To do");
+    expect(result.repeated.status).toEqual(["To do"]);
+  });
+
+  test("a value flag never given has no entry in repeated", () => {
+    const result = parseCtlArgs(["issue", "list"]);
+    expect(result.repeated.status).toBeUndefined();
+  });
+});
+
 describe("end-of-flags (`--`)", () => {
   // `browser action` hands everything after `--` to another program's CLI.
   // Parsing it as ours dropped the flag *names* and left their values as bare

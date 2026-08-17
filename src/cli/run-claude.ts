@@ -8,7 +8,7 @@ import { runTmuxDirect } from "./tmux";
 import { tmuxOrThrow, CliError, type CliContext } from "./context";
 import type { ParsedCtlArgs } from "../cli";
 
-export function validateRunClaude(flags: Record<string, string | boolean | string[]>): {
+export function validateRunClaude(flags: Record<string, string | boolean>): {
   name: string;
   dir: string;
 } {

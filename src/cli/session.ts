@@ -164,7 +164,7 @@ export function parseHiddenList(lines: string[]): HiddenSessionEntry[] {
   return out;
 }
 
-export function validateSessionCreate(flags: Record<string, string | boolean | string[]>): {
+export function validateSessionCreate(flags: Record<string, string | boolean>): {
   name: string;
   dir: string;
   command?: string;

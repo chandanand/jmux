@@ -255,7 +255,7 @@ export interface IssueCreateArgs {
  * to a browser. That is the whole point: the idea never leaves the tracker.
  */
 export function validateIssueCreate(
-  flags: Record<string, string | boolean | string[]>,
+  flags: Record<string, string | boolean>,
 ): IssueCreateArgs {
   const title = typeof flags.title === "string" ? flags.title.trim() : "";
   if (!title) throw new CliError("issue create requires --title <text>");
@@ -359,12 +359,9 @@ async function issueList(parsed: ParsedCtlArgs): Promise<unknown> {
     throw new CliError("issue list only supports --assignee viewer");
   }
 
-  const statusFlag = flags.status;
-  const statuses = statusFlag === undefined
-    ? []
-    : Array.isArray(statusFlag)
-      ? statusFlag
-      : [statusFlag as string];
+  // `repeated.status` carries every `--status` occurrence in order, including
+  // the case of exactly one — `flags.status` (last-wins) is never needed here.
+  const statuses = parsed.repeated.status ?? [];
 
   const adapter = new LinearAdapter({});
   await adapter.authenticate();
@@ -731,11 +728,7 @@ async function issueStart(
   // Validated before any lookup or side effect. Deferring it meant a typo cost
   // a tracker round-trip first, and was skipped entirely on the reuse paths —
   // validation that only fires sometimes is validation nobody can rely on.
-  // `wait` is never a repeated flag (it's parsed by OPTIONAL_NUMERIC_FLAGS,
-  // not the array-accumulating VALUE_FLAGS branch), so it is never actually an
-  // array at runtime — this narrows the shared flags type back to what
-  // parseWaitFlag has always accepted.
-  const waitSpec = parseWaitFlag(Array.isArray(flags.wait) ? undefined : flags.wait);
+  const waitSpec = parseWaitFlag(flags.wait);
 
   const rows = listIssueLinkRows(ctx);
   const reuse = (row: IssueLinkRow, id: string): IssueStartResult => ({

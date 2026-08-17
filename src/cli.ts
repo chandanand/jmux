@@ -15,13 +15,17 @@ import { handleCc } from "./cli/cc";
 export interface ParsedCtlArgs {
   group: string;
   action: string | null;
-  /**
-   * A value flag repeated on the command line (e.g. `--status a --status b`)
-   * accumulates into a `string[]` rather than the last one winning — see the
-   * value-flag branch below.
-   */
-  flags: Record<string, string | boolean | string[]>;
+  /** Last-wins, exactly as before — every existing command reads this unchanged. */
+  flags: Record<string, string | boolean>;
   positional: string[];
+  /**
+   * Every value a value flag carried, in the order given, additive alongside
+   * `flags`. A flag given once still gets a single-element entry here, so a
+   * caller that wants "all of them" never has to special-case the common case
+   * of exactly one. Only value flags appear — `flags` remains the only source
+   * for boolean and optional-numeric flags.
+   */
+  repeated: Record<string, string[]>;
 }
 
 const KNOWN_GROUPS = [
@@ -156,7 +160,8 @@ export function parseCtlArgs(argv: string[]): ParsedCtlArgs {
     process.exit(0);
   }
 
-  const flags: Record<string, string | boolean | string[]> = {};
+  const flags: Record<string, string | boolean> = {};
+  const repeated: Record<string, string[]> = {};
   let i = 0;
 
   // Parse global flags before the group
@@ -243,18 +248,12 @@ export function parseCtlArgs(argv: string[]): ParsedCtlArgs {
           throw new CliError(`Flag --${name} requires a value`);
         }
         const value = argv[++i];
-        // Repeating a value flag (e.g. `issue list --status a --status b`)
-        // accumulates rather than the last one winning — the caller asked for
-        // both, and silently keeping only the last would answer a different
-        // question than the one asked.
-        const existing = flags[name];
-        if (existing === undefined) {
-          flags[name] = value;
-        } else if (Array.isArray(existing)) {
-          existing.push(value);
-        } else {
-          flags[name] = [existing as string, value];
-        }
+        // Last-wins, exactly as every existing command has always seen it.
+        flags[name] = value;
+        // Additive: every occurrence, in order, alongside the last-wins value
+        // above — `issue list --status a --status b` needs both, and nothing
+        // that reads `flags[name]` directly is affected by this array existing.
+        (repeated[name] ??= []).push(value);
         i++;
       } else {
         // Unknown flag — treat as boolean (permissive)
@@ -268,7 +267,7 @@ export function parseCtlArgs(argv: string[]): ParsedCtlArgs {
     }
   }
 
-  return { group, action, flags, positional };
+  return { group, action, flags, positional, repeated };
 }
 
 export async function runCtl(argv: string[]): Promise<void> {
