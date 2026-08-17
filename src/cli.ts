@@ -5,6 +5,7 @@ import { handlePane } from "./cli/pane";
 import { handleRunClaude } from "./cli/run-claude";
 import { handleAgent, runAgentWatch } from "./cli/agent";
 import { handleStatus } from "./cli/status";
+import { handleIdentity } from "./cli/identity";
 import { handleIssue } from "./cli/issue";
 import { handleWorkflow } from "./cli/workflow";
 import { handleBrowser } from "./cli/browser";
@@ -29,9 +30,10 @@ const KNOWN_GROUPS = [
   "issue",
   "workflow",
   "status",
+  "identity",
   "cc",
 ] as const;
-const STANDALONE_GROUPS = new Set(["run-claude", "status"]);
+const STANDALONE_GROUPS = new Set(["run-claude", "status", "identity"]);
 
 // Flags that take a value argument (after group/action, or global)
 const GLOBAL_VALUE_FLAGS = new Set(["session", "socket"]);
@@ -95,6 +97,7 @@ GROUPS
   issue      Work with issues (issue get|link|unlink|start|create|move)
   workflow   The work pipeline (workflow stages|board|next|statuses)
   status     One-shot orchestration snapshot of the whole workspace
+  identity   The tracker's authenticated account
   cc         Command Center views (cc views)
   browser    Browser panes (browser list|open|action)
   dev-servers What is listening in a session, and on which port
@@ -297,6 +300,9 @@ export async function runCtl(argv: string[]): Promise<void> {
         break;
       case "status":
         result = handleStatus(ctx, parsed);
+        break;
+      case "identity":
+        result = await handleIdentity(parsed);
         break;
       case "cc":
         result = handleCc(ctx, parsed);

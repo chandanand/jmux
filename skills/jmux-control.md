@@ -38,6 +38,7 @@ If not set, you're outside jmux and most commands require explicit `--session` f
 | `jmux ctl pane capture --target %ID` | Read pane contents |
 | `jmux ctl pane kill --target %ID` | Kill a pane |
 | `jmux ctl status` | One-shot snapshot of the whole workspace |
+| `jmux ctl identity` | The tracker's authenticated account |
 | `jmux ctl agent state [--session N] [--all]` | Structured agent state (running/waiting/complete) |
 | `jmux ctl agent watch [--session N] [--all]` | Stream agent state changes as JSONL |
 | `jmux ctl session attention set --target N [--reason "..."]` | Flag a session as needing the human |
@@ -361,6 +362,14 @@ session with any other `session`/`pane`/`window` subcommand.
 }
 ```
 `agent` is `null` when there's no agent in the session. `branch` is `null` if the path isn't a git repo.
+
+### identity
+```json
+{"tracker": {"type": "linear", "authState": "ok", "account": "operator@example.com", "organization": "acme"}}
+```
+`account` and `organization` are `null` when `authState` isn't `"ok"` — this is
+the command to check *before* relying on tracker-backed commands like `issue`
+or `workflow`.
 
 ### agent state
 ```json
