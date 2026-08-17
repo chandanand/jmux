@@ -649,6 +649,10 @@ let infoPanelSplitRatio =
   configStore.config.infoPanelSplitRatio ?? DEFAULT_PANEL_SPLIT_RATIO;
 const DRAG_RESIZE_INTERVAL_MS = 33; // ~30fps, matching RENDER_INTERVAL_ACTIVE
 const toolbarEnabled = true;
+// True only while InputRouter is waiting for the key after Ctrl-Space. The
+// toolbar acknowledges the first half of the chord immediately, then the
+// router clears it on the second key or its existing two-second timeout.
+let prefixActive = false;
 // Opt-in second toolbar row showing each window's git branch. Read once at
 // startup; changing it requires a restart (toolbarHeight feeds PTY sizing).
 const windowBranchesEnabled = configStore.config.windowBranches === true;
@@ -1334,10 +1338,13 @@ function makeToolbar(): ToolbarConfig {
     hoverHint: toolbarHoverHint(),
     tabs: currentWindows,
     hoveredTabId,
-    // A live undo takes the chip: it is transient and time-boxed, and being
-    // able to take the write back matters more for those 20s than ambient
-    // snapshot health does.
-    statusChip: undoChipLabel() ?? toastLabel() ?? snapshotChipLabel(getSnapshotHealth()),
+    // A pending prefix takes the chip for the fraction of a second in which
+    // the next key has meaning. Undo/toast then outrank ambient snapshot
+    // health as before.
+    statusChip: prefixActive
+      ? "^Space …"
+      : undoChipLabel() ?? toastLabel() ?? snapshotChipLabel(getSnapshotHealth()),
+    statusChipActive: prefixActive,
   };
 }
 
@@ -5419,6 +5426,10 @@ const inputRouter = new InputRouter(
       }
       pty.write(data);
       clearSessionIndicators();
+    },
+    onPrefixChange: (active) => {
+      prefixActive = active;
+      scheduleRender();
     },
     onSidebarClick: (row, col) => {
       if (sidebar.headerGroupToggleHit(row, col)) {

@@ -1473,6 +1473,27 @@ describe("toolbar snapshot status chip (restored to the live toolbar after the f
     const row0 = result.cells[0].map((c) => c.char).join("");
     expect(row0).toContain("snapshot stale");
   });
+
+  test("an active status chip uses the accent instead of the ambient dim style", () => {
+    const sidebar = createGrid(6, 6);
+    const main = createGrid(40, 4);
+    const toolbar = {
+      buttons: buildToolbarButtons({ panelActive: false }),
+      mainCols: 40,
+      tabs: [],
+      statusChip: "^Space …",
+      statusChipActive: true,
+    };
+    const layout = makeLayout({ sidebarCols: 6, mainCols: 40, toolbarRows: 1, termRows: 4 });
+    const result = compositeGrids(layout, main, sidebar, toolbar);
+    const prefixCell = result.cells[0].find((cell) => cell.char === "^");
+
+    expect(prefixCell).toBeDefined();
+    expect(prefixCell!.fg).toBe(tokens.accent.fg!);
+    expect(prefixCell!.fgMode).toBe(tokens.accent.fgMode!);
+    expect(prefixCell!.bold).toBe(true);
+    expect(prefixCell!.dim).toBe(false);
+  });
 });
 
 describe("toolbar tab separator is blank space, not a │ glyph (Task 7)", () => {

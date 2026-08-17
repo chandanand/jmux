@@ -23,9 +23,11 @@ export interface ToolbarConfig {
   hoveredButton?: string | null;
   tabs?: WindowTab[];
   hoveredTabId?: string | null;
-  /** When set, a dim status chip is rendered between tabs and buttons —
-   * the toolbar's snapshot-health indicator (see main.ts's makeToolbar()). */
+  /** When set, a status chip is rendered between tabs and buttons. Ambient
+   * chips are dim by default; see statusChipActive for transient gestures. */
   statusChip?: string | null;
+  /** Give a transient, user-triggered status chip the active accent. */
+  statusChipActive?: boolean;
   /**
    * Name and keybinding of the button the pointer is currently over, rendered
    * in the same slot as `statusChip` when that slot is free.
@@ -604,11 +606,15 @@ export function compositeGrids(
         writeStyledLine(grid, 0, mainX + x, segments, width);
       }
 
-      // Render status chip (dim text, right-aligned just before action buttons)
+      // Render status chip, right-aligned just before action buttons. Ambient
+      // state stays dim; an in-progress user gesture (such as a pending
+      // prefix chord) uses the active accent so the acknowledgement is clear.
       const chip = toolbarLayout!.statusChip;
       if (chip && toolbar.statusChip) {
         const label = ` ${toolbar.statusChip} `;
-        const attrs: CellAttrs = { fg: 8, fgMode: ColorMode.Palette, dim: true };
+        const attrs: CellAttrs = toolbar.statusChipActive
+          ? { ...tokens.accent, bold: true, dim: false }
+          : { fg: 8, fgMode: ColorMode.Palette, dim: true };
         writeStyledLine(grid, 0, mainX + chip.x, [{ text: label, attrs }], chip.width);
       }
 

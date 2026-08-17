@@ -185,6 +185,36 @@ describe("Ctrl-Shift arrow detection", () => {
     expect(calls).toEqual(["prev", "next"]);
   });
 
+  test("reports the pending prefix state until the chord's second key", () => {
+    const states: boolean[] = [];
+    const router = new InputRouter({
+      onPtyData: () => {},
+      onSidebarClick: () => {},
+      onPrefixChange: (active) => { states.push(active); },
+      onModalToggle: () => {},
+    }, baseLayout(24));
+
+    router.handleInput("\x00");
+    expect(states).toEqual([true]);
+
+    router.handleInput("p");
+    expect(states).toEqual([true, false]);
+  });
+
+  test("clears the pending prefix state for an unrecognized second key", () => {
+    const states: boolean[] = [];
+    const router = new InputRouter({
+      onPtyData: () => {},
+      onSidebarClick: () => {},
+      onPrefixChange: (active) => { states.push(active); },
+    }, baseLayout(24));
+
+    router.handleInput("\x00");
+    router.handleInput("q");
+
+    expect(states).toEqual([true, false]);
+  });
+
   test("Ctrl-Space h/j/k/l moves pane focus", () => {
     const calls: string[] = [];
     const router = new InputRouter({

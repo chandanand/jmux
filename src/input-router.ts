@@ -70,6 +70,8 @@ export function translateMouse(
 export interface InputRouterOptions {
   onPtyData: (data: string) => void;
   onSidebarClick: (row: number, col: number) => void;
+  /** Reports the pending Ctrl-Space chord window for transient UI feedback. */
+  onPrefixChange?: (active: boolean) => void;
   onSidebarScroll?: (delta: number) => void;
   onToolbarClick?: (col: number) => void;
   // Chrome footer row — see classifyRow. col is the 0-indexed absolute grid
@@ -241,6 +243,13 @@ export class InputRouter {
   constructor(opts: InputRouterOptions, layout: FrameLayout) {
     this.opts = opts;
     this.layout = layout;
+  }
+
+  /** Keep the router's prefix state and its visual affordance on one edge. */
+  private setPrefixSeen(seen: boolean): void {
+    if (this.prefixSeen === seen) return;
+    this.prefixSeen = seen;
+    this.opts.onPrefixChange?.(seen);
   }
 
   /**
@@ -473,7 +482,7 @@ export class InputRouter {
     // Center have their wider, explicitly documented arms below.
     if (this.prefixSeen || data === PREFIX_BYTE) {
       if (this.prefixSeen) {
-        this.prefixSeen = false;
+        this.setPrefixSeen(false);
         if (this.prefixTimer) { clearTimeout(this.prefixTimer); this.prefixTimer = null; }
 
         if (this.modalOpen && !surfaceActive) {
@@ -739,9 +748,9 @@ export class InputRouter {
         }
         // Not intercepted — forward to PTY normally (tmux handles its prefix binding)
       } else if (data === PREFIX_BYTE) {
-        this.prefixSeen = true;
+        this.setPrefixSeen(true);
         this.prefixTimer = setTimeout(() => {
-          this.prefixSeen = false;
+          this.setPrefixSeen(false);
           this.prefixTimer = null;
           this.glassPrefixDeferred = false;
           this.surfacePrefixDeferred = false;
