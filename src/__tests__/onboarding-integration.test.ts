@@ -192,11 +192,13 @@ describe.skipIf(!TMUX)("onboarding, under a real pty", () => {
     }
   }, 60_000);
 
-  test("a generic new session launches the configured agent", async () => {
+  test("a generic first session launches the configured agent and names its window", async () => {
     const marker = ".jmux-agent-launched";
     const session = await boot(120, 40, {
       configured: true,
-      agentCommand: `touch "$HOME/${marker}"`,
+      // Keep the launched process alive so pane_current_command has a stable
+      // post-launch value for the automatic window classifier to observe.
+      agentCommand: `touch "$HOME/${marker}"; exec sleep 30`,
     });
     try {
       await session.waitFor("No sessions yet");
@@ -213,6 +215,20 @@ describe.skipIf(!TMUX)("onboarding, under a real pty", () => {
         await Bun.sleep(120);
       }
       expect(existsSync(markerPath)).toBe(true);
+
+      let windowRow = "";
+      while (Date.now() < deadline) {
+        windowRow = tmux([
+          "list-windows",
+          "-t",
+          basename(session.home),
+          "-F",
+          `#{window_name}:#{${AUTO_WINDOW_TITLE_OPTION}}:#{pane_current_command}`,
+        ]);
+        if (windowRow === "sleep:sleep:sleep") break;
+        await Bun.sleep(120);
+      }
+      expect(windowRow).toBe("sleep:sleep:sleep");
     } finally {
       session.dispose();
     }

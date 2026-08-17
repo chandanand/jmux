@@ -77,7 +77,13 @@ function cwdName(cwd: string): string {
 
 /** Whether resolving argv can improve the answer for this executable. */
 export function needsWindowProcessArgv(command: string): boolean {
-  return ARG_SENSITIVE.has(commandName(command));
+  const name = commandName(command);
+  // Auto-launched agents intentionally run as `agent; exec $SHELL` so closing
+  // the agent leaves a usable session. On macOS tmux may therefore keep
+  // reporting the wrapper shell as pane_current_command while the agent is in
+  // the foreground. Its argv still contains the launched command, and the
+  // same one-shot process snapshot used for language runners can recover it.
+  return ARG_SENSITIVE.has(name) || SHELLS.has(name);
 }
 
 /** Parse portable `ps -Ao pid=,ppid=,args=` output. */

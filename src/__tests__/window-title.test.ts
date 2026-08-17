@@ -21,6 +21,11 @@ describe("deriveAutomaticWindowTitle", () => {
   test("agents keep their recognizable names", () => {
     expect(deriveAutomaticWindowTitle({ command: "codex", cwd: "/code/api" })).toBe("codex");
     expect(deriveAutomaticWindowTitle({
+      command: "fish",
+      cwd: "/code/api",
+      argv: "fish -c codex --profile work --approve-for-me; exec $SHELL",
+    })).toBe("codex");
+    expect(deriveAutomaticWindowTitle({
       command: "node",
       cwd: "/code/api",
       argv: "node /opt/lib/node_modules/@anthropic-ai/claude-code/cli.js",
@@ -69,10 +74,22 @@ describe("process argv resolution", () => {
     expect(windowProcessArgv(300, "bun", processes)).toBeNull();
   });
 
+  test("recovers an auto-launched agent from its wrapper shell", () => {
+    const wrapped = parseWindowProcesses([
+      " 400 1 /opt/homebrew/bin/fish -c codex --profile work --approve-for-me; exec $SHELL",
+      " 401 400 /opt/homebrew/bin/codex --profile work --approve-for-me",
+    ].join("\n"));
+    const argv = windowProcessArgv(400, "fish", wrapped);
+    expect(argv).toContain("fish -c codex");
+    expect(deriveAutomaticWindowTitle({ command: "fish", cwd: "/code/api", argv }))
+      .toBe("codex");
+  });
+
   test("only ambiguous executables pay for a process snapshot", () => {
     expect(needsWindowProcessArgv("bun")).toBe(true);
     expect(needsWindowProcessArgv("node")).toBe(true);
+    expect(needsWindowProcessArgv("fish")).toBe(true);
     expect(needsWindowProcessArgv("nvim")).toBe(false);
-    expect(needsWindowProcessArgv("zsh")).toBe(false);
+    expect(needsWindowProcessArgv("zsh")).toBe(true);
   });
 });
