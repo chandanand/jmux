@@ -13,6 +13,7 @@ import {
   resolveTeamId,
   parseWaitFlag,
   provisioningDone,
+  filterIssuesByStatus,
   type IssueLinkRow,
 } from "../../cli/issue";
 import type { Issue } from "../../adapters/types";
@@ -332,6 +333,38 @@ describe("parseWaitFlag", () => {
     for (const bad of ["0", "-5", "soon", ""]) {
       expect(() => parseWaitFlag(bad)).toThrow(/--wait/);
     }
+  });
+});
+
+describe("filterIssuesByStatus", () => {
+  // Built the way the neighbouring tests in this file build fixtures: a helper
+  // returning a real typed value, so the test cannot drift from the interface.
+  function issue(identifier: string, status: string): Issue {
+    return {
+      id: identifier, identifier, title: `Title for ${identifier}`, status,
+      stateType: "unstarted", assignee: null, linkedMrUrls: [],
+      webUrl: `https://tracker.example/${identifier}`, team: "Core",
+    };
+  }
+
+  const issues: Issue[] = [
+    issue("AAA-1", "To do"),
+    issue("AAA-2", "QA Failed"),
+    issue("AAA-3", "In Progress"),
+  ];
+
+  test("keeps only the named statuses, case-insensitively", () => {
+    const kept = filterIssuesByStatus(issues, ["to do", "QA FAILED"]);
+    expect(kept.map((i) => i.identifier)).toEqual(["AAA-1", "AAA-2"]);
+  });
+
+  test("an empty status list keeps everything", () => {
+    expect(filterIssuesByStatus(issues, [])).toHaveLength(3);
+  });
+
+  test("preserves the tracker's ordering rather than sorting", () => {
+    const kept = filterIssuesByStatus(issues, ["In Progress", "To do"]);
+    expect(kept.map((i) => i.identifier)).toEqual(["AAA-1", "AAA-3"]);
   });
 });
 

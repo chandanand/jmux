@@ -15,7 +15,12 @@ import { handleCc } from "./cli/cc";
 export interface ParsedCtlArgs {
   group: string;
   action: string | null;
-  flags: Record<string, string | boolean>;
+  /**
+   * A value flag repeated on the command line (e.g. `--status a --status b`)
+   * accumulates into a `string[]` rather than the last one winning — see the
+   * value-flag branch below.
+   */
+  flags: Record<string, string | boolean | string[]>;
   positional: string[];
 }
 
@@ -59,6 +64,8 @@ const VALUE_FLAGS = new Set([
   "description",
   "team",
   "stage",
+  "status",
+  "assignee",
 ]);
 /**
  * Flags whose value is optional and always numeric, so `--wait` and `--wait 60`
@@ -149,7 +156,7 @@ export function parseCtlArgs(argv: string[]): ParsedCtlArgs {
     process.exit(0);
   }
 
-  const flags: Record<string, string | boolean> = {};
+  const flags: Record<string, string | boolean | string[]> = {};
   let i = 0;
 
   // Parse global flags before the group
@@ -235,7 +242,19 @@ export function parseCtlArgs(argv: string[]): ParsedCtlArgs {
         if (i + 1 >= argv.length) {
           throw new CliError(`Flag --${name} requires a value`);
         }
-        flags[name] = argv[++i];
+        const value = argv[++i];
+        // Repeating a value flag (e.g. `issue list --status a --status b`)
+        // accumulates rather than the last one winning — the caller asked for
+        // both, and silently keeping only the last would answer a different
+        // question than the one asked.
+        const existing = flags[name];
+        if (existing === undefined) {
+          flags[name] = value;
+        } else if (Array.isArray(existing)) {
+          existing.push(value);
+        } else {
+          flags[name] = [existing as string, value];
+        }
         i++;
       } else {
         // Unknown flag — treat as boolean (permissive)

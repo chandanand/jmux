@@ -255,7 +255,7 @@ export interface IssueCreateArgs {
  * to a browser. That is the whole point: the idea never leaves the tracker.
  */
 export function validateIssueCreate(
-  flags: Record<string, string | boolean>,
+  flags: Record<string, string | boolean | string[]>,
 ): IssueCreateArgs {
   const title = typeof flags.title === "string" ? flags.title.trim() : "";
   if (!title) throw new CliError("issue create requires --title <text>");
@@ -302,6 +302,17 @@ export function resolveTeamId(
   throw new CliError(`unknown team "${input}"`);
 }
 
+/**
+ * Status filtering is the caller's, not the tracker's: `getMyIssues` returns
+ * every non-completed assigned issue, and which of those statuses matter is a
+ * decision the consumer makes. Ordering is the tracker's and is preserved.
+ */
+export function filterIssuesByStatus(issues: Issue[], statuses: string[]): Issue[] {
+  if (statuses.length === 0) return issues;
+  const wanted = new Set(statuses.map((s) => s.toLowerCase()));
+  return issues.filter((i) => wanted.has(i.status.toLowerCase()));
+}
+
 // --- Handlers ----------------------------------------------------------------
 
 export async function handleIssue(
@@ -312,6 +323,8 @@ export async function handleIssue(
   switch (action) {
     case "get":
       return await issueGet(parsed);
+    case "list":
+      return await issueList(parsed);
     case "link":
       return issueLink(ctx, parsed);
     case "unlink":
@@ -324,9 +337,43 @@ export async function handleIssue(
       return await issueMove(parsed);
     default:
       throw new CliError(
-        `Unknown issue action "${action}". Known actions: get, link, unlink, start, create, move`,
+        `Unknown issue action "${action}". Known actions: get, list, link, unlink, start, create, move`,
       );
   }
+}
+
+/**
+ * `issue list [--assignee viewer] [--status <name>]...` — the operator's own
+ * assigned queue, for an orchestrator that needs to model in-flight work
+ * without polling the tracker's UI.
+ *
+ * `--assignee` only ever accepts `viewer`: the adapter has no way to fetch
+ * anyone else's issues, so accepting another value would silently return the
+ * wrong set instead of the caller's actual request.
+ */
+async function issueList(parsed: ParsedCtlArgs): Promise<unknown> {
+  const { flags } = parsed;
+
+  const assignee = flags.assignee;
+  if (assignee !== undefined && assignee !== "viewer") {
+    throw new CliError("issue list only supports --assignee viewer");
+  }
+
+  const statusFlag = flags.status;
+  const statuses = statusFlag === undefined
+    ? []
+    : Array.isArray(statusFlag)
+      ? statusFlag
+      : [statusFlag as string];
+
+  const adapter = new LinearAdapter({});
+  await adapter.authenticate();
+  if (adapter.authState !== "ok") {
+    throw new CliError(`issue tracker not authenticated (${adapter.authHint})`);
+  }
+
+  const issues = await adapter.getMyIssues();
+  return { issues: filterIssuesByStatus(issues, statuses) };
 }
 
 /**
@@ -684,7 +731,11 @@ async function issueStart(
   // Validated before any lookup or side effect. Deferring it meant a typo cost
   // a tracker round-trip first, and was skipped entirely on the reuse paths —
   // validation that only fires sometimes is validation nobody can rely on.
-  const waitSpec = parseWaitFlag(flags.wait);
+  // `wait` is never a repeated flag (it's parsed by OPTIONAL_NUMERIC_FLAGS,
+  // not the array-accumulating VALUE_FLAGS branch), so it is never actually an
+  // array at runtime — this narrows the shared flags type back to what
+  // parseWaitFlag has always accepted.
+  const waitSpec = parseWaitFlag(Array.isArray(flags.wait) ? undefined : flags.wait);
 
   const rows = listIssueLinkRows(ctx);
   const reuse = (row: IssueLinkRow, id: string): IssueStartResult => ({
