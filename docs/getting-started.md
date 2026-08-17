@@ -372,7 +372,6 @@ the row reads `restart to apply` until you relaunch.
 
 - **Command palette** (`Ctrl-Space` then `p`) lets you fuzzy-search sessions, windows, pane actions, and settings — useful when you can't remember a keybinding
 - **Scroll the sidebar** with your mouse wheel when you have many sessions
-- **Click the version** at the bottom of the sidebar to see release notes
 - **Mouse selection** works — click and drag to select text, it copies to your clipboard
 - **Your tmux config** still works. If you have `~/.tmux.conf` (or `~/.config/tmux/tmux.conf`), jmux loads it. Your plugins, themes, and custom bindings carry over — and `userTmuxConfig: false` turns that off if its chrome collides with jmux's
 - **Resize panes** with `Ctrl-Space` then `H/J/K/L` (hold for continuous resize)

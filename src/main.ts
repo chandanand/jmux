@@ -3,7 +3,6 @@ import { TmuxPty } from "./tmux-pty";
 import { clipboardCopyCommand } from "./platform";
 import { MIN_TMUX_VERSION, tmuxVersionOk } from "./tmux-version";
 import { configFileIn, materializeAssets, skillIn } from "./assets";
-import { currentChannel, upgradeCommand } from "./channel";
 import {
   clearStampCommand,
   compareGeneration,
@@ -59,7 +58,6 @@ import { PREFIX_BYTE } from "./prefix";
 import { InputModal } from "./input-modal";
 import { ListModal, type ListItem } from "./list-modal";
 import { ContentModal, type StyledLine } from "./content-modal";
-import { renderMarkdownToStyledLines } from "./markdown";
 import {
   NewSessionModal,
   tq,
@@ -1350,16 +1348,14 @@ function makeToolbar(): ToolbarConfig {
 
 /**
  * Builds the footer's model from live state. The footer itself is disabled
- * (footerEnabled: false) — the snapshot chip and version indicator moved
- * back to the toolbar and sidebar respectively (see makeToolbar()'s
- * statusChip and sidebar.ts's version render / isVersionRow). This stays
- * only so footer.ts remains trivially re-enableable; it's unused at runtime.
+ * (footerEnabled: false). This stays only so footer.ts remains trivially
+ * re-enableable; it's unused at runtime.
  */
 function makeFooter(): FooterModel {
   return buildFooter({
     snapshotChip: snapshotChipLabel(getSnapshotHealth()),
-    version: sidebar.getVersion(),
-    updateAvailable: sidebar.hasUpdate() ? `v${sidebar.getLatestVersion()} avail` : null,
+    version: VERSION,
+    updateAvailable: null,
   });
 }
 
@@ -3029,7 +3025,6 @@ let snapshotter: import("./snapshot").Snapshotter | null = null;
 let lockRetrier: import("./snapshot").LockRetrier | null = null;
 let controlChannelLost = false;
 
-sidebar.setVersion(VERSION);
 const lastViewedTimestamps = new Map<string, number>();
 /**
  * Per-session git facts, with the two forms of a session's location kept
@@ -5442,10 +5437,6 @@ const inputRouter = new InputRouter(
         scheduleRender();
         return;
       }
-      if (sidebar.isVersionRow(row)) {
-        void showVersionInfo();
-        return;
-      }
       const groupKey = sidebar.getGroupKeyByRow(row);
       if (groupKey) {
         sidebar.toggleGroup(groupKey);
@@ -5513,15 +5504,6 @@ const inputRouter = new InputRouter(
       for (const { id, startCol, endCol } of ranges) {
         if (col >= startCol && col <= endCol) {
           handleToolbarAction(id);
-          return;
-        }
-      }
-    },
-    onFooterClick: (col) => {
-      const { ranges } = layoutFooter(makeFooter(), layout.termCols);
-      for (const { startCol, endCol, onClick } of ranges) {
-        if (col >= startCol && col <= endCol && onClick === "changelog") {
-          void showVersionInfo();
           return;
         }
       }
@@ -11016,101 +10998,6 @@ try {
 } catch {
   // Config file may not exist yet — watcher will fail silently
 }
-
-// --- Update check ---
-
-async function checkForUpdates(): Promise<void> {
-  try {
-    const resp = await fetch(
-      "https://api.github.com/repos/jarredkenny/jmux/releases/latest",
-      { headers: { "Accept": "application/vnd.github.v3+json" } },
-    );
-    if (!resp.ok) return;
-    const data = await resp.json() as { tag_name?: string };
-    const latest = data.tag_name?.replace(/^v/, "");
-    if (latest && latest !== VERSION) {
-      sidebar.setVersion(VERSION, latest);
-      scheduleRender();
-    }
-  } catch {
-    // Offline or rate-limited — no problem
-  }
-}
-
-async function showVersionInfo(): Promise<void> {
-  try {
-    const resp = await fetch(
-      `https://api.github.com/repos/jarredkenny/jmux/releases?per_page=10`,
-      { headers: { Accept: "application/vnd.github.v3+json" } },
-    );
-    if (!resp.ok) return;
-    const releases = await resp.json() as Array<{
-      tag_name: string; name?: string; published_at?: string; body?: string;
-    }>;
-
-    const currentTag = `v${VERSION}`;
-    const lines: StyledLine[] = [[]];
-
-    // An update indicator with no way to act on it is a dead end, and the right
-    // command differs per channel — brew, the installer, and npm each want
-    // something different. Detection is channel.ts's job; this only renders it.
-    const latestTag = releases[0]?.tag_name;
-    if (latestTag && latestTag !== currentTag) {
-      lines.push([
-        { text: "Update available — run ", attrs: { ...neutralFg(8), bg: theme.surface, bgMode: 2 } },
-        { text: upgradeCommand(currentChannel()), attrs: { fg: 2, fgMode: 1, bold: true, bg: theme.surface, bgMode: 2 } },
-      ]);
-      lines.push([]);
-    }
-
-    // Match ContentModal.preferredWidth() then subtract its 2-col padding each side.
-    const termCols = process.stdout.columns || 80;
-    const modalWidth = Math.min(Math.max(50, Math.round(termCols * 0.7)), 90);
-    const contentWidth = Math.max(20, modalWidth - 4);
-
-    for (const r of releases) {
-      const tag = r.tag_name;
-      const date = (r.published_at || "").split("T")[0];
-      const name = r.name || tag;
-      const isCurrent = tag === currentTag;
-
-      if (isCurrent) {
-        lines.push([
-          { text: name, attrs: { fg: 2, fgMode: 1, bold: true, bg: theme.surface, bgMode: 2 } },
-          { text: "  \u2190 current", attrs: { fg: 2, fgMode: 1, bg: theme.surface, bgMode: 2 } },
-        ]);
-      } else {
-        lines.push([{ text: name, attrs: { bold: true, bg: theme.surface, bgMode: 2 } }]);
-      }
-      lines.push([{ text: date, attrs: { ...neutralFg(8), dim: true, bg: theme.surface, bgMode: 2 } }]);
-      lines.push([]);
-
-      const body = (r.body || "").trim();
-      if (body) {
-        const rendered = renderMarkdownToStyledLines(body, contentWidth, {
-          baseAttrs: { bg: theme.surface, bgMode: 2 },
-        });
-        for (const line of rendered) {
-          lines.push(line);
-        }
-        lines.push([]);
-      }
-      lines.push([{ text: "\u2500".repeat(40), attrs: { ...neutralFg(8), dim: true, bg: theme.surface, bgMode: 2 } }]);
-      lines.push([]);
-    }
-    lines.push([{ text: "github.com/jarredkenny/jmux/releases", attrs: { ...neutralFg(8), dim: true, bg: theme.surface, bgMode: 2 } }]);
-
-    const modal = new ContentModal({ lines, title: "jmux changelog" });
-    modal.setTermRows(process.stdout.rows || 24);
-    modal.open();
-    openModal(modal, () => {});
-  } catch {
-    // Network error — silently fail
-  }
-}
-
-// Check for updates in the background (non-blocking)
-checkForUpdates();
 
 // Warm the project-dirs cache in the background so Ctrl-Space+n is instant
 refreshProjectDirsInBackground();
