@@ -23,7 +23,7 @@ import {
 import { detectSkill, installSkill, installSkills, uninstallIntegrations } from "./agent-hooks/skill";
 import { OnboardingModal, type OnboardingPort } from "./onboarding/modal";
 import { deriveStatus, type SetupFacts } from "./onboarding/status";
-import { applyTrackerCredential } from "./tracker-credential";
+import { applyAdapterCredential } from "./adapter-credential";
 import { ScreenBridge } from "./screen-bridge";
 import { Renderer, getToolbarButtonRanges, getToolbarTabRanges, getModalPosition, buildToolbarButtons, type ToolbarConfig } from "./renderer";
 import { InputRouter } from "./input-router";
@@ -143,7 +143,9 @@ import {
 } from "./issue-session";
 import { createAdapters } from "./adapters/registry";
 import { ActiveAdapters } from "./adapters/active-set";
-import { writeCredential, readCredentials } from "./credentials";
+import { writeCredential, readCredentials, resolveCredential, describeCredential } from "./credentials";
+import { GITLAB_ENV_NAMES } from "./adapters/gitlab";
+import { GITHUB_ENV_NAMES } from "./adapters/github";
 import { PollCoordinator } from "./adapters/poll-coordinator";
 import { SessionState } from "./session-state";
 import type { SessionContext, WorkflowState, AdapterConfig } from "./adapters/types";
@@ -2027,18 +2029,35 @@ for (const view of panelViews) {
   viewStates.set(view.id, createViewState());
 }
 
+/**
+ * Report an adapter that failed to authenticate at startup, on every channel
+ * that can carry it.
+ *
+ * It used to be `process.stderr` alone, which the alt screen swallows — so the
+ * whole visible consequence of a failed code host was that the MR tabs were not
+ * there, with nothing anywhere saying why, and `docs/connecting.md` telling
+ * people to go read a log line that was never written. Both channels, for the
+ * reason `resolveTitleConfig` uses both: the terminal is gone by now, and one
+ * toast is the only thing a user is actually looking at.
+ */
+function reportAdapterAuthFailure(adapter: { type: string; authState: string; authHint: string }): void {
+  const why = adapter.authState === "unreachable"
+    ? "could not be reached"
+    : `auth failed — check ${adapter.authHint}`;
+  const msg = `${adapter.type} adapter ${why}`;
+  process.stderr.write(`jmux: ${msg}\n`);
+  logError("jmux", msg);
+  showToast(msg);
+}
+
 async function initAdapters(): Promise<void> {
   if (adapters.codeHost) {
     await adapters.codeHost.authenticate();
-    if (adapters.codeHost.authState !== "ok") {
-      process.stderr.write(`jmux: ${adapters.codeHost.type} adapter auth failed — check ${adapters.codeHost.authHint}\n`);
-    }
+    if (adapters.codeHost.authState !== "ok") reportAdapterAuthFailure(adapters.codeHost);
   }
   if (adapters.issueTracker) {
     await adapters.issueTracker.authenticate();
-    if (adapters.issueTracker.authState !== "ok") {
-      process.stderr.write(`jmux: ${adapters.issueTracker.type} adapter auth failed — check ${adapters.issueTracker.authHint}\n`);
-    }
+    if (adapters.issueTracker.authState !== "ok") reportAdapterAuthFailure(adapters.issueTracker);
   }
   refreshPanelViews();
 }
@@ -4758,14 +4777,21 @@ function renderFrame(): void {
     const totalCols = fullScreenLayout.termCols;
     const contentCols = sidebarShown ? totalCols - fullScreenLayout.main.x : totalCols;
     const settingsGrid = settingsScreen.render(contentCols, fullScreenLayout.contentRows);
+    // The modal overlay is composited, for the reason the ghost preview states:
+    // this surface paints its own pickers and prompts, but not *only* those —
+    // an action row can open a real modal over it (the code-host token prompt,
+    // the remembered-routes picker), and passing null here opened those
+    // invisibly. Paired with the input guard below, without which the same
+    // modal would also be deaf.
+    const overlay = computeModalOverlay(fullScreenLayout);
     renderer.render(
       fullScreenLayout,
       settingsGrid,
       { x: 0, y: 0 },
       sidebarGrid,
       null, // no toolbar
-      null, // no modal
-      null, // no modal cursor
+      overlay?.grid ?? null,
+      overlay?.cursor ?? null,
       undefined, // no diff panel
       undefined, // no footer — frameless full-screen view
       dragChrome(),
@@ -5487,7 +5513,12 @@ const inputRouter = new InputRouter(
         handleWorkflowInput(data);
         return;
       }
-      if (settingsScreen.isOpen) {
+      // Guarded on no modal being open, for the same reason the preview is:
+      // an action row can open a real modal over this surface, and swallowing
+      // input here left that modal unable to receive the keys it exists to
+      // collect — invisible and deaf at once. The screen's own text editor and
+      // picker are `editState`, not modals, so they are unaffected.
+      if (settingsScreen.isOpen && !activeModal?.isOpen()) {
         handleSettingsInput(data);
         return;
       }
@@ -6402,7 +6433,7 @@ function buildOnboardingPort(): OnboardingPort {
         adapters.issueTracker?.type ??
         configStore.config.adapters?.issueTracker?.type ??
         "linear";
-      const result = await applyTrackerCredential({
+      const result = await applyAdapterCredential({
         type,
         token: token.trim(),
         readCredential: (t) => readCredentials()[t] ?? null,
@@ -7134,6 +7165,96 @@ function adapterConnectionNote(
   }
 }
 
+/**
+ * The environment variables each code host consults, read off the adapters
+ * rather than restated here — a second copy is free to name a variable the
+ * adapter does not actually look at, which is a settings row confidently
+ * sending somebody to export the wrong thing.
+ */
+const CODE_HOST_ENV_NAMES: Record<string, readonly string[]> = {
+  gitlab: GITLAB_ENV_NAMES,
+  github: GITHUB_ENV_NAMES,
+};
+
+/** What the code-host token row displays, and the disclosure beside it. */
+function codeHostCredential(): { value: string; note: string | null } {
+  const type = configStore.config.adapters?.codeHost?.type;
+  if (!type) return { value: "no code host", note: null };
+  return describeCredential(resolveCredential(type, CODE_HOST_ENV_NAMES[type] ?? []));
+}
+
+/**
+ * Verify a candidate code-host token against the code host alone.
+ *
+ * Deliberately **not** `swapAdapters`, which the tracker's own credential flow
+ * uses: that authenticates both slots and refuses the whole swap if either
+ * fails, so a broken tracker would reject a perfectly good GitLab token and
+ * blame GitLab for it. The two adapters are independent everywhere else and a
+ * credential check is the last place to couple them.
+ *
+ * The coupling still exists in `swapAdapters` itself, so publishing can be
+ * refused for a reason that has nothing to do with this token — see the caller,
+ * which says so rather than leaving a saved credential looking inert.
+ */
+async function verifyCodeHostToken(type: string): Promise<boolean> {
+  const candidate = createAdapters({
+    codeHost: { ...configStore.config.adapters?.codeHost, type },
+  });
+  if (!candidate.codeHost) return false;
+  await candidate.codeHost.authenticate();
+  return candidate.codeHost.authState === "ok";
+}
+
+/**
+ * Store a code-host token in jmux itself.
+ *
+ * The code host could previously only read a token out of the ambient
+ * environment or scrape one from `glab` / `gh`, so whether the MR tabs appeared
+ * depended on which shell happened to launch jmux — and when it didn't, the
+ * tabs simply weren't there. The tracker has had the durable answer since the
+ * setup wizard shipped; this is the same one function, given the code host's
+ * slot to write.
+ */
+function promptForCodeHostToken(): void {
+  const type = configStore.config.adapters?.codeHost?.type;
+  if (!type) {
+    // Nothing may advertise an action it cannot perform: with no code host
+    // chosen there is no adapter type to key a credential on.
+    showToast("Choose a code host first — the row above");
+    return;
+  }
+  const modal = new InputModal({
+    header: `Paste your ${type} token`,
+    subheader: "Checked before it is saved. Stored in ~/.config/jmux/credentials.json, mode 0600.",
+    requiredHint: "Paste a token, or press esc to leave it unchanged.",
+    secret: true,
+  });
+  modal.open();
+  openModal(modal, async (value) => {
+    const token = String(value ?? "").trim();
+    if (!token) return;
+    const result = await applyAdapterCredential({
+      type,
+      token,
+      readCredential: (t) => readCredentials()[t] ?? null,
+      writeCredential: (t, v) => writeCredential(t, v),
+      persistType: (t) => configStore.setAdapter("codeHost", { type: t }),
+      verify: () => verifyCodeHostToken(type),
+    });
+    if (!result.ok) {
+      showToast(`${type}: that token was rejected — the previous one is unchanged`);
+      return;
+    }
+    // Verified against the code host alone, so publishing it can still be
+    // refused over the *other* adapter. Saying so beats a stored token that
+    // works and a sidebar that goes on looking exactly as it did.
+    if (!(await swapAdapters(configStore.config.adapters ?? {}))) {
+      showToast(`${type} token saved — takes effect on restart`);
+    }
+    scheduleRender();
+  });
+}
+
 // --- Session title settings ---
 //
 // The last hand-written naming command, so the ◂ ▸ ladder can step past
@@ -7478,6 +7599,14 @@ function buildSettingsCategories(): SettingsCategory[] {
             void swapAdapters(configStore.config.adapters ?? {});
           },
           getNote: () => adapterConnectionNote(adapters.codeHost),
+        },
+        {
+          id: "code-host-token", label: "Code host token", type: "action" as const,
+          describe: () =>
+            "Stored in jmux at ~/.config/jmux/credentials.json, mode 0600, and preferred over the environment. Without one the token has to come from the shell jmux was launched from, or from glab / gh.",
+          getValue: () => codeHostCredential().value,
+          getNote: () => codeHostCredential().note,
+          onActivate: () => promptForCodeHostToken(),
         },
         {
           // Only the trackers `createAdapters` can actually build. GitHub is a

@@ -13,6 +13,9 @@ import { resolveCredential } from "../credentials";
 
 const GITHUB_API = "https://api.github.com";
 
+/** See `GITLAB_ENV_NAMES` — one list, read by the adapter and by the settings row. */
+export const GITHUB_ENV_NAMES = ["GH_TOKEN", "GITHUB_TOKEN"] as const;
+
 export function extractOwnerRepo(remoteUrl: string): string | null {
   const sshMatch = remoteUrl.match(/^git@[^:]+:(.+?)(?:\.git)?$/);
   if (sshMatch) return sshMatch[1];
@@ -113,11 +116,14 @@ export class GitHubAdapter implements CodeHostAdapter {
     // to be rejected. Without a real probe, swapping to a revoked token
     // replaces a working adapter with a dead one and reports success.
     const token =
-      resolveCredential("github", ["GH_TOKEN", "GITHUB_TOKEN"]).token ?? this.readGhToken() ?? null;
+      resolveCredential("github", GITHUB_ENV_NAMES).token ?? this.readGhToken() ?? null;
     if (!token) { this.authState = "failed"; this.identity = null; return; }
     this.token = token;
+    // Against `this.baseUrl`, like every other call here. Pinned to github.com,
+    // a GitHub Enterprise install sent its token to the wrong server, was told
+    // 401, and could never authenticate.
     try {
-      const resp = await fetch("https://api.github.com/user", {
+      const resp = await fetch(`${this.baseUrl}/user`, {
         headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
       });
       if (!resp.ok) { this.authState = "failed"; this.identity = null; return; }

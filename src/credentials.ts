@@ -29,6 +29,15 @@ export type CredentialSource = "file" | "env" | "none";
 export interface ResolvedCredential {
   token: string | null;
   source: CredentialSource;
+  /**
+   * The environment variable that actually carried a token, of the several each
+   * adapter accepts — `null` when none did.
+   *
+   * Named rather than assumed, because the disclosure below is a instruction to
+   * go and edit something: telling somebody who set `$GITLAB_PRIVATE_TOKEN` that
+   * `$GITLAB_TOKEN` is being ignored sends them to the wrong line.
+   */
+  envName: string | null;
   /** True when both a stored and an environment token exist and differ. */
   shadowed: boolean;
 }
@@ -103,14 +112,48 @@ export function resolveCredential(
 
   const stored = store[adapterType] ?? null;
   let fromEnv: string | null = null;
+  let envName: string | null = null;
   for (const name of envNames) {
     const v = env[name];
-    if (v !== undefined && v.length > 0) { fromEnv = v; break; }
+    if (v !== undefined && v.length > 0) { fromEnv = v; envName = name; break; }
   }
 
   if (stored) {
-    return { token: stored, source: "file", shadowed: fromEnv !== null && fromEnv !== stored };
+    return {
+      token: stored,
+      source: "file",
+      envName,
+      shadowed: fromEnv !== null && fromEnv !== stored,
+    };
   }
-  if (fromEnv) return { token: fromEnv, source: "env", shadowed: false };
-  return { token: null, source: "none", shadowed: false };
+  if (fromEnv) return { token: fromEnv, source: "env", envName, shadowed: false };
+  return { token: null, source: "none", envName: null, shadowed: false };
+}
+
+/**
+ * How a settings row should describe a resolved credential.
+ *
+ * `source` and `shadowed` were computed on every resolve and read by nobody, so
+ * the only thing jmux ever said about a credential was whether the adapter
+ * connected. Two things that leaves unanswerable: which of the several accepted
+ * sources is actually in force, and — the one that reads as a bug — why an
+ * environment variable somebody just exported appears to do nothing, when a
+ * stored token is quietly winning ahead of it.
+ *
+ * `none` deliberately says "not stored" rather than "no token": the adapters
+ * also fall back to `glab` / `gh`, which this resolver cannot see. Whether that
+ * fallback worked is what the connection note on the row above reports, and one
+ * row must not answer for another.
+ */
+export function describeCredential(
+  resolved: ResolvedCredential,
+): { value: string; note: string | null } {
+  const note = resolved.shadowed && resolved.envName
+    ? `$${resolved.envName} set but ignored`
+    : null;
+  switch (resolved.source) {
+    case "file": return { value: "stored in jmux", note };
+    case "env": return { value: `$${resolved.envName}`, note };
+    default: return { value: "not stored", note };
+  }
 }

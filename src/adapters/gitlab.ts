@@ -8,9 +8,20 @@ import {
   type AdapterIdentity,
 } from "./types";
 import { openUrl } from "../platform";
-import { resolveCredential } from "../credentials";
+import { resolveCredential, type CredentialStore } from "../credentials";
 
 const GITLAB_API = "https://gitlab.com/api/v4";
+
+/**
+ * Exported so the settings row reporting where the token comes from reads the
+ * same list the adapter resolves against. A second copy would be free to name a
+ * variable this adapter does not actually consult.
+ */
+export const GITLAB_ENV_NAMES = [
+  "GITLAB_TOKEN",
+  "GITLAB_PRIVATE_TOKEN",
+  "GITLAB_PERSONAL_ACCESS_TOKEN",
+] as const;
 
 export function extractProjectPath(remoteUrl: string): string | null {
   const sshMatch = remoteUrl.match(/^git@[^:]+:(.+?)(?:\.git)?$/);
@@ -31,31 +42,38 @@ export class GitLabAdapter implements CodeHostAdapter {
   identity: AdapterIdentity | null = null;
   private token: string | null = null;
   private baseUrl: string;
+  private credentials: CredentialStore | undefined;
 
-  constructor(config: Record<string, unknown>) {
+  /**
+   * `deps.credentials` overrides the credentials file `resolveCredential` reads
+   * by default. Only tests pass it, and only so the glab fallback stays
+   * reachable: the file wins over everything, so a developer who stores a
+   * GitLab token in jmux would otherwise turn every fallback test into one that
+   * passes while asserting nothing.
+   */
+  constructor(config: Record<string, unknown>, deps: { credentials?: CredentialStore } = {}) {
     this.baseUrl = (config.url as string) ?? GITLAB_API;
+    this.credentials = deps.credentials;
   }
 
   async authenticate(): Promise<void> {
-    let token = resolveCredential("gitlab", [
-      "GITLAB_TOKEN",
-      "GITLAB_PRIVATE_TOKEN",
-      "GITLAB_PERSONAL_ACCESS_TOKEN",
-    ]).token;
-    if (!token) {
-      try {
-        const proc = Bun.spawnSync(["glab", "auth", "status", "-t"], { stdout: "pipe", stderr: "pipe" });
-        const output = proc.stdout.toString() + proc.stderr.toString();
-        const match = output.match(/Token:\s+(\S+)/);
-        if (match) token = match[1];
-      } catch {}
-    }
+    const token =
+      resolveCredential(
+        "gitlab",
+        GITLAB_ENV_NAMES,
+        this.credentials ? { store: this.credentials } : {},
+      ).token ?? this.readGlabToken() ?? null;
     if (!token) { this.authState = "failed"; this.identity = null; return; }
     this.token = token;
     // A real probe, for the same reason as GitHub and Linear: presence is not
     // validity, and a swap must not publish a revoked credential as healthy.
+    //
+    // Against `this.baseUrl`, not the gitlab.com constant: every other call in
+    // this file is already host-relative, and a self-hosted install probing
+    // gitlab.com sends its token to the wrong server, is told 401, and can
+    // never authenticate — MR tabs that never appear, with no clue why.
     try {
-      const resp = await fetch(`${GITLAB_API}/user`, {
+      const resp = await fetch(`${this.baseUrl}/user`, {
         headers: { "PRIVATE-TOKEN": token },
       });
       if (!resp.ok) { this.authState = "failed"; this.identity = null; return; }
@@ -66,6 +84,42 @@ export class GitLabAdapter implements CodeHostAdapter {
     } catch {
       this.authState = "unreachable";
       this.identity = null;
+    }
+  }
+
+  /**
+   * The token the GitLab CLI already holds, asked for as a value.
+   *
+   * This used to scrape `glab auth status -t` for `/Token:\s+(\S+)/`. glab
+   * reworded that page — 1.111 prints "Token found in operating system keyring:
+   * <tok>" — and the pattern silently stopped matching, so a machine
+   * authenticated through glab alone reported `failed` and lost every MR tab
+   * with no error anywhere. A status page is prose written for a human and free
+   * to change; `config get token` returns one value and nothing else, which is
+   * why the equivalent `gh auth token` call has never had this problem.
+   *
+   * `--host` because the token is per-instance and jmux's cwd is arbitrary:
+   * without it glab answers for whatever instance the current directory's git
+   * remote implies, which is not necessarily the one this adapter talks to.
+   */
+  private readGlabToken(): string | null {
+    let host: string;
+    try {
+      host = new URL(this.baseUrl).host;
+    } catch {
+      return null;
+    }
+    try {
+      const proc = Bun.spawnSync(["glab", "config", "get", "token", "--host", host], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      // glab prints its usage text rather than staying quiet when it dislikes
+      // the arguments, so a non-zero exit has to disqualify stdout outright.
+      if (proc.exitCode !== 0) return null;
+      return proc.stdout.toString().trim() || null;
+    } catch {
+      return null;
     }
   }
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyTrackerCredential } from "../tracker-credential";
+import { applyAdapterCredential } from "../adapter-credential";
 
 // Every dependency is injected, so none of this touches a real credentials
 // file or a network.
@@ -13,7 +13,7 @@ function harness(opts: { verify: () => Promise<boolean>; previous?: string | nul
     get stored() { return stored; },
     get persistedType() { return persistedType; },
     run: (token: string) =>
-      applyTrackerCredential({
+      applyAdapterCredential({
         type: "linear",
         token,
         readCredential: () => stored,
@@ -27,7 +27,7 @@ function harness(opts: { verify: () => Promise<boolean>; previous?: string | nul
 const ok = () => Promise.resolve(true);
 const rejects = () => Promise.resolve(false);
 
-describe("applyTrackerCredential", () => {
+describe("applyAdapterCredential", () => {
   test("a good token is kept, and the adapter type is persisted with it", async () => {
     const h = harness({ verify: ok });
     expect(await h.run("good")).toEqual({ ok: true });
@@ -84,7 +84,7 @@ describe("applyTrackerCredential", () => {
     // there is nowhere to try a token without storing it first.
     const seen: Array<string | null> = [];
     let stored: string | null = "old";
-    await applyTrackerCredential({
+    await applyAdapterCredential({
       type: "linear",
       token: "candidate",
       readCredential: () => stored,
