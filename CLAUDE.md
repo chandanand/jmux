@@ -392,6 +392,20 @@ the read still forces one more run once the current one finishes. The
 reschedule lives in `finally`, so a throwing read reschedules rather than
 leaving the grid frozen with `inFlight` stuck true.
 
+**The strip's right cluster is the four axes as clickable chips, and it clicks
+through to the same functions the keys run.** `⊞ <Group> ⇅ <Sort> ∇ <Filter>
+▤ <Density>` sit right-aligned before the `+N not shown` count, spelled with
+the sidebar header's own `groupModeShort`/`sortModeShort`/`filterModeShort`
+so one axis reads one way on both surfaces. `layoutStripActions`
+(`glass/strip.ts`) places them and `onGlassViewClick` hit-tests them ahead of
+the view chips, dispatching through `STRIP_AXIS_ACTIONS` — the same
+`cycleGridGroup/Sort/Filter/Density` that `Ctrl-a G/s/f/D` call, so mouse and
+keyboard cannot cycle an axis two different ways. View chips yield to the
+cluster first; the cluster then yields *words* before the active view chip
+would go under `MIN_VIEW_COLS`, and never a chip: a glyph still names its axis
+and still cycles it, where a dropped chip is an axis the mouse can no longer
+reach.
+
 **The client cap counts active and grace-retained tiles together, and every
 tile parses whether or not it is drawn.** `planTiles` (`glass/tile-plan.ts`)
 admits forced (pinned) tiles first, then render order, *before* anything

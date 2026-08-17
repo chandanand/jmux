@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { layoutStrip, renderStrip, STRIP_ROWS, type StripInput } from "../../glass/strip";
+import { layoutStrip, layoutStripActions, renderStrip, STRIP_ROWS, NO_AXES, type StripInput } from "../../glass/strip";
 import { chipAtCol } from "../../band-layout";
 import type { CommandCenterView } from "../../glass/views";
 import { DENSITIES } from "../../glass/density";
@@ -14,7 +14,7 @@ const base: StripInput = {
   activeViewId: "active",
   dirty: false,
   droppedActive: 0,
-  densityLabel: "",
+  axes: NO_AXES,
   width: 80,
 };
 
@@ -133,14 +133,14 @@ describe("density label", () => {
   });
 
   test("renders flush against the right edge when nothing was dropped", () => {
-    const grid = renderStrip({ ...base, densityLabel: DENSITIES.focus.label });
+    const grid = renderStrip({ ...base, axes: { ...NO_AXES, density: DENSITIES.focus.label } });
     const row = grid.cells[0].map((c) => c.char).join("");
     expect(row).toContain("Focus");
     expect(row.trimEnd().endsWith("Focus")).toBe(true);
   });
 
   test("sits immediately left of the dropped-tile count when both are present, which stays rightmost", () => {
-    const grid = renderStrip({ ...base, densityLabel: DENSITIES.fit.label, droppedActive: 2 });
+    const grid = renderStrip({ ...base, axes: { ...NO_AXES, density: DENSITIES.fit.label }, droppedActive: 2 });
     const row = grid.cells[0].map((c) => c.char).join("");
     expect(row).toContain("Fit");
     expect(row).toContain("+2 not shown");
@@ -149,8 +149,8 @@ describe("density label", () => {
   });
 
   test("reserves its own width ahead of chip packing, distinct from the hidden-chip reserve", () => {
-    const withLabel = layoutStrip({ ...base, views: many, activeViewId: "a", width: 40, densityLabel: DENSITIES.focus.label });
-    const withoutLabel = layoutStrip({ ...base, views: many, activeViewId: "a", width: 40, densityLabel: "" });
+    const withLabel = layoutStrip({ ...base, views: many, activeViewId: "a", width: 40, axes: { ...NO_AXES, density: DENSITIES.focus.label } });
+    const withoutLabel = layoutStrip({ ...base, views: many, activeViewId: "a", width: 40, axes: NO_AXES });
     // The same width packs no more chips once room is reserved for the label.
     expect(withLabel.length).toBeLessThanOrEqual(withoutLabel.length);
   });
@@ -197,7 +197,7 @@ describe("density label", () => {
     // alongside the reserved density label. Regression guard for the label
     // eating into the chip budget aggressively enough to drop the active
     // chip too.
-    const input = { ...base, width: 24, densityLabel: DENSITIES.focus.label };
+    const input = { ...base, width: 24, axes: { ...NO_AXES, density: DENSITIES.focus.label } };
     const grid = renderStrip(input);
     const row = grid.cells[0].map((c) => c.char).join("");
     expect(row).toContain("Active");
@@ -211,7 +211,7 @@ describe("density label", () => {
 describe("the active chip is never dropped", () => {
   const long = { id: "a", name: "A Very Long View Name Indeed", filter: "active", groupBy: "status", sortBy: "status" } as any;
   const second = { id: "b", name: "Second", filter: "all", groupBy: "none", sortBy: "name" } as any;
-  const base = { views: [long, second], activeViewId: "a", dirty: false, droppedActive: 0, densityLabel: "Fit" } as any;
+  const base = { views: [long, second], activeViewId: "a", dirty: false, droppedActive: 0, axes: { ...NO_AXES, density: "Fit" } } as any;
 
   // Windowing selects the active chip correctly, but packChips then placed
   // nothing when it alone exceeded the budget — so the strip rendered empty and
@@ -241,7 +241,7 @@ describe("truncation keeps the dirty marker", () => {
   // thing the always-visible strip is obliged to carry: which view, and
   // whether the live axes have been narrowed away from it.
   const long = { id: "a", name: "A Very Long View Name Indeed", filter: "active", groupBy: "status", sortBy: "status" } as any;
-  const base = { views: [long], activeViewId: "a", dirty: true, droppedActive: 0, densityLabel: "Fit" } as any;
+  const base = { views: [long], activeViewId: "a", dirty: true, droppedActive: 0, axes: { ...NO_AXES, density: "Fit" } } as any;
 
   test("the dirty marker survives at every width, truncated or not", () => {
     for (const width of [80, 40, 24, 18]) {
@@ -266,5 +266,66 @@ describe("truncation keeps the dirty marker", () => {
     const input = { ...base, dirty: false, width: 24 };
     const row = renderStrip(input, layoutStrip(input)).cells[0]!.map((c) => c.char).join("");
     expect(row).not.toContain("\u00b7");
+  });
+});
+
+describe("axis chips (right cluster)", () => {
+  const axes = { group: "Proj", sort: "Act", filter: "All", density: "Fit" };
+  const withAxes: StripInput = { ...base, axes };
+
+  test("renders group, sort, filter and density chips in that order, each glyph + label", () => {
+    const row = renderStrip(withAxes).cells[0].map((c) => c.char).join("");
+    for (const chip of ["\u229e Proj", "\u21c5 Act", "\u2207 All", "\u25a4 Fit"]) expect(row).toContain(chip);
+    expect(row.indexOf("\u229e")).toBeLessThan(row.indexOf("\u21c5"));
+    expect(row.indexOf("\u21c5")).toBeLessThan(row.indexOf("\u2207"));
+    expect(row.indexOf("\u2207")).toBeLessThan(row.indexOf("\u25a4"));
+    expect(row.trimEnd().endsWith("Fit")).toBe(true);
+  });
+
+  test("the dropped-tile count stays rightmost, the cluster immediately left of it", () => {
+    const row = renderStrip({ ...withAxes, droppedActive: 2 }).cells[0].map((c) => c.char).join("");
+    expect(row.trimEnd().endsWith("+2 not shown")).toBe(true);
+    expect(row.indexOf("\u25a4 Fit")).toBeLessThan(row.indexOf("+2 not shown"));
+  });
+
+  test("each chip is hit-testable by column with its axis id", () => {
+    const actions = layoutStripActions(withAxes);
+    expect(actions.map((a) => a.id)).toEqual(["group", "sort", "filter", "density"]);
+    const row = renderStrip(withAxes, layoutStrip(withAxes), actions).cells[0].map((c) => c.char).join("");
+    for (const a of actions) {
+      // Every column of the chip resolves to it, and the chip covers its own text.
+      expect(chipAtCol(actions, a.x)).toBe(a.id);
+      expect(chipAtCol(actions, a.x + a.width - 1)).toBe(a.id);
+    }
+    const sort = actions.find((a) => a.id === "sort")!;
+    expect(row.slice(sort.x, sort.x + sort.width)).toBe("\u21c5 Act");
+    // View chips and action chips never overlap.
+    const views = layoutStrip(withAxes);
+    for (const v of views) for (const a of actions) expect(v.x + v.width <= a.x || a.x + a.width <= v.x).toBe(true);
+  });
+
+  test("an empty label omits that chip and reserves nothing for it", () => {
+    const actions = layoutStripActions({ ...base, axes: { ...NO_AXES, sort: "Act" } });
+    expect(actions.map((a) => a.id)).toEqual(["sort"]);
+    expect(layoutStripActions(base)).toEqual([]);
+  });
+
+  test("on a narrow strip the words go and the glyphs stay, so every axis is still clickable", () => {
+    const input: StripInput = { ...withAxes, width: 30 };
+    const actions = layoutStripActions(input);
+    expect(actions.map((a) => a.id)).toEqual(["group", "sort", "filter", "density"]);
+    const row = renderStrip(input, layoutStrip(input), actions).cells[0].map((c) => c.char).join("");
+    expect(row).not.toContain("Proj");
+    expect(row).toContain("\u229e");
+    expect(row).toContain("\u25a4");
+    // The active view chip is still on screen — the cluster yields words before the strip loses its identity.
+    expect(row).toContain("Active");
+  });
+
+  test("view chips yield to the cluster before the cluster yields anything", () => {
+    const withCluster = layoutStrip({ ...base, views: many, activeViewId: "a", width: 60, axes });
+    const without = layoutStrip({ ...base, views: many, activeViewId: "a", width: 60 });
+    expect(withCluster.length).toBeLessThan(without.length);
+    expect(withCluster.some((c) => c.id === "a")).toBe(true);
   });
 });

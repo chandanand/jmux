@@ -32,6 +32,7 @@ import { Sidebar, rebuildSidebarColors } from "./sidebar";
 import {
   GROUP_MODES, SORT_MODES, FILTER_MODES,
   groupModeLabel, sortModeLabel, filterModeLabel, migrateLegacySort,
+  groupModeShort, sortModeShort, filterModeShort,
   cycleGroup, cycleSort, cycleFilter,
   type GroupMode, type SortMode, type FilterMode, type LegacySortMode,
 } from "./sidebar-sort";
@@ -241,7 +242,7 @@ import {
 } from "./glass/views";
 import { GlassView, type GlassTileSpec } from "./glass/view";
 import { buildCcCommands } from "./glass/cc-commands";
-import { renderStrip, layoutStrip, STRIP_ROWS } from "./glass/strip";
+import { renderStrip, layoutStrip, layoutStripActions, STRIP_ROWS, type StripAxisId, type PlacedAxisChip } from "./glass/strip";
 import { DENSITIES, cycleDensity, normalizeDensity, type Density } from "./glass/density";
 import { chipAtCol, type PlacedChip } from "./band-layout";
 import { OtelReceiver } from "./otel-receiver";
@@ -1854,6 +1855,8 @@ let inGlass = false;
 let preGlassSessionId: string | null = null;
 let glassView: GlassView | null = null;
 let currentStripChips: PlacedChip[] = [];
+/** The strip's right-cluster axis chips, placed by the last frame. */
+let currentStripActions: PlacedAxisChip[] = [];
 
 // The Command Center's saved views and its live (possibly dirty) axes. The
 // axes are what `reconcileGrid` derives membership from; the registry is what
@@ -4861,11 +4864,19 @@ function renderFrame(): void {
       activeViewId,
       dirty: axesDiffer(activeView, gridAxes),
       droppedActive: glassView.getDroppedActive(),
-      densityLabel: DENSITIES[commandCenterDensity].label,
+      // The same short names the sidebar header's chips use, so the two
+      // surfaces spell one axis one way.
+      axes: {
+        group: groupModeShort(gridAxes.groupBy),
+        sort: sortModeShort(gridAxes.sortBy),
+        filter: filterModeShort(gridAxes.filter),
+        density: DENSITIES[commandCenterDensity].label,
+      },
       width: contentCols,
     };
     currentStripChips = layoutStrip(stripInput);
-    const strip = renderStrip(stripInput, currentStripChips);
+    currentStripActions = layoutStripActions(stripInput);
+    const strip = renderStrip(stripInput, currentStripChips, currentStripActions);
     const combined = createGrid(contentCols, fullScreenLayout.contentRows);
     // Blit strip on top rows, glass content below.
     for (let r = 0; r < STRIP_ROWS && r < combined.rows; r++)
@@ -5619,7 +5630,15 @@ const inputRouter = new InputRouter(
     },
     // The strip is always visible in the grid now — no view count to gate on.
     glassStripRows: () => (inGlass ? STRIP_ROWS : 0),
-    onGlassViewClick: (x) => { const id = chipAtCol(currentStripChips, x); if (id) switchGlassView(id); },
+    onGlassViewClick: (x) => {
+      // Axis chips first: they and the view chips never overlap, but the
+      // action cluster is the one that says which axis, so it is the one to ask.
+      // chipAtCol is string-typed; the ids are StripAxisIds by construction.
+      const action = chipAtCol(currentStripActions, x) as StripAxisId | null;
+      if (action) { STRIP_AXIS_ACTIONS[action](); scheduleRender(); return; }
+      const id = chipAtCol(currentStripChips, x);
+      if (id) switchGlassView(id);
+    },
     onGlassViewSwitch: (n) => { const view = commandCenterViews[n - 1]; if (view) switchGlassView(view.id); },
     onGlassViewRelative: (delta) => switchGlassViewRelative(delta),
     onGlassDetach: () => detachClient(),
@@ -11838,6 +11857,18 @@ function cycleGridDensity(): void {
   configStore.set("commandCenter", { ...configStore.config.commandCenter, density: commandCenterDensity });
   glassView?.setDensity(commandCenterDensity);
 }
+
+/**
+ * What a click on each of the strip's axis chips does — the same four
+ * functions `Ctrl-a G/s/f/D` run in glass, so the mouse and the keyboard
+ * cannot cycle an axis two different ways.
+ */
+const STRIP_AXIS_ACTIONS: Record<StripAxisId, () => void> = {
+  group: cycleGridGroup,
+  sort: cycleGridSort,
+  filter: cycleGridFilter,
+  density: cycleGridDensity,
+};
 
 /**
  * Detach the interactive client — the Command Center equivalent of a normal
