@@ -11,6 +11,7 @@ import { handleWorkflow } from "./cli/workflow";
 import { handleBrowser } from "./cli/browser";
 import { handleDevServers } from "./cli/dev";
 import { handleCc } from "./cli/cc";
+import { handleRaise } from "./cli/raise";
 
 export interface ParsedCtlArgs {
   group: string;
@@ -44,6 +45,7 @@ const KNOWN_GROUPS = [
   "status",
   "identity",
   "cc",
+  "raise",
 ] as const;
 const STANDALONE_GROUPS = new Set(["run-claude", "status", "identity"]);
 
@@ -74,6 +76,19 @@ const VALUE_FLAGS = new Set([
   "status",
   "assignee",
 ]);
+/**
+ * Value flags that exist only for one group. The global `VALUE_FLAGS` set is
+ * applied after every group, so a name added there changes how every existing
+ * command consumes the token after it. These names are common enough
+ * (`option`, `note`, `context`, `reason`) that doing so would be a behaviour
+ * change in published software.
+ */
+const GROUP_VALUE_FLAGS: Record<string, ReadonlySet<string>> = {
+  raise: new Set([
+    "session", "issue", "question", "option", "recommend",
+    "why", "authority", "context", "note", "reason", "attempt", "state",
+  ]),
+};
 /**
  * Flags whose value is optional and always numeric, so `--wait` and `--wait 60`
  * both work. The next token is consumed only when it parses as a number —
@@ -268,7 +283,11 @@ export function parseCtlArgs(argv: string[]): ParsedCtlArgs {
         if (typeof value === "string") {
           (repeated[valueFlagName] ??= []).push(value);
         }
-      } else if (VALUE_FLAGS.has(valueFlagName) || GLOBAL_VALUE_FLAGS.has(valueFlagName)) {
+      } else if (
+        VALUE_FLAGS.has(valueFlagName) ||
+        GLOBAL_VALUE_FLAGS.has(valueFlagName) ||
+        (GROUP_VALUE_FLAGS[group]?.has(valueFlagName) ?? false)
+      ) {
         let value: string;
         if (eq !== -1) {
           // Split only on the first `=` — a value that itself contains one
@@ -357,6 +376,9 @@ export async function runCtl(argv: string[]): Promise<void> {
         break;
       case "cc":
         result = handleCc(ctx, parsed);
+        break;
+      case "raise":
+        result = handleRaise(ctx, parsed);
         break;
       case "browser":
         result = await handleBrowser(ctx, parsed);

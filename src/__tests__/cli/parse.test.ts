@@ -326,3 +326,25 @@ describe("optional-value flags (`--wait`)", () => {
     expect(r.positional).toEqual(["TRA-1580"]);
   });
 });
+
+describe("raise-group flags are scoped to the raise group", () => {
+  test("--option accumulates inside the raise group", () => {
+    const p = parseCtlArgs(["raise", "create", "--issue", "AAA-1", "--option", "a", "--option", "b"]);
+    expect(p.repeated.option).toEqual(["a", "b"]);
+  });
+
+  test("--note takes a value inside the raise group", () => {
+    const p = parseCtlArgs(["raise", "answer", "r1", "--option", "o1", "--note", "because"]);
+    expect(p.flags.note).toBe("because");
+  });
+
+  test("outside the raise group, the same flag names keep their old meaning", () => {
+    // Registering these globally would change how existing published commands
+    // consume the token after them. `--option` is unknown to `session`, so it
+    // stays a permissive boolean and "a" stays a positional.
+    const p = parseCtlArgs(["session", "list", "--option", "a"]);
+    expect(p.flags.option).toBe(true);
+    expect(p.positional).toContain("a");
+    expect(p.repeated.option).toBeUndefined();
+  });
+});
