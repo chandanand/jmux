@@ -36,7 +36,7 @@ with. jmux uses three parts of it:
 Host and port come from `HUNK_MCP_HOST` / `HUNK_MCP_PORT`, the same variables
 hunk itself reads, so the two agree when a user moves the port.
 
-Six things about this are load-bearing and easy to undo by accident.
+Seven things about this are load-bearing and easy to undo by accident.
 
 - **The control plane is optional, and off is a path that already ships.** No
   daemon, an older hunk, or `diffPanel.controlPlane: false` all land on exactly
@@ -55,6 +55,12 @@ Six things about this are load-bearing and easy to undo by accident.
   the panel goes quietly stale while an agent keeps editing. A visible respawn
   beats a panel that lies. This is also why one mechanism covers both session
   switches and view switches.
+
+- **In the Command Center the panel describes the focused tile.** It docks
+  beside the grid through the same frame layout it docks beside the pty with,
+  and follows tile focus the way it follows the pty client's session outside
+  the grid — same respawn, same default view. `Ctrl-a g` opens it there,
+  Shift+Right off the right-most column focuses it, Shift+Left comes back.
 
 - **Flags are probed, not assumed.** Not every hunk takes the same options —
   0.9 has `--watch` but not `--transparent-bg`, and passing it one it doesn't

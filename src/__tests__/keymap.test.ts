@@ -165,7 +165,16 @@ describe("keymap ↔ input-router", () => {
     }
     if (armBytes["prefix"].has(b.prefixKey!)) out.add("prefix");
     if (armBytes["surface-prefix"].has(b.prefixKey!)) out.add("surface-prefix");
-    if (armBytes["glass-prefix"].has(b.prefixKey!) && !glassClaimedKeys.has(b.prefixKey!)) {
+    // A byte the glass arm intercepts for a Command-Center binding shadows a
+    // context-free binding on the same byte (Ctrl-a G is the grid's group
+    // cycle, not the sidebar's). A binding that carries its own context is a
+    // different case: the arm tells the two apart by that context at runtime
+    // (Ctrl-a z zooms the panel while it holds focus, the tile otherwise), so
+    // both are live there and both must say so.
+    if (
+      armBytes["glass-prefix"].has(b.prefixKey!)
+      && (!glassClaimedKeys.has(b.prefixKey!) || b.context !== undefined)
+    ) {
       out.add("glass-prefix");
     }
     return out;

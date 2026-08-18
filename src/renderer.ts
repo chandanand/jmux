@@ -504,6 +504,7 @@ export function compositeGrids(
   },
   footer?: StyledSegment[] | null,
   drag?: DragState | null,
+  header?: CellGrid | null,
 ): CellGrid {
   // A missing sidebar subtracts the sidebar, and nothing else. This used to
   // `return main` — every other piece of chrome (toolbar, rules, diff panel,
@@ -530,7 +531,12 @@ export function compositeGrids(
   const mainX = layout.main.x;
   const mainCols = toolbar ? toolbar.mainCols : main.cols;
   const totalCols = layout.termCols;
-  const toolbarRows = toolbar ? layout.toolbarRows : 0;
+  // The layout's, not the config's: the toolbar rows exist whenever the
+  // layout reserved them, and what fills them is either the toolbar config
+  // or — for the Command Center, whose view strip takes the same row — an
+  // externally rendered `header` grid over main's columns. The panel's tab
+  // bar lands on that row in both cases.
+  const toolbarRows = layout.toolbarRows;
   const totalRows = layout.termRows;
   const grid = createGrid(totalCols, totalRows);
 
@@ -551,7 +557,19 @@ export function compositeGrids(
         : { ...DEFAULT_CELL, char: BORDER_CHAR, fg: 8, fgMode: ColorMode.Palette };
     }
 
-    if (toolbar && y < toolbarRows) {
+    if (!toolbar && y < toolbarRows) {
+      // Header rows with no toolbar config: `header` (the Command Center's
+      // view strip) over main's columns, row 0 only — the strip is one row.
+      if (header && y === 0) {
+        blit(grid, header, { destX: mainX, destY: y, srcX: 0, srcY: 0, w: Math.min(header.cols, layout.main.w), h: 1 });
+      }
+      // No rule row junctions into the divider here, so it runs from the
+      // top: header │ tab bar, then tiles │ panel below.
+      if (diffPanel?.mode === "split") {
+        writeCell(grid, y, layout.divider!, frame.divider,
+          drag?.hoveredHandle === "panel-divider" ? tokens.accent : tokens.ruleFrame);
+      }
+    } else if (toolbar && y < toolbarRows) {
       if (y === 1 && toolbarRows >= 2) {
         // Second toolbar row: per-window git branch, aligned under each tab.
         renderWindowBranchRow(grid, toolbarLayout!.tabs, mainX);
@@ -838,8 +856,14 @@ export class Renderer {
     },
     footer?: StyledSegment[] | null,
     drag?: DragState | null,
+    /**
+     * A one-row grid painted over main's columns on row 0 when there is no
+     * toolbar config but the layout reserved a toolbar row — the Command
+     * Center's view strip. Ignored when `toolbar` is given.
+     */
+    header?: CellGrid | null,
   ): void {
-    const grid = compositeGrids(layout, main, sidebar, toolbar, modalOverlay, diffPanel, footer, drag);
+    const grid = compositeGrids(layout, main, sidebar, toolbar, modalOverlay, diffPanel, footer, drag, header);
     const cursorOffset = layout.main.x;
     const buf: string[] = [];
 
@@ -939,8 +963,10 @@ export class Renderer {
     // Reset attributes, position cursor. Matches compositeGrids's content
     // offset exactly (layout.contentTop, not a hardcoded toolbar row count)
     // so the real cursor tracks the content band even when the rule row
-    // shifts it down an extra row.
-    const cursorRowOffset = toolbar ? layout.contentTop : 0;
+    // shifts it down an extra row — and whether the row above it holds the
+    // toolbar or the Command Center's strip; the frameless surfaces have a
+    // contentTop of 0 and lose nothing.
+    const cursorRowOffset = layout.contentTop;
     buf.push("\x1b[0m");
     if (modalCursor != null) {
       // Modal cursor is in absolute grid coordinates

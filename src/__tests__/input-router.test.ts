@@ -1640,7 +1640,6 @@ describe("glass strip mouse routing", () => {
       onPtyData: () => {},
       onSidebarClick: () => {},
       glassActive: () => true,
-      glassStripRows: () => 1,
       onGlassViewClick: (x) => tabClicks.push(x),
       onGlassClick: (x, y) => tileClicks.push([x, y]),
     }, baseLayout(26));
@@ -1655,12 +1654,137 @@ describe("glass strip mouse routing", () => {
       onPtyData: () => {},
       onSidebarClick: () => {},
       glassActive: () => true,
-      glassStripRows: () => 1,
       onGlassClick: (x, y) => tileClicks.push([x, y]),
       onGlassViewClick: () => {},
     }, baseLayout(26));
-    router.handleInput(press(30, 5)); // row 5: cy = (5-1) - 1 stripRow = 3
+    // The strip is the layout's toolbar row (baseLayout: toolbarRows 1, so
+    // contentTop 1). Row 5: cy = (5-1) - contentTop = 3.
+    router.handleInput(press(30, 5));
     expect(tileClicks).toEqual([[2, 3]]);
+  });
+});
+
+
+// The panel docks beside the grid through the same `layout` it docks beside
+// the pty with, so the router's panel paths — column hit-testing, focus,
+// Shift-arrow hand-off, the prefix chords — are the ordinary ones. These pin
+// the seams where the glass arm used to claim everything.
+describe("Command Center with the panel docked", () => {
+  // 120 cols, sidebar 26 → main.x 27; split with a 40-col panel: main.w =
+  // 93 - 40 - 1 = 52 → divider at grid col 79, panel.x = 80.
+  const layout = () => baseLayout(26, "split", 40);
+  const press = (col: number, row: number) => `\x1b[<0;${col};${row}M`;
+
+  test("Ctrl-a g toggles the panel from the glass arm and leaks nothing", () => {
+    const sent: string[] = [];
+    let toggled = 0;
+    const router = new InputRouter({
+      onPtyData: (d) => sent.push(d),
+      onSidebarClick: () => {},
+      glassActive: () => true,
+      onDiffToggle: () => toggled++,
+    }, baseLayout(26));
+    router.handleInput("\x01");
+    router.handleInput("g");
+    expect(toggled).toBe(1);
+    expect(sent).toEqual([]);
+  });
+
+  test("Ctrl-a z zooms the panel while it holds focus, the tile otherwise", () => {
+    let panelZoom = 0;
+    let tileZoom = 0;
+    const router = new InputRouter({
+      onPtyData: () => {},
+      onSidebarClick: () => {},
+      glassActive: () => true,
+      onDiffZoom: () => panelZoom++,
+      onGlassZoom: () => tileZoom++,
+    }, layout());
+    router.handleInput("\x01"); router.handleInput("z");
+    expect([panelZoom, tileZoom]).toEqual([0, 1]);
+    router.setPanelFocused(true);
+    router.handleInput("\x01"); router.handleInput("z");
+    expect([panelZoom, tileZoom]).toEqual([1, 1]);
+  });
+
+  test("with the panel focused, an unrecognised chord dies rather than reaching a tile", () => {
+    const sent: string[] = [];
+    const router = new InputRouter({
+      onPtyData: (d) => sent.push(d),
+      onSidebarClick: () => {},
+      glassActive: () => true,
+    }, layout());
+    router.setPanelFocused(true);
+    router.handleInput("\x01");
+    router.handleInput("k");
+    expect(sent).toEqual([]);
+  });
+
+  test("Shift+Left from the focused panel returns focus; other Shift-arrows are swallowed", () => {
+    const moves: string[] = [];
+    let toggles = 0;
+    const router = new InputRouter({
+      onPtyData: () => {},
+      onSidebarClick: () => {},
+      glassActive: () => true,
+      onGlassFocusMove: (d) => moves.push(d),
+      onDiffPanelFocusToggle: () => toggles++,
+    }, layout());
+    router.setPanelFocused(true);
+    router.handleInput("\x1b[1;2C"); // Shift+Right: nowhere to go
+    router.handleInput("\x1b[1;2A");
+    router.handleInput("\x1b[1;2D"); // Shift+Left: back to the tiles
+    expect(moves).toEqual([]);
+    expect(toggles).toBe(1);
+  });
+
+  test("a click in the panel's columns acquires panel focus instead of focusing a tile", () => {
+    const tileClicks: Array<[number, number]> = [];
+    let toggles = 0;
+    const router = new InputRouter({
+      onPtyData: () => {},
+      onSidebarClick: () => {},
+      glassActive: () => true,
+      onGlassClick: (x, y) => tileClicks.push([x, y]),
+      onDiffPanelFocusToggle: () => toggles++,
+      onDiffPanelData: () => {},
+    }, layout());
+    router.handleInput(press(90, 5)); // grid col 89 ≥ panel.x 80
+    expect(tileClicks).toEqual([]);
+    expect(toggles).toBe(1);
+  });
+
+  test("a click in the tiles takes focus back from the panel and focuses the tile", () => {
+    const tileClicks: Array<[number, number]> = [];
+    let toggles = 0;
+    const router = new InputRouter({
+      onPtyData: () => {},
+      onSidebarClick: () => {},
+      glassActive: () => true,
+      onGlassClick: (x, y) => tileClicks.push([x, y]),
+      onGlassMouse: () => {},
+      onDiffPanelFocusToggle: () => toggles++,
+    }, layout());
+    router.setPanelFocused(true);
+    router.handleInput(press(30, 5)); // grid col 29, main.x 27 → cx 2; row 4 - contentTop 1 → cy 3
+    expect(toggles).toBe(1);
+    expect(tileClicks).toEqual([[2, 3]]);
+  });
+
+  test("the panel tab bar on the strip row is hit-tested in the grid", () => {
+    const tabClicks: number[] = [];
+    const stripClicks: number[] = [];
+    const router = new InputRouter({
+      onPtyData: () => {},
+      onSidebarClick: () => {},
+      glassActive: () => true,
+      onGlassViewClick: (x) => stripClicks.push(x),
+      panelTabBarShown: () => true,
+      onPanelTabClick: (x) => tabClicks.push(x),
+    }, layout());
+    router.handleInput(press(85, 1)); // strip row, over the panel's columns
+    expect(stripClicks).toEqual([]);
+    expect(tabClicks).toEqual([4]); // 84 - panel.x 80
   });
 });
 
@@ -1980,7 +2104,7 @@ describe("parseSgrMouseChunk", () => {
 // The info panel's list/detail separator is the one horizontal handle: it
 // hit-tests on the row and travels vertically. main.ts supplies its geometry
 // (the panel owns its own internal row layout; FrameLayout only knows the
-// panel's columns), the same way glassStripRows is supplied.
+// panel's columns), the same way panelSplit is supplied.
 describe("panel split handle", () => {
   const SPLIT = { row: 12, minRow: 6, maxRow: 20 };
 

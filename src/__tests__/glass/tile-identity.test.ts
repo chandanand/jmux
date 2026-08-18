@@ -4,6 +4,7 @@ import { resolveDisplayedRepresentative } from "../../glass/view";
 import type { PaneRow } from "../../glass/representative";
 import type { AgentState } from "../../types";
 import { DENSITIES } from "../../glass/density";
+import { tokens } from "../../chrome-tokens";
 
 // ── Harness ──────────────────────────────────────────────────────────────────
 // GlassView needs a live tmux server for exactly one thing — attaching a mirror
@@ -386,6 +387,47 @@ describe("zoom", () => {
 
     view.toggleZoom(); // zooms $1; $2 leaves the drawn set
     expect(two.sizes).toEqual([]); // never asked to shrink to a rect nobody draws
+  });
+});
+
+describe("focus at the grid's edge, and focus lent to the docked panel", () => {
+  test("moveFocus reports whether it moved, so an edge can hand focus onward", () => {
+    const { view } = makeView();
+    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], EMPTY_CTX);
+    expect(view.focusedSessionId()).toBe("$1");
+    expect(view.moveFocus("right")).toBe(true);
+    expect(view.focusedSessionId()).toBe("$2");
+    // Right-most column: nothing to move into. The caller (main.ts) reads this
+    // to focus the panel docked beside the grid instead of dropping the key.
+    expect(view.moveFocus("right")).toBe(false);
+    expect(view.focusedSessionId()).toBe("$2");
+    // Zoomed: refuses, and says so.
+    view.toggleZoom();
+    expect(view.moveFocus("left")).toBe(false);
+  });
+
+  test("moveFocus reports false with no tiles", () => {
+    const { view } = makeView();
+    expect(view.moveFocus("right")).toBe(false);
+  });
+
+  test("setInputFocus(false) withdraws the focused tile's accent without moving focus", () => {
+    const { view } = makeView();
+    view.setTiles([spec({ sessionId: "$1" }), spec({ sessionId: "$2" })], EMPTY_CTX);
+    const accentCells = () => {
+      const g = view.getGrid();
+      let n = 0;
+      for (const row of g.cells) for (const c of row) if (c.fg === tokens.accent.fg && c.bold) n++;
+      return n;
+    };
+    expect(accentCells()).toBeGreaterThan(0);
+
+    view.setInputFocus(false);
+    expect(accentCells()).toBe(0); // keys are in the panel — no tile claims them
+    expect(view.focusedSessionId()).toBe("$1"); // still the tile keys return to
+
+    view.setInputFocus(true);
+    expect(accentCells()).toBeGreaterThan(0);
   });
 });
 
