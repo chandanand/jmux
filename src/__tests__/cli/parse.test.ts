@@ -241,6 +241,28 @@ describe("--flag=value form", () => {
     expect(result.flags.force).toBeUndefined();
     expect(result.flags["force=true"]).toBe(true);
   });
+
+  test("an optional-numeric flag written with = keeps its value", () => {
+    const parsed = parseCtlArgs(["issue", "start", "TRA-1", "--wait=30"]);
+    expect(parsed.flags.wait).toBe("30");
+    expect(parsed.flags["wait=30"]).toBeUndefined();
+  });
+
+  test("an optional-numeric flag with no value still works both ways", () => {
+    expect(parseCtlArgs(["issue", "start", "TRA-1", "--wait"]).flags.wait).toBe(true);
+    expect(parseCtlArgs(["issue", "start", "TRA-1", "--wait", "60"]).flags.wait).toBe("60");
+  });
+
+  test("repeating an optional-numeric flag accumulates across both spellings", () => {
+    const parsed = parseCtlArgs(["issue", "start", "TRA-1", "--wait=30", "--wait", "60"]);
+    expect(parsed.repeated.wait).toEqual(["30", "60"]);
+  });
+
+  test("an optional-numeric flag's = value reaches the parser literally, with no numeric sniffing", () => {
+    const parsed = parseCtlArgs(["issue", "start", "TRA-1", "--wait=abc"]);
+    expect(parsed.flags.wait).toBe("abc");
+    expect(parsed.flags["wait=abc"]).toBeUndefined();
+  });
 });
 
 describe("end-of-flags (`--`)", () => {

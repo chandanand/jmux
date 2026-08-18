@@ -236,21 +236,35 @@ export function parseCtlArgs(argv: string[]): ParsedCtlArgs {
     } else if (arg.startsWith("--")) {
       const name = arg.slice(2);
       // `--flag=value` reaches us as one token once the shell strips the
-      // quotes around `--status="QA Failed"`. Only value flags gain `=`
-      // support here — `BOOL_FLAGS`/`OPTIONAL_NUMERIC_FLAGS` are matched
-      // against the untouched `name` below, exactly as before, so e.g.
-      // `--force=true` still falls through to the permissive branch rather
-      // than silently taking on a new meaning.
+      // quotes around `--status="QA Failed"`. Value flags and optional-numeric
+      // flags gain `=` support here — `BOOL_FLAGS` is still matched against
+      // the untouched `name` below, exactly as before, so e.g. `--force=true`
+      // still falls through to the permissive branch rather than silently
+      // taking on a new meaning.
       const eq = name.indexOf("=");
       const valueFlagName = eq === -1 ? name : name.slice(0, eq);
       if (BOOL_FLAGS.has(name)) {
         flags[name] = true;
         i++;
-      } else if (OPTIONAL_NUMERIC_FLAGS.has(name)) {
-        const next = argv[i + 1];
-        const numeric = next !== undefined && next.trim() !== "" && Number.isFinite(Number(next));
-        flags[name] = numeric ? argv[++i] : true;
-        i++;
+      } else if (OPTIONAL_NUMERIC_FLAGS.has(valueFlagName)) {
+        let value: string | boolean;
+        if (eq !== -1) {
+          // `=` removes the ambiguity the space form has to sniff around —
+          // `--wait=abc` is unambiguously a value, so it is taken literally
+          // and left for parseWaitFlag to reject, rather than silently
+          // degrading to the bare-boolean default.
+          value = name.slice(eq + 1);
+          i++;
+        } else {
+          const next = argv[i + 1];
+          const numeric = next !== undefined && next.trim() !== "" && Number.isFinite(Number(next));
+          value = numeric ? argv[++i] : true;
+          i++;
+        }
+        flags[valueFlagName] = value;
+        if (typeof value === "string") {
+          (repeated[valueFlagName] ??= []).push(value);
+        }
       } else if (VALUE_FLAGS.has(valueFlagName) || GLOBAL_VALUE_FLAGS.has(valueFlagName)) {
         let value: string;
         if (eq !== -1) {
