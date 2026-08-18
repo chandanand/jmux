@@ -19,11 +19,14 @@ export interface ParsedCtlArgs {
   flags: Record<string, string | boolean>;
   positional: string[];
   /**
-   * Every value a value flag carried, in the order given, additive alongside
-   * `flags`. A flag given once still gets a single-element entry here, so a
-   * caller that wants "all of them" never has to special-case the common case
-   * of exactly one. Only value flags appear — `flags` remains the only source
-   * for boolean and optional-numeric flags.
+   * Every value a value flag or optional-numeric flag actually carried, in
+   * the order given, additive alongside `flags`. A flag given once still
+   * gets a single-element entry here, so a caller that wants "all of them"
+   * never has to special-case the common case of exactly one. An
+   * optional-numeric flag given bare (no value, e.g. `--wait`) gets no entry
+   * here — there is no value to accumulate — but `--wait 30` and `--wait=30`
+   * both do. Boolean flags never appear — `flags` remains the only source
+   * for those.
    */
   repeated: Record<string, string[]>;
 }
