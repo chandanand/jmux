@@ -53,6 +53,16 @@ describe("reading is a typed result, never a bare list", () => {
     writeFileSync(path, JSON.stringify({ version: 99, raises: [] }));
     expect(readRaises(path).kind).toBe("error");
   });
+
+  test("a correct-version file with no raises field is an error, not an empty list", () => {
+    writeFileSync(path, JSON.stringify({ version: 1 }));
+    expect(readRaises(path).kind).toBe("error");
+  });
+
+  test("a correct-version file whose raises field is not an array is an error", () => {
+    writeFileSync(path, JSON.stringify({ version: 1, raises: "not-an-array" }));
+    expect(readRaises(path).kind).toBe("error");
+  });
 });
 
 describe("a mutation is refused while the store is unreadable", () => {
@@ -121,14 +131,19 @@ describe("idempotency", () => {
 });
 
 describe("pruning", () => {
-  test("only resolved raises are pruned, ordered by resolvedAt", () => {
+  test("only resolved raises are pruned, ordered by resolvedAt, not createdAt", () => {
     const rs = [
-      raise({ id: "old", createdAt: 1, state: "resolved", resolvedAt: 10 }),
-      raise({ id: "new", createdAt: 2, state: "resolved", resolvedAt: 20 }),
+      // Raised long ago but answered recently: createdAt and resolvedAt disagree
+      // on purpose. Sorting by createdAt would discard this one, even though it
+      // was the most recently resolved.
+      raise({ id: "old-question-answered-recently", createdAt: 1, state: "resolved", resolvedAt: 20 }),
+      raise({ id: "new-question-resolved-long-ago", createdAt: 2, state: "resolved", resolvedAt: 10 }),
       raise({ id: "open-but-ancient", createdAt: 0, state: "open" }),
     ];
     const kept = pruneResolved(rs, 1).map((r) => r.id).sort();
-    // The open raise survives regardless of age. Only the older resolved one goes.
-    expect(kept).toEqual(["new", "open-but-ancient"]);
+    // The open raise survives regardless of age. Of the two resolved raises,
+    // the one resolved more recently is kept — the one with the newer
+    // createdAt is not, because pruning orders by resolvedAt.
+    expect(kept).toEqual(["old-question-answered-recently", "open-but-ancient"]);
   });
 });
