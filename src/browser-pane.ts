@@ -315,7 +315,11 @@ export interface BrowserSplitOptions extends BrowserEnvOptions {
  * owns the split — passing both would size the pane twice from two different
  * places, and only one of them fires.
  */
-export function browserSplitCommand(client: string, opts: BrowserSplitOptions = {}): string {
+/**
+ * `target` is anything tmux's `-t` accepts: the pty client's name outside the
+ * Command Center, a pane id inside it (the focused tile's).
+ */
+export function browserSplitCommand(target: string, opts: BrowserSplitOptions = {}): string {
   const argv = browserArgv(opts.url).join(" ");
   // One answer to "no usable size", not two. This used to default to an even
   // split here while clampPaneSize defaulted to something else, so omitting the
@@ -327,7 +331,7 @@ export function browserSplitCommand(client: string, opts: BrowserSplitOptions = 
   // a space in it would split into two arguments and tmux would reject the lot.
   const envArgs = Object.entries(env).map(([k, v]) => `-e ${k}=${shellQuote(v)}`).join(" ");
   return [
-    `split-window -t ${client} -h -l ${pct}%`,
+    `split-window -t ${target} -h -l ${pct}%`,
     opts.printPaneId ? `-P -F '#{pane_id}'` : "",
     envArgs,
     `-c '#{pane_current_path}'`,

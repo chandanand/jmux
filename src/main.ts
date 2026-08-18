@@ -3229,7 +3229,7 @@ async function spawnHunk(cols: number, rows: number): Promise<void> {
     return;
   }
 
-  const subject = panelSessionId();
+  const subject = focusedSessionId();
   const cwd = subject ? await getSessionCwd(subject) : null;
   if (!cwd) {
     diffPanel.setHunkExited(true);
@@ -3783,27 +3783,30 @@ function activeChromeLayout(): FrameLayout {
 }
 
 /**
- * The session the docked panel describes and acts on: the pty client's
- * session outside the Command Center, the focused tile's inside it — where
- * `currentSessionId` is the internal park session and would make the panel
- * describe nothing. Same reading `resolveCcTargetPaneId` gives "the pane in
- * front of you". Everything panel-scoped (the Issue tab's context, the hunk
- * cwd, link/unlink/start from the panel, the review-notes target) reads this;
- * session management (kill, rename) keeps reading `currentSessionId`.
+ * The session in front of the user: the pty client's session outside the
+ * Command Center, the focused tile's inside it — where `currentSessionId` is
+ * the internal park session, which nothing should describe or act on. Same
+ * reading `resolveCcTargetPaneId` gives "the pane in front of you". The
+ * docked panel reads it for everything it shows and does (the Issue tab's
+ * context, the hunk cwd, link/unlink/start, the review-notes target), and so
+ * do the palette's per-session actions — kill, rename, pin, park, "switch to
+ * (excluding this one)", dev servers, the browser pane. `currentSessionId`
+ * stays what it is, tmux's answer, for the rail, the snapshotter and the
+ * client-level plumbing.
  */
-function panelSessionId(): string | null {
+function focusedSessionId(): string | null {
   if (inGlass) return glassView?.focusedSessionId() ?? null;
   return currentSessionId;
 }
 
-function panelSessionName(): string | null {
-  const id = panelSessionId();
+function focusedSessionName(): string | null {
+  const id = focusedSessionId();
   if (!id) return null;
   return currentSessions.find((s) => s.id === id)?.name ?? null;
 }
 
 /**
- * Point the panel at `panelSessionId()` if it has changed: back to the default
+ * Point the panel at `focusedSessionId()` if it has changed: back to the default
  * diff view (a view is built from one worktree's refs — "Branch vs main" is a
  * different diff in every session), respawn hunk against the new cwd, make it
  * the poll's active session and put its driving issue under the cursor.
@@ -3816,7 +3819,7 @@ function panelSessionName(): string | null {
  * down, and whichever lands second sees the same answer and does nothing.
  */
 function syncPanelSubject(): void {
-  const subject = panelSessionId();
+  const subject = focusedSessionId();
   if (subject === panelSubjectId) return;
   const hadSubject = panelSubjectId !== null;
   panelSubjectId = subject;
@@ -3992,7 +3995,7 @@ function pasteIntoPane(paneId: string, text: string): boolean {
  * exactly what lands before it does.
  */
 async function sendReviewToAgent(): Promise<void> {
-  const sessionId = panelSessionId();
+  const sessionId = focusedSessionId();
   if (!sessionId) return;
 
   if (!hunkSessionId) {
@@ -4109,7 +4112,7 @@ async function deliverReview(
  * it are separate decisions, and a session may not even have an agent.
  */
 function briefAgentAbout(issues: import("./adapters/types").Issue[]): void {
-  const sessionId = panelSessionId();
+  const sessionId = focusedSessionId();
   if (!sessionId || issues.length === 0) return;
 
   const pane = resolveAgentPane(sessionId);
@@ -4183,7 +4186,7 @@ function briefAgentAbout(issues: import("./adapters/types").Issue[]): void {
  * agent's work rather than just whatever is currently uncommitted.
  */
 async function openDiffViewPicker(): Promise<void> {
-  const subject = panelSessionId();
+  const subject = focusedSessionId();
   const cwd = subject ? await getSessionCwd(subject) : null;
   const base = cwd ? await resolveBaseBranch(cwd) : null;
 
@@ -4988,7 +4991,7 @@ function renderFrame(): void {
  * The docked panel's grid for this frame, or undefined when it is off. Shared
  * by the ordinary and Command Center render branches: the panel is the same
  * panel on both surfaces, sized from the same `layout`, describing
- * `panelSessionName()` — the pty client's session outside the grid, the
+ * `focusedSessionName()` — the pty client's session outside the grid, the
  * focused tile's inside it.
  */
 type DiffPanelArg = NonNullable<Parameters<Renderer["render"]>[7]>;
@@ -5014,7 +5017,7 @@ function buildDiffPanelArg(): DiffPanelArg | undefined {
     if (view) {
       const viewState = viewStates.get(view.id) ?? createViewState();
 
-      const sessionName = panelSessionName() ?? "";
+      const sessionName = focusedSessionName() ?? "";
       const ctx = pollCoordinator.getContext(sessionName);
       const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
       const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
@@ -5804,7 +5807,7 @@ const inputRouter = new InputRouter(
       if (!viewState) return;
       const view = panelViews.find((v) => v.id === infoPanel.activeTab);
       if (!view) return;
-      const sessionName = panelSessionName() ?? "";
+      const sessionName = focusedSessionName() ?? "";
       const ctx = pollCoordinator.getContext(sessionName);
       const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
       const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
@@ -5877,7 +5880,7 @@ const inputRouter = new InputRouter(
       if (!view) return;
       const viewState = viewStates.get(view.id);
       if (!viewState) return;
-      const sessionName = panelSessionName() ?? "";
+      const sessionName = focusedSessionName() ?? "";
       const ctx = pollCoordinator.getContext(sessionName);
       const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
       const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
@@ -6662,9 +6665,10 @@ function buildPaletteCommands(): PaletteCommand[] {
       return bound ? { ...cmd, keys: shortKeys(bound) } : cmd;
     });
 
-  // Dynamic: switch to session (excluding current)
+  // Dynamic: switch to session (excluding the one in front of you)
+  const focusedId = focusedSessionId();
   for (const session of currentSessions) {
-    if (session.id === currentSessionId) continue;
+    if (session.id === focusedId) continue;
     const shown = displaySessionName(session);
     // Both strings go in the label because `refilter` fuzzy-matches the label
     // and nothing else. A human who has typed `tra-123` for two days should not
@@ -6698,9 +6702,9 @@ function buildPaletteCommands(): PaletteCommand[] {
     });
   }
 
-  // Dynamic: pin/unpin current session
+  // Dynamic: pin/unpin the focused session
   {
-    const currentName = currentSessions.find(s => s.id === currentSessionId)?.name;
+    const currentName = focusedSessionName();
     if (currentName) {
       if (pinnedSessions.has(currentName)) {
         commands.push({
@@ -8828,7 +8832,7 @@ function previewTabsFor(
   let items = ticked;
 
   if (items.length < 2) {
-    const sessionName = panelSessionName() ?? "";
+    const sessionName = focusedSessionName() ?? "";
     const issues = pollCoordinator.getContext(sessionName)?.issues ?? [];
     if (issues.length < 2) return undefined;
 
@@ -8933,7 +8937,7 @@ function activePanelContext(): PanelContext | null {
   const viewState = viewStates.get(view.id);
   if (!viewState) return null;
 
-  const sessionName = panelSessionName() ?? "";
+  const sessionName = focusedSessionName() ?? "";
   const ctx = pollCoordinator.getContext(sessionName);
   const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
   const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
@@ -9256,7 +9260,7 @@ function attachIssueToSession(issueId: string): void {
   // Current session first: it is the overwhelmingly likely target, and the
   // annotation shows what each one already carries so the choice is made
   // against the work, not against a list of names.
-  const currentName = panelSessionName();
+  const currentName = focusedSessionName();
   const ordered = [...currentSessions].sort((a, b) =>
     (a.name === currentName ? 0 : 1) - (b.name === currentName ? 0 : 1),
   );
@@ -9307,7 +9311,7 @@ async function startUpNext(): Promise<void> {
  * sessions claim the same issue, the current one wins.
  */
 function explicitIssueLinks(): Map<string, string> {
-  const currentName = panelSessionName() ?? "";
+  const currentName = focusedSessionName() ?? "";
   const links = new Map<string, string>();
   const add = (rawKey: string, sessionName: string) => {
     const key = linkKey(rawKey);
@@ -9588,7 +9592,7 @@ function focusPanelWhere(
  * this session".
  */
 function focusPanelOnIssue(issueId: string): void {
-  const sessionName = panelSessionName() ?? "";
+  const sessionName = focusedSessionName() ?? "";
   const ctx = pollCoordinator.getContext(sessionName);
   const linkedIds = new Set([
     ...explicitIssueLinkIds(sessionName),
@@ -9771,7 +9775,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
 
   // Pin/unpin session
   if (commandId === "pin-session" || commandId === "unpin-session") {
-    const currentName = currentSessions.find(s => s.id === currentSessionId)?.name;
+    const currentName = focusedSessionName();
     if (currentName) {
       if (commandId === "pin-session") {
         pinnedSessions.add(currentName);
@@ -9786,7 +9790,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
   }
 
   if (commandId === "toggle-park-session") {
-    const currentName = currentSessions.find(s => s.id === currentSessionId)?.name;
+    const currentName = focusedSessionName();
     if (currentName) toggleParked(currentName);
     return;
   }
@@ -9958,11 +9962,18 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       });
       return;
     }
-    case "kill-session":
-      await control.sendCommand(`kill-session -t ${tq(currentSessionId!)}`);
+    case "kill-session": {
+      // The focused session, never `currentSessionId`: in the Command Center
+      // that is the internal park session, and killing it takes the grid's
+      // parking spot with it.
+      const target = focusedSessionId();
+      if (target) await control.sendCommand(`kill-session -t ${tq(target)}`);
       return;
+    }
     case "rename-session": {
-      const currentName = currentSessions.find(s => s.id === currentSessionId)?.name ?? "";
+      const target = focusedSessionId();
+      if (!target) return;
+      const currentName = focusedSessionName() ?? "";
       const modal = new InputModal({
         header: "Rename Session",
         subheader: `Current: ${currentName}`,
@@ -9983,12 +9994,12 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
         // The `manual` sentinel lives in a tmux option so a restart cannot
         // forget it and generate a title over the top of their name.
         await control.sendCommand(
-          `rename-session -t ${tq(currentSessionId!)} ${tq(name as string)} ; ` +
+          `rename-session -t ${tq(target)} ${tq(name as string)} ; ` +
             // `-u` is spelled separately, never packed onto `-t`: `-t` takes an
             // argument, so tmux reads `-tu` as `-t u` and fails with
             // "ambiguous option".
-            `set-option -t ${tq(currentSessionId!)} -u ${SESSION_TITLE_OPTION} ; ` +
-            `set-option -t ${tq(currentSessionId!)} ${TITLE_SIGNATURE_OPTION} ${tq(MANUAL_SIGNATURE)}`,
+            `set-option -t ${tq(target)} -u ${SESSION_TITLE_OPTION} ; ` +
+            `set-option -t ${tq(target)} ${TITLE_SIGNATURE_OPTION} ${tq(MANUAL_SIGNATURE)}`,
         );
       });
       return;
@@ -10300,7 +10311,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
           const sel = selected as { id: string };
           const issue = results.find((i) => i.id === sel.id);
           if (issue) {
-            const sName = panelSessionName();
+            const sName = focusedSessionName();
             if (sName) attachIssueTo(sName, issue);
           }
         });
@@ -10308,7 +10319,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       return;
     }
     case "unlink-issue": {
-      const sName = panelSessionName() ?? "";
+      const sName = focusedSessionName() ?? "";
       // Both stores. Listing only `state.json` meant an issue an agent linked
       // with `ctl issue link` showed in the badge and could not be removed from
       // the TUI at all — the human could see the link but not undo it.
@@ -10352,7 +10363,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
         picker.open();
         openModal(picker, (selected) => {
           const sel = selected as { id: string };
-          const sName = panelSessionName();
+          const sName = focusedSessionName();
           if (sName) {
             const mr = results.find((m) => m.id === sel.id);
             if (!mr) return;
@@ -10364,7 +10375,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       return;
     }
     case "unlink-mr": {
-      const sName = panelSessionName() ?? "";
+      const sName = focusedSessionName() ?? "";
       const manualMrs = sessionState.getLinks(sName).filter((l) => l.type === "mr");
       if (manualMrs.length === 0) return;
       const ctx = pollCoordinator.getContext(sName);
@@ -10432,14 +10443,25 @@ async function openBrowserPane(url?: string): Promise<void> {
     return;
   }
 
-  if (!ptyClientName) await resolveClientName();
-  if (!ptyClientName) return;
+  // The split targets the pty client by name outside the Command Center — an
+  // untargeted split lands in whichever session tmux last touched, reliably
+  // the parking session — and the focused tile's pane inside it, where the
+  // client *is* parked and a client-targeted split would put the browser in
+  // `__jmux_park`, in no tile, invisibly.
+  let target: string | null;
+  if (inGlass) {
+    target = glassView?.focusedPaneId() ?? null;
+  } else {
+    if (!ptyClientName) await resolveClientName();
+    target = ptyClientName;
+  }
+  if (!target) return;
   const cfg = configStore.config.browser;
   const runtimeDir = (cfg?.isolate ?? true) ? allocBrowserRuntimeDir() || undefined : undefined;
   // `-P -F` so the split reports the pane it made. The pane options below are
   // the only record that this pane is a browser and where its browser lives —
   // `ctl` has no IPC to reach in here and ask.
-  const lines = await control.sendCommand(browserSplitCommand(ptyClientName, {
+  const lines = await control.sendCommand(browserSplitCommand(target, {
     size: cfg?.paneSize ?? DEFAULT_BROWSER_PANE_SIZE,
     displayScale: cfg?.displayScale ?? DEFAULT_BROWSER_DISPLAY_SCALE,
     fps: cfg?.fps ?? DEFAULT_BROWSER_FPS,
@@ -10502,7 +10524,7 @@ function devServerDeps(): DevServerDeps {
  * 120ms, which is why this is a command and not a live indicator.
  */
 async function openDevServer(): Promise<void> {
-  const sessionName = currentSessions.find((s) => s.id === currentSessionId)?.name;
+  const sessionName = focusedSessionName() ?? undefined;
   const servers = await scanDevServers({ session: sessionName }, devServerDeps());
 
   if (servers.length === 0) {
@@ -10583,7 +10605,7 @@ async function findBrowserPaneHere(): Promise<BrowserPane | null> {
   try {
     const lines = await control.sendCommand(`list-panes -a -F '${BROWSER_PANE_FORMAT}'`);
     const panes = parseBrowserPanes(lines);
-    const session = currentSessions.find((s) => s.id === currentSessionId)?.name;
+    const session = focusedSessionName() ?? undefined;
     return pickBrowserPane(panes, { session });
   } catch {
     return null;

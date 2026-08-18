@@ -419,13 +419,18 @@ panel's columns. The renderer takes the strip as a `header` grid on the row
 the toolbar config would fill, and the panel's tab bar lands on that row in
 both cases. Four rules follow:
 
-- **The panel's subject is the focused tile.** `panelSessionId()` is the
-  pty client's session outside the grid and `glassView.focusedSessionId()`
-  inside it — where `currentSessionId` is the internal park session and would
-  make the panel describe nothing. Everything panel-scoped reads it (the Issue
-  tab's context, the hunk cwd, `n`/`l`/`L`, the palette's link/unlink, the
-  review-notes target); session management (kill, rename) still reads
-  `currentSessionId`. `syncPanelSubject()` is the one function that moves the
+- **The panel's subject is the focused tile, and so is the palette's.**
+  `focusedSessionId()` is the pty client's session outside the grid and
+  `glassView.focusedSessionId()` inside it — where `currentSessionId` is the
+  internal park session, which nothing should describe or act on. Everything
+  panel-scoped reads it (the Issue tab's context, the hunk cwd, `n`/`l`/`L`,
+  the palette's link/unlink, the review-notes target), and so do the palette's
+  per-session actions — kill, rename, pin, park, "switch to", dev servers —
+  and the browser pane, which splits the focused tile's *pane* rather than the
+  parked client (kill-session used to take `__jmux_park` with it, and `Ctrl-a
+  b` opened a browser nobody could see). `currentSessionId` stays tmux's
+  answer for the rail, the snapshotter and client plumbing.
+  `syncPanelSubject()` is the one function that moves the
   panel — default view, hunk respawn, active poll session, driving issue under
   the cursor — and it is idempotent on the subject, called from the
   `%client-session-changed` handler, `switchSession`, every tile focus change
