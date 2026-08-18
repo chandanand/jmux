@@ -494,7 +494,10 @@ may be repeated (`--status "To do" --status "QA Failed"`) and matches
 case-insensitively against each issue's `status`; omit it to get every
 assigned status. `links` is present but empty on ordinary issues — it only
 populates for issues that carry attachments the tracker recognizes (e.g. a
-linked merge request).
+linked merge request). `hasCustomerRequest` is present when the tracker
+supports it: `true`/`false` are confirmed answers, and the field is **absent**
+when the answer could not be established — an absent value must not be read
+as `false`.
 
 ### workflow stages
 ```json
