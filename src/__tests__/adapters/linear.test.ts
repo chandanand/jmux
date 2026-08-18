@@ -260,6 +260,30 @@ describe("GraphQL error handling", () => {
     expect(result!.get("u1")?.identifier).toBe("ENG-1");
   });
 
+  // Exercises the real pollIssue -> graphql -> mapIssue path, not
+  // customerRequestSignal in isolation. A correct helper function that
+  // mapIssue never calls is indistinguishable from no signal at all.
+  test("a needs resolver failure maps through pollIssue as unknown, not absent", async () => {
+    const { result } = await withFetch(
+      () => ({
+        errors: [{ message: "Cannot query field \"needs\" on type \"Issue\"" }],
+        data: { issue: { ...ISSUE("TRA-1"), needs: null } },
+      }),
+      (a) => a.pollIssue("u1"),
+    );
+    expect(result!.hasCustomerRequest).toBeUndefined();
+  });
+
+  test("an attached customer request maps through pollIssue as true", async () => {
+    const { result } = await withFetch(
+      () => ({
+        data: { issue: { ...ISSUE("TRA-2"), needs: { nodes: [{ id: "n1" }] } } },
+      }),
+      (a) => a.pollIssue("u2"),
+    );
+    expect(result!.hasCustomerRequest).toBe(true);
+  });
+
   test("branch lookup uses the supported search field, not deprecated issueSearch", async () => {
     const { result, queries } = await withFetch(
       () => ({ data: { searchIssues: { nodes: [ISSUE("ENG-1234")] } } }),
