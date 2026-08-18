@@ -189,6 +189,60 @@ describe("repeated value flags", () => {
   });
 });
 
+describe("--flag=value form", () => {
+  // `--status="QA Failed"` reaches us as the single token `--status=QA
+  // Failed` once the shell strips the quotes. Before this, `name` included
+  // the whole `status=QA Failed` string, matched nothing in VALUE_FLAGS, and
+  // fell through to the permissive unknown-flag branch — the filter vanished
+  // and the command silently returned the operator's entire queue with exit
+  // 0, the form a programmatic caller most naturally emits.
+  test("--flag=value sets flags[name] to the value after the equals sign", () => {
+    const result = parseCtlArgs(["issue", "list", "--status=QA Failed"]);
+    expect(result.flags.status).toBe("QA Failed");
+  });
+
+  test("--flag=value accumulates into repeated exactly like --flag value", () => {
+    const result = parseCtlArgs(["issue", "list", "--status=QA Failed"]);
+    expect(result.repeated.status).toEqual(["QA Failed"]);
+  });
+
+  test("--flag=value never leaves a junk flag key behind", () => {
+    const result = parseCtlArgs(["issue", "list", "--status=QA Failed"]);
+    expect(Object.keys(result.flags)).toEqual(["status"]);
+  });
+
+  test("a value containing its own equals sign splits only on the first one", () => {
+    const result = parseCtlArgs(["session", "create", "--name", "x", "--command=FOO=bar"]);
+    expect(result.flags.command).toBe("FOO=bar");
+  });
+
+  test("an empty value after the equals sign is accepted, not treated as missing", () => {
+    const result = parseCtlArgs(["issue", "list", "--status="]);
+    expect(result.flags.status).toBe("");
+  });
+
+  test("--flag=value still consumes exactly one token, leaving positionals intact", () => {
+    const result = parseCtlArgs(["issue", "move", "TRA-1", "--status=In Review", "extra"]);
+    expect(result.flags.status).toBe("In Review");
+    expect(result.positional).toEqual(["TRA-1", "extra"]);
+  });
+
+  test("a repeated mix of --flag=value and --flag value forms both accumulate, last-wins in flags", () => {
+    const result = parseCtlArgs([
+      "issue", "list", "--status=To do", "--status", "QA Failed", "--status=Done",
+    ]);
+    expect(result.flags.status).toBe("Done");
+    expect(result.repeated.status).toEqual(["To do", "QA Failed", "Done"]);
+  });
+
+  test("boolean flags are unaffected — --force=true still falls through, not treated as inline-valued", () => {
+    // Out of scope for this fix: only VALUE_FLAGS gain `=value` support.
+    const result = parseCtlArgs(["session", "kill", "--target", "foo", "--force=true"]);
+    expect(result.flags.force).toBeUndefined();
+    expect(result.flags["force=true"]).toBe(true);
+  });
+});
+
 describe("end-of-flags (`--`)", () => {
   // `browser action` hands everything after `--` to another program's CLI.
   // Parsing it as ours dropped the flag *names* and left their values as bare

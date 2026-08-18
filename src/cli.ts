@@ -235,6 +235,14 @@ export function parseCtlArgs(argv: string[]): ParsedCtlArgs {
       break;
     } else if (arg.startsWith("--")) {
       const name = arg.slice(2);
+      // `--flag=value` reaches us as one token once the shell strips the
+      // quotes around `--status="QA Failed"`. Only value flags gain `=`
+      // support here — `BOOL_FLAGS`/`OPTIONAL_NUMERIC_FLAGS` are matched
+      // against the untouched `name` below, exactly as before, so e.g.
+      // `--force=true` still falls through to the permissive branch rather
+      // than silently taking on a new meaning.
+      const eq = name.indexOf("=");
+      const valueFlagName = eq === -1 ? name : name.slice(0, eq);
       if (BOOL_FLAGS.has(name)) {
         flags[name] = true;
         i++;
@@ -243,18 +251,26 @@ export function parseCtlArgs(argv: string[]): ParsedCtlArgs {
         const numeric = next !== undefined && next.trim() !== "" && Number.isFinite(Number(next));
         flags[name] = numeric ? argv[++i] : true;
         i++;
-      } else if (VALUE_FLAGS.has(name) || GLOBAL_VALUE_FLAGS.has(name)) {
-        if (i + 1 >= argv.length) {
-          throw new CliError(`Flag --${name} requires a value`);
+      } else if (VALUE_FLAGS.has(valueFlagName) || GLOBAL_VALUE_FLAGS.has(valueFlagName)) {
+        let value: string;
+        if (eq !== -1) {
+          // Split only on the first `=` — a value that itself contains one
+          // (`--command=FOO=bar`) must not be truncated.
+          value = name.slice(eq + 1);
+          i++;
+        } else {
+          if (i + 1 >= argv.length) {
+            throw new CliError(`Flag --${valueFlagName} requires a value`);
+          }
+          value = argv[++i];
+          i++;
         }
-        const value = argv[++i];
         // Last-wins, exactly as every existing command has always seen it.
-        flags[name] = value;
+        flags[valueFlagName] = value;
         // Additive: every occurrence, in order, alongside the last-wins value
         // above — `issue list --status a --status b` needs both, and nothing
         // that reads `flags[name]` directly is affected by this array existing.
-        (repeated[name] ??= []).push(value);
-        i++;
+        (repeated[valueFlagName] ??= []).push(value);
       } else {
         // Unknown flag — treat as boolean (permissive)
         flags[name] = true;
