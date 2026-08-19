@@ -1,1 +1,0 @@
-- [ ] Sub grouping in the sidebar, so we'd support group, subgroup, and sort.
