@@ -1,6 +1,6 @@
 import { resolve } from "path";
 import { homedir, tmpdir } from "os";
-import { existsSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, writeFileSync } from "fs";
 import { runTmuxDirect } from "./tmux";
 import { tmuxOrThrow, CliError, type CliContext } from "./context";
 import {
@@ -238,6 +238,64 @@ export function resolveRepoForIssue(
     config.routes ?? {},
   );
   return outcome.kind === "resolved" ? outcome.project.dir : null;
+}
+
+/**
+ * The seed prompt an agent receives.
+ *
+ * The contract goes last on purpose: the issue is context the agent needs in
+ * order to understand the instruction, and the instruction is what it should act
+ * on. The separator is explicit because `buildLinearPrompt` does not end with
+ * one, so a direct concatenation runs the two together.
+ */
+export function buildSeedPrompt(issueText: string | null, contract: string | null): string {
+  if (issueText && contract) return `${issueText}\n\n${contract}`;
+  return contract ?? issueText ?? "";
+}
+
+/**
+ * The whole prompt is expanded into a single positional argument by
+ * `buildAgentFragment`, so an oversized prompt fails the agent launch and leaves
+ * a bare shell in the pane. Refusing here costs nothing; refusing later costs a
+ * provisioned session.
+ */
+export const MAX_SEED_PROMPT_BYTES = 128_000;
+
+export function assertSeedPromptFits(prompt: string): void {
+  const bytes = Buffer.byteLength(prompt, "utf-8");
+  if (bytes > MAX_SEED_PROMPT_BYTES) {
+    throw new CliError(`seed prompt is ${bytes} bytes, over the ${MAX_SEED_PROMPT_BYTES} limit`);
+  }
+}
+
+/**
+ * Read once, up front. `buildAgentFragment` defers its own `cat` until launch,
+ * so a contract referenced rather than copied can change or vanish in between.
+ */
+export function readContractFile(path: string): string {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf-8");
+  } catch (e) {
+    throw new CliError(`--append-prompt could not read ${path}: ${(e as Error).message}`);
+  }
+  if (text.trim() === "") throw new CliError(`--append-prompt file ${path} is empty`);
+  return text;
+}
+
+/**
+ * `launchAgent` is `--no-launch-agent` combined with the project's
+ * `autoLaunchAgent` setting, not the flag alone — a project configured not to
+ * launch agents would otherwise discard `--append-prompt`'s contract in
+ * silence, and the orchestrator would believe a session is contracted while no
+ * agent is there to receive it.
+ */
+export function assertLaunchAgentForContract(launchAgent: boolean, path: string): void {
+  if (!launchAgent) {
+    throw new CliError(
+      `--append-prompt ${path} has no agent to deliver it to: launchAgent is false (--no-launch-agent, or the repo's autoLaunchAgent setting)`,
+    );
+  }
 }
 
 export interface IssueCreateArgs {
@@ -763,6 +821,15 @@ async function issueStart(
   // a tracker round-trip first, and was skipped entirely on the reuse paths —
   // validation that only fires sometimes is validation nobody can rely on.
   const waitSpec = parseWaitFlag(flags.wait);
+  // Read before any lookup or side effect, for the same reason as `waitSpec`
+  // above: a bad path or an empty file is a caller mistake, and refusing here
+  // costs nothing, while refusing later costs a tracker round-trip or a
+  // provisioned session. Unused on the reuse paths below — a session that is
+  // reused already has a running agent, so there is no first message left to
+  // seed, the same way a reused session never reads `buildLinearPrompt` either.
+  const appendPromptPath =
+    typeof flags["append-prompt"] === "string" ? flags["append-prompt"] : null;
+  const contract = appendPromptPath ? readContractFile(appendPromptPath) : null;
 
   const rows = listIssueLinkRows(ctx);
   const reuse = (row: IssueLinkRow, id: string): IssueStartResult => ({
@@ -843,13 +910,19 @@ async function issueStart(
   // agent inside. Readiness is now the setup pane's business.
   const worktreeExists = existsSync(worktreePath);
 
-  // Seed the agent's first message from the issue, the same way the TUI does.
+  // Seed the agent's first message from the issue, plus the contract from
+  // --append-prompt when one was given, the same way the TUI seeds the issue
+  // alone.
   const launchAgent = !flags["no-launch-agent"] && repoSettings.autoLaunchAgent;
+  if (appendPromptPath) assertLaunchAgentForContract(launchAgent, appendPromptPath);
+
   let promptFile: string | null = null;
-  if (launchAgent && issue) {
+  if (launchAgent && (issue || contract)) {
+    const seedPrompt = buildSeedPrompt(issue ? buildLinearPrompt(issue) : null, contract);
+    assertSeedPromptFits(seedPrompt);
     const rand = Math.random().toString(36).slice(2);
     promptFile = resolve(tmpdir(), `jmux-prompt-${Date.now()}-${rand}`);
-    writeFileSync(promptFile, buildLinearPrompt(issue), "utf-8");
+    writeFileSync(promptFile, seedPrompt, "utf-8");
   }
 
   const plan = buildProvisionPlan({

@@ -348,3 +348,16 @@ describe("raise-group flags are scoped to the raise group", () => {
     expect(p.repeated.option).toBeUndefined();
   });
 });
+
+describe("issue-group flags are scoped to the issue group", () => {
+  test("--append-prompt takes a value inside the issue group", () => {
+    const p = parseCtlArgs(["issue", "start", "TRA-1", "--append-prompt", "/tmp/c.md"]);
+    expect(p.flags["append-prompt"]).toBe("/tmp/c.md");
+  });
+
+  test("outside the issue group the flag name keeps its old meaning", () => {
+    const p = parseCtlArgs(["session", "list", "--append-prompt", "/tmp/c.md"]);
+    expect(p.flags["append-prompt"]).toBe(true);
+    expect(p.positional).toContain("/tmp/c.md");
+  });
+});

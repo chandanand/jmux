@@ -88,6 +88,7 @@ const GROUP_VALUE_FLAGS: Record<string, ReadonlySet<string>> = {
     "session", "issue", "question", "option", "recommend",
     "why", "authority", "context", "note", "reason", "attempt", "state",
   ]),
+  issue: new Set(["append-prompt"]),
 };
 /**
  * Flags whose value is optional and always numeric, so `--wait` and `--wait 60`
@@ -160,6 +161,10 @@ FLAGS
   --all                Operate on all sessions (agent state/watch, dev-servers)
   --start              Start the work immediately (issue create, workflow next)
   --no-launch-agent    Don't auto-launch Claude (issue start)
+  --append-prompt <file> Append a contract file's contents to the seed prompt
+                       (issue start). Refused when the effective agent-launch
+                       value is false, or when the resulting prompt would be
+                       too large for the launch command to carry.
   --wait [seconds]     Block until the worktree is provisioned (issue start).
                        Off by default: the session and agent are created up
                        front and the worktree lands in a setup pane beside
