@@ -420,6 +420,10 @@ function resolveEvent(): RaiseEvent {
   return { kind: "resolve", atMs: Date.now() };
 }
 
+function retryEvent(): RaiseEvent {
+  return { kind: "retry" };
+}
+
 export function handleRaise(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
   switch (parsed.action) {
     case "create":
@@ -438,9 +442,11 @@ export function handleRaise(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
       return eventAction(parsed, ackEvent);
     case "resolve":
       return eventAction(parsed, resolveEvent);
+    case "retry":
+      return eventAction(parsed, retryEvent);
     default:
       throw new CliError(
-        `Unknown raise action "${parsed.action}". Known actions: create, list, answer, delivering, delivery-failed, applied, ack, resolve`,
+        `Unknown raise action "${parsed.action}". Known actions: create, list, answer, delivering, delivery-failed, applied, ack, resolve, retry`,
       );
   }
 }
