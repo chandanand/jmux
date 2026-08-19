@@ -12,6 +12,7 @@ import {
   SESSION_REPORT_OUTCOME_OPTION,
   SESSION_REPORT_REASON_OPTION,
   parseSessionReport,
+  decodeReportReason,
   type SessionReport,
 } from "./session";
 import { outranks } from "../agent-state-rollup";
@@ -87,7 +88,13 @@ export function parseStatusLine(line: string): StatusSessionRow | null {
     active: p[8] === "1",
     projectId: p[9] ?? "",
     reportOutcome: p[10] ?? "",
-    reportReason: p[11] ?? "",
+    // `list-panes -F` is read one stdout line at a time (`runTmuxDirect`), so
+    // a raw newline in the stored reason would already have split this pane
+    // into more than one line before `splitFields` ever saw it — decoding
+    // here only reverses `encodeReportReason`'s escaping of a *stored* value,
+    // it cannot recover bytes tmux's own read already dropped, which is
+    // exactly why the write path escapes them before they ever reach tmux.
+    reportReason: decodeReportReason(p[11] ?? ""),
   };
 }
 

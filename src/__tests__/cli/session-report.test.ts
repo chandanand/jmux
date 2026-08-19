@@ -17,6 +17,8 @@ import {
   parseSessionReport,
   handleSession,
   SESSION_REPORT_OUTCOMES,
+  encodeReportReason,
+  decodeReportReason,
 } from "../../cli/session";
 import { buildStatusSnapshot, type StatusSessionRow, type StatusInputs } from "../../cli/status";
 import { CliError, type CliContext } from "../../cli/context";
@@ -102,6 +104,52 @@ describe("parseSessionReport", () => {
     for (const outcome of SESSION_REPORT_OUTCOMES) {
       expect(parseSessionReport(outcome, "r")?.unbound).toBe(true);
     }
+  });
+});
+
+// A reason survives `set-option` (tmux stores opaque bytes) but not the read
+// side: `list-panes -F` output is read one stdout line at a time, so a raw
+// embedded newline in the option's value splits what tmux considers one pane
+// row into what this codebase's own parsing treats as several, and
+// everything after the first line is silently dropped — proven live against
+// a real tmux server in the entry-point describe block below.
+// `encodeReportReason`/`decodeReportReason` are the fix: no raw newline is
+// ever handed to tmux, so this pure round trip is what the live tests below
+// depend on holding.
+describe("encodeReportReason / decodeReportReason", () => {
+  test("round-trips a reason with a single embedded newline", () => {
+    const raw = "line one\nline two";
+    // The encoded form must carry no raw newline at all — that is the
+    // property the read-path fix depends on, not merely that some
+    // reversible transform happened. A no-op encoder would still pass a
+    // decode(encode(x)) === x check trivially, for any x.
+    expect(encodeReportReason(raw)).not.toContain("\n");
+    expect(decodeReportReason(encodeReportReason(raw))).toBe(raw);
+  });
+
+  test("round-trips a reason with several newlines", () => {
+    const raw = "step one failed\n\nwhat I tried:\n- a\n- b\n\nneed a human call";
+    expect(encodeReportReason(raw)).not.toContain("\n");
+    expect(decodeReportReason(encodeReportReason(raw))).toBe(raw);
+  });
+
+  test("a literal backslash-n pair is preserved, not decoded into a newline", () => {
+    const raw = "the config key is literally \\n here";
+    const roundTripped = decodeReportReason(encodeReportReason(raw));
+    expect(roundTripped).toBe(raw);
+    expect(roundTripped).not.toContain("\n");
+  });
+
+  test("a trailing newline is preserved, not trimmed away", () => {
+    const raw = "done.\n";
+    const roundTripped = decodeReportReason(encodeReportReason(raw));
+    expect(roundTripped).toBe(raw);
+    expect(roundTripped.endsWith("\n")).toBe(true);
+  });
+
+  test("a reason mixing backslashes and newlines round-trips exactly", () => {
+    const raw = "path is C:\\\\repo\nbranch: fix\\bug\n\\n literal too";
+    expect(decodeReportReason(encodeReportReason(raw))).toBe(raw);
   });
 });
 
@@ -245,5 +293,67 @@ describe.skipIf(!TMUX)("ctl session report (entry point, disposable tmux socket)
       tmux(["kill-server"]);
       rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Live proof that a reason containing newlines round-trips through a real
+// server, not just through encodeReportReason/decodeReportReason in
+// isolation: writes via `ctl session report`, reads back via `ctl status`
+// (the only other place a report's tmux options are ever read), against a
+// disposable tmux socket. Each case is exactly what the pure unit tests
+// above assume holds once real tmux `set-option`/`list-panes -F` sit between
+// write and read.
+// ---------------------------------------------------------------------------
+function reportAndReadBackViaStatus(reason: string): { home: string; report: unknown } {
+  const home = mkdtempSync(join(tmpdir(), "session-report-newline-"));
+  const name = `report-nl-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    const created = tmux(["new-session", "-d", "-s", name, "-c", "/tmp"]);
+    expect(created.ok).toBe(true);
+
+    const reportResult = ctl(["session", "report", "--target", name, "--outcome", "blocked", "--reason", reason], home);
+    expect({ exitCode: reportResult.exitCode, stderr: reportResult.stderr }).toMatchObject({ exitCode: 0 });
+
+    const statusResult = ctl(["status"], home);
+    expect({ exitCode: statusResult.exitCode, stderr: statusResult.stderr }).toMatchObject({ exitCode: 0 });
+    const statusParsed = JSON.parse(statusResult.stdout);
+    const session = statusParsed.sessions.find((s: { name: string }) => s.name === name);
+    expect(session).toBeDefined();
+
+    return { home, report: session.report };
+  } finally {
+    tmux(["kill-session", "-t", name]);
+    tmux(["kill-server"]);
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+describe.skipIf(!TMUX)("a reason with newlines survives a live ctl status round trip", () => {
+  test("an embedded newline round-trips intact through ctl status, not just the write response", () => {
+    const reason = "ran the migration\nit failed on the third table";
+    const { report } = reportAndReadBackViaStatus(reason);
+    expect(report).toEqual({ outcome: "blocked", reason, unbound: true });
+  });
+
+  test("a multi-line reason with several newlines survives whole", () => {
+    const reason = "tried three approaches:\n1. retry\n2. rollback\n3. manual fix\n\nnone worked, need a call";
+    const { report } = reportAndReadBackViaStatus(reason);
+    expect(report).toEqual({ outcome: "blocked", reason, unbound: true });
+  });
+
+  test("a literal backslash-n pair comes back as those two characters, not a newline", () => {
+    const reason = "the env var is literally named FOO\\nBAR in the config";
+    const { report } = reportAndReadBackViaStatus(reason);
+    expect(report).toEqual({ outcome: "blocked", reason, unbound: true });
+    const readReason = (report as { reason: string }).reason;
+    expect(readReason).not.toContain("\n");
+  });
+
+  test("a trailing newline is preserved, not trimmed away", () => {
+    const reason = "done for now.\n";
+    const { report } = reportAndReadBackViaStatus(reason);
+    expect(report).toEqual({ outcome: "blocked", reason, unbound: true });
+    expect((report as { reason: string }).reason.endsWith("\n")).toBe(true);
   });
 });
