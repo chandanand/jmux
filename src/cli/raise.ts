@@ -65,18 +65,16 @@ export function buildRaise(input: BuildRaiseInput): Raise {
  * Beside the config `ctl` actually uses. `ctl` (unlike the TUI) has no
  * `--config` flag, so this is always `~/.config/jmux/config.json` — the same
  * default `loadUserConfig()` and `ConfigStore` fall back to — and `raisesPathFor`
- * puts the store beside it. `$HOME` still governs where that resolves, exactly
- * as it does for every other jmux config path (see `log.ts`) — read directly
- * from `process.env`, not through `homedir()`, because `homedir()` resolves
- * the OS-level home directory and does not observe a same-process override of
- * `$HOME`; only a value actually read from the environment does. That is what
- * lets a test point `handleRaise` at a scratch directory without a bespoke
- * flag or a subprocess, the same way it already could for a freshly spawned
- * one. `homedir()` remains the fallback for the (real-world) case where
- * `$HOME` is unset.
+ * puts the store beside it. Resolved the same way as every other jmux config
+ * path (see `log.ts`, `config.ts`'s `DEFAULT_CONFIG_PATH`): through
+ * `homedir()`, never by reading `$HOME` directly, so `ctl raise` never
+ * disagrees with `loadUserConfig()` or `ConfigStore` about which config file
+ * is "the" one. A test that wants a different store passes `handleRaise` an
+ * explicit `storePath` instead of overriding the environment — see its own
+ * doc comment.
  */
 function defaultConfigPath(): string {
-  return resolve(process.env.HOME || homedir(), ".config", "jmux", "config.json");
+  return resolve(homedir(), ".config", "jmux", "config.json");
 }
 
 /** How many resolved raises `create` leaves behind per mutation, alongside every unresolved one. */
@@ -241,7 +239,7 @@ export function commitRaise(path: string, candidate: Raise, keep: number): Raise
   return outcome;
 }
 
-function createAction(ctx: CliContext, parsed: ParsedCtlArgs): { version: number; raise: Raise } {
+function createAction(ctx: CliContext, parsed: ParsedCtlArgs, storePath: string): { version: number; raise: Raise } {
   const args = validateRaiseCreate(parsed);
 
   const scope: RaiseScope = args.sessionFlag
@@ -262,8 +260,7 @@ function createAction(ctx: CliContext, parsed: ParsedCtlArgs): { version: number
     nowMs: Date.now(),
   });
 
-  const path = raisesPathFor(defaultConfigPath());
-  const raise = commitRaise(path, candidate, RESOLVED_HISTORY_LIMIT);
+  const raise = commitRaise(storePath, candidate, RESOLVED_HISTORY_LIMIT);
 
   if (scope.kind === "session") {
     // Best-effort, like `issue-provision.ts`'s own writes of this same option:
@@ -329,10 +326,10 @@ function optionalStringFlag(parsed: ParsedCtlArgs, name: string): string | null 
 function eventAction(
   parsed: ParsedCtlArgs,
   buildEvent: (parsed: ParsedCtlArgs) => RaiseEvent,
+  storePath: string,
 ): { version: number; raise: Raise } {
   const id = requireRaiseId(parsed);
-  const path = raisesPathFor(defaultConfigPath());
-  const raise = applyRaiseEvent(path, id, buildEvent(parsed));
+  const raise = applyRaiseEvent(storePath, id, buildEvent(parsed));
   return { version: RAISES_CONTRACT_VERSION, raise };
 }
 
@@ -391,10 +388,9 @@ export function listRaisesAt(path: string, filters: RaiseListFilters): Raise[] {
   });
 }
 
-function listAction(parsed: ParsedCtlArgs): { version: number; raises: Raise[] } {
+function listAction(parsed: ParsedCtlArgs, storePath: string): { version: number; raises: Raise[] } {
   const filters = parseRaiseListFilters(parsed);
-  const path = raisesPathFor(defaultConfigPath());
-  return { version: RAISES_CONTRACT_VERSION, raises: listRaisesAt(path, filters) };
+  return { version: RAISES_CONTRACT_VERSION, raises: listRaisesAt(storePath, filters) };
 }
 
 function answerEvent(parsed: ParsedCtlArgs): RaiseEvent {
@@ -430,26 +426,37 @@ function retryEvent(): RaiseEvent {
   return { kind: "retry" };
 }
 
-export function handleRaise(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
+/**
+ * `storePath` defaults to the real store beside `ctl`'s config, exactly as
+ * every action always resolved it. A caller — in practice, a test — can pass
+ * an explicit path instead, the same seam `commitRaise` already offered
+ * `create`, so `handleRaise` itself is directly testable against a temporary
+ * store without touching how `ctl raise` resolves its config in production.
+ */
+export function handleRaise(
+  ctx: CliContext,
+  parsed: ParsedCtlArgs,
+  storePath: string = raisesPathFor(defaultConfigPath()),
+): unknown {
   switch (parsed.action) {
     case "create":
-      return createAction(ctx, parsed);
+      return createAction(ctx, parsed, storePath);
     case "list":
-      return listAction(parsed);
+      return listAction(parsed, storePath);
     case "answer":
-      return eventAction(parsed, answerEvent);
+      return eventAction(parsed, answerEvent, storePath);
     case "delivering":
-      return eventAction(parsed, deliveringEvent);
+      return eventAction(parsed, deliveringEvent, storePath);
     case "delivery-failed":
-      return eventAction(parsed, deliveryFailedEvent);
+      return eventAction(parsed, deliveryFailedEvent, storePath);
     case "applied":
-      return eventAction(parsed, appliedEvent);
+      return eventAction(parsed, appliedEvent, storePath);
     case "ack":
-      return eventAction(parsed, ackEvent);
+      return eventAction(parsed, ackEvent, storePath);
     case "resolve":
-      return eventAction(parsed, resolveEvent);
+      return eventAction(parsed, resolveEvent, storePath);
     case "retry":
-      return eventAction(parsed, retryEvent);
+      return eventAction(parsed, retryEvent, storePath);
     default:
       throw new CliError(
         `Unknown raise action "${parsed.action}". Known actions: create, list, answer, delivering, delivery-failed, applied, ack, resolve, retry`,

@@ -169,11 +169,11 @@ describe("the full session raise path", () => {
 // through to "Unknown raise action" no matter how correct the lifecycle was.
 // This drives the real entry point (`bin/jmux`) as a subprocess, the same way
 // `raise-create.test.ts`'s own entry-point test does, rather than calling
-// `applyRaiseEvent` directly — so a missing or removed dispatch case shows up
-// here. It has to be a subprocess: `handleRaise` resolves the store from
-// `homedir()`, and Bun's `os.homedir()` reads the OS user database rather
-// than `process.env.HOME`, so redirecting it for an in-process call has no
-// effect — only a freshly spawned process picks up an overridden `HOME`.
+// `applyRaiseEvent` directly, so a missing or removed dispatch case shows up
+// here — and, unlike the `handleRaise dispatch` table below (which passes an
+// explicit `storePath`), this one exercises `runCtl`'s own argv parsing and
+// its resolution of the real default config path, with `HOME` pointed at a
+// scratch directory for the subprocess only.
 const BIN = join(import.meta.dir, "..", "..", "..", "bin", "jmux");
 
 describe("ctl raise retry (entry point)", () => {
@@ -221,11 +221,12 @@ describe("ctl raise retry (entry point)", () => {
 // that gap for all nine actions `handleRaise` knows: `create`, `list`, and
 // the seven event-driven actions.
 //
-// `handleRaise` always resolves the store from the real default config path
-// (`defaultConfigPath()`), so `$HOME` is pointed at a fresh scratch
-// directory for each test — the same mechanism `defaultConfigPath`'s own
-// doc comment describes — and restored afterward, so nothing here ever
-// touches a real `~/.config/jmux/raises.json`.
+// `handleRaise` takes an explicit `storePath` for exactly this: production
+// code never reads the environment to make itself testable — `ctl raise`
+// always resolves its config the same way the rest of the application does
+// (`homedir()`, matching `config.ts` and `log.ts`) — and a test that wants a
+// different store passes one in, the same seam `commitRaise` already gave
+// `create`. Nothing here ever touches a real `~/.config/jmux/raises.json`.
 // ---------------------------------------------------------------------------
 
 function raiseAt(over: Partial<Raise> = {}): Raise {
@@ -250,43 +251,40 @@ const dispatchSessionScope = {
 const dummyCtx = { socket: null, paneId: null, sessionOverride: null, insideTmux: false, insideJmux: false };
 
 describe("handleRaise dispatch (every wired action)", () => {
-  let home: string;
-  let raisesPath: string;
-  let originalHome: string | undefined;
+  let dir: string;
+  let storePath: string;
 
   beforeEach(() => {
-    originalHome = process.env.HOME;
-    home = mkdtempSync(join(tmpdir(), "raise-dispatch-"));
-    process.env.HOME = home;
-    raisesPath = join(home, ".config", "jmux", "raises.json");
+    dir = mkdtempSync(join(tmpdir(), "raise-dispatch-"));
+    storePath = join(dir, "raises.json");
   });
 
   afterEach(() => {
-    if (originalHome !== undefined) process.env.HOME = originalHome;
-    else delete process.env.HOME;
-    rmSync(home, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
   });
 
   test("create reaches its handler through the real dispatch, not the unknown-action refusal", () => {
-    const result = handleRaise(dummyCtx, {
-      group: "raise",
-      action: "create",
-      flags: { issue: "AAA-1", question: "q", recommend: "1", why: "w", context: "c", authority: "developer" },
-      positional: [],
-      repeated: { option: ["a", "b"] },
-    }) as { version: number; raise: Raise };
+    const result = handleRaise(
+      dummyCtx,
+      {
+        group: "raise",
+        action: "create",
+        flags: { issue: "AAA-1", question: "q", recommend: "1", why: "w", context: "c", authority: "developer" },
+        positional: [],
+        repeated: { option: ["a", "b"] },
+      },
+      storePath,
+    ) as { version: number; raise: Raise };
     expect(result.raise.state).toBe("open");
   });
 
   test("list reaches its handler through the real dispatch, not the unknown-action refusal", () => {
-    mutateRaises(raisesPath, () => [raiseAt({ state: "open" })]);
-    const result = handleRaise(dummyCtx, {
-      group: "raise",
-      action: "list",
-      flags: {},
-      positional: [],
-      repeated: {},
-    }) as { version: number; raises: Raise[] };
+    mutateRaises(storePath, () => [raiseAt({ state: "open" })]);
+    const result = handleRaise(
+      dummyCtx,
+      { group: "raise", action: "list", flags: {}, positional: [], repeated: {} },
+      storePath,
+    ) as { version: number; raises: Raise[] };
     expect(result.raises).toHaveLength(1);
     expect(result.raises[0]!.id).toBe("r1");
   });
@@ -304,14 +302,12 @@ describe("handleRaise dispatch (every wired action)", () => {
   test.each(EVENT_DISPATCH_CASES)(
     "%s reaches its handler through the real dispatch, not the unknown-action refusal",
     (action, seed, flags, expectedState) => {
-      mutateRaises(raisesPath, () => [seed]);
-      const result = handleRaise(dummyCtx, {
-        group: "raise",
-        action,
-        flags,
-        positional: ["r1"],
-        repeated: {},
-      }) as { version: number; raise: Raise };
+      mutateRaises(storePath, () => [seed]);
+      const result = handleRaise(
+        dummyCtx,
+        { group: "raise", action, flags, positional: ["r1"], repeated: {} },
+        storePath,
+      ) as { version: number; raise: Raise };
       expect(result.raise.state).toBe(expectedState);
     },
   );
@@ -340,25 +336,23 @@ describe("parseRaiseListFilters", () => {
   });
 
   test("an invalid --state reaching handleRaise's list action is refused, never an empty result", () => {
-    const home = mkdtempSync(join(tmpdir(), "raise-list-state-"));
-    const originalHome = process.env.HOME;
+    const dir = mkdtempSync(join(tmpdir(), "raise-list-state-"));
     try {
-      process.env.HOME = home;
-      const raisesPath = join(home, ".config", "jmux", "raises.json");
+      const storePath = join(dir, "raises.json");
       // A real, unresolved raise is waiting — the failure mode this guards
       // against is exactly that a human would see `[]` here and conclude
       // wrongly that nothing needs them.
-      mutateRaises(raisesPath, () => [raiseAt({ state: "open" })]);
+      mutateRaises(storePath, () => [raiseAt({ state: "open" })]);
 
       expect(() =>
-        handleRaise(dummyCtx, {
-          group: "raise", action: "list", flags: { state: "answerd" }, positional: [], repeated: {},
-        }),
+        handleRaise(
+          dummyCtx,
+          { group: "raise", action: "list", flags: { state: "answerd" }, positional: [], repeated: {} },
+          storePath,
+        ),
       ).toThrow(/answerd/);
     } finally {
-      if (originalHome !== undefined) process.env.HOME = originalHome;
-      else delete process.env.HOME;
-      rmSync(home, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
