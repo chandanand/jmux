@@ -4,9 +4,10 @@ import { resolve } from "path";
 import type { CliContext } from "./context";
 import { CliError } from "./context";
 import type { ParsedCtlArgs } from "../cli";
-import type { Raise, RaiseScope } from "../raises/types";
+import type { Raise, RaiseEvent, RaiseScope, RaiseState } from "../raises/types";
 import { RAISES_CONTRACT_VERSION } from "../raises/types";
-import { raisesPathFor, mutateRaises, findByKey, pruneResolved } from "../raises/store";
+import { raisesPathFor, mutateRaises, findByKey, pruneResolved, readRaises } from "../raises/store";
+import { transition } from "../raises/lifecycle";
 import { buildAttentionCommands } from "./session";
 import { runTmuxDirect } from "./tmux";
 import { US, splitFields } from "../tmux-fields";
@@ -276,10 +277,167 @@ function createAction(ctx: CliContext, parsed: ParsedCtlArgs): { version: number
   return { version: RAISES_CONTRACT_VERSION, raise };
 }
 
+/**
+ * Load under the lock, transition, write back. Every action goes through this,
+ * so no command can advance a raise by writing a state directly and skipping
+ * the machine's refusal.
+ */
+export function applyRaiseEvent(path: string, id: string, event: RaiseEvent): Raise {
+  let updated: Raise | null = null;
+  let refusal: string | null = null;
+  const result = mutateRaises(path, (raises) => {
+    const target = raises.find((r) => r.id === id);
+    if (!target) { refusal = `no raise with id ${id}`; return raises; }
+    const t = transition(target, event);
+    if (!t.ok) { refusal = t.why; return raises; }
+    updated = t.raise;
+    return raises.map((r) => (r.id === id ? t.raise : r));
+  });
+  if (!result.ok) throw new CliError(result.why);
+  if (refusal !== null) throw new CliError(refusal);
+  if (updated === null) throw new CliError(`raise ${id} was not updated`);
+  return updated;
+}
+
+/** The raise id every action but `create` and `list` takes as its first positional argument. */
+function requireRaiseId(parsed: ParsedCtlArgs): string {
+  const id = parsed.positional[0];
+  if (!id) throw new CliError(`raise ${parsed.action} requires a raise id as the first argument`);
+  return id;
+}
+
+function requireStringFlag(parsed: ParsedCtlArgs, name: string): string {
+  const value = parsed.flags[name];
+  if (typeof value !== "string" || !value) {
+    throw new CliError(`raise ${parsed.action} requires --${name} <value>`);
+  }
+  return value;
+}
+
+function optionalStringFlag(parsed: ParsedCtlArgs, name: string): string | null {
+  const value = parsed.flags[name];
+  return typeof value === "string" ? value : null;
+}
+
+/** Run one event-driven action end to end: id, event, apply, envelope. */
+function eventAction(
+  parsed: ParsedCtlArgs,
+  buildEvent: (parsed: ParsedCtlArgs) => RaiseEvent,
+): { version: number; raise: Raise } {
+  const id = requireRaiseId(parsed);
+  const path = raisesPathFor(defaultConfigPath());
+  const raise = applyRaiseEvent(path, id, buildEvent(parsed));
+  return { version: RAISES_CONTRACT_VERSION, raise };
+}
+
+const RAISE_STATES: readonly RaiseState[] = [
+  "open",
+  "answered",
+  "delivery-pending",
+  "delivery-failed",
+  "acknowledged",
+  "applied",
+  "resolved",
+];
+
+export interface RaiseListFilters {
+  state: RaiseState | null;
+  session: string | null;
+  issue: string | null;
+}
+
+/**
+ * Validate `ctl raise list` flags. Pure, so the filter parsing (in particular
+ * the `--state` allow-list) is testable without a store on disk.
+ */
+export function parseRaiseListFilters(parsed: ParsedCtlArgs): RaiseListFilters {
+  const stateRaw = optionalStringFlag(parsed, "state");
+  if (stateRaw !== null && !(RAISE_STATES as readonly string[]).includes(stateRaw)) {
+    throw new CliError(`--state must be one of ${RAISE_STATES.join(", ")}, got "${stateRaw}"`);
+  }
+  return {
+    state: stateRaw as RaiseState | null,
+    session: optionalStringFlag(parsed, "session"),
+    issue: optionalStringFlag(parsed, "issue"),
+  };
+}
+
+/**
+ * Read-only: `list` never mutates, so it reads directly rather than taking the
+ * lock `mutateRaises` holds. A store in the `error` state (unreadable or the
+ * wrong contract version) makes this throw with the reason instead of
+ * returning `[]` — an unreadable queue of questions waiting on a human must
+ * never read back as an empty one.
+ */
+export function listRaisesAt(path: string, filters: RaiseListFilters): Raise[] {
+  const result = readRaises(path);
+  if (result.kind === "error") throw new CliError(result.why);
+  const raises = result.kind === "valid" ? result.raises : [];
+  return raises.filter((r) => {
+    if (filters.state !== null && r.state !== filters.state) return false;
+    if (filters.session !== null && (r.scope.kind !== "session" || r.scope.sessionName !== filters.session)) {
+      return false;
+    }
+    if (filters.issue !== null && (r.scope.kind !== "issue" || r.scope.identifier !== filters.issue)) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function listAction(parsed: ParsedCtlArgs): { version: number; raises: Raise[] } {
+  const filters = parseRaiseListFilters(parsed);
+  const path = raisesPathFor(defaultConfigPath());
+  return { version: RAISES_CONTRACT_VERSION, raises: listRaisesAt(path, filters) };
+}
+
+function answerEvent(parsed: ParsedCtlArgs): RaiseEvent {
+  return {
+    kind: "answer",
+    optionId: requireStringFlag(parsed, "option"),
+    note: optionalStringFlag(parsed, "note"),
+    atMs: Date.now(),
+  };
+}
+
+function deliveringEvent(parsed: ParsedCtlArgs): RaiseEvent {
+  return { kind: "delivering", attemptId: requireStringFlag(parsed, "attempt") };
+}
+
+function deliveryFailedEvent(parsed: ParsedCtlArgs): RaiseEvent {
+  return { kind: "delivery-failed", reason: requireStringFlag(parsed, "reason") };
+}
+
+function appliedEvent(): RaiseEvent {
+  return { kind: "applied" };
+}
+
+function ackEvent(): RaiseEvent {
+  return { kind: "ack" };
+}
+
+function resolveEvent(): RaiseEvent {
+  return { kind: "resolve", atMs: Date.now() };
+}
+
 export function handleRaise(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
   switch (parsed.action) {
     case "create":
       return createAction(ctx, parsed);
+    case "list":
+      return listAction(parsed);
+    case "answer":
+      return eventAction(parsed, answerEvent);
+    case "delivering":
+      return eventAction(parsed, deliveringEvent);
+    case "delivery-failed":
+      return eventAction(parsed, deliveryFailedEvent);
+    case "applied":
+      return eventAction(parsed, appliedEvent);
+    case "ack":
+      return eventAction(parsed, ackEvent);
+    case "resolve":
+      return eventAction(parsed, resolveEvent);
     default:
       throw new CliError(
         `Unknown raise action "${parsed.action}". Known actions: create, list, answer, delivering, delivery-failed, applied, ack, resolve`,
