@@ -66,11 +66,17 @@ export function buildRaise(input: BuildRaiseInput): Raise {
  * `--config` flag, so this is always `~/.config/jmux/config.json` — the same
  * default `loadUserConfig()` and `ConfigStore` fall back to — and `raisesPathFor`
  * puts the store beside it. `$HOME` still governs where that resolves, exactly
- * as it does for every other jmux config path (see `log.ts`), which is what
- * lets a test point this at a scratch directory without a bespoke flag.
+ * as it does for every other jmux config path (see `log.ts`) — read directly
+ * from `process.env`, not through `homedir()`, because `homedir()` resolves
+ * the OS-level home directory and does not observe a same-process override of
+ * `$HOME`; only a value actually read from the environment does. That is what
+ * lets a test point `handleRaise` at a scratch directory without a bespoke
+ * flag or a subprocess, the same way it already could for a freshly spawned
+ * one. `homedir()` remains the fallback for the (real-world) case where
+ * `$HOME` is unset.
  */
 function defaultConfigPath(): string {
-  return resolve(homedir(), ".config", "jmux", "config.json");
+  return resolve(process.env.HOME || homedir(), ".config", "jmux", "config.json");
 }
 
 /** How many resolved raises `create` leaves behind per mutation, alongside every unresolved one. */

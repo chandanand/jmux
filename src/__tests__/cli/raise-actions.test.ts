@@ -2,9 +2,9 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { applyRaiseEvent, listRaisesAt } from "../../cli/raise";
+import { applyRaiseEvent, listRaisesAt, parseRaiseListFilters, handleRaise } from "../../cli/raise";
 import { mutateRaises, readRaises } from "../../raises/store";
-import type { Raise } from "../../raises/types";
+import type { Raise, RaiseState } from "../../raises/types";
 
 let dir: string;
 let path: string;
@@ -206,6 +206,158 @@ describe("ctl raise retry (entry point)", () => {
       const stored = readRaises(raisesPath);
       expect(stored.kind === "valid" && stored.raises[0]!.state).toBe("answered");
     } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `handleRaise` is the actual dispatch `runCtl` calls for every `ctl raise
+// ...` invocation. Every test above calls `applyRaiseEvent` or
+// `listRaisesAt` directly, which proves those functions are correct but
+// proves nothing about whether `handleRaise`'s `switch (parsed.action)`
+// still routes to them — a deleted `case` line leaves every one of those
+// tests green while the actual command stops working. These tests close
+// that gap for all nine actions `handleRaise` knows: `create`, `list`, and
+// the seven event-driven actions.
+//
+// `handleRaise` always resolves the store from the real default config path
+// (`defaultConfigPath()`), so `$HOME` is pointed at a fresh scratch
+// directory for each test — the same mechanism `defaultConfigPath`'s own
+// doc comment describes — and restored afterward, so nothing here ever
+// touches a real `~/.config/jmux/raises.json`.
+// ---------------------------------------------------------------------------
+
+function raiseAt(over: Partial<Raise> = {}): Raise {
+  return {
+    id: "r1", createdAt: 1, idempotencyKey: "k1",
+    scope: { kind: "issue", identifier: "AAA-1" },
+    question: "q", options: [{ id: "o1", text: "a" }, { id: "o2", text: "b" }],
+    recommendation: "o1", why: "w", context: "c", authority: "developer",
+    snapshot: null, state: "open", answer: null, resolvedAt: null,
+    ...over,
+  };
+}
+
+const dispatchSessionScope = {
+  kind: "session" as const,
+  socket: "default",
+  sessionId: "$1",
+  sessionName: "aaa-1",
+  agentPane: null,
+};
+
+const dummyCtx = { socket: null, paneId: null, sessionOverride: null, insideTmux: false, insideJmux: false };
+
+describe("handleRaise dispatch (every wired action)", () => {
+  let home: string;
+  let raisesPath: string;
+  let originalHome: string | undefined;
+
+  beforeEach(() => {
+    originalHome = process.env.HOME;
+    home = mkdtempSync(join(tmpdir(), "raise-dispatch-"));
+    process.env.HOME = home;
+    raisesPath = join(home, ".config", "jmux", "raises.json");
+  });
+
+  afterEach(() => {
+    if (originalHome !== undefined) process.env.HOME = originalHome;
+    else delete process.env.HOME;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("create reaches its handler through the real dispatch, not the unknown-action refusal", () => {
+    const result = handleRaise(dummyCtx, {
+      group: "raise",
+      action: "create",
+      flags: { issue: "AAA-1", question: "q", recommend: "1", why: "w", context: "c", authority: "developer" },
+      positional: [],
+      repeated: { option: ["a", "b"] },
+    }) as { version: number; raise: Raise };
+    expect(result.raise.state).toBe("open");
+  });
+
+  test("list reaches its handler through the real dispatch, not the unknown-action refusal", () => {
+    mutateRaises(raisesPath, () => [raiseAt({ state: "open" })]);
+    const result = handleRaise(dummyCtx, {
+      group: "raise",
+      action: "list",
+      flags: {},
+      positional: [],
+      repeated: {},
+    }) as { version: number; raises: Raise[] };
+    expect(result.raises).toHaveLength(1);
+    expect(result.raises[0]!.id).toBe("r1");
+  });
+
+  const EVENT_DISPATCH_CASES: Array<[action: string, seed: Raise, flags: Record<string, string>, expectedState: RaiseState]> = [
+    ["answer", raiseAt({ state: "open" }), { option: "o2" }, "answered"],
+    ["delivering", raiseAt({ state: "answered", scope: dispatchSessionScope }), { attempt: "attempt-1" }, "delivery-pending"],
+    ["delivery-failed", raiseAt({ state: "delivery-pending", scope: dispatchSessionScope }), { reason: "pane was gone" }, "delivery-failed"],
+    ["applied", raiseAt({ state: "answered" }), {}, "applied"],
+    ["ack", raiseAt({ state: "delivery-pending", scope: dispatchSessionScope }), {}, "acknowledged"],
+    ["resolve", raiseAt({ state: "applied" }), {}, "resolved"],
+    ["retry", raiseAt({ state: "delivery-failed", scope: dispatchSessionScope }), {}, "answered"],
+  ];
+
+  test.each(EVENT_DISPATCH_CASES)(
+    "%s reaches its handler through the real dispatch, not the unknown-action refusal",
+    (action, seed, flags, expectedState) => {
+      mutateRaises(raisesPath, () => [seed]);
+      const result = handleRaise(dummyCtx, {
+        group: "raise",
+        action,
+        flags,
+        positional: ["r1"],
+        repeated: {},
+      }) as { version: number; raise: Raise };
+      expect(result.raise.state).toBe(expectedState);
+    },
+  );
+});
+
+describe("parseRaiseListFilters", () => {
+  test("a valid --state passes through untouched", () => {
+    const filters = parseRaiseListFilters({
+      group: "raise", action: "list", flags: { state: "open" }, positional: [], repeated: {},
+    });
+    expect(filters).toEqual({ state: "open", session: null, issue: null });
+  });
+
+  // The allow-list check is what stands between "an unrecognised filter" and
+  // "silently reads back as no matches": without it, `--state answerd`
+  // would parse to `{ state: "answerd", ... }`, `listRaisesAt` would compare
+  // every raise's real state against a value nothing can ever equal, and a
+  // human asking what is waiting on them would see an empty queue instead of
+  // a refusal naming their typo.
+  test("an invalid --state is refused, naming the bad value, not silently accepted", () => {
+    expect(() =>
+      parseRaiseListFilters({
+        group: "raise", action: "list", flags: { state: "answerd" }, positional: [], repeated: {},
+      }),
+    ).toThrow(/answerd/);
+  });
+
+  test("an invalid --state reaching handleRaise's list action is refused, never an empty result", () => {
+    const home = mkdtempSync(join(tmpdir(), "raise-list-state-"));
+    const originalHome = process.env.HOME;
+    try {
+      process.env.HOME = home;
+      const raisesPath = join(home, ".config", "jmux", "raises.json");
+      // A real, unresolved raise is waiting — the failure mode this guards
+      // against is exactly that a human would see `[]` here and conclude
+      // wrongly that nothing needs them.
+      mutateRaises(raisesPath, () => [raiseAt({ state: "open" })]);
+
+      expect(() =>
+        handleRaise(dummyCtx, {
+          group: "raise", action: "list", flags: { state: "answerd" }, positional: [], repeated: {},
+        }),
+      ).toThrow(/answerd/);
+    } finally {
+      if (originalHome !== undefined) process.env.HOME = originalHome;
+      else delete process.env.HOME;
       rmSync(home, { recursive: true, force: true });
     }
   });
