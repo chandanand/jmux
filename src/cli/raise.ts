@@ -5,7 +5,7 @@ import type { CliContext } from "./context";
 import { CliError } from "./context";
 import type { ParsedCtlArgs } from "../cli";
 import type { Raise, RaiseEvent, RaiseScope, RaiseState } from "../raises/types";
-import { RAISES_CONTRACT_VERSION } from "../raises/types";
+import { RAISES_CONTRACT_VERSION, RAISE_STATES } from "../raises/types";
 import { raisesPathFor, mutateRaises, findByKey, pruneResolved, readRaises } from "../raises/store";
 import { transition } from "../raises/lifecycle";
 import { buildAttentionCommands } from "./session";
@@ -333,16 +333,6 @@ function eventAction(
   return { version: RAISES_CONTRACT_VERSION, raise };
 }
 
-const RAISE_STATES: readonly RaiseState[] = [
-  "open",
-  "answered",
-  "delivery-pending",
-  "delivery-failed",
-  "acknowledged",
-  "applied",
-  "resolved",
-];
-
 export interface RaiseListFilters {
   state: RaiseState | null;
   session: string | null;
@@ -371,14 +361,24 @@ export function parseRaiseListFilters(parsed: ParsedCtlArgs): RaiseListFilters {
  * wrong contract version) makes this throw with the reason instead of
  * returning `[]` — an unreadable queue of questions waiting on a human must
  * never read back as an empty one.
+ *
+ * `socket` is the socket this `ctl` process is actually talking to. A
+ * `--session` filter matches on it as well as the session name: several tmux
+ * sockets can hold a session with the same name, and a name-only match would
+ * hand back another server's raise. An issue-scoped raise has no socket and
+ * is never filtered by one — it is global by design, matching every screen
+ * and command that reads one.
  */
-export function listRaisesAt(path: string, filters: RaiseListFilters): Raise[] {
+export function listRaisesAt(path: string, filters: RaiseListFilters, socket: string): Raise[] {
   const result = readRaises(path);
   if (result.kind === "error") throw new CliError(result.why);
   const raises = result.kind === "valid" ? result.raises : [];
   return raises.filter((r) => {
     if (filters.state !== null && r.state !== filters.state) return false;
-    if (filters.session !== null && (r.scope.kind !== "session" || r.scope.sessionName !== filters.session)) {
+    if (
+      filters.session !== null &&
+      (r.scope.kind !== "session" || r.scope.sessionName !== filters.session || r.scope.socket !== socket)
+    ) {
       return false;
     }
     if (filters.issue !== null && (r.scope.kind !== "issue" || r.scope.identifier !== filters.issue)) {
@@ -388,9 +388,10 @@ export function listRaisesAt(path: string, filters: RaiseListFilters): Raise[] {
   });
 }
 
-function listAction(parsed: ParsedCtlArgs, storePath: string): { version: number; raises: Raise[] } {
+function listAction(ctx: CliContext, parsed: ParsedCtlArgs, storePath: string): { version: number; raises: Raise[] } {
   const filters = parseRaiseListFilters(parsed);
-  return { version: RAISES_CONTRACT_VERSION, raises: listRaisesAt(storePath, filters) };
+  const socket = ctx.socket ?? "default";
+  return { version: RAISES_CONTRACT_VERSION, raises: listRaisesAt(storePath, filters, socket) };
 }
 
 function answerEvent(parsed: ParsedCtlArgs): RaiseEvent {
@@ -442,7 +443,7 @@ export function handleRaise(
     case "create":
       return createAction(ctx, parsed, storePath);
     case "list":
-      return listAction(parsed, storePath);
+      return listAction(ctx, parsed, storePath);
     case "answer":
       return eventAction(parsed, answerEvent, storePath);
     case "delivering":

@@ -25,6 +25,14 @@ import type { ReadResult } from "./raises/store";
 export interface RaisesPort {
   /** Read fresh each call. Never cached by the screen — see the module doc. */
   getResult(): ReadResult;
+  /**
+   * The socket this jmux process is actually attached to, resolved the same
+   * way `jump` already does (`socketName ?? "default"`). The queue uses it to
+   * hide session raises from a different tmux server that happens to share a
+   * session name — see `queue()`. An issue-scoped raise has no socket and is
+   * never hidden by this: it is global by design.
+   */
+  getSocket(): string;
   /** Record the human's choice: an option id, never a display position. */
   answer(id: string, optionId: string): void;
   /**
@@ -180,12 +188,21 @@ export class RaisesScreen {
     this.port = null;
   }
 
-  /** The raises the queue works, oldest first. A resolved raise is done; it never occupies the queue. */
+  /**
+   * The raises the queue works, oldest first. A resolved raise is done; it
+   * never occupies the queue. A session raise from a different socket is
+   * someone else's server and never occupies it either — two tmux sockets
+   * can hold a session with the same name, and this jmux only ever drives
+   * the one it was started against. An issue-scoped raise has no socket and
+   * always shows: it is global by design.
+   */
   private queue(): Raise[] {
     const result = this.port?.getResult();
     if (!result || result.kind !== "valid") return [];
+    const socket = this.port?.getSocket();
     return result.raises
       .filter((r) => r.state !== "resolved")
+      .filter((r) => r.scope.kind !== "session" || r.scope.socket === socket)
       .sort((a, b) => a.createdAt - b.createdAt);
   }
 

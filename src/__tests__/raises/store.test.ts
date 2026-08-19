@@ -65,6 +65,64 @@ describe("reading is a typed result, never a bare list", () => {
   });
 });
 
+// One malformed record inside an otherwise-valid store used to reach
+// `RaisesScreen.render` as a bare `Raise` and throw — `renderFrame` runs in a
+// bare `setTimeout`, and main.ts's `uncaughtException` handler calls
+// `process.exit(1)`, so opening the inbox exited the whole application. The
+// envelope (`version`, `raises` is an array) was already validated; the
+// records inside it were not. This validates what consumers actually rely
+// on — `id`, `state`, `scope`, `options`, `recommendation` — and treats a
+// bad one as the same kind of `error` result as an unparseable file, never a
+// silently shortened list.
+describe("a malformed record inside an otherwise-valid envelope is an error, not a crash waiting to happen downstream", () => {
+  test("an unrecognised state is an error", () => {
+    writeFileSync(path, JSON.stringify({ version: 1, raises: [{ ...raise(), state: "bogus-state" }] }));
+    const r = readRaises(path);
+    expect(r.kind).toBe("error");
+    expect(r.kind === "error" && r.why).toContain("bogus-state");
+  });
+
+  test("a scope that is neither a well-formed session scope nor an issue scope is an error", () => {
+    writeFileSync(
+      path,
+      JSON.stringify({ version: 1, raises: [{ ...raise(), scope: { kind: "session", sessionName: "x" } }] }),
+    );
+    expect(readRaises(path).kind).toBe("error");
+  });
+
+  test("options that are not an array of {id, text} is an error", () => {
+    writeFileSync(path, JSON.stringify({ version: 1, raises: [{ ...raise(), options: ["not-an-option-object"] }] }));
+    expect(readRaises(path).kind).toBe("error");
+  });
+
+  test("a recommendation that matches none of the raise's options is an error", () => {
+    writeFileSync(path, JSON.stringify({ version: 1, raises: [{ ...raise(), recommendation: "not-an-option-id" }] }));
+    expect(readRaises(path).kind).toBe("error");
+  });
+
+  test("a missing or blank id is an error", () => {
+    writeFileSync(path, JSON.stringify({ version: 1, raises: [{ ...raise(), id: "" }] }));
+    expect(readRaises(path).kind).toBe("error");
+  });
+
+  // The failure this guards against: a queue that quietly discards the one
+  // question it cannot read and tells the operator nothing is waiting on
+  // them. One good record plus one bad one must fail the whole read, not
+  // read back as "one raise, all fine".
+  test("one malformed record among otherwise-valid ones fails the whole read, not a silently shortened list", () => {
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 1,
+        raises: [raise({ id: "good" }), { ...raise({ id: "bad" }), state: "bogus-state" }],
+      }),
+    );
+    const r = readRaises(path);
+    expect(r.kind).toBe("error");
+    expect(r.kind === "error" && r.why).toContain("bad");
+  });
+});
+
 describe("a mutation is refused while the store is unreadable", () => {
   test("the original bytes survive a refused mutation", () => {
     writeFileSync(path, "{ not json");

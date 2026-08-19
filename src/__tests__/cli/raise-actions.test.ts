@@ -75,14 +75,14 @@ describe("listRaisesAt", () => {
     const b = seed({ id: "b", state: "resolved", resolvedAt: 3, scope: sessionScope });
     mutateRaises(path, () => [a, b]);
 
-    expect(listRaisesAt(path, { state: "open", session: null, issue: null }).map((r) => r.id)).toEqual(["a"]);
-    expect(listRaisesAt(path, { state: null, session: "aaa-1", issue: null }).map((r) => r.id)).toEqual(["b"]);
-    expect(listRaisesAt(path, { state: null, session: null, issue: "AAA-1" }).map((r) => r.id)).toEqual(["a"]);
-    expect(listRaisesAt(path, { state: null, session: null, issue: null }).map((r) => r.id).sort()).toEqual(["a", "b"]);
+    expect(listRaisesAt(path, { state: "open", session: null, issue: null }, "default").map((r) => r.id)).toEqual(["a"]);
+    expect(listRaisesAt(path, { state: null, session: "aaa-1", issue: null }, "default").map((r) => r.id)).toEqual(["b"]);
+    expect(listRaisesAt(path, { state: null, session: null, issue: "AAA-1" }, "default").map((r) => r.id)).toEqual(["a"]);
+    expect(listRaisesAt(path, { state: null, session: null, issue: null }, "default").map((r) => r.id).sort()).toEqual(["a", "b"]);
   });
 
   test("a missing store is an empty list, not an error", () => {
-    expect(listRaisesAt(path, { state: null, session: null, issue: null })).toEqual([]);
+    expect(listRaisesAt(path, { state: null, session: null, issue: null }, "default")).toEqual([]);
   });
 
   // Six defects in this project have been "an unreadable thing reported as an
@@ -92,7 +92,84 @@ describe("listRaisesAt", () => {
   test("an unreadable store makes list fail with the reason, not an empty array", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(path, "not json");
-    expect(() => listRaisesAt(path, { state: null, session: null, issue: null })).toThrow(/could not be parsed/);
+    expect(() => listRaisesAt(path, { state: null, session: null, issue: null }, "default")).toThrow(/could not be parsed/);
+  });
+
+  // The reason the record carries `socket` and `sessionId`, not just a name:
+  // several tmux sockets can hold a session with the same name, and a
+  // name-only match would hand one server's raise back to a `list` running
+  // against another. Verified against a real pair of tmux servers: `ctl -L A
+  // raise list --session reviewsess` returned socket B's raise before this
+  // filter matched the socket too.
+  test("a --session filter matches the socket as well as the name: a same-named session on another socket is not returned", () => {
+    const onA = seed({
+      id: "on-a",
+      scope: { kind: "session" as const, socket: "A", sessionId: "$1", sessionName: "reviewsess", agentPane: null },
+    });
+    const onB = seed({
+      id: "on-b",
+      scope: { kind: "session" as const, socket: "B", sessionId: "$1", sessionName: "reviewsess", agentPane: null },
+    });
+    mutateRaises(path, () => [onA, onB]);
+
+    expect(listRaisesAt(path, { state: null, session: "reviewsess", issue: null }, "A").map((r) => r.id)).toEqual(["on-a"]);
+    expect(listRaisesAt(path, { state: null, session: "reviewsess", issue: null }, "B").map((r) => r.id)).toEqual(["on-b"]);
+  });
+
+  // Issue-scoped raises have no socket and are global by design — they must
+  // keep appearing under a `--issue` filter no matter which socket is asking.
+  test("an --issue filter is unaffected by socket: issue raises are global", () => {
+    const a = seed({ id: "a", state: "open" });
+    mutateRaises(path, () => [a]);
+    expect(listRaisesAt(path, { state: null, session: null, issue: "AAA-1" }, "some-other-socket").map((r) => r.id)).toEqual(["a"]);
+  });
+
+  // A malformed record must fail the whole read, not silently drop itself
+  // and list the rest — see raises/store.ts's `readRaises` and its own doc
+  // comment on why a quietly-shortened queue is treated as data loss.
+  test("a malformed record in the store makes list refuse, never a silently shortened list", () => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 1,
+        raises: [
+          {
+            id: "good",
+            createdAt: 1,
+            idempotencyKey: "k1",
+            scope: { kind: "issue", identifier: "AAA-1" },
+            question: "q",
+            options: [{ id: "o1", text: "a" }],
+            recommendation: "o1",
+            why: "w",
+            context: "c",
+            authority: "developer",
+            snapshot: null,
+            state: "open",
+            answer: null,
+            resolvedAt: null,
+          },
+          {
+            id: "bad",
+            createdAt: 2,
+            idempotencyKey: "k2",
+            scope: { kind: "issue", identifier: "AAA-2" },
+            question: "q2",
+            options: [{ id: "o1", text: "a" }],
+            recommendation: "not-an-option-id",
+            why: "w",
+            context: "c",
+            authority: "developer",
+            snapshot: null,
+            state: "open",
+            answer: null,
+            resolvedAt: null,
+          },
+        ],
+      }),
+    );
+    expect(() => listRaisesAt(path, { state: null, session: null, issue: null }, "default")).toThrow(/bad|malformed/);
   });
 });
 
@@ -287,6 +364,33 @@ describe("handleRaise dispatch (every wired action)", () => {
     ) as { version: number; raises: Raise[] };
     expect(result.raises).toHaveLength(1);
     expect(result.raises[0]!.id).toBe("r1");
+  });
+
+  // The bug this reproduces: `ctl -L A raise list --session reviewsess`
+  // returning socket B's raise, because the filter matched the session name
+  // only. `dummyCtx.socket` is what `--socket`/`-L` (or `$TMUX`) resolves to
+  // in production — see `resolveContext` — so driving `handleRaise` with two
+  // different `ctx.socket` values is the real dispatch path, not just the
+  // pure filter function.
+  test("list's --session filter is scoped to the calling context's socket", () => {
+    mutateRaises(storePath, () => [
+      raiseAt({ id: "on-a", scope: { kind: "session", socket: "A", sessionId: "$1", sessionName: "reviewsess", agentPane: null } }),
+      raiseAt({ id: "on-b", scope: { kind: "session", socket: "B", sessionId: "$1", sessionName: "reviewsess", agentPane: null } }),
+    ]);
+
+    const resultA = handleRaise(
+      { ...dummyCtx, socket: "A" },
+      { group: "raise", action: "list", flags: { session: "reviewsess" }, positional: [], repeated: {} },
+      storePath,
+    ) as { version: number; raises: Raise[] };
+    expect(resultA.raises.map((r) => r.id)).toEqual(["on-a"]);
+
+    const resultB = handleRaise(
+      { ...dummyCtx, socket: "B" },
+      { group: "raise", action: "list", flags: { session: "reviewsess" }, positional: [], repeated: {} },
+      storePath,
+    ) as { version: number; raises: Raise[] };
+    expect(resultB.raises.map((r) => r.id)).toEqual(["on-b"]);
   });
 
   const EVENT_DISPATCH_CASES: Array<[action: string, seed: Raise, flags: Record<string, string>, expectedState: RaiseState]> = [

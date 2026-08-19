@@ -1,7 +1,7 @@
 import { openSync, closeSync, readFileSync, existsSync, unlinkSync, chmodSync, statSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { writeFileAtomicSync } from "../atomic-write";
-import { RAISES_CONTRACT_VERSION, type Raise } from "./types";
+import { RAISES_CONTRACT_VERSION, RAISE_STATES, type Raise, type RaiseOption, type RaiseScope } from "./types";
 
 /**
  * Beside the config file that is actually in use, never a fixed home path. The
@@ -19,10 +19,67 @@ export type ReadResult =
 
 export type MutateResult = { ok: true; raises: Raise[] } | { ok: false; why: string };
 
+function isRaiseOption(value: unknown): value is RaiseOption {
+  if (typeof value !== "object" || value === null) return false;
+  const o = value as Record<string, unknown>;
+  return typeof o.id === "string" && typeof o.text === "string";
+}
+
+function isWellFormedScope(value: unknown): value is RaiseScope {
+  if (typeof value !== "object" || value === null) return false;
+  const s = value as Record<string, unknown>;
+  if (s.kind === "session") {
+    return (
+      typeof s.socket === "string" &&
+      typeof s.sessionId === "string" &&
+      typeof s.sessionName === "string" &&
+      (s.agentPane === null || typeof s.agentPane === "string")
+    );
+  }
+  if (s.kind === "issue") {
+    return typeof s.identifier === "string";
+  }
+  return false;
+}
+
+/**
+ * Whether one record is a well-formed `Raise` — checking only what
+ * consumers actually rely on (`id`, `state`, `scope`, `options`,
+ * `recommendation`), not every field. Returns the reason it fails, or
+ * `null` when the record is sound. A store with one malformed record next
+ * to otherwise-valid ones must never quietly drop the bad one and read back
+ * as if nothing were waiting on the operator — see `readRaises`.
+ */
+function malformedRaiseReason(value: unknown): string | null {
+  if (typeof value !== "object" || value === null) return "record is not an object";
+  const r = value as Record<string, unknown>;
+  if (typeof r.id !== "string" || r.id === "") return "id is missing or not a string";
+  if (typeof r.state !== "string" || !(RAISE_STATES as readonly string[]).includes(r.state)) {
+    return `state ${JSON.stringify(r.state)} is not one of ${RAISE_STATES.join(", ")}`;
+  }
+  if (!isWellFormedScope(r.scope)) return "scope is not a well-formed session or issue scope";
+  if (!Array.isArray(r.options) || !r.options.every(isRaiseOption)) {
+    return "options is not an array of {id, text}";
+  }
+  const optionIds = r.options.map((o) => o.id);
+  if (typeof r.recommendation !== "string" || !optionIds.includes(r.recommendation)) {
+    return "recommendation does not match any of the raise's option ids";
+  }
+  return null;
+}
+
 /**
  * Read the store, distinguishing "there is nothing here yet" from "this could
  * not be read". Returning `[]` for the second is how a corrupt file becomes an
  * erased file, and how a queue of questions waiting on a human silently empties.
+ *
+ * Every record is validated, not just the envelope: a single malformed raise
+ * inside an otherwise-valid file used to reach `RaisesScreen.render` as a bare
+ * `Raise`, and it threw — crashing the whole inbox rather than losing just
+ * that one question. Treating a malformed record as an unreadable store, the
+ * same as an unparseable file, is what already makes `list` refuse and
+ * mutations leave the original bytes intact; see `mutateRaises`'s own re-read
+ * under the lock.
  */
 export function readRaises(path: string): ReadResult {
   if (!existsSync(path)) return { kind: "missing" };
@@ -44,6 +101,18 @@ export function readRaises(path: string): ReadResult {
   }
   if (!Array.isArray(raises)) {
     return { kind: "error", why: `raise store at ${path} has no raises array` };
+  }
+  for (let i = 0; i < raises.length; i++) {
+    const record: unknown = raises[i];
+    const reason = malformedRaiseReason(record);
+    if (reason !== null) {
+      const id =
+        typeof record === "object" && record !== null && typeof (record as Record<string, unknown>).id === "string"
+          ? (record as Record<string, unknown>).id
+          : null;
+      const idHint = id !== null ? ` (id ${id})` : "";
+      return { kind: "error", why: `raise store at ${path} has a malformed record at index ${i}${idHint}: ${reason}` };
+    }
   }
   return { kind: "valid", raises: raises as Raise[] };
 }

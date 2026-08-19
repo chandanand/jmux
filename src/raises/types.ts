@@ -13,6 +13,17 @@ export type RaiseState =
   | "applied"
   | "resolved";
 
+/** Every state a raise can be in, in the one place both the store's record validation and the CLI's `--state` filter draw from. */
+export const RAISE_STATES: readonly RaiseState[] = [
+  "open",
+  "answered",
+  "delivery-pending",
+  "delivery-failed",
+  "acknowledged",
+  "applied",
+  "resolved",
+];
+
 export type RaiseScope =
   /**
    * Socket and session id, not just a name. The session manager supports

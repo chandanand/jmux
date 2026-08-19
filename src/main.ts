@@ -8309,6 +8309,7 @@ function toggleWorkflowScreen(): void {
 function buildRaisesPort(): RaisesPort {
   return {
     getResult: () => readRaises(raisesPathFor(configStore.configPath)),
+    getSocket: () => socketName ?? "default",
     answer: (id, optionId) => {
       try {
         applyRaiseEvent(raisesPathFor(configStore.configPath), id, {
