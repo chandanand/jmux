@@ -88,7 +88,7 @@ const GROUP_VALUE_FLAGS: Record<string, ReadonlySet<string>> = {
     "session", "issue", "question", "option", "recommend",
     "why", "authority", "context", "note", "reason", "attempt", "state",
   ]),
-  issue: new Set(["append-prompt"]),
+  issue: new Set(["append-prompt", "owner-token"]),
 };
 /**
  * Flags whose value is optional and always numeric, so `--wait` and `--wait 60`
@@ -110,6 +110,7 @@ const BOOL_FLAGS = new Set([
   "no-launch-agent",
   "launch-agent",
   "start",
+  "require-new",
 ]);
 
 const CTL_HELP = `
@@ -166,6 +167,14 @@ FLAGS
                         value is false, when the start would reuse a session,
                         or when the resulting prompt is too large for the
                         launch command to carry.
+  --require-new        Refuse instead of reusing (issue start): a session
+                        already linked to the issue, a session already
+                        sitting on the derived name, or a session query that
+                        could not be trusted, all refuse rather than proceed.
+                        Refusals carry a stable "code" alongside "error".
+  --owner-token <val>   Stamp @orch-owned with this value in the same tmux
+                        operation that creates the session (issue start), so
+                        ownership and existence are one fact.
   --wait [seconds]     Block until the worktree is provisioned (issue start).
                        Off by default: the session and agent are created up
                        front and the worktree lands in a setup pane beside
@@ -328,13 +337,22 @@ export function parseCtlArgs(argv: string[]): ParsedCtlArgs {
   return { group, action, flags, positional, repeated };
 }
 
+/**
+ * `{ error, code }` for a `CliError`, with `code` present only when the
+ * error set one. Existing consumers read `error` alone and are unaffected —
+ * `code` is additive, not a replacement.
+ */
+function cliErrorPayload(err: CliError): { error: string; code?: string } {
+  return err.code ? { error: err.message, code: err.code } : { error: err.message };
+}
+
 export async function runCtl(argv: string[]): Promise<void> {
   let parsed: ParsedCtlArgs;
   try {
     parsed = parseCtlArgs(argv);
   } catch (err) {
     if (err instanceof CliError) {
-      process.stderr.write(JSON.stringify({ error: err.message }) + "\n");
+      process.stderr.write(JSON.stringify(cliErrorPayload(err)) + "\n");
       process.exit(1);
     }
     throw err;
@@ -398,7 +416,7 @@ export async function runCtl(argv: string[]): Promise<void> {
     process.stdout.write(JSON.stringify(result ?? null) + "\n");
   } catch (err) {
     if (err instanceof CliError) {
-      process.stderr.write(JSON.stringify({ error: err.message }) + "\n");
+      process.stderr.write(JSON.stringify(cliErrorPayload(err)) + "\n");
       process.exit(1);
     }
     if (err instanceof Error) {

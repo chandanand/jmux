@@ -183,6 +183,63 @@ export function decideStartReuse(
   return { kind: "adopt", row: byName, issues: [...byName.issues, issueId] };
 }
 
+export type RequireNewCode =
+  | "issue-already-linked"
+  | "session-name-taken"
+  | "session-query-failed";
+
+export type RequireNewResult =
+  | { ok: true }
+  | { ok: false; error: string; code: RequireNewCode };
+
+/**
+ * `--require-new`'s decision: refuse rather than reuse, and refuse rather
+ * than trust a session query that might be lying.
+ *
+ * The query-health check runs first and overrides `reuse`'s own kind. A
+ * failed tmux query, permissively read, becomes an empty session list —
+ * `decideStartReuse` then sees nothing and answers `none`, and this
+ * function would otherwise wave through a duplicate session for an issue
+ * that already has one, while reporting success. So an unhealthy query
+ * refuses regardless of what `reuse` says it found, because `reuse` was
+ * itself computed from data this function cannot trust.
+ */
+export function requireNewOrRefuse(
+  reuse: StartReuse,
+  query: { ok: boolean; malformed: number },
+): RequireNewResult {
+  if (!query.ok) {
+    return {
+      ok: false,
+      error:
+        "--require-new refuses: the tmux session query failed, so whether the issue already has a session cannot be determined",
+      code: "session-query-failed",
+    };
+  }
+  if (query.malformed > 0) {
+    return {
+      ok: false,
+      error: `--require-new refuses: ${query.malformed} session row(s) in the tmux query could not be parsed, so whether the issue already has a session cannot be determined`,
+      code: "session-query-failed",
+    };
+  }
+  if (reuse.kind === "linked") {
+    return {
+      ok: false,
+      error: `--require-new refuses: issue is already linked to session "${reuse.row.name}"`,
+      code: "issue-already-linked",
+    };
+  }
+  if (reuse.kind === "adopt") {
+    return {
+      ok: false,
+      error: `--require-new refuses: session "${reuse.row.name}" already exists on the name this issue would derive`,
+      code: "session-name-taken",
+    };
+  }
+  return { ok: true };
+}
+
 // --- Pure helpers for `issue start` ------------------------------------------
 
 /**
@@ -593,15 +650,37 @@ async function issueGet(parsed: ParsedCtlArgs): Promise<unknown> {
   return { issue };
 }
 
-function listIssueLinkRows(ctx: CliContext): IssueLinkRow[] {
+/**
+ * The same query as `listIssueLinkRows`, but reporting whether it can be
+ * trusted rather than silently degrading a failure or a malformed row into
+ * an empty list.
+ *
+ * `--require-new` is built on this: a caller that only reads `rows` gets the
+ * exact permissive behaviour every existing caller already depends on
+ * (published software, so that stays); a caller that also reads `ok` and
+ * `malformed` can tell "nothing exists" apart from "the query could not say."
+ */
+function listIssueLinkRowsReporting(
+  ctx: CliContext,
+): { rows: IssueLinkRow[]; ok: boolean; malformed: number } {
   const result = runTmuxDirect(
     ["list-sessions", "-f", INTERNAL_SESSION_FILTER, "-F", ISSUE_LINK_FORMAT],
     ctx.socket,
   );
-  const lines = result.ok ? result.lines : [];
-  return lines
-    .map(parseIssueLinkRow)
-    .filter((r): r is IssueLinkRow => r !== null);
+  if (!result.ok) return { rows: [], ok: false, malformed: 0 };
+
+  const rows: IssueLinkRow[] = [];
+  let malformed = 0;
+  for (const line of result.lines) {
+    const row = parseIssueLinkRow(line);
+    if (row) rows.push(row);
+    else malformed++;
+  }
+  return { rows, ok: true, malformed };
+}
+
+function listIssueLinkRows(ctx: CliContext): IssueLinkRow[] {
+  return listIssueLinkRowsReporting(ctx).rows;
 }
 
 function findGitRoot(path: string): string | null {
@@ -804,6 +883,16 @@ export interface IssueStartResult {
   reused: boolean;
   /** Absent on the reuse paths: nothing was started, so nothing moved. */
   transition?: TransitionResult;
+  /**
+   * Whether the worktree already existed on disk before this call, from the
+   * `worktreeExists` check made before provisioning. Absent on the reuse
+   * paths: no worktree check runs there, so there is nothing to report.
+   *
+   * The orchestrator uses this to decide what it is allowed to reap: a
+   * worktree it did not create may hold a human's work, and destroying it
+   * on cleanup would be the wrong kind of automation.
+   */
+  worktreePreexisting?: boolean;
   provisioning?: ProvisioningStatus;
 }
 
@@ -830,6 +919,43 @@ function provisioningFailed(ctx: CliContext, session: string): boolean {
   );
   const value = r.ok && r.lines.length > 0 ? r.lines[0].trim() : "";
   return value === PROVISION_ATTENTION_REASON;
+}
+
+/**
+ * The `new-session` invocation that provisions `issue start`'s session.
+ *
+ * With `ownerToken`, `@orch-owned` is stamped by chaining a `set-option` onto
+ * the *same* tmux invocation (tmux's own `;` command separator, passed as its
+ * own argv element — there is no shell here to need escaping it), not by a
+ * follow-up call. The session name is unreserved until `new-session` returns,
+ * and the spawned process can outlive the caller, so two separate tmux
+ * invocations leave a window where a crash produces a session that either
+ * isn't the orchestrator's or can't be proven to be. One invocation makes
+ * existence and ownership one fact: whichever server request lands, both
+ * happen or neither does.
+ */
+export function buildNewSessionArgs(o: {
+  sessionName: string;
+  otelEnv: string;
+  sessionCwd: string;
+  mainCommand: string;
+  ownerToken: string | null;
+}): string[] {
+  const args = [
+    "new-session",
+    "-d",
+    "-e",
+    o.otelEnv,
+    "-s",
+    o.sessionName,
+    "-c",
+    o.sessionCwd,
+    o.mainCommand,
+  ];
+  if (o.ownerToken) {
+    args.push(";", "set-option", "-t", o.sessionName, "@orch-owned", o.ownerToken);
+  }
+  return args;
 }
 
 async function issueStart(
@@ -862,8 +988,11 @@ async function issueStart(
   const appendPromptPath =
     typeof flags["append-prompt"] === "string" ? flags["append-prompt"] : null;
   const contract = appendPromptPath ? readContractFile(appendPromptPath) : null;
+  const requireNew = flags["require-new"] === true;
+  const ownerToken = typeof flags["owner-token"] === "string" ? flags["owner-token"] : null;
 
-  const rows = listIssueLinkRows(ctx);
+  const query = listIssueLinkRowsReporting(ctx);
+  const rows = query.rows;
   const reuse = (row: IssueLinkRow, id: string): IssueStartResult => ({
     session: row.name,
     pane: activePane(ctx, row.name),
@@ -873,6 +1002,10 @@ async function issueStart(
   });
 
   const firstPass = decideStartReuse(rows, issueId, null);
+  if (requireNew) {
+    const check = requireNewOrRefuse(firstPass, { ok: query.ok, malformed: query.malformed });
+    if (!check.ok) throw new CliError(check.error, check.code);
+  }
   if (firstPass.kind === "linked") {
     if (appendPromptPath) assertReuseAllowsContract(firstPass, appendPromptPath);
     return reuse(firstPass.row, issueId);
@@ -915,6 +1048,10 @@ async function issueStart(
   const sessionName = startSessionName(issueId, issue, repoSettings.sessionNameTemplate);
 
   const reused = decideStartReuse(rows, issueId, sessionName);
+  if (requireNew) {
+    const check = requireNewOrRefuse(reused, { ok: query.ok, malformed: query.malformed });
+    if (!check.ok) throw new CliError(check.error, check.code);
+  }
   if (reused.kind === "adopt") {
     if (appendPromptPath) assertReuseAllowsContract(reused, appendPromptPath);
     // Record the link the TUI never wrote, so the *next* lookup — here and in
@@ -979,17 +1116,13 @@ async function issueStart(
   const otel = buildOtelResourceAttrs(sessionName);
   tmuxOrThrow(
     runTmuxDirect(
-      [
-        "new-session",
-        "-d",
-        "-e",
-        `OTEL_RESOURCE_ATTRIBUTES=${otel}`,
-        "-s",
+      buildNewSessionArgs({
         sessionName,
-        "-c",
-        plan.sessionCwd,
-        plan.mainCommand,
-      ],
+        otelEnv: `OTEL_RESOURCE_ATTRIBUTES=${otel}`,
+        sessionCwd: plan.sessionCwd,
+        mainCommand: plan.mainCommand,
+        ownerToken,
+      }),
       ctx.socket,
     ),
   );
@@ -1026,6 +1159,7 @@ async function issueStart(
     issue: linkId,
     reused: false,
     transition,
+    worktreePreexisting: worktreeExists,
   };
 
   // Narrowing on the pane rather than on `plan.setupCommand` is what lets the
