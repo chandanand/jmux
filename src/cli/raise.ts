@@ -75,7 +75,7 @@ function defaultConfigPath(): string {
 /** How many resolved raises `create` leaves behind per mutation, alongside every unresolved one. */
 const RESOLVED_HISTORY_LIMIT = 50;
 
-interface RaiseCreateArgs {
+export interface RaiseCreateArgs {
   sessionFlag: string | null;
   issueFlag: string | null;
   question: string;
@@ -89,9 +89,11 @@ interface RaiseCreateArgs {
 /**
  * Validate `ctl raise create` flags. Every field is required and explicit —
  * a raise a human is going to act on must never be built from a silently
- * defaulted question, recommendation or authority.
+ * defaulted question, recommendation or authority. Pure — exported so the
+ * exactly-one-of-`--session`/`--issue` guard is directly testable without a
+ * live tmux server.
  */
-function validateRaiseCreate(parsed: ParsedCtlArgs): RaiseCreateArgs {
+export function validateRaiseCreate(parsed: ParsedCtlArgs): RaiseCreateArgs {
   const { flags, repeated } = parsed;
 
   const sessionFlag = typeof flags.session === "string" ? flags.session : null;
@@ -131,6 +133,25 @@ function validateRaiseCreate(parsed: ParsedCtlArgs): RaiseCreateArgs {
 
 const SESSION_LOOKUP_FORMAT = ["#{session_id}", "#{@jmux-agent-pane}"].join(US);
 
+export interface SessionLookupRow {
+  sessionId: string;
+  agentPane: string | null;
+}
+
+/**
+ * Parse one `display-message -p "<SESSION_LOOKUP_FORMAT>"` line into a
+ * session id and agent pane, or `null` when the session id field is empty
+ * (tmux resolved no session). Pure — no tmux call, so the missing-pane case
+ * is directly testable: an empty `@jmux-agent-pane` field (no agent has
+ * fired a hook yet, or hooks predate this option — see `agent.ts`) comes back
+ * `agentPane: null`, never an empty string.
+ */
+export function parseSessionLookupLine(line: string): SessionLookupRow | null {
+  const [sessionId, agentPane] = splitFields(line);
+  if (!sessionId) return null;
+  return { sessionId, agentPane: agentPane || null };
+}
+
 /**
  * Resolve a session scope from its name. `sessionId` and `@jmux-agent-pane`
  * come from one `display-message`, not `list-panes`: `@jmux-agent-pane` is a
@@ -151,17 +172,21 @@ function resolveSessionScope(ctx: CliContext, sessionName: string): RaiseScope {
   if (!result.ok || result.lines.length === 0) {
     throw new CliError(`session "${sessionName}" was not found: ${result.error || "no output"}`);
   }
-  const [sessionId, agentPane] = splitFields(result.lines[0]);
-  if (!sessionId) {
+  const row = parseSessionLookupLine(result.lines[0]);
+  if (!row) {
     throw new CliError(`session "${sessionName}" was not found`);
   }
-  return {
-    kind: "session",
-    socket,
-    sessionId,
-    sessionName,
-    agentPane: agentPane || null,
-  };
+  return { kind: "session", socket, sessionId: row.sessionId, sessionName, agentPane: row.agentPane };
+}
+
+/**
+ * Whether there is a recorded agent pane worth capturing. Pure — the decision
+ * `captureSnapshot` acts on before it ever calls `runTmuxDirect`, so the
+ * missing-pane case ("A raise is never lost because its screen was") is
+ * testable without a tmux server.
+ */
+export function isCapturablePane(agentPane: string | null): agentPane is string {
+  return agentPane !== null;
 }
 
 /**
@@ -172,9 +197,41 @@ function resolveSessionScope(ctx: CliContext, sessionName: string): RaiseScope {
  * screen was.
  */
 function captureSnapshot(ctx: CliContext, agentPane: string | null): string | null {
-  if (!agentPane) return null;
+  if (!isCapturablePane(agentPane)) return null;
   const result = runTmuxDirect(["capture-pane", "-p", "-t", agentPane], ctx.socket);
   return result.ok ? result.rawOutput : null;
+}
+
+/**
+ * Persist a candidate raise idempotently at `path`: when an unresolved raise
+ * with the same idempotency key already exists, it is returned unchanged and
+ * no second raise is appended; otherwise the candidate is appended. Either
+ * way `pruneResolved` runs in the same mutation. Exported (and parameterized
+ * on `path` rather than reading `defaultConfigPath()` itself) so the
+ * idempotency short-circuit — the load-bearing behaviour of `create` — is
+ * directly testable against a temporary store, the same way `store.test.ts`
+ * already tests `mutateRaises` itself.
+ */
+export function commitRaise(path: string, candidate: Raise, keep: number): Raise {
+  let outcome: Raise | null = null;
+  const mutation = mutateRaises(path, (raises) => {
+    const existing = findByKey(raises, candidate.idempotencyKey);
+    if (existing) {
+      outcome = existing;
+      return pruneResolved(raises, keep);
+    }
+    outcome = candidate;
+    return pruneResolved([...raises, candidate], keep);
+  });
+  if (!mutation.ok) throw new CliError(mutation.why);
+  if (outcome === null) {
+    // Unreachable: mutateRaises invokes `fn` exactly once, and both branches
+    // above set `outcome` before returning. Guarded rather than asserted so a
+    // future change to that contract fails loudly instead of shipping `null`
+    // as a `Raise`.
+    throw new CliError("raise store mutation produced no result");
+  }
+  return outcome;
 }
 
 function createAction(ctx: CliContext, parsed: ParsedCtlArgs): { version: number; raise: Raise } {
@@ -199,25 +256,7 @@ function createAction(ctx: CliContext, parsed: ParsedCtlArgs): { version: number
   });
 
   const path = raisesPathFor(defaultConfigPath());
-  let outcome: Raise | null = null;
-  const mutation = mutateRaises(path, (raises) => {
-    const existing = findByKey(raises, candidate.idempotencyKey);
-    if (existing) {
-      outcome = existing;
-      return pruneResolved(raises, RESOLVED_HISTORY_LIMIT);
-    }
-    outcome = candidate;
-    return pruneResolved([...raises, candidate], RESOLVED_HISTORY_LIMIT);
-  });
-  if (!mutation.ok) throw new CliError(mutation.why);
-  if (outcome === null) {
-    // Unreachable: mutateRaises invokes `fn` exactly once, and both branches
-    // above set `outcome` before returning. Guarded rather than asserted so a
-    // future change to that contract fails loudly instead of shipping `null`
-    // as a `Raise`.
-    throw new CliError("raise store mutation produced no result");
-  }
-  const raise = outcome;
+  const raise = commitRaise(path, candidate, RESOLVED_HISTORY_LIMIT);
 
   if (scope.kind === "session") {
     // Best-effort, like `issue-provision.ts`'s own writes of this same option:

@@ -2,7 +2,15 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { buildRaise } from "../../cli/raise";
+import {
+  buildRaise,
+  commitRaise,
+  parseSessionLookupLine,
+  isCapturablePane,
+  validateRaiseCreate,
+} from "../../cli/raise";
+import { mutateRaises, readRaises } from "../../raises/store";
+import type { Raise } from "../../raises/types";
 
 const base = {
   question: "Which behaviour is correct?",
@@ -31,15 +39,26 @@ describe("buildRaise", () => {
   });
 
   test("a raise with no options is refused", () => {
+    // Isolated to the empty-options guard's own message: `--recommend`
+    // pointing past an empty option list throws a *different* message that
+    // also happens to contain the word "option", so a looser assertion here
+    // (e.g. /option/i) would still pass with the empty-options guard deleted
+    // entirely — the `--recommend` guard would fire instead and the test
+    // would never notice which one actually ran.
     expect(() =>
       buildRaise({ ...base, options: [], scope: { kind: "issue", identifier: "AAA-1" }, snapshot: null }),
-    ).toThrow(/option/i);
+    ).toThrow("a raise needs at least one --option");
   });
 
-  test("the idempotency key is stable for the same scope and question", () => {
-    const a = buildRaise({ ...base, scope: { kind: "issue", identifier: "AAA-1" }, snapshot: null });
-    const b = buildRaise({ ...base, scope: { kind: "issue", identifier: "AAA-1" }, snapshot: null, nowMs: 999 });
-    expect(a.idempotencyKey).toBe(b.idempotencyKey);
+  test("the idempotency key is a fixed derivation of scope and question", () => {
+    // A golden value, not a clock-variance comparison: `idempotencyKeyFor`
+    // never reads `nowMs`, so asserting two keys built with different
+    // `nowMs` values match proves nothing about the derivation — it passes
+    // whether or not the key is clock-derived. Pinning the exact hash means
+    // any change to what the key is built from (including adding the clock)
+    // breaks this test.
+    const r = buildRaise({ ...base, scope: { kind: "issue", identifier: "AAA-1" }, snapshot: null });
+    expect(r.idempotencyKey).toBe("860f8dc363c962f4923e73cb88fd054a");
   });
 
   test("a different question is a different key", () => {
@@ -66,6 +85,145 @@ describe("buildRaise", () => {
     });
     expect(r.snapshot).toBeNull();
     expect(r.state).toBe("open");
+  });
+});
+
+// `commitRaise` is the load-bearing decision behind `create`'s idempotency:
+// a tick that asks the same question every two minutes must produce one
+// raise, and a resumed agent repeating an outcome is the same case. It is
+// exercised here against a real temporary store file, the same way
+// `raises/store.test.ts` exercises `mutateRaises` directly — no tmux
+// involved, since an issue-scoped raise never touches it.
+describe("commitRaise", () => {
+  let dir: string;
+  let path: string;
+
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function freshCandidate(question = base.question): Raise {
+    return buildRaise({ ...base, question, scope: { kind: "issue", identifier: "AAA-1" }, snapshot: null });
+  }
+
+  test("two calls with the same scope and question return the same raise, and only one is stored", () => {
+    dir = mkdtempSync(join(tmpdir(), "raise-commit-"));
+    path = join(dir, "raises.json");
+
+    const first = commitRaise(path, freshCandidate(), 50);
+    // A second, independently-built candidate — a different id and
+    // createdAt, same idempotencyKey because scope and question match.
+    const second = commitRaise(path, freshCandidate(), 50);
+
+    expect(second.id).toBe(first.id);
+    const stored = readRaises(path);
+    expect(stored.kind === "valid" && stored.raises).toHaveLength(1);
+  });
+
+  test("varying only the question creates a second raise", () => {
+    dir = mkdtempSync(join(tmpdir(), "raise-commit-"));
+    path = join(dir, "raises.json");
+
+    const first = commitRaise(path, freshCandidate("Which behaviour is correct?"), 50);
+    const second = commitRaise(path, freshCandidate("Something else entirely"), 50);
+
+    expect(second.id).not.toBe(first.id);
+    const stored = readRaises(path);
+    expect(stored.kind === "valid" && stored.raises).toHaveLength(2);
+  });
+
+  test("a resolved raise does not block a new one with the same key", () => {
+    dir = mkdtempSync(join(tmpdir(), "raise-commit-"));
+    path = join(dir, "raises.json");
+
+    const candidate = freshCandidate();
+    // Seed the store with an already-resolved raise carrying the same
+    // idempotency key, exactly as if this same question had been asked,
+    // answered and resolved before.
+    const resolved: Raise = { ...candidate, id: "resolved-1", state: "resolved", resolvedAt: 1 };
+    mutateRaises(path, (rs) => [...rs, resolved]);
+
+    const created = commitRaise(path, candidate, 50);
+
+    expect(created.id).toBe(candidate.id);
+    expect(created.id).not.toBe("resolved-1");
+    const stored = readRaises(path);
+    expect(stored.kind === "valid" && stored.raises.map((r) => r.id).sort()).toEqual(
+      [candidate.id, "resolved-1"].sort(),
+    );
+  });
+});
+
+describe("parseSessionLookupLine", () => {
+  test("a missing agent pane field yields agentPane: null", () => {
+    expect(parseSessionLookupLine("$3:|:")).toEqual({ sessionId: "$3", agentPane: null });
+  });
+
+  test("a present agent pane field is carried through", () => {
+    expect(parseSessionLookupLine("$3:|:%7")).toEqual({ sessionId: "$3", agentPane: "%7" });
+  });
+
+  test("a missing session id is refused", () => {
+    expect(parseSessionLookupLine(":|:%7")).toBeNull();
+  });
+});
+
+describe("isCapturablePane", () => {
+  test("null is not capturable", () => {
+    expect(isCapturablePane(null)).toBe(false);
+  });
+
+  test("a pane id is capturable", () => {
+    expect(isCapturablePane("%7")).toBe(true);
+  });
+});
+
+describe("validateRaiseCreate", () => {
+  // No `session` or `issue` key at all — every scope-related test below adds
+  // exactly the ones it wants to exercise, rather than starting from one flag
+  // set and knocking a key out.
+  const scopelessFlags = {
+    question: "Which behaviour is correct?",
+    recommend: "1",
+    why: "the ticket does not say",
+    context: "read the handbook page",
+    authority: "product",
+  };
+
+  test("neither --session nor --issue is refused", () => {
+    expect(() =>
+      validateRaiseCreate({
+        group: "raise",
+        action: "create",
+        flags: { ...scopelessFlags },
+        positional: [],
+        repeated: { option: ["a", "b"] },
+      }),
+    ).toThrow(/requires exactly one of --session/);
+  });
+
+  test("both --session and --issue together is refused", () => {
+    expect(() =>
+      validateRaiseCreate({
+        group: "raise",
+        action: "create",
+        flags: { ...scopelessFlags, session: "aaa-1", issue: "AAA-1" },
+        positional: [],
+        repeated: { option: ["a", "b"] },
+      }),
+    ).toThrow(/not both/);
+  });
+
+  test("exactly one of --session or --issue is accepted", () => {
+    const args = validateRaiseCreate({
+      group: "raise",
+      action: "create",
+      flags: { ...scopelessFlags, issue: "AAA-1" },
+      positional: [],
+      repeated: { option: ["a", "b"] },
+    });
+    expect(args.issueFlag).toBe("AAA-1");
+    expect(args.sessionFlag).toBeNull();
   });
 });
 
