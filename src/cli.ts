@@ -89,6 +89,7 @@ const GROUP_VALUE_FLAGS: Record<string, ReadonlySet<string>> = {
     "why", "authority", "context", "note", "reason", "attempt", "state",
   ]),
   issue: new Set(["append-prompt", "owner-token"]),
+  session: new Set(["outcome"]),
 };
 /**
  * Flags whose value is optional and always numeric, so `--wait` and `--wait 60`
@@ -120,7 +121,7 @@ USAGE
   jmux ctl [GLOBAL FLAGS] <group> [action] [FLAGS] [args...]
 
 GROUPS
-  session    Manage tmux sessions (incl. attention set/clear, hide/unhide/hidden)
+  session    Manage tmux sessions (incl. attention set/clear, hide/unhide/hidden, report)
   window     Manage tmux windows
   pane       Manage tmux panes (incl. pin/unpin/pinned)
   run-claude Run a Claude Code agent in a session
@@ -149,7 +150,9 @@ FLAGS
   --file <val>         File path
   --lines <val>        Number of lines
   --window <val>       Window target
-  --reason <val>       Attention reason text
+  --reason <val>       Attention reason text, or session report reason
+  --outcome <val>      Session report outcome: shipped|blocked|needs-human|failed
+                        (session report). Unbound — carries no turn identity.
   --title <val>        Issue title (issue create)
   --description <val>  Issue description (issue create)
   --team <val>         Team name or id (issue create)

@@ -361,3 +361,28 @@ describe("issue-group flags are scoped to the issue group", () => {
     expect(p.positional).toContain("/tmp/c.md");
   });
 });
+
+// `ctl session report` needs `--outcome`, group-scoped like every flag above
+// — registering it globally would change how every other command consumes
+// the token after `--outcome`. `--reason` already exists globally (attention,
+// raise, ...); this pins that `session report` reusing it changes nothing
+// about how any other group reads it.
+describe("session-group flags are scoped to the session group", () => {
+  test("--outcome takes a value inside the session group", () => {
+    const p = parseCtlArgs(["session", "report", "--target", "TRA-1", "--outcome", "shipped", "--reason", "done"]);
+    expect(p.flags.outcome).toBe("shipped");
+    expect(p.flags.reason).toBe("done");
+  });
+
+  test("outside the session group, --outcome and --reason keep their old meaning", () => {
+    // `--reason` is already global (attention uses it), so it takes a value
+    // everywhere and this half of the test is a no-op guard against a future
+    // regression. `--outcome` is new and unknown to `raise`, so it stays a
+    // permissive boolean and "shipped" stays a positional — exactly as it
+    // behaved before this command existed.
+    const p = parseCtlArgs(["raise", "list", "--outcome", "shipped", "--reason", "done"]);
+    expect(p.flags.outcome).toBe(true);
+    expect(p.positional).toContain("shipped");
+    expect(p.flags.reason).toBe("done");
+  });
+});

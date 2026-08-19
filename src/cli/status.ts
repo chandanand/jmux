@@ -8,6 +8,12 @@ import { type CtlAgentState } from "./agent";
 import { US, splitFields } from "../tmux-fields";
 import { PROJECT_OPTION, type ProjectConfig } from "../project";
 import { ISSUE_LINK_OPTION, parseIssueLinkOption } from "../issue-session";
+import {
+  SESSION_REPORT_OUTCOME_OPTION,
+  SESSION_REPORT_REASON_OPTION,
+  parseSessionReport,
+  type SessionReport,
+} from "./session";
 import { outranks } from "../agent-state-rollup";
 import type { CliContext } from "./context";
 import type { ParsedCtlArgs } from "../cli";
@@ -32,6 +38,14 @@ export interface StatusSessionRow {
   active: boolean;
   /** The `@jmux-project` stamp, or "" when the session carries none. */
   projectId: string;
+  /** The `@jmux-session-report-outcome` stamp, or "" when the session has not reported. */
+  reportOutcome: string;
+  /**
+   * Paired with `reportOutcome` and carried through even when empty — a
+   * corrupted state (outcome set, reason blank) must stay distinguishable
+   * from "no report" — see `parseSessionReport` in `./session`.
+   */
+  reportReason: string;
 }
 
 /**
@@ -51,12 +65,15 @@ const STATUS_FORMAT = [
   "#{pane_current_path}",
   "#{pane_active}",
   `#{${PROJECT_OPTION}}`,
+  `#{${SESSION_REPORT_OUTCOME_OPTION}}`,
+  `#{${SESSION_REPORT_REASON_OPTION}}`,
 ].join(US);
 
 export function parseStatusLine(line: string): StatusSessionRow | null {
   const p = splitFields(line);
-  // Nine, not ten: the project field was added after this shipped, and a
-  // session-list line from an older server simply carries no stamp.
+  // Nine, not eleven: the project field, and later the report fields, were
+  // added after this shipped, and a session-list line from an older server
+  // simply carries no stamp for either.
   if (p.length < 9) return null;
   return {
     id: p[0],
@@ -69,6 +86,8 @@ export function parseStatusLine(line: string): StatusSessionRow | null {
     path: p[7],
     active: p[8] === "1",
     projectId: p[9] ?? "",
+    reportOutcome: p[10] ?? "",
+    reportReason: p[11] ?? "",
   };
 }
 
@@ -137,6 +156,12 @@ export interface StatusSession {
   attention: boolean;
   attentionReason: string | null;
   pinned: boolean;
+  /**
+   * What the session last reported via `ctl session report`, or `null` when
+   * it has not. Every non-null value is unbound — see `SessionReport`'s doc
+   * comment in `./session`.
+   */
+  report: SessionReport | null;
 }
 
 export interface StatusInputs {
@@ -210,6 +235,7 @@ export function buildStatusSnapshot(inp: StatusInputs): {
       attention,
       attentionReason,
       pinned: inp.pinnedNames.has(row.name),
+      report: parseSessionReport(row.reportOutcome, row.reportReason),
     };
   });
 

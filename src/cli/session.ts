@@ -115,6 +115,82 @@ export function buildAttentionCommands(
   );
 }
 
+export const SESSION_REPORT_OUTCOME_OPTION = "@jmux-session-report-outcome";
+export const SESSION_REPORT_REASON_OPTION = "@jmux-session-report-reason";
+
+/**
+ * The four outcomes `ctl session report` accepts. Exhaustive on purpose: a
+ * report's outcome is read back by a consumer whose type covers exactly
+ * these four, so nothing else may ever be persisted (see
+ * `buildSessionReportCommands`'s refusal below).
+ */
+export const SESSION_REPORT_OUTCOMES = ["shipped", "blocked", "needs-human", "failed"] as const;
+export type SessionReportOutcome = (typeof SESSION_REPORT_OUTCOMES)[number];
+
+/**
+ * A session's report, as read back from tmux options or built at write time.
+ *
+ * `unbound` is always `true` and is not something a caller can set — there is
+ * no turn counter anywhere in this repository (see the parent orchestrator
+ * design doc: "a report with no turn is unbound and adjudicated, never
+ * trusted"). It is stamped explicitly, on every report, so a consumer reading
+ * this record can never mistake it for one bound to the turn it describes.
+ */
+export interface SessionReport {
+  outcome: string;
+  reason: string;
+  readonly unbound: true;
+}
+
+/**
+ * Parse the two `ctl session report` tmux-option fields into a report, or
+ * `null` when the session carries none.
+ *
+ * Presence is decided by `outcomeField` alone, never by whether `reasonField`
+ * looks non-empty. A corrupted or partially-written state — outcome set,
+ * reason blank — must surface as a report with an empty reason, not silently
+ * read back as "no report": the same "an unreadable thing reported as an
+ * empty thing" defect this project's own postmortems call out by name.
+ */
+export function parseSessionReport(outcomeField: string, reasonField: string): SessionReport | null {
+  if (!outcomeField) return null;
+  return { outcome: outcomeField, reason: reasonField, unbound: true };
+}
+
+export interface SessionReportCommand {
+  args: string[];
+  required: boolean;
+}
+
+/**
+ * Pure builder for the tmux commands `ctl session report` issues, plus the
+ * two refusals a report must pass before anything is written.
+ *
+ * Reason is written before outcome — the same "payload before the flag"
+ * ordering `buildAttentionCommands` uses (see its doc comment) — because
+ * {@link parseSessionReport} treats the outcome field's presence as the
+ * signal that a report exists at all; writing it last means a reader never
+ * observes an outcome with no reason behind it.
+ */
+export function buildSessionReportCommands(
+  target: string,
+  outcome: string,
+  reason: string,
+): SessionReportCommand[] {
+  if (!(SESSION_REPORT_OUTCOMES as readonly string[]).includes(outcome)) {
+    throw new CliError(
+      `Unknown outcome "${outcome}". Use one of: ${SESSION_REPORT_OUTCOMES.join(", ")}`,
+    );
+  }
+  if (!reason.trim()) {
+    throw new CliError("session report requires a non-empty --reason");
+  }
+  return [
+    { args: ["set-option", "-t", target, SESSION_REPORT_REASON_OPTION, reason], required: true },
+    { args: ["set-option", "-t", target, SESSION_REPORT_OUTCOME_OPTION, outcome], required: true },
+  ];
+}
+
 export interface GridHiddenCommand {
   args: string[];
   required: boolean;
@@ -365,9 +441,28 @@ export function handleSession(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
       return { hidden: parseHiddenList(lines) };
     }
 
+    case "report": {
+      if (!flags.target || typeof flags.target !== "string") {
+        throw new CliError("--target is required");
+      }
+      const target = flags.target;
+      const outcome = typeof flags.outcome === "string" ? flags.outcome : "";
+      const reason = typeof flags.reason === "string" ? flags.reason : "";
+
+      const commands = buildSessionReportCommands(target, outcome, reason);
+      for (const cmd of commands) {
+        tmuxOrThrow(runTmuxDirect(cmd.args, ctx.socket));
+      }
+
+      // `buildSessionReportCommands` already refused any outcome that would
+      // make `outcome` empty, so this can never read back `null`.
+      const report = parseSessionReport(outcome, reason)!;
+      return { target, report };
+    }
+
     default:
       throw new CliError(
-        `Unknown session action "${action}". Known actions: list, create, info, switch, kill, rename, attention, hide, unhide, hidden`,
+        `Unknown session action "${action}". Known actions: list, create, info, switch, kill, rename, attention, hide, unhide, hidden, report`,
       );
   }
 }

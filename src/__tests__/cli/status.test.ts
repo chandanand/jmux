@@ -29,6 +29,8 @@ describe("parseStatusLine", () => {
       path: "/repo/wt",
       active: true,
       projectId: "",
+      reportOutcome: "",
+      reportReason: "",
     });
   });
 
@@ -50,6 +52,8 @@ describe("parseStatusLine", () => {
       path: "/repo/wt",
       active: true,
       projectId: "",
+      reportOutcome: "",
+      reportReason: "",
     });
   });
 });
@@ -71,6 +75,8 @@ describe("buildStatusSnapshot", () => {
 
   const baseRow = (o: Partial<StatusSessionRow>): StatusSessionRow => ({
     projectId: "",
+    reportOutcome: "",
+    reportReason: "",
     id: "$1",
     name: "TRA-123",
     agentState: "",
@@ -154,6 +160,8 @@ describe("buildStatusSnapshot", () => {
 describe("collapseStatusRows", () => {
   const row = (o: Partial<StatusSessionRow> & { id: string }): StatusSessionRow => ({
     projectId: "",
+    reportOutcome: "",
+    reportReason: "",
     name: "s",
     agentState: "",
     agentSince: "",
@@ -228,6 +236,8 @@ describe("collapseStatusRows", () => {
 describe("ctl status project", () => {
   const row = (o: Partial<StatusSessionRow> & { id: string }): StatusSessionRow => ({
     projectId: "",
+    reportOutcome: "",
+    reportReason: "",
     name: "s",
     agentState: "",
     agentSince: "",
