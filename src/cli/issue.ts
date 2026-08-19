@@ -269,6 +269,24 @@ export function assertSeedPromptFits(prompt: string): void {
 }
 
 /**
+ * The byte limit is enforced only when a contract is being appended.
+ *
+ * `--append-prompt` is a new path, so a limit on it changes nothing that
+ * already worked. Without it, the seed prompt is exactly the issue text this
+ * command always sent — no matter how large — and it must stay unchecked:
+ * the real argv ceiling varies by platform and environment, so any constant
+ * we pick here is either too low to be safe on some existing invocation, or
+ * too high to be useful, and refusing an invocation that worked yesterday is
+ * a behaviour change published software does not get to make silently.
+ */
+export function assertSeedPromptFitsWhenAppending(
+  contract: string | null,
+  seedPrompt: string,
+): void {
+  if (contract) assertSeedPromptFits(seedPrompt);
+}
+
+/**
  * Read once, up front. `buildAgentFragment` defers its own `cat` until launch,
  * so a contract referenced rather than copied can change or vanish in between.
  */
@@ -919,7 +937,7 @@ async function issueStart(
   let promptFile: string | null = null;
   if (launchAgent && (issue || contract)) {
     const seedPrompt = buildSeedPrompt(issue ? buildLinearPrompt(issue) : null, contract);
-    assertSeedPromptFits(seedPrompt);
+    assertSeedPromptFitsWhenAppending(contract, seedPrompt);
     const rand = Math.random().toString(36).slice(2);
     promptFile = resolve(tmpdir(), `jmux-prompt-${Date.now()}-${rand}`);
     writeFileSync(promptFile, seedPrompt, "utf-8");

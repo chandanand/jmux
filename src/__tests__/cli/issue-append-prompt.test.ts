@@ -6,6 +6,7 @@ import {
   buildSeedPrompt,
   MAX_SEED_PROMPT_BYTES,
   assertSeedPromptFits,
+  assertSeedPromptFitsWhenAppending,
   readContractFile,
   assertLaunchAgentForContract,
 } from "../../cli/issue";
@@ -55,6 +56,30 @@ describe("the size limit is enforced before anything is created", () => {
     // A multi-byte character must not slip past a length check.
     const contract = "é".repeat(MAX_SEED_PROMPT_BYTES);
     expect(() => assertSeedPromptFits(buildSeedPrompt(null, contract))).toThrow();
+  });
+});
+
+describe("the byte limit is scoped to the appended contract", () => {
+  test("with a contract, an over-limit prompt is refused, naming the size and the limit", () => {
+    // --append-prompt is a new path, so refusing on it changes nothing that
+    // already worked.
+    const contract = "x".repeat(MAX_SEED_PROMPT_BYTES + 1);
+    const seedPrompt = buildSeedPrompt(null, contract);
+    expect(() => assertSeedPromptFitsWhenAppending(contract, seedPrompt)).toThrow(/prompt/i);
+  });
+
+  test("with no contract, an over-limit issue prompt is NOT refused", () => {
+    // Regression test: no --append-prompt means this command must take
+    // exactly the path it took before this feature existed. A real host's
+    // argv ceiling (getconf ARG_MAX) is roughly a megabyte, well above
+    // MAX_SEED_PROMPT_BYTES, so an issue prompt in that gap worked
+    // yesterday and must keep working today, unchecked, no matter how it
+    // compares to the contract limit. This must fail if the check is ever
+    // made unconditional again.
+    const hugeIssueText = "x".repeat(MAX_SEED_PROMPT_BYTES * 4);
+    expect(() =>
+      assertSeedPromptFitsWhenAppending(null, hugeIssueText),
+    ).not.toThrow();
   });
 });
 
