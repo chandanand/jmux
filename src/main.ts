@@ -1564,6 +1564,7 @@ const stdinGate = new StdinGate({
     rebuildSettingsColors();
     rebuildWorkflowColors();
     rebuildGhostPreviewColors();
+    rebuildRaisesColors();
     // rebuildPanelViewColors also re-derives the shared issue-detail attrs, so
     // the preview's body tracks the theme through the same call.
     rebuildPanelViewColors();
@@ -2012,6 +2013,7 @@ let panelSubjectId: string | null = null;
 const settingsScreen = new SettingsScreen();
 const workflowScreen = new WorkflowScreen();
 const ghostPreview = new GhostPreview();
+const raisesScreen = new RaisesScreen();
 
 import { SettingsScreen, rebuildSettingsColors, type SettingDef, type SettingsCategory, type SettingsAction } from "./settings-screen";
 import { numberSetting, editNumber, parseNumber, rangeHint, type NumberSpec } from "./setting-number";
@@ -2019,6 +2021,9 @@ import { WorkflowScreen, rebuildWorkflowColors, TRANSITIONS_BAND, type WorkflowP
 import { GhostPreview, rebuildGhostPreviewColors, type GhostPreviewPort, type StartOutcome } from "./ghost-preview";
 import { buildPreflight, type Preflight } from "./ghost-preflight";
 import { resolveNavStep, type NavFocus } from "./nav-order";
+import { RaisesScreen, rebuildRaisesColors, type RaisesPort } from "./raises-screen";
+import { readRaises, raisesPathFor } from "./raises/store";
+import { applyRaiseEvent } from "./cli/raise";
 
 // Mutable behind an epoch, so a tracker change applies without a restart. Every
 // existing `adapters.issueTracker` / `adapters.codeHost` read still works —
@@ -3777,7 +3782,7 @@ function relayout(): void {
  * which row bands (toolbar/rules/footer) exist differs.
  */
 function activeChromeLayout(): FrameLayout {
-  return settingsScreen.isOpen || workflowScreen.isOpen || ghostPreview.isOpen
+  return settingsScreen.isOpen || workflowScreen.isOpen || ghostPreview.isOpen || raisesScreen.isOpen
     ? fullScreenLayout
     : layout;
 }
@@ -3897,10 +3902,11 @@ function toggleSidebar(): void {
  * else". Leaving the surface is what makes it visible again.
  */
 function requestDiffPanel(): void {
-  if (ghostPreview.isOpen || settingsScreen.isOpen || workflowScreen.isOpen) {
+  if (ghostPreview.isOpen || settingsScreen.isOpen || workflowScreen.isOpen || raisesScreen.isOpen) {
     if (ghostPreview.isOpen) closeGhostPreview();
     if (settingsScreen.isOpen) toggleSettingsScreen();
     if (workflowScreen.isOpen) toggleWorkflowScreen();
+    if (raisesScreen.isOpen) toggleRaisesScreen();
     if (diffPanel.isActive()) {
       scheduleRender();
       return;
@@ -4895,6 +4901,24 @@ function renderFrame(): void {
     return;
   }
 
+  // The raises screen: the same frameless full-screen takeover as settings
+  // and workflow — no modal overlay, because it paints its own state and
+  // opens no real Modal over itself.
+  if (raisesScreen.isOpen) {
+    const sidebarGrid = sidebarShown ? sidebar.getGrid() : null;
+    const totalCols = fullScreenLayout.termCols;
+    const contentCols = sidebarShown ? totalCols - fullScreenLayout.main.x : totalCols;
+    renderer.render(
+      fullScreenLayout,
+      raisesScreen.render(contentCols, fullScreenLayout.contentRows),
+      { x: 0, y: 0 },
+      sidebarGrid,
+      null, null, null, undefined, undefined,
+      dragChrome(),
+    );
+    return;
+  }
+
   // Ghost preview: the same frameless full-screen takeover as settings and
   // workflow — but the modal overlay is composited, because unlike those two
   // this surface opens a real ListModal (the status picker) over itself.
@@ -5582,11 +5606,11 @@ const inputRouter = new InputRouter(
     onFilterCycle: () => { applySidebarFilter(sidebar.cycleFilterMode()); scheduleRender(); },
     onBrowserPane: () => { void openBrowserPane(); },
     onSidebarToggle: () => toggleSidebar(),
-    // The three surfaces that take the whole main area but keep the sidebar
-    // beside them. Glass is absent because it has its own prefix arm already,
-    // and modals are absent by design — see the option's doc comment.
+    // The full-screen surfaces that take the whole main area but keep the
+    // sidebar beside them. Glass is absent because it has its own prefix arm
+    // already, and modals are absent by design — see the option's doc comment.
     fullScreenSurfaceActive: () =>
-      settingsScreen.isOpen || workflowScreen.isOpen || ghostPreview.isOpen,
+      settingsScreen.isOpen || workflowScreen.isOpen || ghostPreview.isOpen || raisesScreen.isOpen,
     onToggleSessionIssues: () => {
       const name = currentSessions.find((s) => s.id === currentSessionId)?.name;
       if (!name) return;
@@ -5610,6 +5634,12 @@ const inputRouter = new InputRouter(
       // Full-screen surfaces consume input while open, ahead of any modal.
       if (workflowScreen.isOpen) {
         handleWorkflowInput(data);
+        return;
+      }
+      // The raises screen opens no real Modal over itself, so it needs no
+      // `!activeModal?.isOpen()` guard the way settings/preview do below.
+      if (raisesScreen.isOpen) {
+        handleRaisesInput(data);
         return;
       }
       // Guarded on no modal being open, for the same reason the preview is:
@@ -6780,6 +6810,7 @@ function buildPaletteCommands(): PaletteCommand[] {
     { id: "dev-server", label: "Open dev server in a browser pane", category: "pane" },
     { id: "open-claude", label: "Open Claude", category: "other" },
     { id: "settings-screen", label: "Settings", category: "other" },
+    { id: "raises-screen", label: "Raises", category: "other" },
     { id: "help", label: "Keyboard shortcuts", category: "other" },
     { id: "setup", label: "Setup", category: "other" },
   );
@@ -8005,6 +8036,7 @@ function returnFromSurface(): boolean {
 
 function openSettingsScreen(focusId?: string): void {
   if (ghostPreview.isOpen) closeGhostPreview();
+  if (raisesScreen.isOpen) raisesScreen.close();
   settingsScreen.open(buildSettingsCategories());
   if (focusId) settingsScreen.selectSetting(focusId);
   inputRouter.setModalOpen(true);
@@ -8246,6 +8278,7 @@ function openWorkflowScreen(): void {
   surfaceReturn = settingsScreen.isOpen ? () => openSettingsScreen("edit-workflow") : null;
   if (settingsScreen.isOpen) settingsScreen.close();
   if (ghostPreview.isOpen) closeGhostPreview();
+  if (raisesScreen.isOpen) raisesScreen.close();
   closeModal();
   workflowScreen.open(buildWorkflowPort());
   inputRouter.setModalOpen(true);
@@ -8263,6 +8296,83 @@ function toggleWorkflowScreen(): void {
     return;
   }
   openWorkflowScreen();
+}
+
+// --- Raises screen ---
+//
+// The inbox for questions an agent asked instead of guessing. Reads
+// raises.json fresh on every render (see RaisesPort.getResult) and answers
+// through applyRaiseEvent (src/cli/raise.ts) — the same lifecycle `ctl raise
+// answer` goes through, so the screen can never advance a raise the state
+// machine would refuse.
+
+function buildRaisesPort(): RaisesPort {
+  return {
+    getResult: () => readRaises(raisesPathFor(configStore.configPath)),
+    answer: (id, optionId) => {
+      try {
+        applyRaiseEvent(raisesPathFor(configStore.configPath), id, {
+          kind: "answer",
+          optionId,
+          note: null,
+          atMs: Date.now(),
+        });
+      } catch (e) {
+        showToast(`Could not record the answer: ${(e as Error).message}`);
+      }
+      scheduleRender();
+    },
+    // The socket travels with the scope, and the jump refuses rather than
+    // guessing when it doesn't match the socket this jmux process is
+    // actually attached to — a name-only jump could otherwise land on the
+    // wrong server's session, and jmux itself only ever drives the one
+    // socket it was started against.
+    jump: (scope) => {
+      const here = socketName ?? "default";
+      if (scope.socket !== here) {
+        showToast(`That raise's session is on socket "${scope.socket}", not this jmux ("${here}")`);
+        return;
+      }
+      raisesScreen.close();
+      inputRouter.setModalOpen(inputConsumerActive());
+      applyChromeLayout();
+      scheduleRender();
+      void switchSession(scope.sessionId);
+    },
+  };
+}
+
+function openRaisesScreen(): void {
+  if (settingsScreen.isOpen) settingsScreen.close();
+  if (workflowScreen.isOpen) workflowScreen.close();
+  if (ghostPreview.isOpen) closeGhostPreview();
+  closeModal();
+  raisesScreen.open(buildRaisesPort());
+  inputRouter.setModalOpen(true);
+  applyChromeLayout();
+  scheduleRender();
+}
+
+function toggleRaisesScreen(): void {
+  if (raisesScreen.isOpen) {
+    raisesScreen.close();
+    inputRouter.setModalOpen(inputConsumerActive());
+    applyChromeLayout();
+    scheduleRender();
+    return;
+  }
+  openRaisesScreen();
+}
+
+/** The screen can close itself (Escape/q), so this re-syncs chrome and routing the same way handleWorkflowInput does. */
+function handleRaisesInput(data: string): void {
+  const wasOpen = raisesScreen.isOpen;
+  raisesScreen.handleInput(data);
+  if (wasOpen && !raisesScreen.isOpen && !inputConsumerActive()) {
+    applyChromeLayout();
+    inputRouter.setModalOpen(false);
+  }
+  scheduleRender();
 }
 
 function buildGhostPreviewPort(): GhostPreviewPort {
@@ -8351,6 +8461,7 @@ function openGhostPreview(issue: { id: string; identifier: string }): void {
   // One full-screen surface at a time — two would leave one painted and deaf.
   if (settingsScreen.isOpen) settingsScreen.close();
   if (workflowScreen.isOpen) workflowScreen.close();
+  if (raisesScreen.isOpen) raisesScreen.close();
   closeModal();
 
   if (inGlass) {
@@ -8438,7 +8549,7 @@ function handleWorkflowInput(data: string): void {
  * one question with one answer is what stops the next surface repeating it.
  */
 function inputConsumerActive(): boolean {
-  return settingsScreen.isOpen || workflowScreen.isOpen || ghostPreview.isOpen
+  return settingsScreen.isOpen || workflowScreen.isOpen || ghostPreview.isOpen || raisesScreen.isOpen
     || activeModal?.isOpen() === true;
 }
 
@@ -10079,6 +10190,9 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
     case "settings-screen":
       toggleSettingsScreen();
       return;
+    case "raises-screen":
+      toggleRaisesScreen();
+      return;
     case "help":
       toggleHelp();
       return;
@@ -10814,9 +10928,14 @@ try {
   // rename surfaces here as an event naming the basename.
   const configDir = dirOf(configStore.configPath);
   const configBase = baseOf(configStore.configPath);
+  // raises.json lives beside config.json (see raisesPathFor), so the same
+  // directory watcher — not a second one — covers it. Same reasoning as the
+  // comment above: an atomic replace of raises.json swaps its inode too.
+  const raisesBase = baseOf(raisesPathFor(configStore.configPath));
   configWatcher = watch(configDir, (_event, filename) => {
     // A null filename means the OS reported a change without saying what, so
-    // it has to fall through rather than be filtered out.
+    // both listeners below have to run rather than either being filtered out.
+    if ((filename === null || filename === raisesBase) && raisesScreen.isOpen) scheduleRender();
     if (filename !== null && filename !== configBase) return;
     const updated = configStore.reload();
     const newWidth = updated.sidebarWidth || 26;
