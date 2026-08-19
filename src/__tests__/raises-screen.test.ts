@@ -1,5 +1,8 @@
 import { describe, test, expect } from "bun:test";
-import { RaisesScreen, type RaisesPort } from "../raises-screen";
+import { watch, mkdtempSync, writeFileSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join, basename } from "path";
+import { RaisesScreen, raiseJumpTarget, raisesFileTouched, type RaisesPort } from "../raises-screen";
 import type { Raise, RaiseScope } from "../raises/types";
 import type { ReadResult } from "../raises/store";
 
@@ -146,5 +149,64 @@ describe("RaisesScreen render", () => {
     screen.render(100, 24);
     screen.handleInput("1");
     expect(calls.answered).toEqual([]);
+  });
+});
+
+function wait(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+describe("raiseJumpTarget", () => {
+  test("the jump target is the raise's session id, never its display name", () => {
+    const scope: Extract<RaiseScope, { kind: "session" }> = {
+      kind: "session",
+      socket: "default",
+      sessionId: "$42-the-real-id",
+      sessionName: "totally-different-display-name",
+      agentPane: null,
+    };
+    expect(raiseJumpTarget(scope)).toBe("$42-the-real-id");
+    expect(raiseJumpTarget(scope)).not.toBe(scope.sessionName);
+  });
+});
+
+describe("raisesFileTouched", () => {
+  test("an unrelated file in the same directory is not a raises.json change", () => {
+    expect(raisesFileTouched("config.json", "raises.json")).toBe(false);
+  });
+
+  test("raises.json itself is a raises.json change", () => {
+    expect(raisesFileTouched("raises.json", "raises.json")).toBe(true);
+  });
+
+  test("a null filename (the OS didn't say what changed) cannot be ruled out", () => {
+    expect(raisesFileTouched(null, "raises.json")).toBe(true);
+  });
+
+  test("wired into a real directory watcher: an unrelated write is not seen as a raises.json change, and a raises.json write is", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jmux-raises-watch-"));
+    const raisesPath = join(dir, "raises.json");
+    writeFileSync(raisesPath, JSON.stringify({ version: 1, raises: [] }));
+    const raisesBase = basename(raisesPath);
+
+    let touched = 0;
+    const w = watch(dir, (_event, filename) => {
+      if (raisesFileTouched(filename, raisesBase)) touched++;
+    });
+    try {
+      await wait(300);
+      touched = 0;
+
+      writeFileSync(join(dir, "config.json"), "{}");
+      await wait(300);
+      expect(touched).toBe(0);
+
+      writeFileSync(raisesPath, JSON.stringify({ version: 1, raises: [] }));
+      await wait(300);
+      expect(touched).toBeGreaterThan(0);
+    } finally {
+      w.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

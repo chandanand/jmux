@@ -2021,7 +2021,7 @@ import { WorkflowScreen, rebuildWorkflowColors, TRANSITIONS_BAND, type WorkflowP
 import { GhostPreview, rebuildGhostPreviewColors, type GhostPreviewPort, type StartOutcome } from "./ghost-preview";
 import { buildPreflight, type Preflight } from "./ghost-preflight";
 import { resolveNavStep, type NavFocus } from "./nav-order";
-import { RaisesScreen, rebuildRaisesColors, type RaisesPort } from "./raises-screen";
+import { RaisesScreen, rebuildRaisesColors, raiseJumpTarget, raisesFileTouched, type RaisesPort } from "./raises-screen";
 import { readRaises, raisesPathFor } from "./raises/store";
 import { applyRaiseEvent } from "./cli/raise";
 
@@ -8337,7 +8337,7 @@ function buildRaisesPort(): RaisesPort {
       inputRouter.setModalOpen(inputConsumerActive());
       applyChromeLayout();
       scheduleRender();
-      void switchSession(scope.sessionId);
+      void switchSession(raiseJumpTarget(scope));
     },
   };
 }
@@ -10935,7 +10935,7 @@ try {
   configWatcher = watch(configDir, (_event, filename) => {
     // A null filename means the OS reported a change without saying what, so
     // both listeners below have to run rather than either being filtered out.
-    if ((filename === null || filename === raisesBase) && raisesScreen.isOpen) scheduleRender();
+    if (raisesFileTouched(filename, raisesBase) && raisesScreen.isOpen) scheduleRender();
     if (filename !== null && filename !== configBase) return;
     const updated = configStore.reload();
     const newWidth = updated.sidebarWidth || 26;

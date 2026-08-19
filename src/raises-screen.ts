@@ -36,6 +36,35 @@ export interface RaisesPort {
   jump(scope: Extract<RaiseScope, { kind: "session" }>): void;
 }
 
+/**
+ * The identity a jump actually switches to: the session **id**, never the
+ * display name. Pulled out as its own function — not inlined at the one call
+ * site in main.ts's `RaisesPort.jump` — because main.ts is glue no unit test
+ * reaches, and this is the one line in it that must never regress: two tmux
+ * sockets can hold a session with the same name, so a jump keyed on the name
+ * risks landing on the wrong server's session the moment that happens. The
+ * socket match is checked separately, before this is ever called; this is
+ * only the "which session on that socket" half.
+ */
+export function raiseJumpTarget(scope: Extract<RaiseScope, { kind: "session" }>): string {
+  return scope.sessionId;
+}
+
+/**
+ * Whether a directory-watcher event for `filename` means raises.json may
+ * have changed, given `raisesBase` (the basename `raisesPathFor` resolved to).
+ * A null filename means the OS reported a change without saying what, so it
+ * cannot be ruled out and counts. Pulled out of main.ts's config directory
+ * watcher for the same reason as `raiseJumpTarget` above: that watcher also
+ * matches config.json in the same callback, on the same directory, and is
+ * itself unreachable by a unit test — so the one thing that must never
+ * regress (an edit to an unrelated file in that directory must never look
+ * like a raises.json change) is pulled out to where it can be proven.
+ */
+export function raisesFileTouched(filename: string | null, raisesBase: string): boolean {
+  return filename === null || filename === raisesBase;
+}
+
 // --- Colours ---
 //
 // Every attr object here is patched in place by rebuildRaisesColors() so a
