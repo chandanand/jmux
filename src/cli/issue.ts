@@ -316,6 +316,20 @@ export function assertLaunchAgentForContract(launchAgent: boolean, path: string)
   }
 }
 
+/**
+ * A reused session already has a running agent. `issue start` returns on the
+ * reuse paths before any provisioning happens, so a contract handed to
+ * `--append-prompt` has no later route to reach it — every other way the
+ * contract can fail to arrive already refuses, and a session that reuses
+ * silently was the one gap left.
+ */
+export function assertReuseAllowsContract(reuse: StartReuse, path: string): void {
+  if (reuse.kind === "none") return;
+  throw new CliError(
+    `--append-prompt ${path} cannot be delivered: issue start would reuse session "${reuse.row.name}", which launches no new agent to seed`,
+  );
+}
+
 export interface IssueCreateArgs {
   title: string;
   description: string;
@@ -842,9 +856,9 @@ async function issueStart(
   // Read before any lookup or side effect, for the same reason as `waitSpec`
   // above: a bad path or an empty file is a caller mistake, and refusing here
   // costs nothing, while refusing later costs a tracker round-trip or a
-  // provisioned session. Unused on the reuse paths below — a session that is
-  // reused already has a running agent, so there is no first message left to
-  // seed, the same way a reused session never reads `buildLinearPrompt` either.
+  // provisioned session. The contract also gates the reuse paths below — a
+  // reused session launches no new agent, so a contract handed to it would be
+  // silently lost rather than merely unused.
   const appendPromptPath =
     typeof flags["append-prompt"] === "string" ? flags["append-prompt"] : null;
   const contract = appendPromptPath ? readContractFile(appendPromptPath) : null;
@@ -859,7 +873,10 @@ async function issueStart(
   });
 
   const firstPass = decideStartReuse(rows, issueId, null);
-  if (firstPass.kind === "linked") return reuse(firstPass.row, issueId);
+  if (firstPass.kind === "linked") {
+    if (appendPromptPath) assertReuseAllowsContract(firstPass, appendPromptPath);
+    return reuse(firstPass.row, issueId);
+  }
 
   const config = loadUserConfig();
 
@@ -899,6 +916,7 @@ async function issueStart(
 
   const reused = decideStartReuse(rows, issueId, sessionName);
   if (reused.kind === "adopt") {
+    if (appendPromptPath) assertReuseAllowsContract(reused, appendPromptPath);
     // Record the link the TUI never wrote, so the *next* lookup — here and in
     // `workflow board` — resolves without depending on the name. Appended to
     // whatever the session already carries: adopting must not detach the

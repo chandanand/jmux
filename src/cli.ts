@@ -161,10 +161,11 @@ FLAGS
   --all                Operate on all sessions (agent state/watch, dev-servers)
   --start              Start the work immediately (issue create, workflow next)
   --no-launch-agent    Don't auto-launch Claude (issue start)
-  --append-prompt <file> Append a contract file's contents to the seed prompt
-                       (issue start). Refused when the effective agent-launch
-                       value is false, or when the resulting prompt would be
-                       too large for the launch command to carry.
+  --append-prompt <val> Append a contract file's contents to the seed prompt
+                        (issue start). Refused when the effective agent-launch
+                        value is false, when the start would reuse a session,
+                        or when the resulting prompt is too large for the
+                        launch command to carry.
   --wait [seconds]     Block until the worktree is provisioned (issue start).
                        Off by default: the session and agent are created up
                        front and the worktree lands in a setup pane beside

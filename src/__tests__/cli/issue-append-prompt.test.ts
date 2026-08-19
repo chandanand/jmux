@@ -9,6 +9,8 @@ import {
   assertSeedPromptFitsWhenAppending,
   readContractFile,
   assertLaunchAgentForContract,
+  assertReuseAllowsContract,
+  type IssueLinkRow,
 } from "../../cli/issue";
 
 function writeTemp(contents: string): string {
@@ -17,6 +19,14 @@ function writeTemp(contents: string): string {
   writeFileSync(path, contents, "utf-8");
   return path;
 }
+
+const linkRow = (o: Partial<IssueLinkRow>): IssueLinkRow => ({
+  id: "$1",
+  name: "TRA-123",
+  issues: [],
+  path: "/repo/wt",
+  ...o,
+});
 
 describe("buildSeedPrompt", () => {
   test("the contract goes after the issue text, separated by a blank line", () => {
@@ -110,5 +120,28 @@ describe("the contract requires an agent to receive it", () => {
 
   test("allowed when the effective launch value is true", () => {
     expect(() => assertLaunchAgentForContract(true, "/tmp/c.md")).not.toThrow();
+  });
+});
+
+describe("a reused session cannot receive the contract", () => {
+  // A reused session already has a running agent: issue start returns before
+  // any provisioning happens, so a contract handed to --append-prompt would
+  // otherwise be validated and then silently thrown away.
+  test("refused when the start would reuse an already-linked session", () => {
+    const row = linkRow({ name: "already-linked-session" });
+    expect(() =>
+      assertReuseAllowsContract({ kind: "linked", row }, "/tmp/c.md"),
+    ).toThrow(/already-linked-session/);
+  });
+
+  test("refused when the start would adopt an unlinked session on the derived name", () => {
+    const row = linkRow({ name: "adopted-session" });
+    expect(() =>
+      assertReuseAllowsContract({ kind: "adopt", row, issues: ["TRA-1"] }, "/tmp/c.md"),
+    ).toThrow(/adopted-session/);
+  });
+
+  test("allowed when there is nothing to reuse", () => {
+    expect(() => assertReuseAllowsContract({ kind: "none" }, "/tmp/c.md")).not.toThrow();
   });
 });
