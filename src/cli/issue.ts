@@ -1,7 +1,7 @@
 import { resolve } from "path";
 import { homedir, tmpdir } from "os";
 import { existsSync, readFileSync, writeFileSync } from "fs";
-import { runTmuxDirect } from "./tmux";
+import { runTmuxDirect, tmuxServerDefinitelyAbsent } from "./tmux";
 import { tmuxOrThrow, CliError, type CliContext } from "./context";
 import {
   sanitizeTmuxSessionName,
@@ -315,6 +315,10 @@ export function buildSeedPrompt(issueText: string | null, contract: string | nul
  * `buildAgentFragment`, so an oversized prompt fails the agent launch and leaves
  * a bare shell in the pane. Refusing here costs nothing; refusing later costs a
  * provisioned session.
+ *
+ * The limit itself is unconditional; whether it is *enforced* is not — see
+ * `assertSeedPromptFitsWhenAppending` below, which only checks it when a
+ * contract is being appended via `--append-prompt`.
  */
 export const MAX_SEED_PROMPT_BYTES = 128_000;
 
@@ -659,6 +663,15 @@ async function issueGet(parsed: ParsedCtlArgs): Promise<unknown> {
  * exact permissive behaviour every existing caller already depends on
  * (published software, so that stays); a caller that also reads `ok` and
  * `malformed` can tell "nothing exists" apart from "the query could not say."
+ *
+ * A failed tmux call is itself split two ways, via `tmuxServerDefinitelyAbsent`:
+ * no server at all on this socket is a *readable* world with zero sessions
+ * (`ok: true`, `rows: []`) — proceeding is safe because there is nothing to
+ * miss. Anything else that made the query fail (a socket that exists but is
+ * unreadable, tmux itself erroring) stays `ok: false`, so `--require-new`
+ * still refuses rather than guessing. Without this split, `--require-new`
+ * could never succeed against a socket that has no server yet, because the
+ * very first call always hits one.
  */
 function listIssueLinkRowsReporting(
   ctx: CliContext,
@@ -667,7 +680,10 @@ function listIssueLinkRowsReporting(
     ["list-sessions", "-f", INTERNAL_SESSION_FILTER, "-F", ISSUE_LINK_FORMAT],
     ctx.socket,
   );
-  if (!result.ok) return { rows: [], ok: false, malformed: 0 };
+  if (!result.ok) {
+    if (tmuxServerDefinitelyAbsent(ctx.socket)) return { rows: [], ok: true, malformed: 0 };
+    return { rows: [], ok: false, malformed: 0 };
+  }
 
   const rows: IssueLinkRow[] = [];
   let malformed = 0;
