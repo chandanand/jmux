@@ -58,7 +58,7 @@ export interface ResolvedRepoSettings {
 export const REPO_SETTING_DEFAULTS: ResolvedRepoSettings = {
   defaultBaseBranch: "main",
   wtmIntegration: true,
-  autoLaunchAgent: true,
+  autoLaunchAgent: false,
   sessionNameTemplate: "{identifier}",
   claudeCommand: "claude",
   onSessionStartState: null,

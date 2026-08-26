@@ -60,8 +60,8 @@ That second one is what keeps a fleet manageable:
 
 ![Marking a status as parked in the workflow screen; its sessions collapse into a Parked row in the sidebar](docs/screenshots/flow.gif)
 
-- **See what you haven't started.** Each stage can show the work sitting in it that nobody has picked up — issues with no session — as dimmed rows right under the sessions that do. Click one and it becomes real: worktree, session, agent, issue linked. The sidebar stops being a list of what's running and becomes the whole board.
-- **Pull the next thing** with `Ctrl-Space u`. It takes the top item from your first non-empty stage and does the whole ticket-to-worktree-to-agent dance. The daily ritual is one keystroke.
+- **See what you haven't started.** Each stage can show the work sitting in it that nobody has picked up — issues with no session — as dimmed rows right under the sessions that do. Click one and it becomes real: worktree, session, issue linked, and an agent too when auto-launch is enabled. The sidebar stops being a list of what's running and becomes the whole board.
+- **Pull the next thing** with `Ctrl-Space u`. It takes the top item from your first non-empty stage and does the whole ticket-to-worktree-to-session dance, optionally launching an agent. The daily ritual is one keystroke.
 - **Capture without losing your place** — `Ctrl-Space a` files a Linear issue from wherever you are. `Enter` files it and returns you; `Ctrl-S` files it *and* starts work on it.
 - **Status updates as a byproduct.** Optionally move an issue along when you start a session on it, when an MR appears on its branch, and when that MR merges — with `TRA-123 → QA  ^Space Z undo` in the toolbar for twenty seconds. All of it defaults to off: **jmux never writes to your tracker until you say so.**
 
@@ -107,7 +107,7 @@ Full guide: [docs/workflow.md](docs/workflow.md).
 
 Connect [Linear](https://linear.app) and [GitLab](https://about.gitlab.com) or [GitHub](https://github.com) — [five minutes, one page](docs/connecting.md) — open the info panel with `Ctrl-Space g`, and the whole loop lives in your terminal:
 
-**Pick an issue → press `n` → jmux creates a worktree, opens a session, and launches your agent with the issue context.** One keystroke from ticket to working code.
+**Pick an issue → press `n` → jmux creates a worktree and opens a session, optionally launching your agent with the issue context.** One keystroke from ticket to working code; agent launch is opt-in.
 
 ![jmux info panel showing Linear issues beside a live agent](docs/screenshots/ticket.gif)
 

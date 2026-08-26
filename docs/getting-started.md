@@ -313,6 +313,8 @@ In settings (`Ctrl-Space I` > **Repo** > **Team → repo mappings**), add entrie
 - `Frontend` → `~/repos/frontend`
 
 Now selecting an issue and pressing `n` will create a worktree, open a session, and optionally launch Claude Code with the issue context — all in one step.
+Agent launch is off by default; enable **Auto-launch agent** under
+`Ctrl-Space I` > **Repo** when you want that behavior.
 
 ### 3. Define your workflow (optional)
 

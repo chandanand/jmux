@@ -313,11 +313,12 @@ do:
   [↵] Start  [s] Status  [o] Open  [Esc] Back
 ```
 
-`↵` runs the same flow as `n` in the issues panel: worktree, session, agent,
-issue linked. If a worktree already exists from an earlier attempt it is reused
-rather than recreated, and the action reads **Resume**; if a session already
-claims the issue it reads **Switch**. When the issue's team maps to no repo the
-pre-flight says so, and `↵` opens the manual session picker instead.
+`↵` runs the same flow as `n` in the issues panel: worktree, session and issue
+linked, with an agent launched when enabled. If a worktree already exists from
+an earlier attempt it is reused rather than recreated, and the action reads
+**Resume**. If a session already claims the issue it reads **Switch**. When the
+issue's team maps to no repo, the pre-flight says so and `↵` opens the manual
+session picker instead.
 
 `s` changes the issue's status without starting anything — which is also how you
 park it, since parking is a status. The row re-bands or disappears on its own.
@@ -491,7 +492,7 @@ One composer, two commit keys:
 | Key | Action |
 |-----|--------|
 | `Enter` | File the issue and stay where you are |
-| `Ctrl-S` | File it, create the worktree + session, and launch the agent on it |
+| `Ctrl-S` | File it, create the worktree + session, and launch the agent when enabled |
 | `Tab` | Move between title / team / description |
 
 Agents can file issues themselves without any UI at all:

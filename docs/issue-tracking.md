@@ -239,6 +239,9 @@ The most powerful feature: select an issue in the panel and press `n` to create 
 
 ### Configuration
 
+Agent launch is off by default. This example opts in by setting
+`autoLaunchAgent` to `true`.
+
 ```json
 {
   "issueWorkflow": {
@@ -263,7 +266,7 @@ The most powerful feature: select an issue in the panel and press `n` to create 
 | `teamRepoMap` | global | `{}` | Maps Linear team names to local repo directories |
 | `defaultBaseBranch` | per-repo | `"main"` | Branch to create worktrees from |
 | `wtmIntegration` | per-repo | bare-repo detection | `true` → `wtm create`; `false` → `git worktree add` |
-| `autoLaunchAgent` | per-repo | `true` | Launch the configured agent in new sessions; issue starts seed it with issue context |
+| `autoLaunchAgent` | per-repo | `false` | Launch the configured agent in new sessions; issue starts seed it with issue context |
 | `sessionNameTemplate` | per-repo | `"{identifier}"` | Template for session names. Supports `{identifier}` and `{title}` |
 | `claudeCommand` | per-repo | `"claude"` | Command used to launch the agent |
 
@@ -284,7 +287,7 @@ Issues in the panel show their session state:
 
 | State | Meaning | Action on `n` |
 |-------|---------|---------------|
-| No session | No worktree or session exists | Creates worktree + session + launches agent |
+| No session | No worktree or session exists | Creates worktree + session; launches agent when enabled |
 | Worktree exists | Worktree on disk but no tmux session | Creates session in existing worktree |
 | Session exists | Tmux session is running | Switches to that session |
 

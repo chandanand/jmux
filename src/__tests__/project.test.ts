@@ -45,6 +45,7 @@ describe("resolveProjectSettings", () => {
   test("falls through to the built-in defaults when nothing is set", () => {
     const r = resolveProjectSettings(undefined, undefined);
     expect(r).toEqual(PROJECT_SETTING_DEFAULTS);
+    expect(r.autoLaunchAgent).toBe(false);
   });
 
   test("a global default beats the built-in", () => {

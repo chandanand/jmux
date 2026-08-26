@@ -43,7 +43,7 @@ export interface ResolvedProjectSettings {
 export const PROJECT_SETTING_DEFAULTS: ResolvedProjectSettings = {
   defaultBaseBranch: "main",
   wtmIntegration: true,
-  autoLaunchAgent: true,
+  autoLaunchAgent: false,
   sessionNameTemplate: "{identifier}",
   agentCommand: "claude",
   onSessionStartState: null,

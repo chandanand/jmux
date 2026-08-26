@@ -18,6 +18,7 @@ describe("resolveRepoSettings", () => {
   test("falls back to hardcoded defaults when nothing is set", () => {
     const r = resolveRepoSettings(undefined, undefined);
     expect(r).toEqual(REPO_SETTING_DEFAULTS);
+    expect(r.autoLaunchAgent).toBe(false);
   });
 
   test("global default overrides hardcoded", () => {

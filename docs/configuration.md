@@ -192,7 +192,7 @@ the settings row says `restart to apply` until you do. See
   "repoDefaults": {
     "defaultBaseBranch": "main",
     "wtmIntegration": true,
-    "autoLaunchAgent": true,
+    "autoLaunchAgent": false,
     "sessionNameTemplate": "{identifier}",
     "claudeCommand": "claude"
   },
