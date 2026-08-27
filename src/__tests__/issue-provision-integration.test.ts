@@ -10,7 +10,7 @@
 // almost immediately, while the worktree is still being made. So this drives
 // real tmux, with a deliberately slow "worktree tool", and asserts the ordering.
 
-import { describe, test, expect, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -22,10 +22,17 @@ import {
 } from "../issue-provision";
 
 const TMUX = Bun.which("tmux");
-const SOCKET = `jmux-provision-test-${process.pid}`;
+let socketSerial = 0;
+let socket = "";
+
+beforeEach(() => {
+  // A killed tmux server can leave its socket in a short shutdown window. A
+  // fresh socket per case prevents the next server from racing that teardown.
+  socket = `jmux-provision-test-${process.pid}-${++socketSerial}`;
+});
 
 function tmux(...args: string[]): { code: number; out: string } {
-  const r = Bun.spawnSync([TMUX!, "-L", SOCKET, ...args], {
+  const r = Bun.spawnSync([TMUX!, "-L", socket, ...args], {
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -151,8 +158,8 @@ describe.skipIf(!TMUX)("issue provisioning, against a real tmux server", () => {
       // buildSetupCommand's real output, with a create step that cannot succeed.
       const real = buildSetupCommand({ session, baseBranch: "main", wtm: false });
       const failing = real.replace(
-        /^git worktree add [^|]+/,
-        "sh -c 'echo boom-from-the-tool >&2; exit 1' ",
+        /git worktree add [^|]+/,
+        "echo boom-from-the-tool >&2; false ",
       );
       expect(failing).not.toBe(real);
 
@@ -170,8 +177,10 @@ describe.skipIf(!TMUX)("issue provisioning, against a real tmux server", () => {
       );
 
       // The pane survived instead of vanishing, so the tool's own error is readable.
-      expect(tmux("list-panes", "-t", session, "-F", "#{pane_id}").out.split("\n")).toHaveLength(2);
-      expect(tmux("capture-pane", "-t", `${session}.1`, "-p").out).toContain("boom-from-the-tool");
+      const panes = tmux("list-panes", "-t", session, "-F", "#{pane_id}").out.split("\n");
+      expect(panes).toHaveLength(2);
+      const contents = panes.map((pane) => tmux("capture-pane", "-t", pane, "-p").out).join("\n");
+      expect(contents).toContain("boom-from-the-tool");
     },
     20000,
   );
