@@ -85,19 +85,17 @@ async function bootWith(
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     HOME: home,
+    XDG_CONFIG_HOME: join(home, ".config"),
+    XDG_DATA_HOME: join(home, ".local", "share"),
+    XDG_STATE_HOME: join(home, ".local", "state"),
     TERM: "xterm-256color",
     JMUX: "",
     TMUX: "",
     TMUX_PANE: "",
   };
-  // Removed, not blanked. The resolver reads XDG_CONFIG_HOME for its second
-  // candidate and a developer who has one set would send jmux looking outside
-  // the scratch home — but an *empty* XDG var is not the same as an unset one
-  // anywhere in jmux: `dataHome()` and the snapshot directory both treat "" as
-  // a path, and the run dies on `mkdir /jmux` before it reaches this feature.
-  delete env.XDG_CONFIG_HOME;
-  delete env.XDG_DATA_HOME;
-  delete env.XDG_STATE_HOME;
+  // Set every XDG root explicitly. bun-pty merges the supplied environment
+  // with its parent on some runtime versions, so deleting a key here can let
+  // the developer's real XDG_CONFIG_HOME leak back into the child process.
 
   let exitCode: number | null = null;
   const pty = new Terminal(
