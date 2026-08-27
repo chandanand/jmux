@@ -38,6 +38,19 @@ export const SETUP_PANE_SIZE = "30%";
 export const PROVISION_ATTENTION_REASON = "worktree setup failed";
 
 /**
+ * Run provisioning glue with the POSIX grammar it is written in.
+ *
+ * tmux evaluates a pane's command with `default-shell`, which users commonly
+ * set to fish. The worktree wait uses `while ...; do`, and the failure branch
+ * uses a brace group; neither is valid fish syntax. Keeping the script behind
+ * an explicit `/bin/sh -c` lets the eventual interactive shell still come from
+ * `$SHELL` without asking that shell to parse jmux's control flow first.
+ */
+function inPosixShell(command: string): string {
+  return `exec /bin/sh -c ${tq(command)}`;
+}
+
+/**
  * The agent's command, or a plain shell when no agent should launch.
  *
  * `exec $SHELL` is the tail in both cases: without it the pane dies when the
@@ -80,7 +93,9 @@ export function buildMainCommand(o: {
 }): string {
   if (!o.awaitWorktree) return o.agentFragment;
   const path = tq(o.worktreePath);
-  return `while [ ! -d ${path} ]; do sleep ${WORKTREE_POLL_SECONDS}; done; cd ${path}; ${o.agentFragment}`;
+  return inPosixShell(
+    `while [ ! -d ${path} ]; do sleep ${WORKTREE_POLL_SECONDS}; done; cd ${path}; ${o.agentFragment}`,
+  );
 }
 
 /**
@@ -135,7 +150,7 @@ export function buildSetupCommand(o: {
     `tmux set-option -t ${target} @jmux-attention-reason ${tq(PROVISION_ATTENTION_REASON)} 2>/dev/null; ` +
     `tmux set-option -t ${target} @jmux-attention 1 2>/dev/null`;
 
-  return `${create} || { ${flag}; exec $SHELL; }`;
+  return inPosixShell(`${create} || { ${flag}; exec $SHELL; }`);
 }
 
 export interface ProvisionInput {

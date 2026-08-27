@@ -80,8 +80,12 @@ describe("buildNewSessionPlan", () => {
 
     expect(plan.session).toBe("my_feature");
     expect(plan.sessionCwd).toBe("/repo");
-    expect(plan.mainCommand).toContain("while [ ! -d '/repo/my_feature' ]");
-    expect(plan.mainCommand).toContain("cd '/repo/my_feature'; codex --model gpt-5; exec $SHELL");
+    expect(plan.mainCommand).toContain("while [ ! -d");
+    expect(plan.mainCommand).toContain("/repo/my_feature");
+    expect(plan.mainCommand.indexOf("cd ")).toBeLessThan(
+      plan.mainCommand.indexOf("codex --model gpt-5"),
+    );
+    expect(plan.mainCommand).toContain("exec $SHELL");
     expect(plan.setupCommand).toContain("wtm");
     expect(plan.setupCommand).toContain("my_feature");
     expect(plan.setupCommand).toContain("develop");

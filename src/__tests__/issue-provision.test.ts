@@ -54,9 +54,10 @@ describe("buildMainCommand", () => {
       agentFragment: "claude; exec $SHELL",
       awaitWorktree: true,
     });
-    expect(cmd).toBe(
-      `while [ ! -d '/repo/tra-123' ]; do sleep 0.2; done; cd '/repo/tra-123'; claude; exec $SHELL`,
-    );
+    expect(cmd).toStartWith("exec /bin/sh -c ");
+    expect(cmd).toContain("while [ ! -d");
+    expect(cmd).toContain("do sleep 0.2; done");
+    expect(cmd).toContain("claude; exec $SHELL");
   });
 
   test("an existing worktree needs no wait — tmux opens the pane in it", () => {
@@ -75,19 +76,22 @@ describe("buildMainCommand", () => {
       agentFragment: "x",
       awaitWorktree: true,
     });
-    expect(cmd).toContain(`'/repo/it'\\''s'`);
+    expect(cmd).toContain("/repo/it");
+    expect(cmd).not.toContain("cd /repo/it's");
   });
 });
 
 describe("buildSetupCommand", () => {
   test("wtm repo uses wtm create --no-shell", () => {
     const cmd = buildSetupCommand({ session: "tra-123", baseBranch: "main", wtm: true });
-    expect(cmd).toStartWith("wtm create tra-123 --from main --no-shell ||");
+    expect(cmd).toStartWith("exec /bin/sh -c ");
+    expect(cmd).toContain("wtm create tra-123 --from main --no-shell ||");
   });
 
   test("non-wtm repo uses git worktree add", () => {
     const cmd = buildSetupCommand({ session: "tra-123", baseBranch: "dev", wtm: false });
-    expect(cmd).toStartWith("git worktree add ./tra-123 -b tra-123 dev ||");
+    expect(cmd).toStartWith("exec /bin/sh -c ");
+    expect(cmd).toContain("git worktree add ./tra-123 -b tra-123 dev ||");
   });
 
   test("failure raises the attention flag before dropping to a shell", () => {
@@ -130,7 +134,8 @@ describe("buildProvisionPlan", () => {
   test("fresh issue: session opens in the repo, setup pane creates the worktree", () => {
     const plan = buildProvisionPlan(BASE);
     expect(plan.sessionCwd).toBe("/repo");
-    expect(plan.mainCommand).toContain("while [ ! -d '/repo/tra-123' ]");
+    expect(plan.mainCommand).toContain("while [ ! -d");
+    expect(plan.mainCommand).toContain("/repo/tra-123");
     expect(plan.setupCommand).toContain("wtm create tra-123");
   });
 
@@ -143,15 +148,16 @@ describe("buildProvisionPlan", () => {
 
   test("the agent is launched from the worktree, never the repo root", () => {
     const plan = buildProvisionPlan(BASE);
-    const cd = plan.mainCommand.indexOf(`cd '/repo/tra-123'`);
+    const cd = plan.mainCommand.indexOf("cd ");
     const agent = plan.mainCommand.indexOf("claude ");
     expect(cd).toBeGreaterThan(-1);
     expect(cd).toBeLessThan(agent);
+    expect(plan.mainCommand.slice(cd, agent)).toContain("/repo/tra-123");
   });
 
   test("no agent still produces a usable session", () => {
     const plan = buildProvisionPlan({ ...BASE, agentCommand: null, promptFile: null });
-    expect(plan.mainCommand).toEndWith("exec $SHELL");
+    expect(plan.mainCommand).toContain("exec $SHELL");
     expect(plan.setupCommand).not.toBeNull();
   });
 });
