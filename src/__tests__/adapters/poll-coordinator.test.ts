@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
 import { PollCoordinator, type PollCoordinatorOptions } from "../../adapters/poll-coordinator";
+import { getGitBranch, getGitRemotes } from "../../adapters/context-resolver";
 import type {
   CodeHostAdapter,
   IssueTrackerAdapter,
@@ -680,5 +681,118 @@ describe("PollCoordinator retired-adapter reports", () => {
     coord.setAdapters({ codeHost: null, issueTracker: null });
     coord.reportRateLimit("hard_limited", stale);
     expect(coord.rateLimitState).toBe("normal");
+  });
+});
+
+// --- Branch MR discovery after a context has resolved ---
+//
+// A session is created before its PR exists — start the session, write the
+// code, then push — so a context routinely resolves with no merge request at
+// all. Discovery used to only *replace* an existing branch-source entry, and
+// nothing re-resolves a clean context (`enqueueBackfill` covers unresolved,
+// degraded and link-changed sessions only, and there is no freshness TTL), so
+// the PR number never appeared until jmux was restarted.
+describe("PollCoordinator branch MR adoption", () => {
+  const MR: MergeRequest = {
+    id: "owner/repo#7",
+    title: "feat: thing",
+    status: "open",
+    sourceBranch: "feat",
+    targetBranch: "main",
+    pipeline: { state: "passed", webUrl: "https://example.com/p/1" },
+    approvals: { required: 1, current: 0 },
+    webUrl: "https://example.com/pull/7",
+  };
+
+  const settle = () => new Promise((r) => setTimeout(r, 10));
+
+  function seed(coord: PollCoordinator, name: string, mrs: SessionContext["mrs"]): void {
+    (coord as any).contexts.set(name, {
+      sessionName: name,
+      dir: `/nonexistent/${name}`,
+      branch: "feat",
+      remote: "https://github.com/owner/repo.git",
+      mrs,
+      issues: [],
+      resolvedAt: Date.now(),
+    } satisfies SessionContext);
+  }
+
+  test("the sweep adds a PR to a context that resolved without one", async () => {
+    const codeHost = makeMockCodeHost({
+      pollAllMergeRequests: mock(() => Promise.resolve(new Map([["s1", MR]]))),
+    });
+    const updates: string[] = [];
+    const coord = new PollCoordinator({
+      codeHost, issueTracker: null,
+      onUpdate: (n) => updates.push(n),
+      getSessionDir: () => "/nonexistent", sessionState: null,
+    });
+    coord.start();
+    coord.addSession("s1", "/nonexistent/s1");
+    await settle();
+    seed(coord, "s1", []);
+
+    await (coord as any).pollBackgroundSessions();
+
+    expect(coord.getContext("s1")?.mrs.map((m) => m.id)).toEqual(["owner/repo#7"]);
+    expect(coord.getContext("s1")?.mrs[0]?.source).toBe("branch");
+    expect(updates).toContain("s1");
+    coord.stop();
+  });
+
+  test("adoption does not demote the same PR held under a stronger source", async () => {
+    // `deduplicateMrs` ranks manual above branch, so a poll must not re-tag
+    // what the resolver decided — and must not list the PR twice either.
+    const codeHost = makeMockCodeHost({
+      pollAllMergeRequests: mock(() => Promise.resolve(new Map([["s1", MR]]))),
+    });
+    const coord = new PollCoordinator({
+      codeHost, issueTracker: null,
+      onUpdate: () => {}, getSessionDir: () => "/nonexistent", sessionState: null,
+    });
+    coord.start();
+    coord.addSession("s1", "/nonexistent/s1");
+    await settle();
+    seed(coord, "s1", [{ ...MR, source: "manual" }]);
+
+    await (coord as any).pollBackgroundSessions();
+
+    expect(coord.getContext("s1")?.mrs.length).toBe(1);
+    expect(coord.getContext("s1")?.mrs[0]?.source).toBe("manual");
+    coord.stop();
+  });
+
+  test("the active session discovers a PR opened after it resolved", async () => {
+    // The by-ID refresh can only update MRs a context already has, and the
+    // background sweep skips the active session outright — so this is the one
+    // path that can ever give the session you are looking at its number.
+    const dir = process.cwd();
+    const branch = await getGitBranch(dir);
+    const remotes = await getGitRemotes(dir);
+    if (!branch || remotes.length === 0) return; // not a git checkout with a remote
+
+    let pr: MergeRequest | null = null;
+    const codeHost = makeMockCodeHost({
+      getMergeRequest: mock(() => Promise.resolve(pr)),
+    });
+    const updates: string[] = [];
+    const coord = new PollCoordinator({
+      codeHost, issueTracker: null,
+      onUpdate: (n) => updates.push(n),
+      getSessionDir: () => dir, sessionState: null,
+    });
+    coord.start();
+    coord.addSession("s1", dir);
+    await settle();
+    await coord.setActiveSession("s1");
+    expect(coord.getContext("s1")?.mrs).toEqual([]);
+
+    pr = MR;
+    await (coord as any).pollActiveSession();
+
+    expect(coord.getContext("s1")?.mrs.map((m) => m.id)).toEqual(["owner/repo#7"]);
+    expect(updates).toContain("s1");
+    coord.stop();
   });
 });

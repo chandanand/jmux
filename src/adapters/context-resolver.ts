@@ -102,7 +102,12 @@ export interface ResolveOptions {
   manualMrIds: string[];
 }
 
-const MAX_MRS = 10;
+/**
+ * Cap on the merge requests one context may hold. Exported because
+ * `PollCoordinator` adopts branch MRs discovered *after* a context resolved,
+ * and a second number over there could disagree with this one.
+ */
+export const MAX_MRS = 10;
 const MAX_ISSUES = 10;
 
 type TaggedMr = MergeRequest & { source: LinkSource };

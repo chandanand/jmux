@@ -305,3 +305,71 @@ describe("project grouping keys on the Project id", () => {
     expect(bands.find((b) => b.kind === "group")?.key).toBe("project:alpha");
   });
 });
+
+describe("owner grouping (group=crew)", () => {
+  const owned = () =>
+    makeSessions([
+      { name: "mine-b" },
+      { name: "ALF-123", managedBy: "groundcrew" },
+      { name: "mine-a" },
+    ]);
+
+  const order = (sessions: SessionInfo[]) =>
+    orderSessions({
+      sessions,
+      sortInfos: makeSortInfos(sessions),
+      groupMode: "crew",
+      sortMode: "name",
+      filterMode: "all",
+      pinnedSessions: new Set(),
+      parkedSessions: new Set(),
+      workflowByName: new Map(),
+      includeParked: true,
+    });
+
+  test("bands Groundcrew-managed work above your own, both with headers", () => {
+    const sessions = owned();
+    const bands = order(sessions);
+
+    expect(bands.map((b) => b.kind)).toEqual(["group", "group"]);
+    expect(bands.map((b) => b.label)).toEqual(["Groundcrew", "Yours"]);
+    expect(idsOf(sessions, bands[0]!.indices)).toEqual(["$1"]);
+    // Members still sort by sortMode within the band.
+    expect(idsOf(sessions, bands[1]!.indices)).toEqual(["$2", "$0"]);
+  });
+
+  test("keys the bands per axis so collapse state cannot collide with a project", () => {
+    const bands = order(owned());
+    expect(bands.map((b) => b.key)).toEqual(["crew:groundcrew", "crew:none"]);
+  });
+
+  test("draws a header even when nothing is managed, so the axis is never inert", () => {
+    // With the human half left in the flat remainder this would be
+    // indistinguishable from group=none while the header chip read "Owner".
+    const sessions = makeSessions([{ name: "solo" }]);
+    const bands = order(sessions);
+    expect(bands.map((b) => b.kind)).toEqual(["group"]);
+    expect(bands[0]!.label).toBe("Yours");
+  });
+
+  test("pinned and parked still outrank ownership", () => {
+    const sessions = makeSessions([
+      { name: "pinned-crew", managedBy: "groundcrew" },
+      { name: "parked-crew", managedBy: "groundcrew" },
+      { name: "live-crew", managedBy: "groundcrew" },
+    ]);
+    const bands = orderSessions({
+      sessions,
+      sortInfos: makeSortInfos(sessions),
+      groupMode: "crew",
+      sortMode: "name",
+      filterMode: "all",
+      pinnedSessions: new Set(["pinned-crew"]),
+      parkedSessions: new Set(["parked-crew"]),
+      workflowByName: new Map(),
+      includeParked: true,
+    });
+    expect(bands.map((b) => b.kind)).toEqual(["pinned", "group", "parked"]);
+    expect(idsOf(sessions, bands[1]!.indices)).toEqual(["$2"]);
+  });
+});

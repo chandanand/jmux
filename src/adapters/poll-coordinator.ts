@@ -10,7 +10,7 @@ import {
   type Issue,
   type MergeRequest,
 } from "./types";
-import { getGitBranch } from "./context-resolver";
+import { getGitBranch, MAX_MRS } from "./context-resolver";
 import type { SessionState } from "../session-state";
 import { mergeIssueLinkIds, issueLinkSignature } from "../issue-session";
 
@@ -481,6 +481,43 @@ export class PollCoordinator {
     }
   }
 
+  /**
+   * Fold a freshly discovered branch merge request into a cached context.
+   *
+   * Discovery used to only *replace* an existing branch-source entry, so a
+   * context resolved before the PR existed — the ordinary order of work: start
+   * the session, write the code, then push — threw the answer away on every
+   * sweep and never showed a number. Nothing else rescued it: `enqueueBackfill`
+   * re-resolves only unresolved, degraded or link-changed sessions and there is
+   * no freshness TTL, so one early miss was permanent for the life of the
+   * process.
+   *
+   * A context already holding this same MR under a stronger source — a manual
+   * link that resolved to the same PR — keeps that source: `deduplicateMrs`
+   * ranks `manual` above `branch`, and re-tagging here would let a poll quietly
+   * demote what the resolver decided.
+   *
+   * Returns whether the context changed, so callers keep owning `resolvedAt`
+   * and `onUpdate`.
+   */
+  private adoptBranchMr(ctx: SessionContext, mr: MergeRequest): boolean {
+    const branchIdx = ctx.mrs.findIndex((m) => m.source === "branch");
+    if (branchIdx >= 0) {
+      ctx.mrs[branchIdx] = { ...mr, source: "branch" };
+      return true;
+    }
+    const sameIdx = ctx.mrs.findIndex((m) => m.id === mr.id);
+    if (sameIdx >= 0) {
+      ctx.mrs[sameIdx] = { ...mr, source: ctx.mrs[sameIdx].source };
+      return true;
+    }
+    // The resolver's cap, shared rather than restated: a session must not grow
+    // an eleventh MR here that a re-resolve would then drop.
+    if (ctx.mrs.length >= MAX_MRS) return false;
+    ctx.mrs.push({ ...mr, source: "branch" });
+    return true;
+  }
+
   private async pollActiveSession(): Promise<void> {
     // Every catch below reports auth/rate state against the *current* adapter,
     // so a failure from a retired one must not be applied. Captured once here
@@ -537,6 +574,32 @@ export class PollCoordinator {
             changed = true;
           }
         }
+      } catch (e) {
+        if (!this.isCurrent(epoch)) return;
+        const status = e instanceof HttpError ? e.status : 0;
+        if (status === 401 || status === 403) this.reportAuthFailure("codeHost", epoch);
+        else if (status === 429) this.reportRateLimit("rate_limited", epoch);
+        else logError("PollCoordinator", `poll error: ${(e as Error).message}`);
+      }
+    }
+
+    // Branch-oriented discovery, for a context holding no branch MR yet.
+    //
+    // The by-ID refresh above can only update merge requests a context already
+    // has, and `pollBackgroundSessions` skips the active session outright — so
+    // without this the session you are looking at never picks up a PR opened
+    // after its context resolved. Guarded on the absence of a branch MR, so the
+    // steady state costs no extra request; placed after the refresh above so a
+    // 401 there has already marked the adapter and this does not ask again.
+    if (
+      codeHost && codeHost.authState === "ok" &&
+      live.branch && live.remote &&
+      !live.mrs.some((mr) => mr.source === "branch")
+    ) {
+      try {
+        const discovered = await codeHost.getMergeRequest(live.remote, live.branch);
+        if (!this.isCurrent(epoch)) return;
+        if (discovered && this.adoptBranchMr(live, discovered)) changed = true;
       } catch (e) {
         if (!this.isCurrent(epoch)) return;
         const status = e instanceof HttpError ? e.status : 0;
@@ -622,9 +685,7 @@ export class PollCoordinator {
         if (!this.isCurrent(epoch)) return;
         for (const [sessionName, mr] of results) {
           const ctx = this.contexts.get(sessionName);
-          if (ctx) {
-            const idx = ctx.mrs.findIndex((m) => m.source === "branch");
-            if (idx >= 0) ctx.mrs[idx] = { ...mr, source: "branch" };
+          if (ctx && this.adoptBranchMr(ctx, mr)) {
             ctx.resolvedAt = Date.now();
             this.opts.onUpdate(sessionName);
           }

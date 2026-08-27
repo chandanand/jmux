@@ -7,7 +7,7 @@
 
 import type { AgentState } from "./types";
 
-export type GroupMode = "none" | "project" | "status" | "stage";
+export type GroupMode = "none" | "project" | "status" | "stage" | "crew";
 export type SortMode = "name" | "activity" | "status";
 export type FilterMode = "all" | "started" | "attention" | "active";
 
@@ -29,7 +29,7 @@ export interface SessionSortInfo {
   lastActivity: number;
 }
 
-export const GROUP_MODES: readonly GroupMode[] = ["none", "project", "status", "stage"];
+export const GROUP_MODES: readonly GroupMode[] = ["none", "project", "status", "stage", "crew"];
 export const SORT_MODES: readonly SortMode[] = ["name", "activity", "status"];
 export const FILTER_MODES: readonly FilterMode[] = ["all", "started", "attention", "active"];
 
@@ -67,6 +67,7 @@ const GROUP_LABELS: Record<GroupMode, string> = {
   project: "by project",
   status: "by status",
   stage: "by workflow stage",
+  crew: "by owner (Groundcrew)",
 };
 const SORT_LABELS: Record<SortMode, string> = {
   name: "by name",
@@ -96,6 +97,7 @@ const GROUP_SHORT: Record<GroupMode, string> = {
   project: "Project",
   status: "Status",
   stage: "Stage",
+  crew: "Owner",
 };
 const SORT_SHORT: Record<SortMode, string> = {
   name: "Name",

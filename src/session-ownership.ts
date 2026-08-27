@@ -6,6 +6,19 @@ export const GROUNDCREW_MANAGED_OPTION = "@groundcrew_managed";
 
 export type SessionManager = "groundcrew";
 
+/**
+ * Header a manager's sessions band under on the owner axis. A record rather
+ * than a ternary so a second manager cannot be added to `SessionManager`
+ * without deciding what its band is called.
+ */
+const MANAGER_BAND_LABELS: Record<SessionManager, string> = {
+  groundcrew: "Groundcrew",
+};
+
+export function sessionManagerBandLabel(manager: SessionManager): string {
+  return MANAGER_BAND_LABELS[manager];
+}
+
 export type GroundcrewGuardedAction =
   | "kill-session"
   | "cleanup-session"

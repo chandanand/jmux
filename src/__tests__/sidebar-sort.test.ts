@@ -25,7 +25,8 @@ describe("cycle", () => {
     expect(cycleGroup("none")).toBe("project");
     expect(cycleGroup("project")).toBe("status");
     expect(cycleGroup("status")).toBe("stage");
-    expect(cycleGroup("stage")).toBe("none"); // wraps
+    expect(cycleGroup("stage")).toBe("crew");
+    expect(cycleGroup("crew")).toBe("none"); // wraps
     for (const m of GROUP_MODES) expect(GROUP_MODES).toContain(cycleGroup(m));
   });
 

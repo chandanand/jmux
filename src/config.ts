@@ -243,7 +243,7 @@ export interface JmuxConfig {
   /** Per-state indicator colors (ANSI color names). */
   stateColors?: StateColorConfig;
   /** Sidebar grouping axis. Persists across restarts (filter deliberately does not). */
-  sidebarGroupBy?: "none" | "project" | "status" | "stage";
+  sidebarGroupBy?: "none" | "project" | "status" | "stage" | "crew";
   /** Sidebar member-sort axis. Persists across restarts. */
   sidebarSortBy?: "name" | "activity" | "status";
   /** @deprecated Pre-split single sort axis; read once to migrate onto

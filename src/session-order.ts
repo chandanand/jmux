@@ -20,13 +20,14 @@ import {
   type SessionSortInfo,
 } from "./sidebar-sort";
 import type { SessionWorkflow } from "./workflow-drift";
+import { sessionManagerBandLabel } from "./session-ownership";
 
 export type BandKind = "pinned" | "group" | "ungrouped" | "parked";
 
 export interface SessionBand {
   kind: BandKind;
   /** Axis-namespaced collapse identity: "pinned" | "parked" | "ungrouped" |
-   *  "project:<label>" | "status:<status>" | "stage:<id>". */
+   *  "project:<label>" | "status:<status>" | "stage:<id>" | "crew:<manager|none>". */
   key: string;
   /** What a header renders. "" for the ungrouped band, which draws none. */
   label: string;
@@ -62,6 +63,10 @@ const PINNED_GROUP_KEY = "pinned";
 const PINNED_GROUP_LABEL = "Pinned";
 const PARKED_GROUP_KEY = "parked";
 const PARKED_GROUP_LABEL = "Parked";
+// The human half of the owner axis. Sessions nobody's automation claims —
+// "unmanaged" is the accurate word and "Yours" is the one that reads.
+const CREW_SELF_KEY = "crew:none";
+const CREW_SELF_LABEL = "Yours";
 
 // The project bucket a session belongs to: its wtm project name (preferred)
 // or a directory-derived label, else null (ungrouped).
@@ -98,8 +103,10 @@ function projectLabelOf(session: SessionInfo): string | null {
 export function compareGroupBands(a: SessionBand, b: SessionBand, groupMode: GroupMode): number {
   // Group-header order is fixed by axis, NOT by sortMode: project →
   // alphabetical, status → status rank (needs-you group on top), stage → the
-  // order the user arranged their own workflow in.
-  return groupMode === "status" || groupMode === "stage"
+  // order the user arranged their own workflow in, crew → managed work above
+  // your own (the distinction the axis exists to surface goes on top, the same
+  // reason "needs you" heads the status axis).
+  return groupMode === "status" || groupMode === "stage" || groupMode === "crew"
     ? a.rank - b.rank
     : a.label.localeCompare(b.label);
 }
@@ -194,6 +201,21 @@ export function orderSessions(input: OrderSessionsInput): SessionBand[] {
         continue;
       }
       bucketFor(`stage:${stage.id}`, stage.label, stage.rank).indices.push(i);
+      continue;
+    }
+    if (groupMode === "crew") {
+      // Every session buckets and both halves draw a header — unlike project,
+      // there is no flat remainder here. A machine with no Groundcrew work
+      // would otherwise render this axis identically to group=none: a mode that
+      // announces itself in the header chip while doing nothing, which is the
+      // inert-mode failure `applySidebarFilter` discloses rather than allows.
+      // With headers, "no crew sessions right now" is a visible answer.
+      const manager = sessions[i]!.managedBy;
+      if (manager) {
+        bucketFor(`crew:${manager}`, sessionManagerBandLabel(manager), 0).indices.push(i);
+      } else {
+        bucketFor(CREW_SELF_KEY, CREW_SELF_LABEL, 1).indices.push(i);
+      }
       continue;
     }
     // groupMode === "status" — every session has a status, so none are ungrouped.
