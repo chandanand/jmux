@@ -107,6 +107,34 @@ describe("NewSessionModal", () => {
     }
   });
 
+  test("issue-driven standard flow skips the name prompt", () => {
+    const modal = new NewSessionModal(
+      makeProviders({
+        scanProjectDirs: () => [
+          { dir: "/home/user/project-a", label: "API", projectId: "api" },
+        ],
+      }),
+      {
+        nameForSelection: ({ projectId }) => projectId === "api" ? "tra-123" : "",
+      },
+    );
+    modal.open();
+
+    // Selecting the Project is the last question: the issue already supplies
+    // the name, so there is no second session-name screen to accept.
+    const action = modal.handleInput("\r");
+    expect(action).toEqual({
+      type: "result",
+      value: {
+        type: "standard",
+        dir: "/home/user/project-a",
+        name: "tra-123",
+        projectId: "api",
+      },
+    });
+    expect(modal.isOpen()).toBe(false);
+  });
+
   test("keeps same-directory Projects distinct", () => {
     const modal = new NewSessionModal(makeProviders({
       scanProjectDirs: () => [
@@ -242,6 +270,35 @@ describe("NewSessionModal", () => {
         projectId: "api",
       });
     }
+  });
+
+  test("issue-driven new-worktree flow skips the name prompt", () => {
+    const modal = new NewSessionModal(
+      makeProviders({
+        scanProjectDirs: () => [
+          { dir: "/home/user/bare-repo", label: "API", projectId: "api" },
+        ],
+      }),
+      { nameForSelection: () => "tra.123" },
+    );
+    modal.open();
+    modal.handleInput("\r"); // bare repo
+    modal.handleInput("\r"); // + new worktree
+
+    // Accept the default base branch. The derived issue name completes the
+    // wizard immediately and is sanitized the same way as a typed name.
+    const action = modal.handleInput("\r");
+    expect(action).toEqual({
+      type: "result",
+      value: {
+        type: "new_worktree",
+        dir: "/home/user/bare-repo",
+        baseBranch: "main",
+        name: "tra_123",
+        projectId: "api",
+      },
+    });
+    expect(modal.isOpen()).toBe(false);
   });
 
   test("Esc at step 1 closes wizard (returns 'closed')", () => {

@@ -25,6 +25,18 @@ export interface NewSessionProviders {
 }
 
 /**
+ * Context supplied by callers that already know what should name the session.
+ *
+ * The callback runs after the directory/Project choice because that choice can
+ * change the effective `sessionNameTemplate`. Returning a non-empty name skips
+ * the generic name prompt; omitting the callback keeps the ordinary New
+ * Session wizard unchanged.
+ */
+export interface NewSessionOptions {
+  nameForSelection?: (selection: NewSessionDir) => string;
+}
+
+/**
  * One directory choice in the first step.
  *
  * `projectId` distinguishes a configured Project from a bare path, and also
@@ -58,6 +70,7 @@ export class NewSessionModal {
   private currentStep: StepId = "dir";
   private stepStack: StackEntry[] = [];
   private providers: NewSessionProviders;
+  private options: NewSessionOptions;
 
   // Accumulated selections as we advance through steps
   private selectedDir = "";
@@ -67,8 +80,9 @@ export class NewSessionModal {
   /** Opaque ListModal id -> the full choice it represents. */
   private dirChoices = new Map<string, NewSessionDir>();
 
-  constructor(providers: NewSessionProviders) {
+  constructor(providers: NewSessionProviders, options: NewSessionOptions = {}) {
     this.providers = providers;
+    this.options = options;
   }
 
   open(): void {
@@ -177,6 +191,18 @@ export class NewSessionModal {
           return { type: "consumed" };
         }
 
+        const derivedName = this.nameForCurrentSelection();
+        if (derivedName) {
+          const result: NewSessionResult = {
+            type: "standard",
+            dir: this.selectedDir,
+            name: derivedName,
+            ...(this.selectedProjectId ? { projectId: this.selectedProjectId } : {}),
+          };
+          this.close();
+          return { type: "result", value: result };
+        }
+
         // Non-bare: advance to name input
         this.pushCurrentToStack();
         this.currentStep = "name";
@@ -215,6 +241,19 @@ export class NewSessionModal {
       case "base_branch": {
         const item = value as ListItem;
         this.selectedBranch = item.id;
+
+        const derivedName = this.nameForCurrentSelection();
+        if (derivedName) {
+          const result: NewSessionResult = {
+            type: "new_worktree",
+            dir: this.selectedDir,
+            baseBranch: this.selectedBranch,
+            name: derivedName,
+            ...(this.selectedProjectId ? { projectId: this.selectedProjectId } : {}),
+          };
+          this.close();
+          return { type: "result", value: result };
+        }
 
         this.pushCurrentToStack();
         this.currentStep = "name";
@@ -258,6 +297,15 @@ export class NewSessionModal {
         stepId: this.currentStep,
       });
     }
+  }
+
+  private nameForCurrentSelection(): string {
+    const derive = this.options.nameForSelection;
+    if (!derive || !this.selectedDir) return "";
+    return sanitizeTmuxSessionName(derive({
+      dir: this.selectedDir,
+      ...(this.selectedProjectId ? { projectId: this.selectedProjectId } : {}),
+    }).trim());
   }
 
   private breadcrumb(): string {

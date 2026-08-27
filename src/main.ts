@@ -8822,7 +8822,20 @@ async function startWorkOnIssue(
       }
 
       // Fallback: no config mapping — open manual modal
-      const modal = new NewSessionModal(getNewSessionProviders(newSessionDirs()));
+      const modal = new NewSessionModal(
+        getNewSessionProviders(newSessionDirs()),
+        {
+          // This fallback still needs the human to choose where an unrouted
+          // issue belongs, but it does not need them to name it as well. The
+          // selected Project decides the effective template, just as it does
+          // on the fully-routed path; the default therefore stays the Linear
+          // identifier and a configured template/branch convention survives.
+          nameForSelection: ({ dir, projectId }) => sharedIssueSessionName(
+            issue,
+            repoSettingsFor(dir, projectId).sessionNameTemplate,
+          ),
+        },
+      );
       modal.open();
       refreshProjectDirsInBackground(() => {
         // Re-derived, not passed through: the scan yields bare paths, and
