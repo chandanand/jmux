@@ -10,8 +10,9 @@ import { writeFileAtomicSync } from "../atomic-write";
 // edit was silently missed — a regression introduced by fixing durability.
 //
 // main.ts is unreachable by unit tests, so this asserts the *premise* the fix
-// rests on rather than the wiring: a directory watcher sees an atomic replace,
-// and a file watcher does not reliably see the one after it.
+// rests on rather than the wiring: a directory watcher sees atomic replaces
+// and remains subscribed afterwards. Whether a watcher on the file itself goes
+// deaf is runtime- and platform-dependent, so it is not an invariant to test.
 
 const SETTLE_MS = 300;
 
@@ -68,17 +69,20 @@ describe("config watching survives atomic replacement", () => {
     }
   });
 
-  test("a file watcher goes deaf after an atomic replace — the regression this avoids", async () => {
-    let afterReplace = 0;
-    const w = watch(path, () => { afterReplace++; });
+  test("a directory watcher survives repeated atomic replacements", async () => {
+    const base = basename(path);
+    let afterFirst = 0;
+    const w = watch(dirname(path), (_e, filename) => {
+      if (filename === null || filename === base) afterFirst++;
+    });
     try {
       await wait(SETTLE_MS);
-      writeFileAtomicSync(path, '{"sidebarWidth":30}');   // swaps the inode
+      writeFileAtomicSync(path, '{"sidebarWidth":30}');
       await wait(SETTLE_MS);
-      afterReplace = 0;
-      writeFileSync(path, '{"sidebarWidth":34}');          // the edit that gets missed
+      afterFirst = 0;
+      writeFileAtomicSync(path, '{"sidebarWidth":34}');
       await wait(SETTLE_MS);
-      expect(afterReplace).toBe(0);
+      expect(afterFirst).toBeGreaterThan(0);
     } finally {
       w.close();
     }
