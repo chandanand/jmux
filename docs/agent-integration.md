@@ -32,14 +32,16 @@ nothing is written.
 | Agent | Mechanism | `RUNNING` | `WAITING` | `COMPLETE` |
 | --- | --- | :-: | :-: | :-: |
 | Claude Code | hooks in `~/.claude/settings.json` | ✓ | ✓ | ✓ |
-| Codex CLI | hooks in `~/.codex/hooks.json` | ✓ | ✓ | ✓ |
+| Codex CLI | hooks in `~/.codex/hooks.json` | ✓ | — | ✓ |
 | pi | extension in `settings.extensions` | ✓ | — | ✓ |
 | anything else | screen signatures (opt-in) | depends | depends | depends |
 
-**pi never shows `WAITING`.** Its extension API exposes no permission-request
-event, so that state is unobservable rather than merely unimplemented. jmux
-declares this rather than inventing a state — a pi pane sitting on `RUNNING`
-while it waits on you is a limitation of pi's API, not a stuck detection.
+**Codex and pi never show `WAITING` from their own integrations.** Pi's
+extension API exposes no permission-request event. Codex exposes one, but also
+fires it for requests handled by automatic approval review, so it is not a
+reliable statement that the human is needed. Jmux declares those gaps rather
+than inventing attention; opt-in screen signatures may fill them when the
+visible UI provides an unambiguous prompt.
 
 ### Codex needs two extra things
 

@@ -130,7 +130,14 @@ function capturePrompt(): string {
 export function hookCommands(kind: AgentKind): Record<HookEvent, string> {
   return {
     UserPromptSubmit: `${writeState(kind, "running")}\n${capturePrompt()}`,
-    PermissionRequest: writeState(kind, "waiting"),
+    // Codex also emits PermissionRequest for requests handled by automatic
+    // approval review. The event therefore does not mean a human is waiting,
+    // and writing WAITING here leaves an actively-running tool under "Needs
+    // you" with no post-approval event to clear it. Keep the pane RUNNING;
+    // Claude Code's PermissionRequest is still a human-attention signal.
+    PermissionRequest: kind === "codex"
+      ? writeRunningIdempotent(kind)
+      : writeState(kind, "waiting"),
     // Idempotent — see writeRunningIdempotent.
     PreToolUse: writeRunningIdempotent(kind),
     Stop: writeState(kind, "complete"),

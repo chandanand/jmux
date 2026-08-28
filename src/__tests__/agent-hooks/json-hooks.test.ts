@@ -72,6 +72,16 @@ describe("buildHookBlock", () => {
     expect(hookCommands("codex").Stop).toContain("@jmux-agent-kind codex");
     expect(hookCommands("pi").Stop).toContain("@jmux-agent-kind pi");
   });
+
+  test("Codex approval review keeps the pane running instead of claiming human attention", () => {
+    const cmd = hookCommands("codex").PermissionRequest;
+    expect(cmd).toContain('@jmux-agent-state running');
+    expect(cmd).not.toContain('@jmux-agent-state waiting');
+  });
+
+  test("Claude PermissionRequest still reports genuine human attention", () => {
+    expect(hookCommands("claude").PermissionRequest).toContain("@jmux-agent-state waiting");
+  });
 });
 
 describe("detectInstalledKind", () => {

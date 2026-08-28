@@ -1739,6 +1739,33 @@ describe("Sidebar — sort & filter", () => {
     expect(running).toBeLessThan(alpha);
   });
 
+  test("status groups follow live activity transitions without a session refresh", () => {
+    const sb = new Sidebar(WIDTH, 40);
+    sb.updateSessions(makeSessions([{ name: "alpha" }]));
+    sb.setGroupMode("status");
+    expect(linesWith(sb, "Idle")).toBeGreaterThan(-1);
+
+    sb.setActivity("$0", true);
+    expect(linesWith(sb, "Active")).toBeGreaterThan(-1);
+    expect(linesWith(sb, "Idle")).toBe(-1);
+
+    sb.setActivity("$0", false);
+    expect(linesWith(sb, "Idle")).toBeGreaterThan(-1);
+    expect(linesWith(sb, "Active")).toBe(-1);
+  });
+
+  test("status groups follow WAITING to RUNNING transitions directly", () => {
+    const sb = new Sidebar(WIDTH, 40);
+    sb.updateSessions(makeSessions([{ name: "alpha" }]));
+    sb.setGroupMode("status");
+    sb.setAgentStateRecord("$0", { state: "waiting", since: 100 });
+    expect(linesWith(sb, "Needs you")).toBeGreaterThan(-1);
+
+    sb.setAgentStateRecord("$0", { state: "running", since: 200 });
+    expect(linesWith(sb, "Running")).toBeGreaterThan(-1);
+    expect(linesWith(sb, "Needs you")).toBe(-1);
+  });
+
   test("group=project + sort=status keeps project headers, ranks members within", () => {
     const sb = seeded();
     // Default group=project; sort members by status so waiting rises inside a group.

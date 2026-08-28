@@ -56,7 +56,10 @@ function readHooks(): HookSettings {
 export const codexIntegration: AgentIntegration = {
   id: "codex",
   label: "Codex CLI",
-  reports: new Set<AgentState>(["running", "waiting", "complete"]),
+  // PermissionRequest is also emitted for automatically-reviewed requests, so
+  // Codex cannot honestly distinguish "needs the human" from "review is in
+  // progress" through hooks. Reporting WAITING would manufacture attention.
+  reports: new Set<AgentState>(["running", "complete"]),
   get configPath(): string {
     return hooksPath();
   },

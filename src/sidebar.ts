@@ -1079,11 +1079,17 @@ export class Sidebar {
   }
 
   setActivity(sessionId: string, active: boolean): void {
+    const had = this.activitySet.has(sessionId);
     if (active) {
       this.activitySet.add(sessionId);
     } else {
       this.activitySet.delete(sessionId);
     }
+    // Activity is a status-group membership input. Callers used to need a
+    // coincidental updateSessions() afterwards for a row to move between Idle
+    // and Active; clearing on interaction had no such rebuild and left the row
+    // under a stale header.
+    if (had !== active) this.rebuildPlan();
   }
 
   setSessionOtelState(sessionId: string, state: SessionOtelState | null): void {
@@ -1103,9 +1109,17 @@ export class Sidebar {
     sessionId: string,
     record: AgentStateRecord | null,
   ): void {
-    const had = this.agentStateRecords.has(sessionId);
+    const previous = this.agentStateRecords.get(sessionId) ?? null;
+    const had = previous !== null;
     if (record === null) this.agentStateRecords.delete(sessionId);
     else this.agentStateRecords.set(sessionId, record);
+
+    const changed = previous?.state !== record?.state || previous?.since !== record?.since;
+    if (!changed) return;
+
+    // Agent state is also a status-group membership input. Rebuild for every
+    // transition (WAITING -> RUNNING included), not only promotion/demotion.
+    this.rebuildPlan();
 
     // Promotion (or de-promotion) changes this session's row count, which
     // shifts every item below it — so the scroll offset can fall out of range.

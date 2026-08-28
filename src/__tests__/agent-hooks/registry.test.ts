@@ -30,12 +30,16 @@ describe("AGENT_INTEGRATIONS", () => {
 });
 
 describe("agentReports", () => {
-  test("Claude Code and Codex report all three states", () => {
-    for (const kind of ["claude", "codex"] as const) {
-      expect(agentReports(kind, "running")).toBe(true);
-      expect(agentReports(kind, "waiting")).toBe(true);
-      expect(agentReports(kind, "complete")).toBe(true);
-    }
+  test("Claude Code reports all three states", () => {
+    expect(agentReports("claude", "running")).toBe(true);
+    expect(agentReports("claude", "waiting")).toBe(true);
+    expect(agentReports("claude", "complete")).toBe(true);
+  });
+
+  test("Codex does not equate automatically-reviewed permission requests with human attention", () => {
+    expect(agentReports("codex", "running")).toBe(true);
+    expect(agentReports("codex", "waiting")).toBe(false);
+    expect(agentReports("codex", "complete")).toBe(true);
   });
 
   test("pi cannot report waiting — its extension API has no permission event", () => {
@@ -60,8 +64,10 @@ describe("screenTierMayWrite", () => {
     // The central rule: a guess must not overwrite a fact.
     for (const state of ["running", "waiting", "complete"] as const) {
       expect(screenTierMayWrite("claude", state)).toBe(false);
-      expect(screenTierMayWrite("codex", state)).toBe(false);
     }
+    expect(screenTierMayWrite("codex", "running")).toBe(false);
+    expect(screenTierMayWrite("codex", "complete")).toBe(false);
+    expect(screenTierMayWrite("codex", "waiting")).toBe(true);
   });
 
   test("fills only the gap an agent structurally cannot observe", () => {
