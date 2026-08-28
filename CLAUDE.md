@@ -423,7 +423,7 @@ the sidebar header's own `groupModeShort`/`sortModeShort`/`filterModeShort`
 so one axis reads one way on both surfaces. `layoutStripActions`
 (`glass/strip.ts`) places them and `onGlassViewClick` hit-tests them ahead of
 the view chips, dispatching through `STRIP_AXIS_ACTIONS` — the same
-`cycleGridGroup/Sort/Filter/Density` that `Ctrl-a G/s/f/D` call, so mouse and
+`cycleGridGroup/Sort/Filter/Density` that `Ctrl-Space G/s/f/D` call, so mouse and
 keyboard cannot cycle an axis two different ways. View chips yield to the
 cluster first; the cluster then yields *words* before the active view chip
 would go under `MIN_VIEW_COLS`, and never a chip: a glyph still names its axis
@@ -451,7 +451,7 @@ both cases. Four rules follow:
   the palette's link/unlink, the review-notes target), and so do the palette's
   per-session actions — kill, rename, pin, park, "switch to", dev servers —
   and the browser pane, which splits the focused tile's *pane* rather than the
-  parked client (kill-session used to take `__jmux_park` with it, and `Ctrl-a
+  parked client (kill-session used to take `__jmux_park` with it, and `Ctrl-Space
   b` opened a browser nobody could see). `currentSessionId` stays tmux's
   answer for the rail, the snapshotter and client plumbing.
   `syncPanelSubject()` is the one function that moves the
@@ -467,10 +467,10 @@ both cases. Four rules follow:
   pane outside, `GlassView.setInputFocus(false)` — the focused tile giving up
   its accent border — inside, where the pty is parked and there is no rule
   row to underline. Shift+Right off the right-most column hands focus to a
-  split panel (`moveFocus` reports whether it moved); Shift+Left, `Ctrl-a
+  split panel (`moveFocus` reports whether it moved); Shift+Left, `Ctrl-Space
   Tab` and a press in the tiles hand it back.
 - **The panel's chords are live in the glass arm** (`g`, `Tab`, `v`, `r`, `z`)
-  and `Ctrl-a z` is decided by focus: the panel while it holds keys, the tile
+  and `Ctrl-Space z` is decided by focus: the panel while it holds keys, the tile
   otherwise. `keymap.test.ts` models this as "two bindings on one byte are
   told apart by context", so a context-bearing binding is not shadowed by a
   glass binding on the same byte where a context-free one (the sidebar's

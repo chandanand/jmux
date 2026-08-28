@@ -23,17 +23,17 @@ const SEP = " · ";
 
 /**
  * Every hint the focused tile can show, in the spec's fixed order — the order
- * `buildTileHints` drops from the tail of as the tile narrows. `⌃a x` is
+ * `buildTileHints` drops from the tail of as the tile narrows. `⌃Space x` is
  * itself conditional (single-pane sessions have nothing to cycle to), so a
  * one-pane session's hints already read one shorter before width ever enters
  * into it.
  */
 function hintList(input: TileHintsInput): string[] {
-  const hints = ["⇧↔ focus", "⌃a↵ open"];
+  const hints = ["⇧↔ focus", "⌃Space↵ open"];
   if (input.eligibleCount > 1) {
-    hints.push(`⌃a x agent ${input.eligibleIndex}/${input.eligibleCount}`);
+    hints.push(`⌃Space x agent ${input.eligibleIndex}/${input.eligibleCount}`);
   }
-  hints.push("⌃a P hide");
+  hints.push("⌃Space P hide");
   return hints;
 }
 

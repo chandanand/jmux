@@ -101,9 +101,9 @@ export interface GlassTileSpec {
  * mirror. Sessions carrying `@jmux-grid-hidden` are subtracted out by the
  * caller and reported under `hiddenCount` instead.
  *
- * Note what this count does not promise. `⌃a f` recovers only the filtered
+ * Note what this count does not promise. `⌃Space f` recovers only the filtered
  * part of it: parking is undone by unparking and a paneless session has
- * nothing to show at any filter. The empty state lists `⌃a f` as a key worth
+ * nothing to show at any filter. The empty state lists `⌃Space f` as a key worth
  * trying, not as a remedy for every session in this figure — an earlier
  * wording claimed otherwise and would have sent a user to press it for
  * sessions it cannot reach.
@@ -1095,26 +1095,38 @@ export class GlassView {
       return;
     }
     const line1 = viewName ? `No sessions match "${viewName}"` : "No sessions to show";
+    const GAP = "      "; // six columns, the gap between every clause on this screen
     // "not shown", not "hidden" — the strip's own word for the same idea
     // (`+N not shown`), because "hidden" already names the `@jmux-grid-hidden`
     // exception and this figure is everything the view's axes excluded.
     // Two clauses because they have two remedies. "not shown" is everything the
-    // axes excluded and `⌃a f` recovers it; "hidden" is the explicit exception,
+    // axes excluded and `⌃Space f` recovers it; "hidden" is the explicit exception,
     // which no filter reaches — it names the palette entry instead. Reported
     // separately so the number never points at the wrong key.
-    const excludedClause = excludedCount > 0 ? `      ${excludedCount} not shown` : "";
-    const hiddenClause = hiddenCount > 0 ? `      ${hiddenCount} hidden (⌃a p)` : "";
-    const line2 = `⌃a f  all sessions      ⌃a 1…9  switch view${excludedClause}${hiddenClause}`;
+    const excludedClause = excludedCount > 0 ? `${excludedCount} not shown` : "";
+    const hiddenClause = hiddenCount > 0 ? `${hiddenCount} hidden (⌃Space p)` : "";
+    const counts = [excludedClause, hiddenClause].filter((c) => c.length > 0).join(GAP);
+    const keys = `⌃Space f  all sessions${GAP}⌃Space 1…9  switch view`;
+    // The counts ride the keys line when they fit and drop to a line of their
+    // own when they do not. `writeString` clips at the grid edge, so a single
+    // line that overruns loses the tail silently — and the tail is where the
+    // numbers are, which is the half a user is reading the screen for. This is
+    // `buildTileHints`'s rule (never show a truncated hint) applied to the one
+    // other surface that states a chord: degrade the layout, never the text.
+    const oneLine = counts.length > 0 ? `${keys}${GAP}${counts}` : keys;
+    const split = counts.length > 0 && textCols(oneLine) > this.width;
+    const lines = split ? [line1, keys, counts] : [line1, oneLine];
 
-    // Left-align both lines against the wider of the two, then center that
-    // block — independently centering each line would zig-zag the left edge
-    // between them, which reads as two unrelated messages rather than one.
-    const blockCols = Math.max(textCols(line1), textCols(line2));
+    // Left-align the lines against the widest, then center that block —
+    // independently centering each would zig-zag the left edge between them,
+    // which reads as unrelated messages rather than one.
+    const blockCols = Math.max(...lines.map(textCols));
     const col = Math.max(0, Math.floor((this.width - blockCols) / 2));
     const row = Math.max(0, Math.floor(this.height / 2) - 1);
 
     const attrs = { fgMode: ColorMode.Palette, fg: 8 } as const; // dark gray
-    writeString(grid, row, col, line1, attrs);
-    writeString(grid, row + 1, col, line2, attrs);
+    lines.forEach((text, i) => {
+      if (row + i < this.height) writeString(grid, row + i, col, text, attrs);
+    });
   }
 }

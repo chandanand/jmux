@@ -8,14 +8,14 @@ const single: TileHintsInput = { eligibleIndex: 1, eligibleCount: 1 };
 describe("buildTileHints", () => {
   test("shows every hint, in order, when there is room", () => {
     expect(buildTileHints(wide, 200)).toBe(
-      "⇧↔ focus · ⌃a↵ open · ⌃a x agent 2/3 · ⌃a P hide",
+      "⇧↔ focus · ⌃Space↵ open · ⌃Space x agent 2/3 · ⌃Space P hide",
     );
   });
 
-  test("⌃a x is omitted below two eligible panes — nothing to cycle to", () => {
+  test("⌃Space x is omitted below two eligible panes — nothing to cycle to", () => {
     const text = buildTileHints(single, 200);
     expect(text).not.toContain("agent");
-    expect(text).toBe("⇧↔ focus · ⌃a↵ open · ⌃a P hide");
+    expect(text).toBe("⇧↔ focus · ⌃Space↵ open · ⌃Space P hide");
   });
 
   test("eligibleCount 0 also omits the face cycle", () => {
@@ -26,10 +26,10 @@ describe("buildTileHints", () => {
   test("drops from the tail as the tile narrows — the last hint goes first", () => {
     const full = buildTileHints(wide, 200);
     const noHide = buildTileHints(wide, textCols(full) - 1);
-    expect(noHide).toBe("⇧↔ focus · ⌃a↵ open · ⌃a x agent 2/3");
+    expect(noHide).toBe("⇧↔ focus · ⌃Space↵ open · ⌃Space x agent 2/3");
 
     const noAgent = buildTileHints(wide, textCols(noHide) - 1);
-    expect(noAgent).toBe("⇧↔ focus · ⌃a↵ open");
+    expect(noAgent).toBe("⇧↔ focus · ⌃Space↵ open");
 
     const focusOnly = buildTileHints(wide, textCols(noAgent) - 1);
     expect(focusOnly).toBe("⇧↔ focus");
@@ -40,9 +40,9 @@ describe("buildTileHints", () => {
 
   test("never returns a truncated hint — every result is one of the exact fixed strings", () => {
     const possible = new Set([
-      "⇧↔ focus · ⌃a↵ open · ⌃a x agent 2/3 · ⌃a P hide",
-      "⇧↔ focus · ⌃a↵ open · ⌃a x agent 2/3",
-      "⇧↔ focus · ⌃a↵ open",
+      "⇧↔ focus · ⌃Space↵ open · ⌃Space x agent 2/3 · ⌃Space P hide",
+      "⇧↔ focus · ⌃Space↵ open · ⌃Space x agent 2/3",
+      "⇧↔ focus · ⌃Space↵ open",
       "⇧↔ focus",
       "",
     ]);

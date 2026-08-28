@@ -23,7 +23,7 @@ both, to force-on both — either qualifies them for the cycle).
   tile of its own. It renders full-bleed.
 - Focus the tile and press `Ctrl-Space x`. The tile keeps its place, size and
   border; only the picture inside it changes, and the bottom border's hint
-  updates its position (`⌃a x agent 2/3`). Press again to cycle back.
+  updates its position (`⌃Space x agent 2/3`). Press again to cycle back.
 - Leave the Command Center (`Ctrl-Space C` again). **No window is left zoomed** —
   both panes are side-by-side again, exactly as before entering. This is the
   one that catches a retarget that unzoomed the wrong pane — teardown must

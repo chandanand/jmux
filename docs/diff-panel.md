@@ -59,7 +59,7 @@ Seven things about this are load-bearing and easy to undo by accident.
 - **In the Command Center the panel describes the focused tile.** It docks
   beside the grid through the same frame layout it docks beside the pty with,
   and follows tile focus the way it follows the pty client's session outside
-  the grid — same respawn, same default view. `Ctrl-a g` opens it there,
+  the grid — same respawn, same default view. `Ctrl-Space g` opens it there,
   Shift+Right off the right-most column focuses it, Shift+Left comes back.
 
 - **Flags are probed, not assumed.** Not every hunk takes the same options —

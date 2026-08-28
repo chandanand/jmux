@@ -53,7 +53,7 @@ If not set, you're outside jmux and most commands require explicit `--session` f
 | `jmux ctl issue unlink <session> [issue-id]` | Remove one issue link, or all of them |
 | `jmux ctl workflow stages` | The workflow stages and their counts |
 | `jmux ctl workflow board [--stage ID]` | Every stage with its sessions and unstarted work |
-| `jmux ctl workflow next [--start]` | The next thing to pick up (`Ctrl-a u`) |
+| `jmux ctl workflow next [--start]` | The next thing to pick up (`Ctrl-Space u`) |
 | `jmux ctl workflow statuses` | Every tracker status: its stage, whether it parks |
 | `jmux ctl browser list` | Browser panes, their tabs and current URLs |
 | `jmux ctl browser open <url>` | Point a browser at a URL, or open one beside you |
@@ -153,7 +153,7 @@ done
 
 ### `workflow` — the work pipeline
 
-jmux models work as **stages** the user defined (`Ctrl-a W`), each sitting on top
+jmux models work as **stages** the user defined (`Ctrl-Space W`), each sitting on top
 of one or more of the tracker's own statuses. Stage order is priority order. A
 session belongs to the stage that claims its linked issue's status; an issue in a
 stage with no session yet is **unstarted** work anyone can pick up.
@@ -180,7 +180,7 @@ Key fields:
 - `counts.sessions` / `counts.parked` / `counts.unstarted` / `counts.issues` —
   per stage. `issues` is everything in the stage; `unstarted` is the subset with
   no session.
-- `upNextRank` — the stage's place in the `Ctrl-a u` rotation, or `null` if it
+- `upNextRank` — the stage's place in the `Ctrl-Space u` rotation, or `null` if it
   isn't in it. `workflow next` walks that order and returns the top item of the
   first non-empty stage.
 - `ungrouped` — sessions with no issue, or whose status no stage claims. These

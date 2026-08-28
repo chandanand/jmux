@@ -94,8 +94,8 @@ Both slots take a token directly, checked before it is saved and written to
 
 | Slot | Where |
 |---|---|
-| Issue tracker | The setup flow (`Ctrl-a p` → **Setup**), tracker step |
-| Code host | `Ctrl-a I` → **Integrations** → **Code host token** |
+| Issue tracker | The setup flow (`Ctrl-Space p` → **Setup**), tracker step |
+| Code host | `Ctrl-Space I` → **Integrations** → **Code host token** |
 
 A stored token beats the environment, so this is also the fix for the case
 that reads as jmux ignoring you: `$GITLAB_TOKEN` exported in your profile but
@@ -187,12 +187,12 @@ so a blip at launch can't permanently disable the integration.
 The consequence to know: **an adapter that isn't connected contributes no tabs
 at all.** No Issues tab and no MR tabs is what a bad token looks like, not an
 error dialog. The reason is written to `~/.config/jmux/jmux.log` and shown as a
-toast at startup, and the **Integrations** rows in `Ctrl-a I` state it at any
+toast at startup, and the **Integrations** rows in `Ctrl-Space I` state it at any
 time.
 
 | What you see | Likely cause |
 |---|---|
-| No Issues tab at all | No `issueTracker` in config, or its token was rejected. `Ctrl-a I` → **Integrations** says which |
+| No Issues tab at all | No `issueTracker` in config, or its token was rejected. `Ctrl-Space I` → **Integrations** says which |
 | No MR tabs at all | Same, for `codeHost` — most often a token that is exported in your profile but absent from the environment jmux was actually launched from. Store it in jmux instead (above) |
 | Tabs exist but stay empty | The adapter is connected and nothing matches the tab's filter — try `F` in the panel to widen it |
 | Tabs were there, now they're gone | A 401/403 mid-session disables that adapter until restart |

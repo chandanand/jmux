@@ -68,7 +68,7 @@ refuses to run unless the tag, `HEAD`, and the pushed branch all agree with it.
 ### 3. Write the release notes
 
 **This is the part only you can do.** The body you write is markdown-rendered
-inside jmux as the changelog modal (`Ctrl-a p` → Changelog), so it is read by
+inside jmux as the changelog modal (`Ctrl-Space p` → Changelog), so it is read by
 users in the product, not just on GitHub.
 
 Write for someone deciding whether to upgrade:

@@ -10412,7 +10412,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
     const name = currentSessions.find((s) => s.id === sublistOptionId)?.name ?? sublistOptionId;
     showNotice({
       title: "Command Center",
-      message: `${name} is no longer hidden. It joins the grid when the current view selects it — ⌃a f widens the filter.`,
+      message: `${name} is no longer hidden. It joins the grid when the current view selects it — ⌃Space f widens the filter.`,
     });
     return;
   }
@@ -12180,7 +12180,7 @@ function applyGridSnapshot(snap: GridSnapshot): void {
       viewName: activeView.name,
       // Two numbers, disjoint, because they have two remedies. `excludedCount`
       // is every session that exists but is not tiled for a reason other than
-      // an explicit hide — filtered, parked or paneless. (`⌃a f` reaches only
+      // an explicit hide — filtered, parked or paneless. (`⌃Space f` reaches only
       // the filtered part of that: parking is undone by unparking, and a
       // paneless session has nothing to mirror at any filter.)
       // `hiddenCount` is the `@jmux-grid-hidden`
@@ -12188,7 +12188,7 @@ function applyGridSnapshot(snap: GridSnapshot): void {
       // sessions" undoes it. Hidden sessions are subtracted out of the first so
       // each session is reported once, under the clause whose key actually
       // works on it: counting them in both rendered "3 not shown  3 hidden" for
-      // the same three sessions and sent the user to `⌃a f` for nothing.
+      // the same three sessions and sent the user to `⌃Space f` for nothing.
       excludedCount: Math.max(
         0,
         shared.sessions.length - specs.length - gridHiddenSessionIds.size,

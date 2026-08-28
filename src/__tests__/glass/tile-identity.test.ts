@@ -753,7 +753,7 @@ describe("the empty state", () => {
     expect(text).toContain('No sessions match "Active"');
     expect(text).toContain("3 not shown");
     expect(text).not.toContain("hidden");
-    expect(text).toContain("⌃a f");
+    expect(text).toContain("⌃Space f");
     expect(text).toContain("switch view");
   });
 
@@ -771,26 +771,29 @@ describe("the empty state", () => {
 describe("the focused tile's bottom-border hint", () => {
   test("a wide tile shows every hint, including the face cycle", () => {
     const { view } = makeView();
-    view.resize(64, 10);
+    // The full hint is 60 columns and the border math budgets `width - 5`, so
+    // "wide" here means >= 65. Sized off that rather than a round number, or
+    // the test silently becomes a narrow-tile test the next time a hint grows.
+    view.resize(80, 10);
     view.setTiles(
       [spec({ sessionId: "$1", panes: [pane("%1"), pane("%2"), pane("%3")] })],
       EMPTY_CTX,
     );
     const text = gridText(view);
     expect(text).toContain("⇧↔ focus");
-    expect(text).toContain("⌃a↵ open");
-    expect(text).toContain("⌃a x agent 1/3");
-    expect(text).toContain("⌃a P hide");
+    expect(text).toContain("⌃Space↵ open");
+    expect(text).toContain("⌃Space x agent 1/3");
+    expect(text).toContain("⌃Space P hide");
   });
 
-  test("⌃a x is omitted for a single-pane session — nothing to cycle to", () => {
+  test("⌃Space x is omitted for a single-pane session — nothing to cycle to", () => {
     const { view } = makeView();
     view.resize(64, 10);
     view.setTiles([spec({ sessionId: "$1", panes: [pane("%1")] })], EMPTY_CTX);
     const text = gridText(view);
     expect(text).toContain("⇧↔ focus");
     expect(text).not.toContain("agent");
-    expect(text).toContain("⌃a P hide");
+    expect(text).toContain("⌃Space P hide");
   });
 
   test("a medium tile drops from the tail rather than truncating", () => {
@@ -868,6 +871,31 @@ describe("the empty state's two counts are disjoint", () => {
     const row = view.getGrid().cells.map((r) => r.map((c) => c.char).join("")).join("\n");
     expect(row).toContain("4 not shown");
     expect(row).toContain("3 hidden");
+  });
+
+  // `writeString` clips at the grid edge, so a keys-plus-counts line that
+  // overruns loses its tail — and the tail is the numbers. The line has always
+  // been able to overrun on a narrow grid; spelling the prefix `⌃Space` rather
+  // than the long-dead `⌃a` made it overrun far enough to cut "3 hidden" in
+  // half. The counts get their own row instead of a shorter word.
+  test("a narrow grid moves the counts to their own line rather than clipping them", () => {
+    const { view } = makeView();
+    view.resize(80, 24);
+    view.setTiles([], { viewName: "Active", excludedCount: 4, hiddenCount: 3 });
+    const lines = view.getGrid().cells.map((r) => r.map((c) => c.char).join(""));
+    expect(lines.some((l) => l.includes("⌃Space f  all sessions"))).toBe(true);
+    // Whole, on one row, with the palette key that undoes a hide still attached.
+    expect(lines.some((l) => l.includes("4 not shown      3 hidden (⌃Space p)"))).toBe(true);
+    // Every row stays inside the grid — nothing was written past the edge.
+    for (const l of lines) expect(l.length).toBeLessThanOrEqual(80);
+  });
+
+  test("a wide grid keeps the keys and the counts on one line", () => {
+    const { view } = makeView();
+    view.resize(140, 24);
+    view.setTiles([], { viewName: "Active", excludedCount: 4, hiddenCount: 3 });
+    const lines = view.getGrid().cells.map((r) => r.map((c) => c.char).join(""));
+    expect(lines.some((l) => l.includes("switch view") && l.includes("4 not shown"))).toBe(true);
   });
 
   test("no hidden sessions means no hidden clause at all", () => {

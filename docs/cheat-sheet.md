@@ -265,7 +265,7 @@ sidebar, or `Ctrl-Space C` from anywhere.
 | `Ctrl-Space d` | in the grid | Detach jmux (not the focused tile) |
 | `Ctrl-Space h/j/k/l` | in the grid | Move focus between tiles |
 | Click a view chip | in the grid | Switch to that view |
-| Click `⊞` / `⇅` / `∇` / `▤` (strip, right end) | in the grid | Cycle the grid's grouping / sort / filter / density — the same as `Ctrl-a G` / `s` / `f` / `D` |
+| Click `⊞` / `⇅` / `∇` / `▤` (strip, right end) | in the grid | Cycle the grid's grouping / sort / filter / density — the same as `Ctrl-Space G` / `s` / `f` / `D` |
 | Mouse wheel | in the grid | Scroll the tile under the cursor |
 
 **Density** picks the tile-size floor the grid packs against — `Ctrl-Space D`
@@ -280,7 +280,7 @@ drops the words. Fit is the default: it's what
 *session*, not the client, so two tiles can't show two panes of one session at
 once by any arrangement of pins. A session with several agent panes shows one at
 a time; `Ctrl-Space x` cycles between them, and the focused tile's bottom border
-names the position (`⌃a x agent 2/3`) so the others are a visible fact before
+names the position (`⌃Space x agent 2/3`) so the others are a visible fact before
 you press anything.
 
 **Views** replace the old tab strip — a view is a named preset of the grid's own
@@ -301,8 +301,8 @@ Hiding a session always wins over a pin left on one of its panes: hide's subject
 is the whole session, a pin's subject is one pane in it, so pinning a pane can't
 silently undo an explicit "keep this session off my grid".
 
-An empty grid names the active view and how to widen it (`⌃a f  all sessions`,
-`⌃a 1…9  switch view`), plus how many sessions are hidden.
+An empty grid names the active view and how to widen it (`⌃Space f  all sessions`,
+`⌃Space 1…9  switch view`), plus how many sessions are hidden.
 
 ---
 
