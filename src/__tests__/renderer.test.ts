@@ -891,6 +891,63 @@ describe("compositeGrids with panel tab bar", () => {
   });
 });
 
+// The Command Center renders through a layout whose one chrome row is the view
+// strip — a `header` grid, since there is no toolbar config — and docks the
+// panel beside the tiles through the same layout. The tab bar's row is the
+// layout's toolbar row whichever of the two fills it.
+describe("compositeGrids with a header instead of a toolbar (Command Center)", () => {
+  test("the header is painted on row 0 over main's columns and content starts at contentTop", () => {
+    const sidebar = createGrid(6, 8);
+    const main = createGrid(20, 7);
+    writeString(main, 0, 0, "TILES");
+    const header = createGrid(20, 1);
+    writeString(header, 0, 0, "STRIP");
+    const layout = makeLayout({ sidebarCols: 6, mainCols: 20, toolbarRows: 1, termRows: 8 });
+    expect(layout.contentTop).toBe(1);
+
+    const result = compositeGrids(layout, main, sidebar, null, null, undefined, undefined, undefined, header);
+    const rowText = (y: number, x: number, n: number) =>
+      Array.from({ length: n }, (_, i) => result.cells[y][x + i].char).join("");
+    expect(rowText(0, 7, 5)).toBe("STRIP");
+    expect(rowText(1, 7, 5)).toBe("TILES");
+  });
+
+  test("the panel tab bar lands on the header row with no toolbar config", () => {
+    const sidebar = createGrid(6, 8);
+    const main = createGrid(20, 7);
+    const header = createGrid(20, 1);
+    const diffGrid = createGrid(10, 7);
+    writeString(diffGrid, 0, 0, "PANEL");
+    const tabBar = createGrid(10, 1);
+    writeString(tabBar, 0, 0, "Diff");
+    const layout = makeLayout({
+      sidebarCols: 6, mainCols: 20, toolbarRows: 1, termRows: 8,
+      panel: { cols: 10, mode: "split" },
+    });
+    const result = compositeGrids(
+      layout, main, sidebar, null, null,
+      { grid: diffGrid, mode: "split", focused: false, tabBar },
+      undefined, undefined, header,
+    );
+    const panelX = layout.panel!.x;
+    const rowText = (y: number, x: number, n: number) =>
+      Array.from({ length: n }, (_, i) => result.cells[y][x + i].char).join("");
+    expect(rowText(0, panelX, 4)).toBe("Diff");
+    expect(rowText(1, panelX, 5)).toBe("PANEL");
+    // The divider runs from row 0: there is no rule row to junction into.
+    expect(result.cells[0][layout.divider!].char).toBe(result.cells[3][layout.divider!].char);
+  });
+
+  test("without a header the reserved row stays blank rather than swallowing content", () => {
+    const main = createGrid(20, 7);
+    writeString(main, 0, 0, "TILES");
+    const layout = makeLayout({ mainCols: 20, toolbarRows: 1, termRows: 8 });
+    const result = compositeGrids(layout, main, null, null);
+    expect(result.cells[0].map((c) => c.char).join("").trim()).toBe("");
+    expect(Array.from({ length: 5 }, (_, i) => result.cells[1][i].char).join("")).toBe("TILES");
+  });
+});
+
 describe("compositeGrids top rule, junctions, and tab underline", () => {
   const tab = (over: Record<string, unknown> = {}) => ({
     windowId: "@1", index: 0, name: "win", active: false, bell: false, zoomed: false, ...over,

@@ -94,8 +94,7 @@ export interface InputRouterOptions {
    * rows, or null when there isn't one (diff tab, panel closed, or a panel
    * too short for a detail pane). The panel owns its own internal row layout
    * — FrameLayout only knows the panel's column span — so the router is told
-   * where the separator is rather than deriving it. Same shape of dependency
-   * as glassStripRows.
+   * where the separator is rather than deriving it.
    */
   panelSplit?: () => { row: number; minRow: number; maxRow: number } | null;
   onModalInput?: (data: string) => void;
@@ -441,12 +440,22 @@ export class InputRouter {
     }
 
     // Pane-of-glass: Shift+arrows move focus between tiles (intercepted before
-    // the diff-panel Shift handling and before reaching tmux).
+    // the diff-panel Shift handling and before reaching tmux). With the panel
+    // docked and focused, Shift+Left is the way back to the tiles — the same
+    // key the ordinary Shift block below gives it — and the other three are
+    // swallowed: the panel is not a tile, so there is nowhere for them to go.
+    // The hand-off *into* the panel is main.ts's: onGlassFocusMove("right")
+    // reports whether focus moved, and off the right-most column it doesn't.
     if (this.opts.glassActive?.() && !this.modalOpen) {
-      if (data === "\x1b[1;2D") { this.opts.onGlassFocusMove?.("left"); return; }
-      if (data === "\x1b[1;2C") { this.opts.onGlassFocusMove?.("right"); return; }
-      if (data === "\x1b[1;2A") { this.opts.onGlassFocusMove?.("up"); return; }
-      if (data === "\x1b[1;2B") { this.opts.onGlassFocusMove?.("down"); return; }
+      if (this.diffPanelFocused && this.layout.panel !== null) {
+        if (data === "\x1b[1;2D") { this.opts.onDiffPanelFocusToggle?.(); return; }
+        if (data === "\x1b[1;2C" || data === "\x1b[1;2A" || data === "\x1b[1;2B") return;
+      } else {
+        if (data === "\x1b[1;2D") { this.opts.onGlassFocusMove?.("left"); return; }
+        if (data === "\x1b[1;2C") { this.opts.onGlassFocusMove?.("right"); return; }
+        if (data === "\x1b[1;2A") { this.opts.onGlassFocusMove?.("up"); return; }
+        if (data === "\x1b[1;2B") { this.opts.onGlassFocusMove?.("down"); return; }
+      }
     }
 
     // Shift+Right/Left pane navigation integrating with diff panel
@@ -557,6 +566,15 @@ export class InputRouter {
           if (data === "l") { this.opts.onGlassFocusMove?.("right"); return; }
           if (data === "(") { this.opts.onSessionPrev?.(); return; }
           if (data === ")") { this.opts.onSessionNext?.(); return; }
+          // The panel docks beside the grid, so its chords are the ordinary
+          // arm's: toggle, focus hand-off, view picker, send review — and `z`,
+          // which zooms the *panel* while it holds focus and the focused tile
+          // otherwise. Focus decides, exactly as it decides where keys go.
+          if (data === "g") { this.opts.onDiffToggle?.(); return; }
+          if (data === "\t" && this.layout.panel !== null) { this.opts.onDiffPanelFocusToggle?.(); return; }
+          if (data === "v") { this.opts.onDiffViewPicker?.(); return; }
+          if (data === "r") { this.opts.onDiffSendReview?.(); return; }
+          if (data === "z" && this.diffPanelFocused && this.layout.panel !== null) { this.opts.onDiffZoom?.(); return; }
           if (data === "d") { this.opts.onGlassDetach?.(); return; }
           if (data === "?") { this.opts.onHelp?.(); return; }
           if (data === "p") { this.opts.onModalToggle?.(); return; }
@@ -583,6 +601,9 @@ export class InputRouter {
           if (data === "z") { this.opts.onGlassZoom?.(); return; }
           if (data === "D") { this.opts.onGlassCycleDensity?.(); return; }
           // --- keymap:glass-prefix end ---
+          // With the panel focused, an unrecognised chord dies here rather than
+          // reaching a tile the keys are not in — the ordinary arm's rule.
+          if (this.diffPanelFocused && this.layout.panel !== null) return;
           // Not a jmux chord — flush the buffered prefix, then the key, to the tile.
           if (deferred) this.opts.onPtyData(PREFIX_BYTE);
           this.opts.onPtyData(data);
@@ -833,7 +854,10 @@ export class InputRouter {
         } else if (gridX < sidebarCols) {
           this.opts.onHover({ area: "sidebar", row: gridY });
         } else if (!this.modalOpen) {
-          if (gridY < layout.toolbarRows) {
+          // In the grid the toolbar row is the view strip, which has no hover
+          // state; reporting it as the toolbar would light a button that is
+          // not painted.
+          if (gridY < layout.toolbarRows && !this.opts.glassActive?.()) {
             this.opts.onHover({ area: "toolbar", col: gridX - layout.main.x });
           } else {
             this.opts.onHover(null);
@@ -913,23 +937,32 @@ export class InputRouter {
       // mouse interaction all work. A fresh press also focuses that tile.
       // Checked before toolbar so that glass strip row 1 isn't eaten by the
       // toolbar handler (there is no toolbar visible in glass mode).
-      if (this.opts.glassActive?.()) {
-        const stripRows = this.opts.glassStripRows?.() ?? 0;
+      //
+      // The grid owns the columns left of the panel only; the panel's fall
+      // through to the panel paths below, which read the same `layout` and so
+      // hit-test the docked panel in the grid exactly as beside the pty. In
+      // full mode `panel.x === main.x` and the panel covers the tiles, so it
+      // takes every click — the divider press was already consumed as a drag
+      // handle above.
+      if (this.opts.glassActive?.() && (layout.panel === null || gridX < layout.panel.x)) {
         const cx = gridX - layout.main.x;
-        const yInContent = gridY; // 0-indexed within the content column
         const bareMotion = isMotion && (mouse.button & 0x03) === 3;
         if (bareMotion) return; // ignore hover motion (no button held)
 
-        // Strip row: a button-down switches views; ignore wheel/release/motion here.
-        if (yInContent < stripRows) {
+        // Strip row — the layout's toolbar row: a button-down switches views;
+        // ignore wheel/release/motion here.
+        if (gridY < layout.contentTop) {
           if (!mouse.release && !isMotion && !isWheel) {
             this.opts.onGlassViewClick?.(cx);
           }
           return;
         }
 
-        const cy = yInContent - stripRows; // tile-area row
+        const cy = gridY - layout.contentTop; // tile-area row
         if (!mouse.release && !isMotion && !isWheel) {
+          // A press in the tiles takes the keys back from the panel, as a
+          // press in the pty does below.
+          if (this.diffPanelFocused && layout.panel) this.opts.onDiffPanelFocusToggle?.();
           this.opts.onGlassClick?.(cx, cy); // focus on button-down
         }
         this.opts.onGlassMouse?.(cx, cy, mouse.button, mouse.release);

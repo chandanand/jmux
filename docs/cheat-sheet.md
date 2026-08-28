@@ -265,12 +265,15 @@ sidebar, or `Ctrl-Space C` from anywhere.
 | `Ctrl-Space d` | in the grid | Detach jmux (not the focused tile) |
 | `Ctrl-Space h/j/k/l` | in the grid | Move focus between tiles |
 | Click a view chip | in the grid | Switch to that view |
+| Click `⊞` / `⇅` / `∇` / `▤` (strip, right end) | in the grid | Cycle the grid's grouping / sort / filter / density — the same as `Ctrl-a G` / `s` / `f` / `D` |
 | Mouse wheel | in the grid | Scroll the tile under the cursor |
 
 **Density** picks the tile-size floor the grid packs against — `Ctrl-Space D`
 toggles **Fit** (everything visible, sized to whatever fits — the default)
 and **Focus** (four big, legible tiles; the rest scroll). The active mode's
-name sits at the right end of the strip. Fit is the default: it's what
+name sits at the right end of the strip, in the same clickable cluster as the
+group / sort / filter chips; on a narrow strip the cluster keeps its glyphs and
+drops the words. Fit is the default: it's what
 "Command Center" means, and it beats a fixed floor at any agent count.
 
 **Why one tile per session:** tmux ties the current window and zoom to the

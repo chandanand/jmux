@@ -416,6 +416,70 @@ the read still forces one more run once the current one finishes. The
 reschedule lives in `finally`, so a throwing read reschedules rather than
 leaving the grid frozen with `inFlight` stuck true.
 
+**The strip's right cluster is the four axes as clickable chips, and it clicks
+through to the same functions the keys run.** `⊞ <Group> ⇅ <Sort> ∇ <Filter>
+▤ <Density>` sit right-aligned before the `+N not shown` count, spelled with
+the sidebar header's own `groupModeShort`/`sortModeShort`/`filterModeShort`
+so one axis reads one way on both surfaces. `layoutStripActions`
+(`glass/strip.ts`) places them and `onGlassViewClick` hit-tests them ahead of
+the view chips, dispatching through `STRIP_AXIS_ACTIONS` — the same
+`cycleGridGroup/Sort/Filter/Density` that `Ctrl-a G/s/f/D` call, so mouse and
+keyboard cannot cycle an axis two different ways. View chips yield to the
+cluster first; the cluster then yields *words* before the active view chip
+would go under `MIN_VIEW_COLS`, and never a chip: a glyph still names its axis
+and still cycles it, where a dropped chip is an axis the mouse can no longer
+reach.
+
+**The panel docks beside the grid, and it does so through the same `layout`
+it docks beside the pty with.** In the grid `relayout()` computes `layout`
+with the view strip as its one toolbar row and no rule under it — the
+Command Center is not a frameless takeover like settings, the workflow screen
+or the ghost preview (which keep `fullScreenLayout` and *swap* for the panel
+via `requestDiffPanel`); it shares the frame. That one decision is what makes
+`layout.panel`, `getDiffPanelCols()`, the hunk pty resize, `panelSplit` and
+every panel path in `InputRouter` work in the grid with no second copy: the
+router reads `this.layout.panel`, and the glass mouse branch simply yields the
+panel's columns. The renderer takes the strip as a `header` grid on the row
+the toolbar config would fill, and the panel's tab bar lands on that row in
+both cases. Four rules follow:
+
+- **The panel's subject is the focused tile, and so is the palette's.**
+  `focusedSessionId()` is the pty client's session outside the grid and
+  `glassView.focusedSessionId()` inside it — where `currentSessionId` is the
+  internal park session, which nothing should describe or act on. Everything
+  panel-scoped reads it (the Issue tab's context, the hunk cwd, `n`/`l`/`L`,
+  the palette's link/unlink, the review-notes target), and so do the palette's
+  per-session actions — kill, rename, pin, park, "switch to", dev servers —
+  and the browser pane, which splits the focused tile's *pane* rather than the
+  parked client (kill-session used to take `__jmux_park` with it, and `Ctrl-a
+  b` opened a browser nobody could see). `currentSessionId` stays tmux's
+  answer for the rail, the snapshotter and client plumbing.
+  `syncPanelSubject()` is the one function that moves the
+  panel — default view, hunk respawn, active poll session, driving issue under
+  the cursor — and it is idempotent on the subject, called from the
+  `%client-session-changed` handler, `switchSession`, every tile focus change
+  (click, Shift-arrows, a reconcile that re-elects focus) and entering or
+  leaving the grid. Idempotence is what makes the leave-glass ordering (async
+  client event vs teardown) safe to ignore; it also removed a double respawn
+  `switchSession` used to cause.
+- **Focus resets at the boundary.** Entering or leaving the grid calls
+  `setDiffFocus(false)`, because the cue differs on each side: a dimmed tmux
+  pane outside, `GlassView.setInputFocus(false)` — the focused tile giving up
+  its accent border — inside, where the pty is parked and there is no rule
+  row to underline. Shift+Right off the right-most column hands focus to a
+  split panel (`moveFocus` reports whether it moved); Shift+Left, `Ctrl-a
+  Tab` and a press in the tiles hand it back.
+- **The panel's chords are live in the glass arm** (`g`, `Tab`, `v`, `r`, `z`)
+  and `Ctrl-a z` is decided by focus: the panel while it holds keys, the tile
+  otherwise. `keymap.test.ts` models this as "two bindings on one byte are
+  told apart by context", so a context-bearing binding is not shadowed by a
+  glass binding on the same byte where a context-free one (the sidebar's
+  `G/s/f`) is.
+- **A panel that had no subject spawns on the first one.** `hunkExited` means
+  both "the user quit hunk with `q`" and "there was nothing to spawn against"
+  (an empty grid); `syncPanelSubject` respawns on the second by remembering
+  whether it had a subject before, and never on the first.
+
 **The client cap counts active and grace-retained tiles together, and every
 tile parses whether or not it is drawn.** `planTiles` (`glass/tile-plan.ts`)
 admits forced (pinned) tiles first, then render order, *before* anything

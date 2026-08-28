@@ -5,17 +5,31 @@ import { handlePane } from "./cli/pane";
 import { handleRunClaude } from "./cli/run-claude";
 import { handleAgent, runAgentWatch } from "./cli/agent";
 import { handleStatus } from "./cli/status";
+import { handleIdentity } from "./cli/identity";
 import { handleIssue } from "./cli/issue";
 import { handleWorkflow } from "./cli/workflow";
 import { handleBrowser } from "./cli/browser";
 import { handleDevServers } from "./cli/dev";
 import { handleCc } from "./cli/cc";
+import { handleRaise } from "./cli/raise";
 
 export interface ParsedCtlArgs {
   group: string;
   action: string | null;
+  /** Last-wins, exactly as before — every existing command reads this unchanged. */
   flags: Record<string, string | boolean>;
   positional: string[];
+  /**
+   * Every value a value flag or optional-numeric flag actually carried, in
+   * the order given, additive alongside `flags`. A flag given once still
+   * gets a single-element entry here, so a caller that wants "all of them"
+   * never has to special-case the common case of exactly one. An
+   * optional-numeric flag given bare (no value, e.g. `--wait`) gets no entry
+   * here — there is no value to accumulate — but `--wait 30` and `--wait=30`
+   * both do. Boolean flags never appear — `flags` remains the only source
+   * for those.
+   */
+  repeated: Record<string, string[]>;
 }
 
 const KNOWN_GROUPS = [
@@ -29,9 +43,11 @@ const KNOWN_GROUPS = [
   "issue",
   "workflow",
   "status",
+  "identity",
   "cc",
+  "raise",
 ] as const;
-const STANDALONE_GROUPS = new Set(["run-claude", "status"]);
+const STANDALONE_GROUPS = new Set(["run-claude", "status", "identity"]);
 
 // Flags that take a value argument (after group/action, or global)
 const GLOBAL_VALUE_FLAGS = new Set(["session", "socket"]);
@@ -57,7 +73,24 @@ const VALUE_FLAGS = new Set([
   "description",
   "team",
   "stage",
+  "status",
+  "assignee",
 ]);
+/**
+ * Value flags that exist only for one group. The global `VALUE_FLAGS` set is
+ * applied after every group, so a name added there changes how every existing
+ * command consumes the token after it. These names are common enough
+ * (`option`, `note`, `context`, `reason`) that doing so would be a behaviour
+ * change in published software.
+ */
+const GROUP_VALUE_FLAGS: Record<string, ReadonlySet<string>> = {
+  raise: new Set([
+    "session", "issue", "question", "option", "recommend",
+    "why", "authority", "context", "note", "reason", "attempt", "state",
+  ]),
+  issue: new Set(["append-prompt", "owner-token"]),
+  session: new Set(["outcome"]),
+};
 /**
  * Flags whose value is optional and always numeric, so `--wait` and `--wait 60`
  * both work. The next token is consumed only when it parses as a number —
@@ -78,6 +111,7 @@ const BOOL_FLAGS = new Set([
   "no-launch-agent",
   "launch-agent",
   "start",
+  "require-new",
 ]);
 
 const CTL_HELP = `
@@ -87,7 +121,7 @@ USAGE
   jmux ctl [GLOBAL FLAGS] <group> [action] [FLAGS] [args...]
 
 GROUPS
-  session    Manage tmux sessions (incl. cleanup, attention, hide/unhide/hidden)
+  session    Manage tmux sessions (incl. cleanup, attention, hide/unhide/hidden, report)
   window     Manage tmux windows
   pane       Manage tmux panes (incl. pin/unpin/pinned)
   run-claude Run a Claude Code agent in a session
@@ -95,6 +129,7 @@ GROUPS
   issue      Work with issues (issue get|link|unlink|start|create|move)
   workflow   The work pipeline (workflow stages|board|next|statuses)
   status     One-shot orchestration snapshot of the whole workspace
+  identity   The tracker's authenticated account
   cc         Command Center views (cc views)
   browser    Browser panes (browser list|open|action)
   dev-servers What is listening in a session, and on which port
@@ -115,7 +150,9 @@ FLAGS
   --file <val>         File path
   --lines <val>        Number of lines
   --window <val>       Window target
-  --reason <val>       Attention reason text
+  --reason <val>       Attention reason text, or session report reason
+  --outcome <val>      Session report outcome: shipped|blocked|needs-human|failed
+                        (session report). Unbound — carries no turn identity.
   --title <val>        Issue title (issue create)
   --description <val>  Issue description (issue create)
   --team <val>         Team name or id (issue create)
@@ -128,6 +165,19 @@ FLAGS
   --all                Operate on all sessions (agent state/watch, dev-servers)
   --start              Start the work immediately (issue create, workflow next)
   --no-launch-agent    Don't auto-launch Claude (issue start)
+  --append-prompt <val> Append a contract file's contents to the seed prompt
+                        (issue start). Refused when the effective agent-launch
+                        value is false, when the start would reuse a session,
+                        or when the resulting prompt is too large for the
+                        launch command to carry.
+  --require-new        Refuse instead of reusing (issue start): a session
+                        already linked to the issue, a session already
+                        sitting on the derived name, or a session query that
+                        could not be trusted, all refuse rather than proceed.
+                        Refusals carry a stable "code" alongside "error".
+  --owner-token <val>   Stamp @orch-owned with this value in the same tmux
+                        operation that creates the session (issue start), so
+                        ownership and existence are one fact.
   --wait [seconds]     Block until the worktree is provisioned (issue start).
                        Off by default: the session and agent are created up
                        front and the worktree lands in a setup pane beside
@@ -155,6 +205,7 @@ export function parseCtlArgs(argv: string[]): ParsedCtlArgs {
   }
 
   const flags: Record<string, string | boolean> = {};
+  const repeated: Record<string, string[]> = {};
   let i = 0;
 
   // Parse global flags before the group
@@ -228,20 +279,60 @@ export function parseCtlArgs(argv: string[]): ParsedCtlArgs {
       break;
     } else if (arg.startsWith("--")) {
       const name = arg.slice(2);
+      // `--flag=value` reaches us as one token once the shell strips the
+      // quotes around `--status="QA Failed"`. Value flags and optional-numeric
+      // flags gain `=` support here — `BOOL_FLAGS` is still matched against
+      // the untouched `name` below, exactly as before, so e.g. `--force=true`
+      // still falls through to the permissive branch rather than silently
+      // taking on a new meaning.
+      const eq = name.indexOf("=");
+      const valueFlagName = eq === -1 ? name : name.slice(0, eq);
       if (BOOL_FLAGS.has(name)) {
         flags[name] = true;
         i++;
-      } else if (OPTIONAL_NUMERIC_FLAGS.has(name)) {
-        const next = argv[i + 1];
-        const numeric = next !== undefined && next.trim() !== "" && Number.isFinite(Number(next));
-        flags[name] = numeric ? argv[++i] : true;
-        i++;
-      } else if (VALUE_FLAGS.has(name) || GLOBAL_VALUE_FLAGS.has(name)) {
-        if (i + 1 >= argv.length) {
-          throw new CliError(`Flag --${name} requires a value`);
+      } else if (OPTIONAL_NUMERIC_FLAGS.has(valueFlagName)) {
+        let value: string | boolean;
+        if (eq !== -1) {
+          // `=` removes the ambiguity the space form has to sniff around —
+          // `--wait=abc` is unambiguously a value, so it is taken literally
+          // and left for parseWaitFlag to reject, rather than silently
+          // degrading to the bare-boolean default.
+          value = name.slice(eq + 1);
+          i++;
+        } else {
+          const next = argv[i + 1];
+          const numeric = next !== undefined && next.trim() !== "" && Number.isFinite(Number(next));
+          value = numeric ? argv[++i] : true;
+          i++;
         }
-        flags[name] = argv[++i];
-        i++;
+        flags[valueFlagName] = value;
+        if (typeof value === "string") {
+          (repeated[valueFlagName] ??= []).push(value);
+        }
+      } else if (
+        VALUE_FLAGS.has(valueFlagName) ||
+        GLOBAL_VALUE_FLAGS.has(valueFlagName) ||
+        (GROUP_VALUE_FLAGS[group]?.has(valueFlagName) ?? false)
+      ) {
+        let value: string;
+        if (eq !== -1) {
+          // Split only on the first `=` — a value that itself contains one
+          // (`--command=FOO=bar`) must not be truncated.
+          value = name.slice(eq + 1);
+          i++;
+        } else {
+          if (i + 1 >= argv.length) {
+            throw new CliError(`Flag --${valueFlagName} requires a value`);
+          }
+          value = argv[++i];
+          i++;
+        }
+        // Last-wins, exactly as every existing command has always seen it.
+        flags[valueFlagName] = value;
+        // Additive: every occurrence, in order, alongside the last-wins value
+        // above — `issue list --status a --status b` needs both, and nothing
+        // that reads `flags[name]` directly is affected by this array existing.
+        (repeated[valueFlagName] ??= []).push(value);
       } else {
         // Unknown flag — treat as boolean (permissive)
         flags[name] = true;
@@ -254,7 +345,16 @@ export function parseCtlArgs(argv: string[]): ParsedCtlArgs {
     }
   }
 
-  return { group, action, flags, positional };
+  return { group, action, flags, positional, repeated };
+}
+
+/**
+ * `{ error, code }` for a `CliError`, with `code` present only when the
+ * error set one. Existing consumers read `error` alone and are unaffected —
+ * `code` is additive, not a replacement.
+ */
+function cliErrorPayload(err: CliError): { error: string; code?: string } {
+  return err.code ? { error: err.message, code: err.code } : { error: err.message };
 }
 
 export async function runCtl(argv: string[]): Promise<void> {
@@ -263,7 +363,7 @@ export async function runCtl(argv: string[]): Promise<void> {
     parsed = parseCtlArgs(argv);
   } catch (err) {
     if (err instanceof CliError) {
-      process.stderr.write(JSON.stringify({ error: err.message }) + "\n");
+      process.stderr.write(JSON.stringify(cliErrorPayload(err)) + "\n");
       process.exit(1);
     }
     throw err;
@@ -306,8 +406,14 @@ export async function runCtl(argv: string[]): Promise<void> {
       case "status":
         result = handleStatus(ctx, parsed);
         break;
+      case "identity":
+        result = await handleIdentity(parsed);
+        break;
       case "cc":
         result = handleCc(ctx, parsed);
+        break;
+      case "raise":
+        result = handleRaise(ctx, parsed);
         break;
       case "browser":
         result = await handleBrowser(ctx, parsed);
@@ -321,7 +427,7 @@ export async function runCtl(argv: string[]): Promise<void> {
     process.stdout.write(JSON.stringify(result ?? null) + "\n");
   } catch (err) {
     if (err instanceof CliError) {
-      process.stderr.write(JSON.stringify({ error: err.message }) + "\n");
+      process.stderr.write(JSON.stringify(cliErrorPayload(err)) + "\n");
       process.exit(1);
     }
     if (err instanceof Error) {

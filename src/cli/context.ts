@@ -19,9 +19,19 @@ interface ResolveInput {
 }
 
 export class CliError extends Error {
-  constructor(message: string) {
+  /**
+   * A stable machine-readable reason, alongside the human-readable `message`.
+   * Optional: most call sites have exactly one way to fail and prose is
+   * enough for the human reading stderr. A caller that needs to tell one
+   * refusal apart from another — the orchestrator distinguishing "already
+   * linked" from "retry me" — sets one.
+   */
+  readonly code?: string;
+
+  constructor(message: string, code?: string) {
     super(message);
     this.name = "CliError";
+    if (code) this.code = code;
   }
 }
 

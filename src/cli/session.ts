@@ -128,6 +128,142 @@ export function buildAttentionCommands(
   );
 }
 
+export const SESSION_REPORT_OUTCOME_OPTION = "@jmux-session-report-outcome";
+export const SESSION_REPORT_REASON_OPTION = "@jmux-session-report-reason";
+
+/**
+ * The four outcomes `ctl session report` accepts. Exhaustive on purpose: a
+ * report's outcome is read back by a consumer whose type covers exactly
+ * these four, so nothing else may ever be persisted (see
+ * `buildSessionReportCommands`'s refusal below).
+ */
+export const SESSION_REPORT_OUTCOMES = ["shipped", "blocked", "needs-human", "failed"] as const;
+export type SessionReportOutcome = (typeof SESSION_REPORT_OUTCOMES)[number];
+
+/**
+ * A session's report, as read back from tmux options or built at write time.
+ *
+ * `unbound` is always `true` and is not something a caller can set — there is
+ * no turn counter anywhere in this repository (see the parent orchestrator
+ * design doc: "a report with no turn is unbound and adjudicated, never
+ * trusted"). It is stamped explicitly, on every report, so a consumer reading
+ * this record can never mistake it for one bound to the turn it describes.
+ */
+export interface SessionReport {
+  outcome: string;
+  reason: string;
+  readonly unbound: true;
+}
+
+/**
+ * Parse the two `ctl session report` tmux-option fields into a report, or
+ * `null` when the session carries none.
+ *
+ * Presence is decided by `outcomeField` alone, never by whether `reasonField`
+ * looks non-empty. A corrupted or partially-written state — outcome set,
+ * reason blank — must surface as a report with an empty reason, not silently
+ * read back as "no report": the same "an unreadable thing reported as an
+ * empty thing" defect this project's own postmortems call out by name.
+ */
+export function parseSessionReport(outcomeField: string, reasonField: string): SessionReport | null {
+  if (!outcomeField) return null;
+  return { outcome: outcomeField, reason: reasonField, unbound: true };
+}
+
+/**
+ * A reason travels through a tmux `set-option` / `#{...}` round trip that,
+ * unlike the option's stored bytes, is read one line at a time on the way
+ * back out — `runTmuxDirect` splits `list-panes -F` stdout on `\n`, the same
+ * way `tmux-fields.ts`'s own doc comment explains the field separator has to
+ * be printable ASCII. tmux is happy to store a raw embedded newline in an
+ * option value, so the *write* survives it, but the *read* does not: the
+ * server's own `-F` output for that one pane spans several literal stdout
+ * lines, this codebase's line-based parsing treats them as several rows, and
+ * everything after the first line is silently dropped — proven live against
+ * a real server (`show-options -v` returns the reason whole; `list-panes -F`
+ * with the same option embedded splits it across three stdout lines).
+ *
+ * `encodeReportReason` escapes every newline to the two characters `\n`
+ * before the value ever reaches tmux, so no raw newline is ever stored.
+ * Backslash is escaped first: escaping newline before backslash would take
+ * an already-encoded `\n` and re-escape its backslash on a second pass,
+ * corrupting a value that was already safe. `decodeReportReason` reverses
+ * it, and only it — a literal backslash followed by the letter `n` that was
+ * never a newline is, by construction, always paired with an escaped
+ * backslash ahead of it (`encodeReportReason` doubles every backslash before
+ * it ever escapes a newline), so the decoder cannot mistake one for the
+ * other.
+ *
+ * Together these are the only place a reason's bytes are ever transformed:
+ * the write path still returns the caller's reason whole in its own
+ * response (built from the same in-process string, never round-tripped
+ * through tmux), and this pair is what keeps a *read* of that same reason
+ * true to it after a trip through a real server.
+ */
+export function encodeReportReason(raw: string): string {
+  return raw.replace(/\\/g, "\\\\").replace(/\n/g, "\\n");
+}
+
+/** Inverse of {@link encodeReportReason}. */
+export function decodeReportReason(encoded: string): string {
+  let out = "";
+  for (let i = 0; i < encoded.length; i++) {
+    const ch = encoded[i];
+    if (ch === "\\" && i + 1 < encoded.length) {
+      const next = encoded[i + 1];
+      if (next === "n") {
+        out += "\n";
+        i++;
+        continue;
+      }
+      if (next === "\\") {
+        out += "\\";
+        i++;
+        continue;
+      }
+    }
+    out += ch;
+  }
+  return out;
+}
+
+export interface SessionReportCommand {
+  args: string[];
+  required: boolean;
+}
+
+/**
+ * Pure builder for the tmux commands `ctl session report` issues, plus the
+ * two refusals a report must pass before anything is written.
+ *
+ * Reason is written before outcome — the same "payload before the flag"
+ * ordering `buildAttentionCommands` uses (see its doc comment) — because
+ * {@link parseSessionReport} treats the outcome field's presence as the
+ * signal that a report exists at all; writing it last means a reader never
+ * observes an outcome with no reason behind it.
+ */
+export function buildSessionReportCommands(
+  target: string,
+  outcome: string,
+  reason: string,
+): SessionReportCommand[] {
+  if (!(SESSION_REPORT_OUTCOMES as readonly string[]).includes(outcome)) {
+    throw new CliError(
+      `Unknown outcome "${outcome}". Use one of: ${SESSION_REPORT_OUTCOMES.join(", ")}`,
+    );
+  }
+  if (!reason.trim()) {
+    throw new CliError("session report requires a non-empty --reason");
+  }
+  return [
+    {
+      args: ["set-option", "-t", target, SESSION_REPORT_REASON_OPTION, encodeReportReason(reason)],
+      required: true,
+    },
+    { args: ["set-option", "-t", target, SESSION_REPORT_OUTCOME_OPTION, outcome], required: true },
+  ];
+}
+
 export interface GridHiddenCommand {
   args: string[];
   required: boolean;
@@ -431,9 +567,28 @@ export function handleSession(ctx: CliContext, parsed: ParsedCtlArgs): unknown {
       return { hidden: parseHiddenList(lines) };
     }
 
+    case "report": {
+      if (!flags.target || typeof flags.target !== "string") {
+        throw new CliError("--target is required");
+      }
+      const target = flags.target;
+      const outcome = typeof flags.outcome === "string" ? flags.outcome : "";
+      const reason = typeof flags.reason === "string" ? flags.reason : "";
+
+      const commands = buildSessionReportCommands(target, outcome, reason);
+      for (const cmd of commands) {
+        tmuxOrThrow(runTmuxDirect(cmd.args, ctx.socket));
+      }
+
+      // `buildSessionReportCommands` already refused any outcome that would
+      // make `outcome` empty, so this can never read back `null`.
+      const report = parseSessionReport(outcome, reason)!;
+      return { target, report };
+    }
+
     default:
       throw new CliError(
-        `Unknown session action "${action}". Known actions: list, create, info, switch, kill, cleanup, rename, attention, hide, unhide, hidden`,
+        `Unknown session action "${action}". Known actions: list, create, info, switch, kill, cleanup, rename, attention, hide, unhide, hidden, report`,
       );
   }
 }

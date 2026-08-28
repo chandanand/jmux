@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync, statSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { readCredentials, writeCredential, resolveCredential } from "../credentials";
+import { readCredentials, writeCredential, resolveCredential, describeCredential } from "../credentials";
 
 let dir: string;
 let path: string;
@@ -69,7 +69,7 @@ describe("resolveCredential", () => {
 
   test("no source at all", () => {
     const r = resolveCredential("linear", ENV, { store: {}, env: {} });
-    expect(r).toEqual({ token: null, source: "none", shadowed: false });
+    expect(r).toEqual({ token: null, source: "none", envName: null, shadowed: false });
   });
 
   test("the environment is used when nothing is stored", () => {
@@ -124,6 +124,48 @@ describe("resolveCredential", () => {
   // completely untouched.
   test("an env-only user is unaffected", () => {
     const r = resolveCredential("linear", ENV, { store: {}, env: { LINEAR_API_KEY: "old" } });
-    expect(r).toEqual({ token: "old", source: "env", shadowed: false });
+    expect(r).toEqual({ token: "old", source: "env", envName: "LINEAR_API_KEY", shadowed: false });
+  });
+});
+
+/**
+ * The Connections rows report where a token comes from, which until now was
+ * unanswerable: `source` and `shadowed` were computed on every resolve and read
+ * by nobody, so "connected" was the only thing jmux ever said and an env var
+ * silently losing to a stored file looked like the export not working.
+ */
+describe("describeCredential", () => {
+  const ENV = ["GITLAB_TOKEN", "GITLAB_PRIVATE_TOKEN"];
+
+  test("a stored token names the file, not the variable", () => {
+    const r = resolveCredential("gitlab", ENV, { store: { gitlab: "s" }, env: {} });
+    expect(describeCredential(r)).toEqual({ value: "stored in jmux", note: null });
+  });
+
+  test("an environment token names the variable that actually matched", () => {
+    // Not the first name in the list — the one that won. Reporting "$GITLAB_TOKEN"
+    // to somebody who set $GITLAB_PRIVATE_TOKEN sends them to edit the wrong line.
+    const r = resolveCredential("gitlab", ENV, { store: {}, env: { GITLAB_PRIVATE_TOKEN: "e" } });
+    expect(describeCredential(r)).toEqual({ value: "$GITLAB_PRIVATE_TOKEN", note: null });
+  });
+
+  test("no token anywhere says so without claiming the CLI has none", () => {
+    // resolveCredential cannot see `glab`/`gh`, which the adapter still tries.
+    // So this says what is stored, and leaves connected-or-not to the row above.
+    const r = resolveCredential("gitlab", ENV, { store: {}, env: {} });
+    expect(describeCredential(r)).toEqual({ value: "not stored", note: null });
+  });
+
+  test("a shadowed environment variable is disclosed by name", () => {
+    const r = resolveCredential("gitlab", ENV, { store: { gitlab: "s" }, env: { GITLAB_TOKEN: "e" } });
+    expect(describeCredential(r)).toEqual({
+      value: "stored in jmux",
+      note: "$GITLAB_TOKEN set but ignored",
+    });
+  });
+
+  test("an environment variable agreeing with the file is not a disagreement", () => {
+    const r = resolveCredential("gitlab", ENV, { store: { gitlab: "x" }, env: { GITLAB_TOKEN: "x" } });
+    expect(describeCredential(r).note).toBeNull();
   });
 });

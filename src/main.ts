@@ -29,7 +29,7 @@ import {
 import { detectSkill, installSkill, installSkills, uninstallIntegrations } from "./agent-hooks/skill";
 import { OnboardingModal, type OnboardingPort } from "./onboarding/modal";
 import { deriveStatus, type SetupFacts } from "./onboarding/status";
-import { applyTrackerCredential } from "./tracker-credential";
+import { applyAdapterCredential } from "./adapter-credential";
 import { ScreenBridge } from "./screen-bridge";
 import { Renderer, getToolbarButtonRanges, getToolbarTabRanges, getModalPosition, buildToolbarButtons, type ToolbarConfig } from "./renderer";
 import { InputRouter } from "./input-router";
@@ -38,6 +38,7 @@ import { Sidebar, rebuildSidebarColors } from "./sidebar";
 import {
   GROUP_MODES, SORT_MODES, FILTER_MODES,
   groupModeLabel, sortModeLabel, filterModeLabel, migrateLegacySort,
+  groupModeShort, sortModeShort, filterModeShort,
   cycleGroup, cycleSort, cycleFilter,
   type GroupMode, type SortMode, type FilterMode, type LegacySortMode,
 } from "./sidebar-sort";
@@ -159,7 +160,9 @@ import {
 } from "./issue-session";
 import { createAdapters } from "./adapters/registry";
 import { ActiveAdapters } from "./adapters/active-set";
-import { writeCredential, readCredentials } from "./credentials";
+import { writeCredential, readCredentials, resolveCredential, describeCredential } from "./credentials";
+import { GITLAB_ENV_NAMES } from "./adapters/gitlab";
+import { GITHUB_ENV_NAMES } from "./adapters/github";
 import { PollCoordinator } from "./adapters/poll-coordinator";
 import { SessionState } from "./session-state";
 import type { SessionContext, WorkflowState, AdapterConfig } from "./adapters/types";
@@ -218,6 +221,7 @@ import { decideStartup, sessionNamesFromProbe } from "./startup-decision";
 import { PinnedPaneTracker } from "./glass/pinned-pane-tracker";
 import type { PaneLocation } from "./glass/types";
 import { US, splitFields } from "./tmux-fields";
+import { latestWindowActivity, WINDOW_ACTIVITY_FORMAT } from "./session-activity";
 import { resolveIssueProject, attachProjectDrift, mayOfferLinearProjectRoute, prunableIssueRoutes } from "./project-routing";
 import {
   PROJECT_SETTING_DEFAULTS,
@@ -262,7 +266,7 @@ import {
 } from "./glass/views";
 import { GlassView, type GlassTileSpec } from "./glass/view";
 import { buildCcCommands } from "./glass/cc-commands";
-import { renderStrip, layoutStrip, STRIP_ROWS } from "./glass/strip";
+import { renderStrip, layoutStrip, layoutStripActions, STRIP_ROWS, type StripAxisId, type PlacedAxisChip } from "./glass/strip";
 import { DENSITIES, cycleDensity, normalizeDensity, type Density } from "./glass/density";
 import { chipAtCol, type PlacedChip } from "./band-layout";
 import { OtelReceiver } from "./otel-receiver";
@@ -1020,17 +1024,18 @@ let layout: FrameLayout = computeFrameLayout({
 });
 let mainCols = layout.main.w;
 
-// The settings screen and Command Center (glass) are full-screen takeovers
+// The settings, workflow and ghost-preview screens are full-screen takeovers
 // with no window tabs — they pass toolbar: null — so they render through
-// this dedicated chrome-less layout instead of the shared toolbar-ful
-// `layout` above: toolbarRows: 0 collapses resolveChrome's whole ladder to
-// NONE (see frame-layout.ts), so there's no blank toolbar-row strip above
-// them and no footer band clipping their bottom. Column geometry (sidebar
-// span, borderCol, main.x) is identical to `layout` — only the row bands
-// differ — so this is recomputed alongside `layout` everywhere `layout`
-// changes (relayout()) and applied via applyChromeLayout() whenever the
-// settings/glass mode itself is entered or left (those transitions don't
-// go through relayout()).
+// this dedicated chrome-less layout instead of the shared `layout` above:
+// toolbarRows: 0 collapses resolveChrome's whole ladder to NONE (see
+// frame-layout.ts), so there's no blank toolbar-row strip above them and no
+// footer band clipping their bottom. Column geometry (sidebar span,
+// borderCol, main.x) is identical to `layout` — only the row bands differ —
+// so this is recomputed alongside `layout` everywhere `layout` changes
+// (relayout()) and applied via applyChromeLayout() whenever such a surface
+// is entered or left (those transitions don't go through relayout()). The
+// Command Center is not one of these: it shares the frame with the docked
+// panel, so `layout` itself carries its row bands while the grid is up.
 let fullScreenLayout: FrameLayout = computeFrameLayout({
   termCols: cols,
   termRows: rows,
@@ -1592,6 +1597,7 @@ const stdinGate = new StdinGate({
     rebuildSettingsColors();
     rebuildWorkflowColors();
     rebuildGhostPreviewColors();
+    rebuildRaisesColors();
     // rebuildPanelViewColors also re-derives the shared issue-detail attrs, so
     // the preview's body tracks the theme through the same call.
     rebuildPanelViewColors();
@@ -1899,6 +1905,8 @@ let inGlass = false;
 let preGlassSessionId: string | null = null;
 let glassView: GlassView | null = null;
 let currentStripChips: PlacedChip[] = [];
+/** The strip's right-cluster axis chips, placed by the last frame. */
+let currentStripActions: PlacedAxisChip[] = [];
 
 // The Command Center's saved views and its live (possibly dirty) axes. The
 // axes are what `reconcileGrid` derives membership from; the registry is what
@@ -2048,9 +2056,12 @@ let hunkSessionState: HunkSession | null = null;
 let hunkPollTimer: ReturnType<typeof setInterval> | null = null;
 /** The changeset the panel is pointed at. Per-panel, not per-session. */
 let diffView: HunkView = DEFAULT_VIEW;
+/** The session `syncPanelSubject` last pointed the panel at. */
+let panelSubjectId: string | null = null;
 const settingsScreen = new SettingsScreen();
 const workflowScreen = new WorkflowScreen();
 const ghostPreview = new GhostPreview();
+const raisesScreen = new RaisesScreen();
 
 import { SettingsScreen, rebuildSettingsColors, type SettingDef, type SettingsCategory, type SettingsAction } from "./settings-screen";
 import { numberSetting, editNumber, parseNumber, rangeHint, type NumberSpec } from "./setting-number";
@@ -2058,6 +2069,9 @@ import { WorkflowScreen, rebuildWorkflowColors, TRANSITIONS_BAND, type WorkflowP
 import { GhostPreview, rebuildGhostPreviewColors, type GhostPreviewPort, type StartOutcome } from "./ghost-preview";
 import { buildPreflight, type Preflight } from "./ghost-preflight";
 import { resolveNavStep, type NavFocus } from "./nav-order";
+import { RaisesScreen, rebuildRaisesColors, raiseJumpTarget, raisesFileTouched, type RaisesPort } from "./raises-screen";
+import { readRaises, raisesPathFor } from "./raises/store";
+import { applyRaiseEvent } from "./cli/raise";
 
 // Mutable behind an epoch, so a tracker change applies without a restart. Every
 // existing `adapters.issueTracker` / `adapters.codeHost` read still works —
@@ -2074,18 +2088,35 @@ for (const view of panelViews) {
   viewStates.set(view.id, createViewState());
 }
 
+/**
+ * Report an adapter that failed to authenticate at startup, on every channel
+ * that can carry it.
+ *
+ * It used to be `process.stderr` alone, which the alt screen swallows — so the
+ * whole visible consequence of a failed code host was that the MR tabs were not
+ * there, with nothing anywhere saying why, and `docs/connecting.md` telling
+ * people to go read a log line that was never written. Both channels, for the
+ * reason `resolveTitleConfig` uses both: the terminal is gone by now, and one
+ * toast is the only thing a user is actually looking at.
+ */
+function reportAdapterAuthFailure(adapter: { type: string; authState: string; authHint: string }): void {
+  const why = adapter.authState === "unreachable"
+    ? "could not be reached"
+    : `auth failed — check ${adapter.authHint}`;
+  const msg = `${adapter.type} adapter ${why}`;
+  process.stderr.write(`jmux: ${msg}\n`);
+  logError("jmux", msg);
+  showToast(msg);
+}
+
 async function initAdapters(): Promise<void> {
   if (adapters.codeHost) {
     await adapters.codeHost.authenticate();
-    if (adapters.codeHost.authState !== "ok") {
-      process.stderr.write(`jmux: ${adapters.codeHost.type} adapter auth failed — check ${adapters.codeHost.authHint}\n`);
-    }
+    if (adapters.codeHost.authState !== "ok") reportAdapterAuthFailure(adapters.codeHost);
   }
   if (adapters.issueTracker) {
     await adapters.issueTracker.authenticate();
-    if (adapters.issueTracker.authState !== "ok") {
-      process.stderr.write(`jmux: ${adapters.issueTracker.type} adapter auth failed — check ${adapters.issueTracker.authHint}\n`);
-    }
+    if (adapters.issueTracker.authState !== "ok") reportAdapterAuthFailure(adapters.issueTracker);
   }
   refreshPanelViews();
 }
@@ -2994,9 +3025,13 @@ function toggleParked(name: string): void {
 function setDiffFocus(focused: boolean): void {
   diffPanelFocused = focused;
   inputRouter.setPanelFocused(focused);
-  // Dim/undim the tmux active pane to visually show focus has moved. The dim
-  // color tracks the theme so it recedes correctly on light backgrounds too.
-  if (focused) {
+  if (inGlass) {
+    // The pty client is parked, so there is no tmux pane to dim; the cue is
+    // the focused tile giving up its accent border — keys are in no tile.
+    glassView?.setInputFocus(!focused);
+  } else if (focused) {
+    // Dim/undim the tmux active pane to visually show focus has moved. The dim
+    // color tracks the theme so it recedes correctly on light backgrounds too.
     control.sendCommand(`select-pane -P 'fg=${toHex(theme.paneInactiveFg)}'`).catch(() => {});
   } else {
     control.sendCommand("select-pane -P ''").catch(() => {});
@@ -3152,8 +3187,7 @@ function getDiffPanelCols(): number {
   return layout.panel?.w ?? 0;
 }
 
-async function getSessionCwd(sessionId = currentSessionId): Promise<string | null> {
-  if (!sessionId) return null;
+async function getSessionCwd(sessionId: string): Promise<string | null> {
   try {
     const lines = await control.sendCommand(
       `display-message -t ${tq(sessionId)} -p '#{pane_current_path}'`,
@@ -3249,7 +3283,8 @@ async function spawnHunk(cols: number, rows: number): Promise<void> {
     return;
   }
 
-  const cwd = await getSessionCwd();
+  const subject = focusedSessionId();
+  const cwd = subject ? await getSessionCwd(subject) : null;
   if (!cwd) {
     diffPanel.setHunkExited(true);
     return;
@@ -3702,17 +3737,26 @@ function relayout(): void {
 
   // Probe computeFrameLayout in off mode to derive the available width that
   // the panel-width calculation depends on.
+  //
+  // `layout` carries the Command Center's mode rather than glass keeping a
+  // private frameless layout: in the grid the one chrome row is the view
+  // strip, where the toolbar sits otherwise, and there is no rule under it.
+  // Column geometry is identical either way, so the panel — which docks
+  // beside the tiles exactly as it docks beside the pty — reads its width,
+  // rows and `contentTop` from the same `layout` on both surfaces, and every
+  // consumer of `layout.panel` (the router's hit-testing, the hunk pty
+  // resize below, `panelSplit`) works in the grid with no second copy.
   const base = {
     termCols,
     termRows,
     sidebarWidth,
     sidebarHidden,
     borderWidth: BORDER_WIDTH,
-    toolbarRows: toolbarHeight,
+    toolbarRows: inGlass ? STRIP_ROWS : toolbarHeight,
     // The top rule (+ junctions + tab underline) is on — compositeGrids
     // paints it (renderer.ts). The footer is disabled (see footer-removal
     // notes) — content reclaims the bottom row for tmux.
-    frameRulesEnabled: true,
+    frameRulesEnabled: !inGlass,
     footerEnabled: false,
   };
   const probe = computeFrameLayout({ ...base, diffState: "off", requestedPanelCols: 0 });
@@ -3731,11 +3775,14 @@ function relayout(): void {
     requestedPanelCols,
   });
 
-  // Recomputed alongside `layout` on every geometry change so the settings
-  // screen / Command Center's frameless render always has an up-to-date
-  // fullScreenLayout for the current terminal size, even though neither of
-  // those modes affects diffState/requestedPanelCols (both are always "off"/0
-  // here — they're full-screen takeovers with no diff panel of their own).
+  // Recomputed alongside `layout` on every geometry change so the settings,
+  // workflow and ghost-preview surfaces' frameless render always has an
+  // up-to-date fullScreenLayout for the current terminal size, even though
+  // none of them affects diffState/requestedPanelCols (always "off"/0 here —
+  // they take the whole main area, and asking for the panel *leaves* them; see
+  // requestDiffPanel). The Command Center is deliberately not on this list:
+  // the panel shares the frame with the grid, so glass renders through
+  // `layout` above.
   fullScreenLayout = computeFrameLayout({
     termCols,
     termRows,
@@ -3762,12 +3809,11 @@ function relayout(): void {
 
   // The grid's tiles are real attached clients, so they have to be resized like
   // the main pty above rather than merely re-composited. Here rather than at
-  // each caller because this is where `fullScreenLayout` — the layout
-  // `resizeGlass` reads — is recomputed, so every geometry change reaches it by
-  // construction: hiding the sidebar, opening or zooming the panel, dragging
-  // the sidebar border, SIGWINCH. Hooking the callers instead is how the
-  // sidebar toggle came to relayout the frame around tiles that stayed the old
-  // width.
+  // each caller because this is where `layout` — which `resizeGlass` reads —
+  // is recomputed, so every geometry change reaches it by construction: hiding
+  // the sidebar, opening or zooming the panel, dragging the sidebar border,
+  // SIGWINCH. Hooking the callers instead is how the sidebar toggle came to
+  // relayout the frame around tiles that stayed the old width.
   if (inGlass) resizeGlass();
 
   applyChromeLayout();
@@ -3778,15 +3824,73 @@ function relayout(): void {
 /**
  * The layout that should currently govern the sidebar's height and the
  * input router's row classification: the frameless full-screen layout while
- * the settings screen or Command Center (glass) is the active view — both
- * render via `fullScreenLayout` in renderFrame() — the shared toolbar-ful
- * `layout` otherwise. Column geometry is identical between the two; only
+ * settings, the workflow screen or the ghost preview is the active view — all
+ * render via `fullScreenLayout` in renderFrame() — the shared `layout`
+ * otherwise, which carries the Command Center's own row bands while the grid
+ * is up (see relayout). Column geometry is identical between the two; only
  * which row bands (toolbar/rules/footer) exist differs.
  */
 function activeChromeLayout(): FrameLayout {
-  return settingsScreen.isOpen || workflowScreen.isOpen || ghostPreview.isOpen || inGlass
+  return settingsScreen.isOpen || workflowScreen.isOpen || ghostPreview.isOpen || raisesScreen.isOpen
     ? fullScreenLayout
     : layout;
+}
+
+/**
+ * The session in front of the user: the pty client's session outside the
+ * Command Center, the focused tile's inside it — where `currentSessionId` is
+ * the internal park session, which nothing should describe or act on. Same
+ * reading `resolveCcTargetPaneId` gives "the pane in front of you". The
+ * docked panel reads it for everything it shows and does (the Issue tab's
+ * context, the hunk cwd, link/unlink/start, the review-notes target), and so
+ * do the palette's per-session actions — kill, rename, pin, park, "switch to
+ * (excluding this one)", dev servers, the browser pane. `currentSessionId`
+ * stays what it is, tmux's answer, for the rail, the snapshotter and the
+ * client-level plumbing.
+ */
+function focusedSessionId(): string | null {
+  if (inGlass) return glassView?.focusedSessionId() ?? null;
+  return currentSessionId;
+}
+
+function focusedSessionName(): string | null {
+  const id = focusedSessionId();
+  if (!id) return null;
+  return currentSessions.find((s) => s.id === id)?.name ?? null;
+}
+
+/**
+ * Point the panel at `focusedSessionId()` if it has changed: back to the default
+ * diff view (a view is built from one worktree's refs — "Branch vs main" is a
+ * different diff in every session), respawn hunk against the new cwd, make it
+ * the poll's active session and put its driving issue under the cursor.
+ *
+ * Idempotent on the subject, and every place the subject can move calls it:
+ * the pty client changing session, tile focus moving (click, Shift-arrows, a
+ * reconcile that re-elected focus), and entering or leaving the grid. That is
+ * what makes the ordering between those safe to ignore — leaving the grid
+ * switches the client (an async `%client-session-changed`) and tears the grid
+ * down, and whichever lands second sees the same answer and does nothing.
+ */
+function syncPanelSubject(): void {
+  const subject = focusedSessionId();
+  if (subject === panelSubjectId) return;
+  const hadSubject = panelSubjectId !== null;
+  panelSubjectId = subject;
+  if (!subject) return;
+  // A hunk the user quit with `q` stays quit across a switch — but a panel
+  // that had no subject to spawn against (an empty grid, or boot) reports the
+  // same `hunkExited`, and the first subject to arrive is its cue to start.
+  if (diffPanel.isActive() && (!diffPanel.hunkExited || !hadSubject)) {
+    diffView = DEFAULT_VIEW;
+    void spawnHunk(getDiffPanelCols(), layout.ptyRows);
+  }
+  const sessionName = currentSessions.find((s) => s.id === subject)?.name;
+  if (sessionName) {
+    void pollCoordinator.setActiveSession(sessionName);
+    focusPanelOnSessionIssue(sessionName);
+  }
+  scheduleRender();
 }
 
 /**
@@ -3847,10 +3951,11 @@ function toggleSidebar(): void {
  * else". Leaving the surface is what makes it visible again.
  */
 function requestDiffPanel(): void {
-  if (ghostPreview.isOpen || settingsScreen.isOpen || workflowScreen.isOpen) {
+  if (ghostPreview.isOpen || settingsScreen.isOpen || workflowScreen.isOpen || raisesScreen.isOpen) {
     if (ghostPreview.isOpen) closeGhostPreview();
     if (settingsScreen.isOpen) toggleSettingsScreen();
     if (workflowScreen.isOpen) toggleWorkflowScreen();
+    if (raisesScreen.isOpen) toggleRaisesScreen();
     if (diffPanel.isActive()) {
       scheduleRender();
       return;
@@ -3945,7 +4050,7 @@ function pasteIntoPane(paneId: string, text: string): boolean {
  * exactly what lands before it does.
  */
 async function sendReviewToAgent(): Promise<void> {
-  const sessionId = currentSessionId;
+  const sessionId = focusedSessionId();
   if (!sessionId) return;
 
   if (!hunkSessionId) {
@@ -4062,7 +4167,7 @@ async function deliverReview(
  * it are separate decisions, and a session may not even have an agent.
  */
 function briefAgentAbout(issues: import("./adapters/types").Issue[]): void {
-  const sessionId = currentSessionId;
+  const sessionId = focusedSessionId();
   if (!sessionId || issues.length === 0) return;
 
   const pane = resolveAgentPane(sessionId);
@@ -4136,7 +4241,8 @@ function briefAgentAbout(issues: import("./adapters/types").Issue[]): void {
  * agent's work rather than just whatever is currently uncommitted.
  */
 async function openDiffViewPicker(): Promise<void> {
-  const cwd = await getSessionCwd();
+  const subject = focusedSessionId();
+  const cwd = subject ? await getSessionCwd(subject) : null;
   const base = cwd ? await resolveBaseBranch(cwd) : null;
 
   const all: Array<{ view: HunkView; hint: string }> = [
@@ -4261,11 +4367,77 @@ const SESSION_LIST_FORMAT = [
   `#{${GROUNDCREW_MANAGED_OPTION}}`,
 ].join(US);
 
+async function readWindowActivity(): Promise<Map<string, number>> {
+  const lines = await control.sendCommand(
+    `list-windows -a -f "${INTERNAL_SESSION_FILTER}" -F '${WINDOW_ACTIVITY_FORMAT}'`,
+  );
+  return latestWindowActivity(lines);
+}
+
+let windowActivityRefreshInFlight = false;
+let windowActivityRefreshQueued = false;
+
+/**
+ * Refresh only the output timestamp/status inputs, without re-running the much
+ * heavier session discovery path (project lookup, tracker registration and
+ * title generation) once per second while an agent is printing.
+ */
+async function refreshWindowActivity(): Promise<void> {
+  if (windowActivityRefreshInFlight) {
+    // Preserve the trailing edge: output may land after the in-flight
+    // list-windows snapshot, and then stop. Dropping that subscription edge
+    // would leave the final activity transition unseen forever.
+    windowActivityRefreshQueued = true;
+    return;
+  }
+  windowActivityRefreshInFlight = true;
+  try {
+    do {
+      windowActivityRefreshQueued = false;
+      try {
+        const activityBySession = await readWindowActivity();
+        let changed = false;
+        for (const session of currentSessions) {
+          const activity = activityBySession.get(session.id);
+          if (activity === undefined) continue;
+          if (session.activity !== activity) {
+            session.activity = activity;
+            changed = true;
+          }
+
+          const lastViewed = lastViewedTimestamps.get(session.id) ?? 0;
+          if (
+            activity > lastViewed &&
+            session.id !== currentSessionId &&
+            !sidebar.hasActivity(session.id)
+          ) {
+            sidebar.setActivity(session.id, true);
+            changed = true;
+          }
+        }
+        if (changed) {
+          // Timestamp changes affect activity sorting even when the unread-output
+          // bit was already set, so rebuild from the updated SessionInfo objects.
+          sidebar.updateSessions(currentSessions);
+          scheduleRender();
+        }
+      } catch {
+        // A pane/window can disappear between the subscription edge and this read.
+      }
+    } while (windowActivityRefreshQueued);
+  } finally {
+    windowActivityRefreshInFlight = false;
+  }
+}
+
 async function fetchSessions(): Promise<void> {
   try {
     const lines = await control.sendCommand(
       `list-sessions -f "${INTERNAL_SESSION_FILTER}" -F '${SESSION_LIST_FORMAT}'`,
     );
+    // `session_activity` is focus/client history. Pane output updates
+    // `window_activity`, which is the signal the Active group promises.
+    const windowActivityBySession = await readWindowActivity().catch(() => new Map<string, number>());
     // A row that yields no id or name is not a session, and must not become
     // one: `name` is the key for config, links, worktrees and every tmux
     // command jmux sends, so a nameless entry took the whole boot down inside
@@ -4279,7 +4451,7 @@ async function fetchSessions(): Promise<void> {
         const [
           id,
           name,
-          activity,
+          sessionActivity,
           attached,
           windows,
           issueLink,
@@ -4298,7 +4470,7 @@ async function fetchSessions(): Promise<void> {
         return {
           id,
           name,
-          activity: parseInt(activity, 10) || 0,
+          activity: windowActivityBySession.get(id) ?? (parseInt(sessionActivity, 10) || 0),
           attached: attached === "1",
           windowCount: parseInt(windows, 10) || 1,
           directory: cached?.directory,
@@ -4825,11 +4997,8 @@ async function switchSession(sessionId: string): Promise<boolean> {
     sidebar.setActiveSession(sessionId);
     sidebar.scrollToActive();
     const sessionName = currentSessions.find((s) => s.id === sessionId)?.name;
-    if (sessionName) {
-      snapshotter?.onFocused(sessionName);
-      await pollCoordinator.setActiveSession(sessionName);
-      focusPanelOnSessionIssue(sessionName);
-    }
+    if (sessionName) snapshotter?.onFocused(sessionName);
+    syncPanelSubject();
     fetchWindows();
     renderFrame();
     return true;
@@ -4890,14 +5059,21 @@ function renderFrame(): void {
     const totalCols = fullScreenLayout.termCols;
     const contentCols = sidebarShown ? totalCols - fullScreenLayout.main.x : totalCols;
     const settingsGrid = settingsScreen.render(contentCols, fullScreenLayout.contentRows);
+    // The modal overlay is composited, for the reason the ghost preview states:
+    // this surface paints its own pickers and prompts, but not *only* those —
+    // an action row can open a real modal over it (the code-host token prompt,
+    // the remembered-routes picker), and passing null here opened those
+    // invisibly. Paired with the input guard below, without which the same
+    // modal would also be deaf.
+    const overlay = computeModalOverlay(fullScreenLayout);
     renderer.render(
       fullScreenLayout,
       settingsGrid,
       { x: 0, y: 0 },
       sidebarGrid,
       null, // no toolbar
-      null, // no modal
-      null, // no modal cursor
+      overlay?.grid ?? null,
+      overlay?.cursor ?? null,
       undefined, // no diff panel
       undefined, // no footer — frameless full-screen view
       dragChrome(),
@@ -4915,6 +5091,24 @@ function renderFrame(): void {
     renderer.render(
       fullScreenLayout,
       workflowScreen.render(contentCols, fullScreenLayout.contentRows),
+      { x: 0, y: 0 },
+      sidebarGrid,
+      null, null, null, undefined, undefined,
+      dragChrome(),
+    );
+    return;
+  }
+
+  // The raises screen: the same frameless full-screen takeover as settings
+  // and workflow — no modal overlay, because it paints its own state and
+  // opens no real Modal over itself.
+  if (raisesScreen.isOpen) {
+    const sidebarGrid = sidebarShown ? sidebar.getGrid() : null;
+    const totalCols = fullScreenLayout.termCols;
+    const contentCols = sidebarShown ? totalCols - fullScreenLayout.main.x : totalCols;
+    renderer.render(
+      fullScreenLayout,
+      raisesScreen.render(contentCols, fullScreenLayout.contentRows),
       { x: 0, y: 0 },
       sidebarGrid,
       null, null, null, undefined, undefined,
@@ -4946,18 +5140,16 @@ function renderFrame(): void {
     return;
   }
 
-  // Pane-of-glass (Overview) replaces main content; toolbar hidden. Modals
-  // (e.g. the command palette) still composite on top — otherwise they open
-  // invisibly while the Command Center is up. Frameless full-screen takeover
-  // like settings above — rendered through fullScreenLayout, no footer.
+  // Command Center: the tiles fill `layout.main` under the view strip, which
+  // takes the toolbar's row; the panel — when open — docks beside them
+  // through the same `layout` and the same `buildDiffPanelArg()` as below,
+  // describing the focused tile's session. Modals (e.g. the command palette)
+  // still composite on top — otherwise they open invisibly while the grid is
+  // up.
   if (inGlass && glassView) {
     const sidebarGrid = sidebarShown ? sidebar.getGrid() : null;
-    const overlay = computeModalOverlay(fullScreenLayout);
-    const totalCols = fullScreenLayout.termCols;
-    const contentCols = sidebarShown ? totalCols - fullScreenLayout.main.x : totalCols;
-
-    let content = glassView.getGrid();
-    let cursor = glassView.getFocusedCursor() ?? { x: 0, y: 0 };
+    const overlay = computeModalOverlay(layout);
+    const stripCols = layout.main.w;
 
     // The strip is always visible in the grid — it's the only chrome that
     // says a view exists at all, let alone that others are a keystroke away.
@@ -4967,21 +5159,36 @@ function renderFrame(): void {
       activeViewId,
       dirty: axesDiffer(activeView, gridAxes),
       droppedActive: glassView.getDroppedActive(),
-      densityLabel: DENSITIES[commandCenterDensity].label,
-      width: contentCols,
+      // The same short names the sidebar header's chips use, so the two
+      // surfaces spell one axis one way.
+      axes: {
+        group: groupModeShort(gridAxes.groupBy),
+        sort: sortModeShort(gridAxes.sortBy),
+        filter: filterModeShort(gridAxes.filter),
+        density: DENSITIES[commandCenterDensity].label,
+      },
+      width: stripCols,
     };
     currentStripChips = layoutStrip(stripInput);
-    const strip = renderStrip(stripInput, currentStripChips);
-    const combined = createGrid(contentCols, fullScreenLayout.contentRows);
-    // Blit strip on top rows, glass content below.
-    for (let r = 0; r < STRIP_ROWS && r < combined.rows; r++)
-      for (let c = 0; c < contentCols; c++) combined.cells[r][c] = strip.cells[r][c];
-    for (let r = 0; r < content.rows && r + STRIP_ROWS < combined.rows; r++)
-      for (let c = 0; c < content.cols && c < contentCols; c++) combined.cells[r + STRIP_ROWS][c] = content.cells[r][c];
-    content = combined;
-    cursor = { x: cursor.x, y: cursor.y + STRIP_ROWS };
+    currentStripActions = layoutStripActions(stripInput);
+    const strip = renderStrip(stripInput, currentStripChips, currentStripActions);
 
-    renderer.render(fullScreenLayout, content, cursor, sidebarGrid, null, overlay?.grid ?? null, overlay?.cursor ?? null, undefined, undefined, dragChrome());
+    // The tile grid's cursor is relative to the tiles; the renderer offsets by
+    // `layout.contentTop`, the strip row, exactly as it does for the pty.
+    const cursor = glassView.getFocusedCursor() ?? { x: 0, y: 0 };
+    renderer.render(
+      layout,
+      glassView.getGrid(),
+      cursor,
+      sidebarGrid,
+      null,
+      overlay?.grid ?? null,
+      overlay?.cursor ?? null,
+      buildDiffPanelArg(),
+      undefined,
+      dragChrome(),
+      strip,
+    );
     return;
   }
 
@@ -4989,91 +5196,99 @@ function renderFrame(): void {
   const cursor = bridge.getCursor();
   const tb = toolbarEnabled ? makeToolbar() : null;
   const overlay = computeModalOverlay(layout);
-  const modalGrid = overlay?.grid ?? null;
-  const modalCursorPos = overlay?.cursor ?? null;
-  let diffPanelArg: { grid: import("./types").CellGrid; mode: "split" | "full"; focused: boolean; tabBar?: import("./types").CellGrid } | undefined;
-  if (diffPanel.isActive()) {
-    const dpCols = getDiffPanelCols();
-    const dpRows = layout.ptyRows;
-
-    let contentGrid: import("./types").CellGrid;
-    if (infoPanel.activeTab === "diff") {
-      if (diffPanel.hunkExited || !diffBridge) {
-        contentGrid = !Bun.which(hunkCommand)
-          ? diffPanel.getNotFoundGrid(dpCols, dpRows)
-          : diffPanel.getEmptyGrid(dpCols, dpRows);
-      } else {
-        contentGrid = diffBridge.getGrid();
-      }
-    } else {
-      // View tab — use global panel view renderer
-      const activeViewId = infoPanel.activeTab;
-      const view = panelViews.find((v) => v.id === activeViewId);
-      if (view) {
-        const viewState = viewStates.get(view.id) ?? createViewState();
-
-        const sessionName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
-        const ctx = pollCoordinator.getContext(sessionName);
-        const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
-        const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
-
-        let rawItems: import("./panel-view-renderer").RenderableItem[];
-        // Built inside the branch that needs them and shared with
-        // previewTabsFor below. `getIssueSessionStates` walks every global issue
-        // and stats a worktree path for each — a cost its own doc comment calls
-        // out as fine once per poll and not per frame, which is what building it
-        // separately for the strip briefly made it.
-        let sessionStates: Map<string, IssueSessionInfo> | undefined;
-        let mrsIndex: ReturnType<typeof mrsByUrl> | undefined;
-        if (view.source === "issues") {
-          sessionStates = getIssueSessionStates();
-          mrsIndex = mrsByUrl();
-          rawItems = transformIssues(issuesForView(view), linkedIssueIds, sessionStates, mrsIndex);
-        } else if (view.filter.scope === "reviewing") {
-          rawItems = transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds);
-        } else {
-          rawItems = transformMrs(pollCoordinator.getGlobalMrs(), linkedMrIds);
-        }
-
-        // Apply fuzzy filter when active
-        if (viewState.filterQuery) {
-          rawItems = filterItems(rawItems, viewState.filterQuery);
-        }
-
-        // When filtering, flatten groups so fuzzy-score order is preserved
-        const effectiveView = viewState.filterQuery
-          ? { ...view, groupBy: "none" as const }
-          : view;
-        const nodes = buildViewNodes(rawItems, effectiveView, viewState.collapsedGroups);
-        contentGrid = renderView(nodes, dpCols, dpRows, viewState, {
-          splitRatio: infoPanelSplitRatio,
-          splitHovered: hoveredHandle === "panel-split",
-          previewTabs: previewTabsFor(view, viewState, nodes, sessionStates, mrsIndex),
-        });
-      } else {
-        contentGrid = createGrid(dpCols, dpRows);
-      }
-    }
-
-    const tabBar = infoPanel.tabBarShown ? infoPanel.getTabBarGrid(dpCols, hoveredPanelTabId) : undefined;
-    diffPanelArg = {
-      grid: contentGrid,
-      mode: diffPanel.state as "split" | "full",
-      focused: diffPanelFocused,
-      tabBar,
-    };
-  }
   renderer.render(
     layout,
     grid, cursor,
     sidebarShown ? sidebar.getGrid() : null,
     tb,
-    modalGrid,
-    modalCursorPos,
-    diffPanelArg,
+    overlay?.grid ?? null,
+    overlay?.cursor ?? null,
+    buildDiffPanelArg(),
     footerCells,
     dragChrome(),
   );
+}
+
+/**
+ * The docked panel's grid for this frame, or undefined when it is off. Shared
+ * by the ordinary and Command Center render branches: the panel is the same
+ * panel on both surfaces, sized from the same `layout`, describing
+ * `focusedSessionName()` — the pty client's session outside the grid, the
+ * focused tile's inside it.
+ */
+type DiffPanelArg = NonNullable<Parameters<Renderer["render"]>[7]>;
+
+function buildDiffPanelArg(): DiffPanelArg | undefined {
+  if (!diffPanel.isActive()) return undefined;
+  const dpCols = getDiffPanelCols();
+  const dpRows = layout.ptyRows;
+
+  let contentGrid: import("./types").CellGrid;
+  if (infoPanel.activeTab === "diff") {
+    if (diffPanel.hunkExited || !diffBridge) {
+      contentGrid = !Bun.which(hunkCommand)
+        ? diffPanel.getNotFoundGrid(dpCols, dpRows)
+        : diffPanel.getEmptyGrid(dpCols, dpRows);
+    } else {
+      contentGrid = diffBridge.getGrid();
+    }
+  } else {
+    // View tab — use global panel view renderer
+    const activeViewId = infoPanel.activeTab;
+    const view = panelViews.find((v) => v.id === activeViewId);
+    if (view) {
+      const viewState = viewStates.get(view.id) ?? createViewState();
+
+      const sessionName = focusedSessionName() ?? "";
+      const ctx = pollCoordinator.getContext(sessionName);
+      const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
+      const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
+
+      let rawItems: import("./panel-view-renderer").RenderableItem[];
+      // Built inside the branch that needs them and shared with
+      // previewTabsFor below. `getIssueSessionStates` walks every global issue
+      // and stats a worktree path for each — a cost its own doc comment calls
+      // out as fine once per poll and not per frame, which is what building it
+      // separately for the strip briefly made it.
+      let sessionStates: Map<string, IssueSessionInfo> | undefined;
+      let mrsIndex: ReturnType<typeof mrsByUrl> | undefined;
+      if (view.source === "issues") {
+        sessionStates = getIssueSessionStates();
+        mrsIndex = mrsByUrl();
+        rawItems = transformIssues(issuesForView(view), linkedIssueIds, sessionStates, mrsIndex);
+      } else if (view.filter.scope === "reviewing") {
+        rawItems = transformMrs(pollCoordinator.getGlobalReviewMrs(), linkedMrIds);
+      } else {
+        rawItems = transformMrs(pollCoordinator.getGlobalMrs(), linkedMrIds);
+      }
+
+      // Apply fuzzy filter when active
+      if (viewState.filterQuery) {
+        rawItems = filterItems(rawItems, viewState.filterQuery);
+      }
+
+      // When filtering, flatten groups so fuzzy-score order is preserved
+      const effectiveView = viewState.filterQuery
+        ? { ...view, groupBy: "none" as const }
+        : view;
+      const nodes = buildViewNodes(rawItems, effectiveView, viewState.collapsedGroups);
+      contentGrid = renderView(nodes, dpCols, dpRows, viewState, {
+        splitRatio: infoPanelSplitRatio,
+        splitHovered: hoveredHandle === "panel-split",
+        previewTabs: previewTabsFor(view, viewState, nodes, sessionStates, mrsIndex),
+      });
+    } else {
+      contentGrid = createGrid(dpCols, dpRows);
+    }
+  }
+
+  const tabBar = infoPanel.tabBarShown ? infoPanel.getTabBarGrid(dpCols, hoveredPanelTabId) : undefined;
+  return {
+    grid: contentGrid,
+    mode: diffPanel.state as "split" | "full",
+    focused: diffPanelFocused,
+    tabBar,
+  };
 }
 
 const RENDER_INTERVAL_ACTIVE = 33;  // ~30fps when focused
@@ -5580,11 +5795,11 @@ const inputRouter = new InputRouter(
     onFilterCycle: () => { applySidebarFilter(sidebar.cycleFilterMode()); scheduleRender(); },
     onBrowserPane: () => { void openBrowserPane(); },
     onSidebarToggle: () => toggleSidebar(),
-    // The three surfaces that take the whole main area but keep the sidebar
-    // beside them. Glass is absent because it has its own prefix arm already,
-    // and modals are absent by design — see the option's doc comment.
+    // The full-screen surfaces that take the whole main area but keep the
+    // sidebar beside them. Glass is absent because it has its own prefix arm
+    // already, and modals are absent by design — see the option's doc comment.
     fullScreenSurfaceActive: () =>
-      settingsScreen.isOpen || workflowScreen.isOpen || ghostPreview.isOpen,
+      settingsScreen.isOpen || workflowScreen.isOpen || ghostPreview.isOpen || raisesScreen.isOpen,
     onToggleSessionIssues: () => {
       const name = currentSessions.find((s) => s.id === currentSessionId)?.name;
       if (!name) return;
@@ -5610,7 +5825,18 @@ const inputRouter = new InputRouter(
         handleWorkflowInput(data);
         return;
       }
-      if (settingsScreen.isOpen) {
+      // The raises screen opens no real Modal over itself, so it needs no
+      // `!activeModal?.isOpen()` guard the way settings/preview do below.
+      if (raisesScreen.isOpen) {
+        handleRaisesInput(data);
+        return;
+      }
+      // Guarded on no modal being open, for the same reason the preview is:
+      // an action row can open a real modal over this surface, and swallowing
+      // input here left that modal unable to receive the keys it exists to
+      // collect — invisible and deaf at once. The screen's own text editor and
+      // picker are `editState`, not modals, so they are unaffected.
+      if (settingsScreen.isOpen && !activeModal?.isOpen()) {
         handleSettingsInput(data);
         return;
       }
@@ -5699,6 +5925,7 @@ const inputRouter = new InputRouter(
     glassActive: () => inGlass,
     onGlassClick: (x, y) => {
       glassView?.focusAt(x, y);
+      syncPanelSubject();
       scheduleRender();
     },
     onGlassMouse: (x, y, button, release) => {
@@ -5706,7 +5933,12 @@ const inputRouter = new InputRouter(
       scheduleRender();
     },
     onGlassFocusMove: (dir) => {
-      glassView?.moveFocus(dir);
+      const moved = glassView?.moveFocus(dir) ?? false;
+      // Off the right-most column the next thing to the right is the docked
+      // panel, so the key hands focus on rather than dying at the edge. Split
+      // only: in full mode the panel covers the tiles and Tab is the way in.
+      if (!moved && dir === "right" && diffPanel.state === "split") setDiffFocus(true);
+      syncPanelSubject();
       scheduleRender();
     },
     onPaneFocusMove: (dir) => {
@@ -5740,7 +5972,15 @@ const inputRouter = new InputRouter(
     },
     // The strip is always visible in the grid now — no view count to gate on.
     glassStripRows: () => (inGlass ? STRIP_ROWS : 0),
-    onGlassViewClick: (x) => { const id = chipAtCol(currentStripChips, x); if (id) switchGlassView(id); },
+    onGlassViewClick: (x) => {
+      // Axis chips first: they and the view chips never overlap, but the
+      // action cluster is the one that says which axis, so it is the one to ask.
+      // chipAtCol is string-typed; the ids are StripAxisIds by construction.
+      const action = chipAtCol(currentStripActions, x) as StripAxisId | null;
+      if (action) { STRIP_AXIS_ACTIONS[action](); scheduleRender(); return; }
+      const id = chipAtCol(currentStripChips, x);
+      if (id) switchGlassView(id);
+    },
     onGlassViewSwitch: (n) => { const view = commandCenterViews[n - 1]; if (view) switchGlassView(view.id); },
     onGlassViewRelative: (delta) => switchGlassViewRelative(delta),
     onGlassDetach: () => detachClient(),
@@ -5817,7 +6057,7 @@ const inputRouter = new InputRouter(
       if (!viewState) return;
       const view = panelViews.find((v) => v.id === infoPanel.activeTab);
       if (!view) return;
-      const sessionName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
+      const sessionName = focusedSessionName() ?? "";
       const ctx = pollCoordinator.getContext(sessionName);
       const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
       const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
@@ -5890,7 +6130,7 @@ const inputRouter = new InputRouter(
       if (!view) return;
       const viewState = viewStates.get(view.id);
       if (!viewState) return;
-      const sessionName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
+      const sessionName = focusedSessionName() ?? "";
       const ctx = pollCoordinator.getContext(sessionName);
       const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
       const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
@@ -6553,7 +6793,7 @@ function buildOnboardingPort(): OnboardingPort {
         adapters.issueTracker?.type ??
         configStore.config.adapters?.issueTracker?.type ??
         "linear";
-      const result = await applyTrackerCredential({
+      const result = await applyAdapterCredential({
         type,
         token: token.trim(),
         readCredential: (t) => readCredentials()[t] ?? null,
@@ -6655,7 +6895,8 @@ function openPalette(): void {
 }
 
 function currentGroundcrewSession(): SessionInfo | null {
-  const session = currentSessions.find((s) => s.id === currentSessionId) ?? null;
+  const focusedId = focusedSessionId();
+  const session = currentSessions.find((s) => s.id === focusedId) ?? null;
   return session?.managedBy === "groundcrew" ? session : null;
 }
 
@@ -6683,7 +6924,7 @@ function cleanupErrorMessage(err: unknown): string {
 }
 
 /**
- * Preflight the attached session's worktree and put the destructive boundary
+ * Preflight the focused session's worktree and put the destructive boundary
  * on screen. The TUI process lives outside tmux, so unlike `jmux ctl` it can
  * safely finish removing the worktree after its attached session is killed.
  *
@@ -6695,7 +6936,8 @@ function cleanupErrorMessage(err: unknown): string {
 async function openSessionCleanupConfirm(): Promise<void> {
   if (guardGroundcrewAction("cleanup-session")) return;
 
-  const session = currentSessions.find((s) => s.id === currentSessionId);
+  const focusedId = focusedSessionId();
+  const session = currentSessions.find((s) => s.id === focusedId);
   if (!session) {
     showNotice({
       title: "No session to clean up",
@@ -6825,7 +7067,7 @@ function buildPaletteCommands(): PaletteCommand[] {
 
   const cfg = configStore.config;
   const groundcrewSession = currentGroundcrewSession();
-  const currentSession = currentSessions.find((s) => s.id === currentSessionId) ?? null;
+  const currentSession = currentSessions.find((s) => s.id === focusedSessionId()) ?? null;
 
   const ownedCommand = (
     action: GroundcrewGuardedAction,
@@ -6858,9 +7100,10 @@ function buildPaletteCommands(): PaletteCommand[] {
       return bound ? { ...cmd, keys: shortKeys(bound) } : cmd;
     });
 
-  // Dynamic: switch to session (excluding current)
+  // Dynamic: switch to session (excluding the one in front of you)
+  const focusedId = focusedSessionId();
   for (const session of currentSessions) {
-    if (session.id === currentSessionId) continue;
+    if (session.id === focusedId) continue;
     const shown = displaySessionName(session);
     // Both strings go in the label because `refilter` fuzzy-matches the label
     // and nothing else. A human who has typed `tra-123` for two days should not
@@ -6894,9 +7137,9 @@ function buildPaletteCommands(): PaletteCommand[] {
     });
   }
 
-  // Dynamic: pin/unpin current session
+  // Dynamic: pin/unpin the focused session
   {
-    const currentName = currentSession?.name;
+    const currentName = focusedSessionName();
     if (currentName) {
       if (pinnedSessions.has(currentName)) {
         commands.push({
@@ -6986,6 +7229,7 @@ function buildPaletteCommands(): PaletteCommand[] {
     { id: "dev-server", label: "Open dev server in a browser pane", category: "pane" },
     { id: "open-claude", label: "Open Claude", category: "other" },
     { id: "settings-screen", label: "Settings", category: "other" },
+    { id: "raises-screen", label: "Raises", category: "other" },
     { id: "help", label: "Keyboard shortcuts", category: "other" },
     { id: "setup", label: "Setup", category: "other" },
   );
@@ -7483,6 +7727,96 @@ function adapterConnectionNote(
   }
 }
 
+/**
+ * The environment variables each code host consults, read off the adapters
+ * rather than restated here — a second copy is free to name a variable the
+ * adapter does not actually look at, which is a settings row confidently
+ * sending somebody to export the wrong thing.
+ */
+const CODE_HOST_ENV_NAMES: Record<string, readonly string[]> = {
+  gitlab: GITLAB_ENV_NAMES,
+  github: GITHUB_ENV_NAMES,
+};
+
+/** What the code-host token row displays, and the disclosure beside it. */
+function codeHostCredential(): { value: string; note: string | null } {
+  const type = configStore.config.adapters?.codeHost?.type;
+  if (!type) return { value: "no code host", note: null };
+  return describeCredential(resolveCredential(type, CODE_HOST_ENV_NAMES[type] ?? []));
+}
+
+/**
+ * Verify a candidate code-host token against the code host alone.
+ *
+ * Deliberately **not** `swapAdapters`, which the tracker's own credential flow
+ * uses: that authenticates both slots and refuses the whole swap if either
+ * fails, so a broken tracker would reject a perfectly good GitLab token and
+ * blame GitLab for it. The two adapters are independent everywhere else and a
+ * credential check is the last place to couple them.
+ *
+ * The coupling still exists in `swapAdapters` itself, so publishing can be
+ * refused for a reason that has nothing to do with this token — see the caller,
+ * which says so rather than leaving a saved credential looking inert.
+ */
+async function verifyCodeHostToken(type: string): Promise<boolean> {
+  const candidate = createAdapters({
+    codeHost: { ...configStore.config.adapters?.codeHost, type },
+  });
+  if (!candidate.codeHost) return false;
+  await candidate.codeHost.authenticate();
+  return candidate.codeHost.authState === "ok";
+}
+
+/**
+ * Store a code-host token in jmux itself.
+ *
+ * The code host could previously only read a token out of the ambient
+ * environment or scrape one from `glab` / `gh`, so whether the MR tabs appeared
+ * depended on which shell happened to launch jmux — and when it didn't, the
+ * tabs simply weren't there. The tracker has had the durable answer since the
+ * setup wizard shipped; this is the same one function, given the code host's
+ * slot to write.
+ */
+function promptForCodeHostToken(): void {
+  const type = configStore.config.adapters?.codeHost?.type;
+  if (!type) {
+    // Nothing may advertise an action it cannot perform: with no code host
+    // chosen there is no adapter type to key a credential on.
+    showToast("Choose a code host first — the row above");
+    return;
+  }
+  const modal = new InputModal({
+    header: `Paste your ${type} token`,
+    subheader: "Checked before it is saved. Stored in ~/.config/jmux/credentials.json, mode 0600.",
+    requiredHint: "Paste a token, or press esc to leave it unchanged.",
+    secret: true,
+  });
+  modal.open();
+  openModal(modal, async (value) => {
+    const token = String(value ?? "").trim();
+    if (!token) return;
+    const result = await applyAdapterCredential({
+      type,
+      token,
+      readCredential: (t) => readCredentials()[t] ?? null,
+      writeCredential: (t, v) => writeCredential(t, v),
+      persistType: (t) => configStore.setAdapter("codeHost", { type: t }),
+      verify: () => verifyCodeHostToken(type),
+    });
+    if (!result.ok) {
+      showToast(`${type}: that token was rejected — the previous one is unchanged`);
+      return;
+    }
+    // Verified against the code host alone, so publishing it can still be
+    // refused over the *other* adapter. Saying so beats a stored token that
+    // works and a sidebar that goes on looking exactly as it did.
+    if (!(await swapAdapters(configStore.config.adapters ?? {}))) {
+      showToast(`${type} token saved — takes effect on restart`);
+    }
+    scheduleRender();
+  });
+}
+
 // --- Session title settings ---
 //
 // The last hand-written naming command, so the ◂ ▸ ladder can step past
@@ -7829,6 +8163,14 @@ function buildSettingsCategories(): SettingsCategory[] {
           getNote: () => adapterConnectionNote(adapters.codeHost),
         },
         {
+          id: "code-host-token", label: "Code host token", type: "action" as const,
+          describe: () =>
+            "Stored in jmux at ~/.config/jmux/credentials.json, mode 0600, and preferred over the environment. Without one the token has to come from the shell jmux was launched from, or from glab / gh.",
+          getValue: () => codeHostCredential().value,
+          getNote: () => codeHostCredential().note,
+          onActivate: () => promptForCodeHostToken(),
+        },
+        {
           // Only the trackers `createAdapters` can actually build. GitHub is a
           // code host here and nothing more — offering it as a tracker wrote a
           // type into config that resolved to no adapter, so every issue tab
@@ -8113,6 +8455,7 @@ function returnFromSurface(): boolean {
 
 function openSettingsScreen(focusId?: string): void {
   if (ghostPreview.isOpen) closeGhostPreview();
+  if (raisesScreen.isOpen) raisesScreen.close();
   settingsScreen.open(buildSettingsCategories());
   if (focusId) settingsScreen.selectSetting(focusId);
   inputRouter.setModalOpen(true);
@@ -8354,6 +8697,7 @@ function openWorkflowScreen(): void {
   surfaceReturn = settingsScreen.isOpen ? () => openSettingsScreen("edit-workflow") : null;
   if (settingsScreen.isOpen) settingsScreen.close();
   if (ghostPreview.isOpen) closeGhostPreview();
+  if (raisesScreen.isOpen) raisesScreen.close();
   closeModal();
   workflowScreen.open(buildWorkflowPort());
   inputRouter.setModalOpen(true);
@@ -8371,6 +8715,84 @@ function toggleWorkflowScreen(): void {
     return;
   }
   openWorkflowScreen();
+}
+
+// --- Raises screen ---
+//
+// The inbox for questions an agent asked instead of guessing. Reads
+// raises.json fresh on every render (see RaisesPort.getResult) and answers
+// through applyRaiseEvent (src/cli/raise.ts) — the same lifecycle `ctl raise
+// answer` goes through, so the screen can never advance a raise the state
+// machine would refuse.
+
+function buildRaisesPort(): RaisesPort {
+  return {
+    getResult: () => readRaises(raisesPathFor(configStore.configPath)),
+    getSocket: () => socketName ?? "default",
+    answer: (id, optionId) => {
+      try {
+        applyRaiseEvent(raisesPathFor(configStore.configPath), id, {
+          kind: "answer",
+          optionId,
+          note: null,
+          atMs: Date.now(),
+        });
+      } catch (e) {
+        showToast(`Could not record the answer: ${(e as Error).message}`);
+      }
+      scheduleRender();
+    },
+    // The socket travels with the scope, and the jump refuses rather than
+    // guessing when it doesn't match the socket this jmux process is
+    // actually attached to — a name-only jump could otherwise land on the
+    // wrong server's session, and jmux itself only ever drives the one
+    // socket it was started against.
+    jump: (scope) => {
+      const here = socketName ?? "default";
+      if (scope.socket !== here) {
+        showToast(`That raise's session is on socket "${scope.socket}", not this jmux ("${here}")`);
+        return;
+      }
+      raisesScreen.close();
+      inputRouter.setModalOpen(inputConsumerActive());
+      applyChromeLayout();
+      scheduleRender();
+      void switchSession(raiseJumpTarget(scope));
+    },
+  };
+}
+
+function openRaisesScreen(): void {
+  if (settingsScreen.isOpen) settingsScreen.close();
+  if (workflowScreen.isOpen) workflowScreen.close();
+  if (ghostPreview.isOpen) closeGhostPreview();
+  closeModal();
+  raisesScreen.open(buildRaisesPort());
+  inputRouter.setModalOpen(true);
+  applyChromeLayout();
+  scheduleRender();
+}
+
+function toggleRaisesScreen(): void {
+  if (raisesScreen.isOpen) {
+    raisesScreen.close();
+    inputRouter.setModalOpen(inputConsumerActive());
+    applyChromeLayout();
+    scheduleRender();
+    return;
+  }
+  openRaisesScreen();
+}
+
+/** The screen can close itself (Escape/q), so this re-syncs chrome and routing the same way handleWorkflowInput does. */
+function handleRaisesInput(data: string): void {
+  const wasOpen = raisesScreen.isOpen;
+  raisesScreen.handleInput(data);
+  if (wasOpen && !raisesScreen.isOpen && !inputConsumerActive()) {
+    applyChromeLayout();
+    inputRouter.setModalOpen(false);
+  }
+  scheduleRender();
 }
 
 function buildGhostPreviewPort(): GhostPreviewPort {
@@ -8459,6 +8881,7 @@ function openGhostPreview(issue: { id: string; identifier: string }): void {
   // One full-screen surface at a time — two would leave one painted and deaf.
   if (settingsScreen.isOpen) settingsScreen.close();
   if (workflowScreen.isOpen) workflowScreen.close();
+  if (raisesScreen.isOpen) raisesScreen.close();
   closeModal();
 
   if (inGlass) {
@@ -8546,7 +8969,7 @@ function handleWorkflowInput(data: string): void {
  * one question with one answer is what stops the next surface repeating it.
  */
 function inputConsumerActive(): boolean {
-  return settingsScreen.isOpen || workflowScreen.isOpen || ghostPreview.isOpen
+  return settingsScreen.isOpen || workflowScreen.isOpen || ghostPreview.isOpen || raisesScreen.isOpen
     || activeModal?.isOpen() === true;
 }
 
@@ -8931,7 +9354,7 @@ function previewTabsFor(
   let items = ticked;
 
   if (items.length < 2) {
-    const sessionName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
+    const sessionName = focusedSessionName() ?? "";
     const issues = pollCoordinator.getContext(sessionName)?.issues ?? [];
     if (issues.length < 2) return undefined;
 
@@ -9036,7 +9459,7 @@ function activePanelContext(): PanelContext | null {
   const viewState = viewStates.get(view.id);
   if (!viewState) return null;
 
-  const sessionName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
+  const sessionName = focusedSessionName() ?? "";
   const ctx = pollCoordinator.getContext(sessionName);
   const linkedIssueIds = new Set(ctx?.issues.map((i) => i.id) ?? []);
   const linkedMrIds = new Set(ctx?.mrs.map((m) => m.id) ?? []);
@@ -9360,7 +9783,7 @@ function attachIssueToSession(issueId: string): void {
   // Current session first: it is the overwhelmingly likely target, and the
   // annotation shows what each one already carries so the choice is made
   // against the work, not against a list of names.
-  const currentName = currentSessions.find((s) => s.id === currentSessionId)?.name;
+  const currentName = focusedSessionName();
   const ordered = [...currentSessions].sort((a, b) =>
     (a.name === currentName ? 0 : 1) - (b.name === currentName ? 0 : 1),
   );
@@ -9411,7 +9834,7 @@ async function startUpNext(): Promise<void> {
  * sessions claim the same issue, the current one wins.
  */
 function explicitIssueLinks(): Map<string, string> {
-  const currentName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
+  const currentName = focusedSessionName() ?? "";
   const links = new Map<string, string>();
   const add = (rawKey: string, sessionName: string) => {
     const key = linkKey(rawKey);
@@ -9692,7 +10115,7 @@ function focusPanelWhere(
  * this session".
  */
 function focusPanelOnIssue(issueId: string): void {
-  const sessionName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
+  const sessionName = focusedSessionName() ?? "";
   const ctx = pollCoordinator.getContext(sessionName);
   const linkedIds = new Set([
     ...explicitIssueLinkIds(sessionName),
@@ -9877,7 +10300,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
 
   // Pin/unpin session
   if (commandId === "pin-session" || commandId === "unpin-session") {
-    const currentName = currentSessions.find(s => s.id === currentSessionId)?.name;
+    const currentName = focusedSessionName();
     if (currentName) {
       if (commandId === "pin-session") {
         pinnedSessions.add(currentName);
@@ -9892,7 +10315,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
   }
 
   if (commandId === "toggle-park-session") {
-    const currentName = currentSessions.find(s => s.id === currentSessionId)?.name;
+    const currentName = focusedSessionName();
     if (currentName) toggleParked(currentName);
     return;
   }
@@ -10031,16 +10454,23 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       });
       return;
     }
-    case "kill-session":
+    case "kill-session": {
+      // The focused session, never `currentSessionId`: in the Command Center
+      // that is the internal park session, and killing it takes the grid's
+      // parking spot with it.
+      const target = focusedSessionId();
       if (guardGroundcrewAction("kill-session")) return;
-      await control.sendCommand(`kill-session -t ${tq(currentSessionId!)}`);
+      if (target) await control.sendCommand(`kill-session -t ${tq(target)}`);
       return;
+    }
     case "cleanup-session":
       await openSessionCleanupConfirm();
       return;
     case "rename-session": {
       if (guardGroundcrewAction("rename-session")) return;
-      const currentName = currentSessions.find(s => s.id === currentSessionId)?.name ?? "";
+      const target = focusedSessionId();
+      if (!target) return;
+      const currentName = focusedSessionName() ?? "";
       const modal = new InputModal({
         header: "Rename Session",
         subheader: `Current: ${currentName}`,
@@ -10061,12 +10491,12 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
         // The `manual` sentinel lives in a tmux option so a restart cannot
         // forget it and generate a title over the top of their name.
         await control.sendCommand(
-          `rename-session -t ${tq(currentSessionId!)} ${tq(name as string)} ; ` +
+          `rename-session -t ${tq(target)} ${tq(name as string)} ; ` +
             // `-u` is spelled separately, never packed onto `-t`: `-t` takes an
             // argument, so tmux reads `-tu` as `-t u` and fails with
             // "ambiguous option".
-            `set-option -t ${tq(currentSessionId!)} -u ${SESSION_TITLE_OPTION} ; ` +
-            `set-option -t ${tq(currentSessionId!)} ${TITLE_SIGNATURE_OPTION} ${tq(MANUAL_SIGNATURE)}`,
+            `set-option -t ${tq(target)} -u ${SESSION_TITLE_OPTION} ; ` +
+            `set-option -t ${tq(target)} ${TITLE_SIGNATURE_OPTION} ${tq(MANUAL_SIGNATURE)}`,
         );
       });
       return;
@@ -10157,6 +10587,9 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       return;
     case "settings-screen":
       toggleSettingsScreen();
+      return;
+    case "raises-screen":
+      toggleRaisesScreen();
       return;
     case "help":
       toggleHelp();
@@ -10390,7 +10823,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
           const sel = selected as { id: string };
           const issue = results.find((i) => i.id === sel.id);
           if (issue) {
-            const sName = currentSessions.find((s) => s.id === currentSessionId)?.name;
+            const sName = focusedSessionName();
             if (sName) attachIssueTo(sName, issue);
           }
         });
@@ -10398,7 +10831,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       return;
     }
     case "unlink-issue": {
-      const sName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
+      const sName = focusedSessionName() ?? "";
       // Both stores. Listing only `state.json` meant an issue an agent linked
       // with `ctl issue link` showed in the badge and could not be removed from
       // the TUI at all — the human could see the link but not undo it.
@@ -10442,7 +10875,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
         picker.open();
         openModal(picker, (selected) => {
           const sel = selected as { id: string };
-          const sName = currentSessions.find((s) => s.id === currentSessionId)?.name;
+          const sName = focusedSessionName();
           if (sName) {
             const mr = results.find((m) => m.id === sel.id);
             if (!mr) return;
@@ -10454,7 +10887,7 @@ async function handlePaletteAction(result: PaletteResult): Promise<void> {
       return;
     }
     case "unlink-mr": {
-      const sName = currentSessions.find((s) => s.id === currentSessionId)?.name ?? "";
+      const sName = focusedSessionName() ?? "";
       const manualMrs = sessionState.getLinks(sName).filter((l) => l.type === "mr");
       if (manualMrs.length === 0) return;
       const ctx = pollCoordinator.getContext(sName);
@@ -10522,14 +10955,25 @@ async function openBrowserPane(url?: string): Promise<void> {
     return;
   }
 
-  if (!ptyClientName) await resolveClientName();
-  if (!ptyClientName) return;
+  // The split targets the pty client by name outside the Command Center — an
+  // untargeted split lands in whichever session tmux last touched, reliably
+  // the parking session — and the focused tile's pane inside it, where the
+  // client *is* parked and a client-targeted split would put the browser in
+  // `__jmux_park`, in no tile, invisibly.
+  let target: string | null;
+  if (inGlass) {
+    target = glassView?.focusedPaneId() ?? null;
+  } else {
+    if (!ptyClientName) await resolveClientName();
+    target = ptyClientName;
+  }
+  if (!target) return;
   const cfg = configStore.config.browser;
   const runtimeDir = (cfg?.isolate ?? true) ? allocBrowserRuntimeDir() || undefined : undefined;
   // `-P -F` so the split reports the pane it made. The pane options below are
   // the only record that this pane is a browser and where its browser lives —
   // `ctl` has no IPC to reach in here and ask.
-  const lines = await control.sendCommand(browserSplitCommand(ptyClientName, {
+  const lines = await control.sendCommand(browserSplitCommand(target, {
     size: cfg?.paneSize ?? DEFAULT_BROWSER_PANE_SIZE,
     displayScale: cfg?.displayScale ?? DEFAULT_BROWSER_DISPLAY_SCALE,
     fps: cfg?.fps ?? DEFAULT_BROWSER_FPS,
@@ -10592,7 +11036,7 @@ function devServerDeps(): DevServerDeps {
  * 120ms, which is why this is a command and not a live indicator.
  */
 async function openDevServer(): Promise<void> {
-  const sessionName = currentSessions.find((s) => s.id === currentSessionId)?.name;
+  const sessionName = focusedSessionName() ?? undefined;
   const servers = await scanDevServers({ session: sessionName }, devServerDeps());
 
   if (servers.length === 0) {
@@ -10673,7 +11117,7 @@ async function findBrowserPaneHere(): Promise<BrowserPane | null> {
   try {
     const lines = await control.sendCommand(`list-panes -a -F '${BROWSER_PANE_FORMAT}'`);
     const panes = parseBrowserPanes(lines);
-    const session = currentSessions.find((s) => s.id === currentSessionId)?.name;
+    const session = focusedSessionName() ?? undefined;
     return pickBrowserPane(panes, { session });
   } catch {
     return null;
@@ -10888,9 +11332,14 @@ try {
   // rename surfaces here as an event naming the basename.
   const configDir = dirOf(configStore.configPath);
   const configBase = baseOf(configStore.configPath);
+  // raises.json lives beside config.json (see raisesPathFor), so the same
+  // directory watcher — not a second one — covers it. Same reasoning as the
+  // comment above: an atomic replace of raises.json swaps its inode too.
+  const raisesBase = baseOf(raisesPathFor(configStore.configPath));
   configWatcher = watch(configDir, (_event, filename) => {
     // A null filename means the OS reported a change without saying what, so
-    // it has to fall through rather than be filtered out.
+    // both listeners below have to run rather than either being filtered out.
+    if (raisesFileTouched(filename, raisesBase) && raisesScreen.isOpen) scheduleRender();
     if (filename !== null && filename !== configBase) return;
     const updated = configStore.reload();
     const newWidth = updated.sidebarWidth || 26;
@@ -11058,24 +11507,11 @@ control.onEvent((event: ControlEvent) => {
         if (startupComplete) {
           await syncControlClient();
           fetchWindows();
-          if (diffPanel.isActive() && !diffPanel.hunkExited) {
-            // Back to the working tree for the new session. A view is built
-            // from one worktree's refs — "Branch vs main" is a different diff
-            // in every session — so carrying the choice across would show a
-            // changeset the user never asked for under a label they chose
-            // somewhere else.
-            diffView = DEFAULT_VIEW;
-            const dpCols = getDiffPanelCols();
-            const dpRows = layout.ptyRows;
-            await spawnHunk(dpCols, dpRows);
-          }
-          // Sync issue panel and snapshotter to the new session's linked issue
           const sessionName = currentSessions.find((s) => s.id === currentSessionId)?.name;
-          if (sessionName) {
-            snapshotter?.onFocused(sessionName);
-            await pollCoordinator.setActiveSession(sessionName);
-            focusPanelOnSessionIssue(sessionName);
-          }
+          if (sessionName) snapshotter?.onFocused(sessionName);
+          // The panel follows the client outside the grid; inside it the
+          // subject is the focused tile and this is a no-op.
+          syncPanelSubject();
         }
         renderFrame();
       });
@@ -11112,6 +11548,8 @@ control.onEvent((event: ControlEvent) => {
       if (!startupComplete) break;
       if (event.name === "agent-state" || event.name === "agent-state-since") {
         void fetchAgentState();
+      } else if (event.name === "window-activity") {
+        void refreshWindowActivity();
       } else if (event.name === "windows") {
         fetchWindows();
       } else if (event.name === "session-titles" || event.name === "session-projects") {
@@ -11757,6 +12195,9 @@ function applyGridSnapshot(snap: GridSnapshot): void {
       ),
       hiddenCount: gridHiddenSessionIds.size,
     });
+    // A reconcile can move focus — the focused tile left, or the first tile
+    // arrived — and the panel follows the focused tile.
+    syncPanelSubject();
   }
   scheduleRender();
 }
@@ -11786,14 +12227,11 @@ function ensureGlassView(): GlassView {
 
 function resizeGlass(): void {
   if (!glassView) return;
-  // Command Center is a frameless full-screen takeover — size its tiles
-  // (and the real mirrored PTYs behind them) against fullScreenLayout's
-  // content band, not the shared toolbar-ful layout's smaller one, or the
-  // tiles would leave a gap where the toolbar/footer chrome used to be.
-  const totalCols = fullScreenLayout.termCols;
-  const contentCols = sidebarShown ? totalCols - fullScreenLayout.main.x : totalCols;
-  const contentRows = Math.max(1, fullScreenLayout.contentRows - STRIP_ROWS);
-  glassView.resize(contentCols, contentRows);
+  // The tiles (and the real mirrored PTYs behind them) fill `layout.main` —
+  // in the grid that is the band under the view strip and beside the panel
+  // when it is docked, so a docked panel narrows the tiles exactly as it
+  // narrows the pty outside the grid.
+  glassView.resize(layout.main.w, layout.contentRows);
 }
 
 async function enterGlass(): Promise<void> {
@@ -11804,8 +12242,17 @@ async function enterGlass(): Promise<void> {
   preGlassSessionId = currentSessionId;
   if (ghostPreview.isOpen) closeGhostPreview();
   ensureGlassView();
+  // Crossing into or out of the grid puts keys back in the content: the focus
+  // cue is different on each side (a dimmed tmux pane here, a withdrawn tile
+  // border there) and carrying focus across would leave the old cue painted
+  // on a surface that no longer owns the keys.
+  setDiffFocus(false);
   inGlass = true;
-  applyChromeLayout(); // frameless layout now governs the sidebar/input router
+  // The grid has its own row bands (strip, no toolbar rule), so this is a
+  // geometry change, not just a mode change: `layout` is recomputed, the tiles
+  // sized against it, and — if the panel is open — its pty resized to the
+  // grid's content rows.
+  relayout();
   sidebar.setActiveSession(""); // clear the session highlight while in the glass
   sidebar.setOverviewActive(true);
   // Park the main client so it doesn't constrain the pinned sessions' sizes.
@@ -11815,10 +12262,11 @@ async function enterGlass(): Promise<void> {
       .sendCommand(`switch-client -c ${ptyClientName} -t ${PARK_SESSION}`)
       .catch(() => {});
   }
-  resizeGlass();
   // Awaited, not merely queued: the first read is what spawns the tiles, and
   // rendering ahead of it would flash the empty state on every open.
   await gridReconciler.flush();
+  // The panel now describes the focused tile, which the flush above elected.
+  syncPanelSubject();
   scheduleRender();
 }
 
@@ -11923,10 +12371,12 @@ function deleteCcView(): void {
  */
 function exitGlass(): void {
   if (!inGlass) return;
+  setDiffFocus(false); // while still in glass, so the tile cue is restored
   inGlass = false;
-  applyChromeLayout(); // back to the shared toolbar-ful layout
+  relayout(); // back to the toolbar-ful row bands
   glassView?.teardown();
   sidebar.setOverviewActive(false);
+  syncPanelSubject();
 }
 
 /**
@@ -12076,6 +12526,18 @@ function cycleGridDensity(): void {
   configStore.set("commandCenter", { ...configStore.config.commandCenter, density: commandCenterDensity });
   glassView?.setDensity(commandCenterDensity);
 }
+
+/**
+ * What a click on each of the strip's axis chips does — the same four
+ * functions `Ctrl-Space G/s/f/D` run in glass, so the mouse and the keyboard
+ * cannot cycle an axis two different ways.
+ */
+const STRIP_AXIS_ACTIONS: Record<StripAxisId, () => void> = {
+  group: cycleGridGroup,
+  sort: cycleGridSort,
+  filter: cycleGridFilter,
+  density: cycleGridDensity,
+};
 
 /**
  * Detach the interactive client — the Command Center equivalent of a normal
@@ -12471,12 +12933,11 @@ async function start(): Promise<void> {
     }
   }
 
-  // Sync issue panel to the initial session
-  const initialSessionName = currentSessions.find((s) => s.id === currentSessionId)?.name;
-  if (initialSessionName) {
-    await pollCoordinator.setActiveSession(initialSessionName);
-    focusPanelOnSessionIssue(initialSessionName);
-  }
+  // Point the panel at the initial session. The panel is off at boot, so this
+  // is the poll's active session and the issue under the cursor; it also seeds
+  // the subject, so the first `%client-session-changed` after startup is the
+  // no-op it should be rather than a second sync of the same session.
+  syncPanelSubject();
 
   renderFrame();
 
@@ -12533,6 +12994,15 @@ async function start(): Promise<void> {
     "agent-state-since",
     1,
     "#{S:#{W:#{P:#{pane_id}=#{@jmux-agent-state-since} }}}",
+  );
+
+  // Session activity records client focus, not pane output. Subscribe to the
+  // newest window timestamps so an unintegrated/wrapped agent producing output
+  // can move from Idle to Active without a session being created or switched.
+  await control.registerSubscription(
+    "window-activity",
+    1,
+    "#{S:#{W:#{window_id}=#{window_activity} }}",
   );
 
   // Subscribe to the session-title option, for the same reason as agent-state:

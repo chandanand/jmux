@@ -41,6 +41,7 @@ interface Session {
   resize(cols: number, rows: number): void;
   frame(): string;
   waitFor(text: string, timeoutMs?: number): Promise<void>;
+  waitForSessionNames(names: string[], timeoutMs?: number): Promise<void>;
   sessionNames(): string[];
   clientRows(): string[];
   dispose(): void;
@@ -156,6 +157,19 @@ async function boot(cols = 120, rows = 40, options: BootOptions = {}): Promise<S
         await Bun.sleep(120);
       }
       throw new Error(`timed out waiting for ${JSON.stringify(text)}\n--- frame ---\n${frame()}`);
+    },
+    waitForSessionNames: async (names, timeoutMs = 10_000) => {
+      const expected = [...names].sort();
+      const deadline = Date.now() + timeoutMs;
+      let actual: string[] = [];
+      while (Date.now() < deadline) {
+        actual = session.sessionNames();
+        if (actual.length === expected.length && actual.every((name, i) => name === expected[i])) {
+          return;
+        }
+        await Bun.sleep(120);
+      }
+      throw new Error(`timed out waiting for sessions ${JSON.stringify(expected)}; got ${JSON.stringify(actual)}`);
     },
     sessionNames: () => {
       const output = tmux(["list-sessions", "-F", "#{session_name}"]);
@@ -359,6 +373,7 @@ describe.skipIf(!TMUX)("onboarding, under a real pty", () => {
     });
     try {
       await session.waitFor("named-cold-start");
+      await session.waitForSessionNames([PARK_SESSION, "named-cold-start"]);
       expect(session.sessionNames()).toEqual([PARK_SESSION, "named-cold-start"].sort());
       expect(session.sessionNames()).not.toContain("0");
       expect(session.clientRows()).toContain("0:named-cold-start");

@@ -58,6 +58,14 @@ export interface Issue {
     createdAt: string;
   }>;
   links?: Array<{ type: string; title?: string; url: string }>;
+  /**
+   * Whether the tracker reports at least one customer request attached.
+   * Absent when the answer could not be established — a consumer must be able
+   * to tell "no customer request" from "this could not be read", because the
+   * delivery rules put an issue with an attached request in the lane that
+   * requires a human.
+   */
+  hasCustomerRequest?: boolean;
 }
 
 /**

@@ -1,7 +1,7 @@
 import { resolve } from "path";
 import { homedir, tmpdir } from "os";
-import { existsSync, writeFileSync } from "fs";
-import { runTmuxDirect } from "./tmux";
+import { existsSync, readFileSync, writeFileSync } from "fs";
+import { runTmuxDirect, tmuxServerDefinitelyAbsent } from "./tmux";
 import { tmuxOrThrow, CliError, type CliContext } from "./context";
 import {
   sanitizeTmuxSessionName,
@@ -189,6 +189,63 @@ export function decideStartReuse(
   return { kind: "adopt", row: byName, issues: [...byName.issues, issueId] };
 }
 
+export type RequireNewCode =
+  | "issue-already-linked"
+  | "session-name-taken"
+  | "session-query-failed";
+
+export type RequireNewResult =
+  | { ok: true }
+  | { ok: false; error: string; code: RequireNewCode };
+
+/**
+ * `--require-new`'s decision: refuse rather than reuse, and refuse rather
+ * than trust a session query that might be lying.
+ *
+ * The query-health check runs first and overrides `reuse`'s own kind. A
+ * failed tmux query, permissively read, becomes an empty session list —
+ * `decideStartReuse` then sees nothing and answers `none`, and this
+ * function would otherwise wave through a duplicate session for an issue
+ * that already has one, while reporting success. So an unhealthy query
+ * refuses regardless of what `reuse` says it found, because `reuse` was
+ * itself computed from data this function cannot trust.
+ */
+export function requireNewOrRefuse(
+  reuse: StartReuse,
+  query: { ok: boolean; malformed: number },
+): RequireNewResult {
+  if (!query.ok) {
+    return {
+      ok: false,
+      error:
+        "--require-new refuses: the tmux session query failed, so whether the issue already has a session cannot be determined",
+      code: "session-query-failed",
+    };
+  }
+  if (query.malformed > 0) {
+    return {
+      ok: false,
+      error: `--require-new refuses: ${query.malformed} session row(s) in the tmux query could not be parsed, so whether the issue already has a session cannot be determined`,
+      code: "session-query-failed",
+    };
+  }
+  if (reuse.kind === "linked") {
+    return {
+      ok: false,
+      error: `--require-new refuses: issue is already linked to session "${reuse.row.name}"`,
+      code: "issue-already-linked",
+    };
+  }
+  if (reuse.kind === "adopt") {
+    return {
+      ok: false,
+      error: `--require-new refuses: session "${reuse.row.name}" already exists on the name this issue would derive`,
+      code: "session-name-taken",
+    };
+  }
+  return { ok: true };
+}
+
 // --- Pure helpers for `issue start` ------------------------------------------
 
 /**
@@ -271,6 +328,100 @@ export function resolveRepoForIssue(
   return resolveRepoContextForIssue(flags, issue, config)?.repo ?? null;
 }
 
+/**
+ * The seed prompt an agent receives.
+ *
+ * The contract goes last on purpose: the issue is context the agent needs in
+ * order to understand the instruction, and the instruction is what it should act
+ * on. The separator is explicit because `buildLinearPrompt` does not end with
+ * one, so a direct concatenation runs the two together.
+ */
+export function buildSeedPrompt(issueText: string | null, contract: string | null): string {
+  if (issueText && contract) return `${issueText}\n\n${contract}`;
+  return contract ?? issueText ?? "";
+}
+
+/**
+ * The whole prompt is expanded into a single positional argument by
+ * `buildAgentFragment`, so an oversized prompt fails the agent launch and leaves
+ * a bare shell in the pane. Refusing here costs nothing; refusing later costs a
+ * provisioned session.
+ *
+ * The limit itself is unconditional; whether it is *enforced* is not — see
+ * `assertSeedPromptFitsWhenAppending` below, which only checks it when a
+ * contract is being appended via `--append-prompt`.
+ */
+export const MAX_SEED_PROMPT_BYTES = 128_000;
+
+export function assertSeedPromptFits(prompt: string): void {
+  const bytes = Buffer.byteLength(prompt, "utf-8");
+  if (bytes > MAX_SEED_PROMPT_BYTES) {
+    throw new CliError(`seed prompt is ${bytes} bytes, over the ${MAX_SEED_PROMPT_BYTES} limit`);
+  }
+}
+
+/**
+ * The byte limit is enforced only when a contract is being appended.
+ *
+ * `--append-prompt` is a new path, so a limit on it changes nothing that
+ * already worked. Without it, the seed prompt is exactly the issue text this
+ * command always sent — no matter how large — and it must stay unchecked:
+ * the real argv ceiling varies by platform and environment, so any constant
+ * we pick here is either too low to be safe on some existing invocation, or
+ * too high to be useful, and refusing an invocation that worked yesterday is
+ * a behaviour change published software does not get to make silently.
+ */
+export function assertSeedPromptFitsWhenAppending(
+  contract: string | null,
+  seedPrompt: string,
+): void {
+  if (contract) assertSeedPromptFits(seedPrompt);
+}
+
+/**
+ * Read once, up front. `buildAgentFragment` defers its own `cat` until launch,
+ * so a contract referenced rather than copied can change or vanish in between.
+ */
+export function readContractFile(path: string): string {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf-8");
+  } catch (e) {
+    throw new CliError(`--append-prompt could not read ${path}: ${(e as Error).message}`);
+  }
+  if (text.trim() === "") throw new CliError(`--append-prompt file ${path} is empty`);
+  return text;
+}
+
+/**
+ * `launchAgent` is `--no-launch-agent` combined with the project's
+ * `autoLaunchAgent` setting, not the flag alone — a project configured not to
+ * launch agents would otherwise discard `--append-prompt`'s contract in
+ * silence, and the orchestrator would believe a session is contracted while no
+ * agent is there to receive it.
+ */
+export function assertLaunchAgentForContract(launchAgent: boolean, path: string): void {
+  if (!launchAgent) {
+    throw new CliError(
+      `--append-prompt ${path} has no agent to deliver it to: launchAgent is false (--no-launch-agent, or the repo's autoLaunchAgent setting)`,
+    );
+  }
+}
+
+/**
+ * A reused session already has a running agent. `issue start` returns on the
+ * reuse paths before any provisioning happens, so a contract handed to
+ * `--append-prompt` has no later route to reach it — every other way the
+ * contract can fail to arrive already refuses, and a session that reuses
+ * silently was the one gap left.
+ */
+export function assertReuseAllowsContract(reuse: StartReuse, path: string): void {
+  if (reuse.kind === "none") return;
+  throw new CliError(
+    `--append-prompt ${path} cannot be delivered: issue start would reuse session "${reuse.row.name}", which launches no new agent to seed`,
+  );
+}
+
 export interface IssueCreateArgs {
   title: string;
   description: string;
@@ -333,6 +484,17 @@ export function resolveTeamId(
   throw new CliError(`unknown team "${input}"`);
 }
 
+/**
+ * Status filtering is the caller's, not the tracker's: `getMyIssues` returns
+ * every non-completed assigned issue, and which of those statuses matter is a
+ * decision the consumer makes. Ordering is the tracker's and is preserved.
+ */
+export function filterIssuesByStatus(issues: Issue[], statuses: string[]): Issue[] {
+  if (statuses.length === 0) return issues;
+  const wanted = new Set(statuses.map((s) => s.toLowerCase()));
+  return issues.filter((i) => wanted.has(i.status.toLowerCase()));
+}
+
 // --- Handlers ----------------------------------------------------------------
 
 export async function handleIssue(
@@ -343,6 +505,8 @@ export async function handleIssue(
   switch (action) {
     case "get":
       return await issueGet(parsed);
+    case "list":
+      return await issueList(parsed);
     case "link":
       return issueLink(ctx, parsed);
     case "unlink":
@@ -355,9 +519,40 @@ export async function handleIssue(
       return await issueMove(parsed);
     default:
       throw new CliError(
-        `Unknown issue action "${action}". Known actions: get, link, unlink, start, create, move`,
+        `Unknown issue action "${action}". Known actions: get, list, link, unlink, start, create, move`,
       );
   }
+}
+
+/**
+ * `issue list [--assignee viewer] [--status <name>]...` — the operator's own
+ * assigned queue, for an orchestrator that needs to model in-flight work
+ * without polling the tracker's UI.
+ *
+ * `--assignee` only ever accepts `viewer`: the adapter has no way to fetch
+ * anyone else's issues, so accepting another value would silently return the
+ * wrong set instead of the caller's actual request.
+ */
+async function issueList(parsed: ParsedCtlArgs): Promise<unknown> {
+  const { flags } = parsed;
+
+  const assignee = flags.assignee;
+  if (assignee !== undefined && assignee !== "viewer") {
+    throw new CliError("issue list only supports --assignee viewer");
+  }
+
+  // `repeated.status` carries every `--status` occurrence in order, including
+  // the case of exactly one — `flags.status` (last-wins) is never needed here.
+  const statuses = parsed.repeated.status ?? [];
+
+  const adapter = new LinearAdapter({});
+  await adapter.authenticate();
+  if (adapter.authState !== "ok") {
+    throw new CliError(`issue tracker not authenticated (${adapter.authHint})`);
+  }
+
+  const issues = await adapter.getMyIssues();
+  return { issues: filterIssuesByStatus(issues, statuses) };
 }
 
 /**
@@ -436,6 +631,35 @@ async function issueCreate(
   return { created: true, identifier: issue.identifier, id: issue.id, url: issue.webUrl, started };
 }
 
+/**
+ * `issue get`'s resolution order: try the branch/identifier path first — the
+ * same one every other command resolves through — and only when that yields
+ * nothing, fall back to the tracker's own id.
+ *
+ * `ctl status` reports a session's linked issues as tracker ids (Linear's
+ * `issue(id:)` accepts a UUID; `getIssueByBranch` does not), so without this
+ * fallback there was no way to go from a session's link back to its issue.
+ * The fallback is additive only: it never runs while the branch path still
+ * has an answer, so every input that resolves today keeps resolving the same
+ * way.
+ *
+ * `byId` throwing means "no issue with that id" (the tracker's own 404), the
+ * same outcome as `byBranch` returning null — both collapse to `null` here so
+ * the caller reports one clean "not found" instead of an unhandled rejection.
+ */
+export async function resolveIssueGetTarget(
+  byBranch: () => Promise<Issue | null>,
+  byId: () => Promise<Issue>,
+): Promise<Issue | null> {
+  const viaBranch = await byBranch();
+  if (viaBranch) return viaBranch;
+  try {
+    return await byId();
+  } catch {
+    return null;
+  }
+}
+
 async function fetchIssue(issueId: string): Promise<Issue | null> {
   const adapter = new LinearAdapter({});
   await adapter.authenticate();
@@ -444,8 +668,13 @@ async function fetchIssue(issueId: string): Promise<Issue | null> {
       "Linear is not configured: set LINEAR_API_KEY or LINEAR_TOKEN",
     );
   }
-  // getIssueByBranch extracts the identifier from the string and resolves it.
-  return await adapter.getIssueByBranch(issueId);
+  // getIssueByBranch extracts the identifier from the string and resolves it;
+  // pollIssue resolves by the tracker's own id, tried only if that comes up
+  // empty (see resolveIssueGetTarget).
+  return await resolveIssueGetTarget(
+    () => adapter.getIssueByBranch(issueId),
+    () => adapter.pollIssue(issueId),
+  );
 }
 
 async function issueGet(parsed: ParsedCtlArgs): Promise<unknown> {
@@ -456,15 +685,49 @@ async function issueGet(parsed: ParsedCtlArgs): Promise<unknown> {
   return { issue };
 }
 
-function listIssueLinkRows(ctx: CliContext): IssueLinkRow[] {
+/**
+ * The same query as `listIssueLinkRows`, but reporting whether it can be
+ * trusted rather than silently degrading a failure or a malformed row into
+ * an empty list.
+ *
+ * `--require-new` is built on this: a caller that only reads `rows` gets the
+ * exact permissive behaviour every existing caller already depends on
+ * (published software, so that stays); a caller that also reads `ok` and
+ * `malformed` can tell "nothing exists" apart from "the query could not say."
+ *
+ * A failed tmux call is itself split two ways, via `tmuxServerDefinitelyAbsent`:
+ * no server at all on this socket is a *readable* world with zero sessions
+ * (`ok: true`, `rows: []`) — proceeding is safe because there is nothing to
+ * miss. Anything else that made the query fail (a socket that exists but is
+ * unreadable, tmux itself erroring) stays `ok: false`, so `--require-new`
+ * still refuses rather than guessing. Without this split, `--require-new`
+ * could never succeed against a socket that has no server yet, because the
+ * very first call always hits one.
+ */
+function listIssueLinkRowsReporting(
+  ctx: CliContext,
+): { rows: IssueLinkRow[]; ok: boolean; malformed: number } {
   const result = runTmuxDirect(
     ["list-sessions", "-f", INTERNAL_SESSION_FILTER, "-F", ISSUE_LINK_FORMAT],
     ctx.socket,
   );
-  const lines = result.ok ? result.lines : [];
-  return lines
-    .map(parseIssueLinkRow)
-    .filter((r): r is IssueLinkRow => r !== null);
+  if (!result.ok) {
+    if (tmuxServerDefinitelyAbsent(ctx.socket)) return { rows: [], ok: true, malformed: 0 };
+    return { rows: [], ok: false, malformed: 0 };
+  }
+
+  const rows: IssueLinkRow[] = [];
+  let malformed = 0;
+  for (const line of result.lines) {
+    const row = parseIssueLinkRow(line);
+    if (row) rows.push(row);
+    else malformed++;
+  }
+  return { rows, ok: true, malformed };
+}
+
+function listIssueLinkRows(ctx: CliContext): IssueLinkRow[] {
+  return listIssueLinkRowsReporting(ctx).rows;
 }
 
 function findGitRoot(path: string): string | null {
@@ -667,6 +930,16 @@ export interface IssueStartResult {
   reused: boolean;
   /** Absent on the reuse paths: nothing was started, so nothing moved. */
   transition?: TransitionResult;
+  /**
+   * Whether the worktree already existed on disk before this call, from the
+   * `worktreeExists` check made before provisioning. Absent on the reuse
+   * paths: no worktree check runs there, so there is nothing to report.
+   *
+   * The orchestrator uses this to decide what it is allowed to reap: a
+   * worktree it did not create may hold a human's work, and destroying it
+   * on cleanup would be the wrong kind of automation.
+   */
+  worktreePreexisting?: boolean;
   provisioning?: ProvisioningStatus;
 }
 
@@ -695,6 +968,43 @@ function provisioningFailed(ctx: CliContext, session: string): boolean {
   return value === PROVISION_ATTENTION_REASON;
 }
 
+/**
+ * The `new-session` invocation that provisions `issue start`'s session.
+ *
+ * With `ownerToken`, `@orch-owned` is stamped by chaining a `set-option` onto
+ * the *same* tmux invocation (tmux's own `;` command separator, passed as its
+ * own argv element — there is no shell here to need escaping it), not by a
+ * follow-up call. The session name is unreserved until `new-session` returns,
+ * and the spawned process can outlive the caller, so two separate tmux
+ * invocations leave a window where a crash produces a session that either
+ * isn't the orchestrator's or can't be proven to be. One invocation makes
+ * existence and ownership one fact: whichever server request lands, both
+ * happen or neither does.
+ */
+export function buildNewSessionArgs(o: {
+  sessionName: string;
+  otelEnv: string;
+  sessionCwd: string;
+  mainCommand: string;
+  ownerToken: string | null;
+}): string[] {
+  const args = [
+    "new-session",
+    "-d",
+    "-e",
+    o.otelEnv,
+    "-s",
+    o.sessionName,
+    "-c",
+    o.sessionCwd,
+    o.mainCommand,
+  ];
+  if (o.ownerToken) {
+    args.push(";", "set-option", "-t", o.sessionName, "@orch-owned", o.ownerToken);
+  }
+  return args;
+}
+
 async function issueStart(
   ctx: CliContext,
   parsed: ParsedCtlArgs,
@@ -716,8 +1026,20 @@ async function issueStart(
   // a tracker round-trip first, and was skipped entirely on the reuse paths —
   // validation that only fires sometimes is validation nobody can rely on.
   const waitSpec = parseWaitFlag(flags.wait);
+  // Read before any lookup or side effect, for the same reason as `waitSpec`
+  // above: a bad path or an empty file is a caller mistake, and refusing here
+  // costs nothing, while refusing later costs a tracker round-trip or a
+  // provisioned session. The contract also gates the reuse paths below — a
+  // reused session launches no new agent, so a contract handed to it would be
+  // silently lost rather than merely unused.
+  const appendPromptPath =
+    typeof flags["append-prompt"] === "string" ? flags["append-prompt"] : null;
+  const contract = appendPromptPath ? readContractFile(appendPromptPath) : null;
+  const requireNew = flags["require-new"] === true;
+  const ownerToken = typeof flags["owner-token"] === "string" ? flags["owner-token"] : null;
 
-  const rows = listIssueLinkRows(ctx);
+  const query = listIssueLinkRowsReporting(ctx);
+  const rows = query.rows;
   const reuse = (row: IssueLinkRow, id: string): IssueStartResult => ({
     session: row.name,
     pane: activePane(ctx, row.name),
@@ -727,7 +1049,14 @@ async function issueStart(
   });
 
   const firstPass = decideStartReuse(rows, issueId, null);
-  if (firstPass.kind === "linked") return reuse(firstPass.row, issueId);
+  if (requireNew) {
+    const check = requireNewOrRefuse(firstPass, { ok: query.ok, malformed: query.malformed });
+    if (!check.ok) throw new CliError(check.error, check.code);
+  }
+  if (firstPass.kind === "linked") {
+    if (appendPromptPath) assertReuseAllowsContract(firstPass, appendPromptPath);
+    return reuse(firstPass.row, issueId);
+  }
 
   const config = loadUserConfig();
 
@@ -771,7 +1100,12 @@ async function issueStart(
   const sessionName = startSessionName(issueId, issue, repoSettings.sessionNameTemplate);
 
   const reused = decideStartReuse(rows, issueId, sessionName);
+  if (requireNew) {
+    const check = requireNewOrRefuse(reused, { ok: query.ok, malformed: query.malformed });
+    if (!check.ok) throw new CliError(check.error, check.code);
+  }
   if (reused.kind === "adopt") {
+    if (appendPromptPath) assertReuseAllowsContract(reused, appendPromptPath);
     // Record the link the TUI never wrote, so the *next* lookup — here and in
     // `workflow board` — resolves without depending on the name. Appended to
     // whatever the session already carries: adopting must not detach the
@@ -807,13 +1141,19 @@ async function issueStart(
   // agent inside. Readiness is now the setup pane's business.
   const worktreeExists = existsSync(worktreePath);
 
-  // Seed the agent's first message from the issue, the same way the TUI does.
+  // Seed the agent's first message from the issue, plus the contract from
+  // --append-prompt when one was given, the same way the TUI seeds the issue
+  // alone.
   const launchAgent = !flags["no-launch-agent"] && repoSettings.autoLaunchAgent;
+  if (appendPromptPath) assertLaunchAgentForContract(launchAgent, appendPromptPath);
+
   let promptFile: string | null = null;
-  if (launchAgent && issue) {
+  if (launchAgent && (issue || contract)) {
+    const seedPrompt = buildSeedPrompt(issue ? buildLinearPrompt(issue) : null, contract);
+    assertSeedPromptFitsWhenAppending(contract, seedPrompt);
     const rand = Math.random().toString(36).slice(2);
     promptFile = resolve(tmpdir(), `jmux-prompt-${Date.now()}-${rand}`);
-    writeFileSync(promptFile, buildLinearPrompt(issue), "utf-8");
+    writeFileSync(promptFile, seedPrompt, "utf-8");
   }
 
   const plan = buildProvisionPlan({
@@ -834,17 +1174,13 @@ async function issueStart(
   const otel = buildOtelResourceAttrs(sessionName);
   tmuxOrThrow(
     runTmuxDirect(
-      [
-        "new-session",
-        "-d",
-        "-e",
-        `OTEL_RESOURCE_ATTRIBUTES=${otel}`,
-        "-s",
+      buildNewSessionArgs({
         sessionName,
-        "-c",
-        plan.sessionCwd,
-        plan.mainCommand,
-      ],
+        otelEnv: `OTEL_RESOURCE_ATTRIBUTES=${otel}`,
+        sessionCwd: plan.sessionCwd,
+        mainCommand: plan.mainCommand,
+        ownerToken,
+      }),
       ctx.socket,
     ),
   );
@@ -887,6 +1223,7 @@ async function issueStart(
     issue: linkId,
     reused: false,
     transition,
+    worktreePreexisting: worktreeExists,
   };
 
   // Narrowing on the pane rather than on `plan.setupCommand` is what lets the

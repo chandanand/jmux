@@ -294,6 +294,16 @@ export class GlassView {
    * while set (see below), so the two only ever diverge by a tile vanishing.
    */
   private zoomedKey: TileKey | null = null;
+  /**
+   * Whether keys are going to the focused tile at all. False while the docked
+   * panel holds keyboard focus beside the grid: the focused tile is still
+   * *the* tile — writeFocused, cycling and zoom keep addressing it, and it is
+   * where focus returns — but it paints unfocused, because an accent border on
+   * a tile that is not receiving keys is a lie about where the keys go. The
+   * grid has no rule row to underline the panel with, so this withdrawal is
+   * the whole cue.
+   */
+  private inputFocus = true;
   /** Live tiles that have left membership, with the moment they left. */
   private retained: Map<TileKey, RetainedTile> = new Map();
   /** Face cycles, keyed by tile — cleared when the pane they name dies. */
@@ -447,7 +457,7 @@ export class GlassView {
       const tile = this.tileAt(rect.index);
       if (!tile) continue;
 
-      const isFocused = rect.index === focusedIndex;
+      const isFocused = this.inputFocus && rect.index === focusedIndex;
       this.drawTile(grid, rect, tile, isFocused);
     }
 
@@ -469,13 +479,18 @@ export class GlassView {
     }
   }
 
-  moveFocus(dir: "left" | "right" | "up" | "down"): void {
-    if (this.tileOrder.length === 0) return;
+  /**
+   * Returns whether focus actually moved. `false` at an edge is what lets the
+   * caller hand focus onward — Shift+Right off the right-most column goes to
+   * the docked panel — instead of the key dying silently at the border.
+   */
+  moveFocus(dir: "left" | "right" | "up" | "down"): boolean {
+    if (this.tileOrder.length === 0) return false;
     // While zoomed only one tile is drawn, so there is nowhere else to move
     // focus into — and moving it silently would desync keystrokes (routed by
     // focus) from the picture (pinned to zoomedKey) from the tile the user is
     // actually looking at.
-    if (this.zoomedKey !== null) return;
+    if (this.zoomedKey !== null) return false;
     const layout = this.layout();
     const cols = layout.columns;
     const total = this.tileOrder.length;
@@ -496,7 +511,14 @@ export class GlassView {
         break;
     }
 
+    const moved = next !== this.focusIndex();
     this.focusedKey = this.tileOrder[next] ?? this.focusedKey;
+    return moved;
+  }
+
+  /** See `inputFocus`. */
+  setInputFocus(focused: boolean): void {
+    this.inputFocus = focused;
   }
 
   writeFocused(data: string): void {
@@ -570,6 +592,7 @@ export class GlassView {
     this.tileOrder = [];
     this.focusedKey = null;
     this.zoomedKey = null;
+    this.inputFocus = true;
     this.retained.clear();
     this.faceOverrides.clear();
     this.droppedActive = 0;

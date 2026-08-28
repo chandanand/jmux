@@ -173,6 +173,105 @@ describe("parseCtlArgs", () => {
   });
 });
 
+describe("repeated value flags", () => {
+  // `flags` must stay last-wins for every existing command's sake — this is
+  // the regression guard for that promise.
+  test("a value flag given twice leaves flags[name] holding the last value", () => {
+    const result = parseCtlArgs([
+      "issue", "list", "--status", "To do", "--status", "QA Failed",
+    ]);
+    expect(result.flags.status).toBe("QA Failed");
+    expect(result.repeated.status).toEqual(["To do", "QA Failed"]);
+  });
+
+  test("a value flag given once is a plain string in flags and a single-element array in repeated", () => {
+    const result = parseCtlArgs(["issue", "list", "--status", "To do"]);
+    expect(result.flags.status).toBe("To do");
+    expect(result.repeated.status).toEqual(["To do"]);
+  });
+
+  test("a value flag never given has no entry in repeated", () => {
+    const result = parseCtlArgs(["issue", "list"]);
+    expect(result.repeated.status).toBeUndefined();
+  });
+});
+
+describe("--flag=value form", () => {
+  // `--status="QA Failed"` reaches us as the single token `--status=QA
+  // Failed` once the shell strips the quotes. Before this, `name` included
+  // the whole `status=QA Failed` string, matched nothing in VALUE_FLAGS, and
+  // fell through to the permissive unknown-flag branch — the filter vanished
+  // and the command silently returned the operator's entire queue with exit
+  // 0, the form a programmatic caller most naturally emits.
+  test("--flag=value sets flags[name] to the value after the equals sign", () => {
+    const result = parseCtlArgs(["issue", "list", "--status=QA Failed"]);
+    expect(result.flags.status).toBe("QA Failed");
+  });
+
+  test("--flag=value accumulates into repeated exactly like --flag value", () => {
+    const result = parseCtlArgs(["issue", "list", "--status=QA Failed"]);
+    expect(result.repeated.status).toEqual(["QA Failed"]);
+  });
+
+  test("--flag=value never leaves a junk flag key behind", () => {
+    const result = parseCtlArgs(["issue", "list", "--status=QA Failed"]);
+    expect(Object.keys(result.flags)).toEqual(["status"]);
+  });
+
+  test("a value containing its own equals sign splits only on the first one", () => {
+    const result = parseCtlArgs(["session", "create", "--name", "x", "--command=FOO=bar"]);
+    expect(result.flags.command).toBe("FOO=bar");
+  });
+
+  test("an empty value after the equals sign is accepted, not treated as missing", () => {
+    const result = parseCtlArgs(["issue", "list", "--status="]);
+    expect(result.flags.status).toBe("");
+  });
+
+  test("--flag=value still consumes exactly one token, leaving positionals intact", () => {
+    const result = parseCtlArgs(["issue", "move", "TRA-1", "--status=In Review", "extra"]);
+    expect(result.flags.status).toBe("In Review");
+    expect(result.positional).toEqual(["TRA-1", "extra"]);
+  });
+
+  test("a repeated mix of --flag=value and --flag value forms both accumulate, last-wins in flags", () => {
+    const result = parseCtlArgs([
+      "issue", "list", "--status=To do", "--status", "QA Failed", "--status=Done",
+    ]);
+    expect(result.flags.status).toBe("Done");
+    expect(result.repeated.status).toEqual(["To do", "QA Failed", "Done"]);
+  });
+
+  test("boolean flags are unaffected — --force=true still falls through, not treated as inline-valued", () => {
+    // Out of scope for this fix: only VALUE_FLAGS gain `=value` support.
+    const result = parseCtlArgs(["session", "kill", "--target", "foo", "--force=true"]);
+    expect(result.flags.force).toBeUndefined();
+    expect(result.flags["force=true"]).toBe(true);
+  });
+
+  test("an optional-numeric flag written with = keeps its value", () => {
+    const parsed = parseCtlArgs(["issue", "start", "TRA-1", "--wait=30"]);
+    expect(parsed.flags.wait).toBe("30");
+    expect(parsed.flags["wait=30"]).toBeUndefined();
+  });
+
+  test("an optional-numeric flag with no value still works both ways", () => {
+    expect(parseCtlArgs(["issue", "start", "TRA-1", "--wait"]).flags.wait).toBe(true);
+    expect(parseCtlArgs(["issue", "start", "TRA-1", "--wait", "60"]).flags.wait).toBe("60");
+  });
+
+  test("repeating an optional-numeric flag accumulates across both spellings", () => {
+    const parsed = parseCtlArgs(["issue", "start", "TRA-1", "--wait=30", "--wait", "60"]);
+    expect(parsed.repeated.wait).toEqual(["30", "60"]);
+  });
+
+  test("an optional-numeric flag's = value reaches the parser literally, with no numeric sniffing", () => {
+    const parsed = parseCtlArgs(["issue", "start", "TRA-1", "--wait=abc"]);
+    expect(parsed.flags.wait).toBe("abc");
+    expect(parsed.flags["wait=abc"]).toBeUndefined();
+  });
+});
+
 describe("end-of-flags (`--`)", () => {
   // `browser action` hands everything after `--` to another program's CLI.
   // Parsing it as ours dropped the flag *names* and left their values as bare
@@ -232,5 +331,65 @@ describe("optional-value flags (`--wait`)", () => {
     const r = parseCtlArgs(["issue", "start", "--wait", "90", "TRA-1580"]);
     expect(r.flags.wait).toBe("90");
     expect(r.positional).toEqual(["TRA-1580"]);
+  });
+});
+
+describe("raise-group flags are scoped to the raise group", () => {
+  test("--option accumulates inside the raise group", () => {
+    const p = parseCtlArgs(["raise", "create", "--issue", "AAA-1", "--option", "a", "--option", "b"]);
+    expect(p.repeated.option).toEqual(["a", "b"]);
+  });
+
+  test("--note takes a value inside the raise group", () => {
+    const p = parseCtlArgs(["raise", "answer", "r1", "--option", "o1", "--note", "because"]);
+    expect(p.flags.note).toBe("because");
+  });
+
+  test("outside the raise group, the same flag names keep their old meaning", () => {
+    // Registering these globally would change how existing published commands
+    // consume the token after them. `--option` is unknown to `session`, so it
+    // stays a permissive boolean and "a" stays a positional.
+    const p = parseCtlArgs(["session", "list", "--option", "a"]);
+    expect(p.flags.option).toBe(true);
+    expect(p.positional).toContain("a");
+    expect(p.repeated.option).toBeUndefined();
+  });
+});
+
+describe("issue-group flags are scoped to the issue group", () => {
+  test("--append-prompt takes a value inside the issue group", () => {
+    const p = parseCtlArgs(["issue", "start", "TRA-1", "--append-prompt", "/tmp/c.md"]);
+    expect(p.flags["append-prompt"]).toBe("/tmp/c.md");
+  });
+
+  test("outside the issue group the flag name keeps its old meaning", () => {
+    const p = parseCtlArgs(["session", "list", "--append-prompt", "/tmp/c.md"]);
+    expect(p.flags["append-prompt"]).toBe(true);
+    expect(p.positional).toContain("/tmp/c.md");
+  });
+});
+
+// `ctl session report` needs `--outcome`, group-scoped like every flag above
+// — registering it globally would change how every other command consumes
+// the token after `--outcome`. `--reason` already exists globally (attention,
+// raise, ...); this pins that `session report` reusing it changes nothing
+// about how any other group reads it.
+describe("session-group flags are scoped to the session group", () => {
+  test("--outcome takes a value inside the session group", () => {
+    const p = parseCtlArgs(["session", "report", "--target", "TRA-1", "--outcome", "shipped", "--reason", "done"]);
+    expect(p.flags.outcome).toBe("shipped");
+    expect(p.flags.reason).toBe("done");
+  });
+
+  test("outside the session group, --outcome and --reason keep their old meaning", () => {
+    // `--reason` is already global (attention uses it), so it takes a value
+    // everywhere and this half of the test is a no-op guard against a future
+    // regression. `--outcome` is new and unknown to `raise`, so it stays a
+    // permissive boolean and "shipped" stays a positional — exactly as it
+    // behaved before this command existed.
+    const p = parseCtlArgs(["raise", "list", "--outcome", "shipped", "--reason", "done"]);
+    expect(p.flags.outcome).toBe(true);
+    expect(p.positional).toContain("shipped");
+    expect(p.flags.reason).toBe("done");
   });
 });

@@ -4,7 +4,7 @@ import { parseCtlArgs } from "../../cli";
 describe("parseCtlArgs — cc group", () => {
   test("cc views parses as group=cc action=views", () => {
     expect(parseCtlArgs(["cc", "views"])).toEqual({
-      group: "cc", action: "views", flags: {}, positional: [],
+      group: "cc", action: "views", flags: {}, positional: [], repeated: {},
     });
   });
 

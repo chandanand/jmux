@@ -409,7 +409,9 @@ export const KEYMAP: readonly Binding[] = [
     section: "Info panel",
     source: "jmux",
     prefixKey: "g",
-    arms: ["ordinary", "surface"],
+    // The panel docks beside the Command Center's tiles as it docks beside
+    // the pty, so its chords are live in the glass arm too.
+    arms: ["ordinary", "glass", "surface"],
   },
   {
     id: "diff-zoom",
@@ -419,7 +421,7 @@ export const KEYMAP: readonly Binding[] = [
     source: "jmux",
     prefixKey: "z",
     context: IN_PANEL,
-    arms: ["ordinary"],
+    arms: ["ordinary", "glass"],
   },
   {
     id: "panel-focus-toggle",
@@ -428,7 +430,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Info panel",
     source: "jmux",
     prefixKey: "\t",
-    arms: ["ordinary"],
+    arms: ["ordinary", "glass"],
   },
   {
     id: "diff-send-review",
@@ -437,7 +439,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Info panel",
     source: "jmux",
     prefixKey: "r",
-    arms: ["ordinary"],
+    arms: ["ordinary", "glass"],
   },
   {
     id: "diff-view-picker",
@@ -446,7 +448,7 @@ export const KEYMAP: readonly Binding[] = [
     section: "Info panel",
     source: "jmux",
     prefixKey: "v",
-    arms: ["ordinary"],
+    arms: ["ordinary", "glass"],
   },
   {
     id: "panel-prev-tab",

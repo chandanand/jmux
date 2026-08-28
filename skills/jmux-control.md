@@ -39,13 +39,15 @@ If not set, you're outside jmux and most commands require explicit `--session` f
 | `jmux ctl pane capture --target %ID` | Read pane contents |
 | `jmux ctl pane kill --target %ID` | Kill a pane |
 | `jmux ctl status` | One-shot snapshot of the whole workspace |
+| `jmux ctl identity` | The tracker's authenticated account |
 | `jmux ctl agent state [--session N] [--all]` | Structured agent state (running/waiting/complete) |
 | `jmux ctl agent watch [--session N] [--all]` | Stream agent state changes as JSONL |
 | `jmux ctl session attention set --target N [--reason "..."]` | Flag a session as needing the human |
 | `jmux ctl session attention clear --target N` | Clear the attention flag |
 | `jmux ctl issue create --title T [--description D] [--team T] [--start]` | File a new issue; `--start` also provisions the session |
 | `jmux ctl issue start <issue-id> [--repo P] [--wait [sec]]` | Start (or resume) work for an issue. Returns immediately; worktree setup continues in a pane |
-| `jmux ctl issue get <issue-id>` | Fetch issue details from the tracker |
+| `jmux ctl issue get <issue-id>` | Fetch issue details from the tracker — `<issue-id>` accepts either an identifier (e.g. `TRA-1866`) or the tracker's own id (the UUID `ctl status` reports for a session's linked issues) |
+| `jmux ctl issue list [--assignee viewer] [--status NAME]...` | The operator's assigned issues, with labels |
 | `jmux ctl issue move <issue-id> <status>` | Move an issue along the workflow |
 | `jmux ctl issue link <session> <issue-id>` | Add an issue to a session (a session may carry several) |
 | `jmux ctl issue unlink <session> [issue-id]` | Remove one issue link, or all of them |
@@ -368,6 +370,14 @@ session with any other `session`/`pane`/`window` subcommand.
 ```
 `agent` is `null` when there's no agent in the session. `branch` is `null` if the path isn't a git repo.
 
+### identity
+```json
+{"tracker": {"type": "linear", "authState": "ok", "account": "operator@example.com", "organization": "acme"}}
+```
+`account` and `organization` are `null` when `authState` isn't `"ok"` — this is
+the command to check *before* relying on tracker-backed commands like `issue`
+or `workflow`.
+
 ### agent state
 ```json
 {"agents": [{"session": "TRA-123", "sessionId": "$1", "state": "running", "since": 1781480000, "ageSeconds": 123, "agentPane": "%12", "activePane": "%12", "path": "/repo/worktree", "kind": "claude"}]}
@@ -468,6 +478,32 @@ every link on the session does.
 ```json
 {"issue": "TRA-123", "from": "In Progress", "to": "MR Review", "moved": true, "status": "MR Review"}
 ```
+
+### issue list
+```json
+{
+  "issues": [
+    {
+      "id": "uuid", "identifier": "TRA-123", "title": "Fix the thing", "status": "To do",
+      "stateType": "unstarted", "assignee": "operator@example.com", "linkedMrUrls": [],
+      "webUrl": "https://linear.app/…", "team": "Core Engineering", "teamId": "uuid",
+      "priority": 3, "updatedAt": 1786984801269,
+      "labels": [{"name": "Feature", "group": "Type"}],
+      "comments": [], "links": []
+    }
+  ]
+}
+```
+Only the operator's own assigned, non-completed issues — `--assignee` accepts
+no value but `viewer` (the adapter has no way to fetch anyone else's). `--status`
+may be repeated (`--status "To do" --status "QA Failed"`) and matches
+case-insensitively against each issue's `status`; omit it to get every
+assigned status. `links` is present but empty on ordinary issues — it only
+populates for issues that carry attachments the tracker recognizes (e.g. a
+linked merge request). `hasCustomerRequest` is present when the tracker
+supports it: `true`/`false` are confirmed answers, and the field is **absent**
+when the answer could not be established — an absent value must not be read
+as `false`.
 
 ### workflow stages
 ```json

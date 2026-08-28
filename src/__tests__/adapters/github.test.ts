@@ -428,3 +428,34 @@ describe("GitHubAdapter.fetchApprovals guards empty logins", () => {
     expect(a.authState).toBe("ok");
   });
 });
+
+/**
+ * The mirror of the GitLab defect, found while fixing it: every other call in
+ * the adapter is `this.baseUrl`-relative and the identity probe alone was
+ * pinned to api.github.com. A GitHub Enterprise install therefore sent its
+ * token to github.com, was told 401, and could never authenticate — PR tabs
+ * that never appear, with nothing on screen saying why.
+ */
+describe("GitHubAdapter identity probe", () => {
+  test("probes the configured base URL, not api.github.com", async () => {
+    const origGH = process.env.GH_TOKEN;
+    const origGithub = process.env.GITHUB_TOKEN;
+    process.env.GH_TOKEN = "test-token";
+    delete process.env.GITHUB_TOKEN;
+    const realFetch = globalThis.fetch;
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: string) => {
+      urls.push(String(url));
+      return new Response(JSON.stringify({ login: "ada" }), { status: 200 });
+    }) as unknown as typeof fetch;
+    try {
+      const adapter = new GitHubAdapter({ type: "github", url: "https://github.example.com/api/v3" });
+      await adapter.authenticate();
+      expect(urls).toEqual(["https://github.example.com/api/v3/user"]);
+    } finally {
+      globalThis.fetch = realFetch;
+      if (origGH === undefined) delete process.env.GH_TOKEN; else process.env.GH_TOKEN = origGH;
+      if (origGithub !== undefined) process.env.GITHUB_TOKEN = origGithub;
+    }
+  });
+});

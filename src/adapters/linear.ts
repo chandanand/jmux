@@ -8,7 +8,7 @@ import { resolveCredential } from "../credentials";
 const LINEAR_API = "https://api.linear.app/graphql";
 
 // Shared GraphQL fields for issue queries
-const ISSUE_FIELDS = `id identifier title description branchName state { name type } assignee { name } team { id name } project { id name } priority updatedAt labels { nodes { name parent { name } } } attachments { nodes { title url sourceType } } comments(first: 20) { nodes { id parent { id } body user { name } createdAt } } url`;
+const ISSUE_FIELDS = `id identifier title description branchName state { name type } assignee { name } team { id name } project { id name } priority updatedAt labels { nodes { name parent { name } } } attachments { nodes { title url sourceType } } comments(first: 20) { nodes { id parent { id } body user { name } createdAt } } url needs(first: 1) { nodes { id } }`;
 
 const ISSUE_STATE_TYPES: ReadonlySet<IssueStateType> = new Set(["triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"]);
 function isIssueStateType(v: unknown): v is IssueStateType {
@@ -19,6 +19,21 @@ export function extractIssueIdFromBranch(branch: string): string | null {
   const match = branch.match(/(?:^|\/?)([a-zA-Z]+-\d+)/);
   if (!match) return null;
   return match[1].toUpperCase();
+}
+
+/**
+ * Only a validated connection counts as an answer. Linear returns `needs:
+ * null` alongside a partial-error `errors` entry when the resolver fails, and
+ * `graphql()` returns that partial data rather than throwing — so `null` is
+ * not the same as "never requested", and neither can be read as "confirmed
+ * empty". Everything short of an actual node array is unknown.
+ */
+export function customerRequestSignal(raw: unknown): boolean | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const nodes = (raw as { nodes?: unknown }).nodes;
+  if (!Array.isArray(nodes)) return undefined;
+  return nodes.length > 0;
 }
 
 export class LinearAdapter implements IssueTrackerAdapter {
@@ -258,6 +273,7 @@ export class LinearAdapter implements IssueTrackerAdapter {
           title: a.title ?? undefined,
           url: a.url,
         })),
+      hasCustomerRequest: customerRequestSignal(raw.needs),
     };
   }
 

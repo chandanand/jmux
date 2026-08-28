@@ -14,6 +14,8 @@ import {
   resolveTeamId,
   parseWaitFlag,
   provisioningDone,
+  filterIssuesByStatus,
+  resolveIssueGetTarget,
   type IssueLinkRow,
 } from "../../cli/issue";
 import type { Issue } from "../../adapters/types";
@@ -363,6 +365,80 @@ describe("parseWaitFlag", () => {
     for (const bad of ["0", "-5", "soon", ""]) {
       expect(() => parseWaitFlag(bad)).toThrow(/--wait/);
     }
+  });
+});
+
+describe("filterIssuesByStatus", () => {
+  // Built the way the neighbouring tests in this file build fixtures: a helper
+  // returning a real typed value, so the test cannot drift from the interface.
+  function issue(identifier: string, status: string): Issue {
+    return {
+      id: identifier, identifier, title: `Title for ${identifier}`, status,
+      stateType: "unstarted", assignee: null, linkedMrUrls: [],
+      webUrl: `https://tracker.example/${identifier}`, team: "Core",
+    };
+  }
+
+  const issues: Issue[] = [
+    issue("AAA-1", "To do"),
+    issue("AAA-2", "QA Failed"),
+    issue("AAA-3", "In Progress"),
+  ];
+
+  test("keeps only the named statuses, case-insensitively", () => {
+    const kept = filterIssuesByStatus(issues, ["to do", "QA FAILED"]);
+    expect(kept.map((i) => i.identifier)).toEqual(["AAA-1", "AAA-2"]);
+  });
+
+  test("an empty status list keeps everything", () => {
+    expect(filterIssuesByStatus(issues, [])).toHaveLength(3);
+  });
+
+  test("preserves the tracker's ordering rather than sorting", () => {
+    const kept = filterIssuesByStatus(issues, ["In Progress", "To do"]);
+    expect(kept.map((i) => i.identifier)).toEqual(["AAA-1", "AAA-3"]);
+  });
+});
+
+describe("resolveIssueGetTarget", () => {
+  // `ctl status` reports a session's linked issues as tracker ids, not
+  // identifiers, so `issue get` has to accept both. The branch/identifier path
+  // is what every other command already resolves through, so it must stay
+  // first and unconditional; the tracker-id lookup only ever runs as a
+  // fallback when that comes up empty.
+
+  test("an identifier resolves via the branch path, without ever trying the id path", () => {
+    let byIdCalls = 0;
+    const found = issue({ identifier: "TRA-1866" });
+    return resolveIssueGetTarget(
+      async () => found,
+      async () => {
+        byIdCalls++;
+        throw new Error("should not be called");
+      },
+    ).then((result) => {
+      expect(result).toBe(found);
+      expect(byIdCalls).toBe(0);
+    });
+  });
+
+  test("a tracker id resolves via the id path once the branch path yields nothing", async () => {
+    const found = issue({ id: "86d270ce-dbf8-4fee-a6c3-3433bbba031c" });
+    const result = await resolveIssueGetTarget(
+      async () => null,
+      async () => found,
+    );
+    expect(result).toBe(found);
+  });
+
+  test("an id that resolves via neither path is null, not a thrown error", async () => {
+    const result = await resolveIssueGetTarget(
+      async () => null,
+      async () => {
+        throw new Error("issue not found");
+      },
+    );
+    expect(result).toBeNull();
   });
 });
 

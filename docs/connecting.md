@@ -61,9 +61,10 @@ export GITLAB_TOKEN="glpat-..."
 # or GITLAB_PRIVATE_TOKEN, or GITLAB_PERSONAL_ACCESS_TOKEN
 ```
 
-**Or don't.** With none of them set, jmux runs `glab auth status -t` and uses
-the token the [GitLab CLI](https://gitlab.com/gitlab-org/cli) already holds. If
-`glab` works in your shell, you need no export at all.
+**Or don't.** With none of them set, jmux runs
+`glab config get token --host <your instance>` and uses the token the
+[GitLab CLI](https://gitlab.com/gitlab-org/cli) already holds. If `glab` works
+in your shell, you need no export at all.
 
 ### GitHub
 
@@ -85,6 +86,24 @@ Everything else on the MR is unaffected.
 Put the export in your shell profile (`~/.zshrc`, `~/.bashrc`) — jmux reads the
 environment of the process you launch it from, so a token exported in one pane
 after jmux started is not visible to it.
+
+### Or store it in jmux, and stop thinking about the environment
+
+Both slots take a token directly, checked before it is saved and written to
+`~/.config/jmux/credentials.json` at mode 0600:
+
+| Slot | Where |
+|---|---|
+| Issue tracker | The setup flow (`Ctrl-a p` → **Setup**), tracker step |
+| Code host | `Ctrl-a I` → **Integrations** → **Code host token** |
+
+A stored token beats the environment, so this is also the fix for the case
+that reads as jmux ignoring you: `$GITLAB_TOKEN` exported in your profile but
+jmux launched from somewhere that never sourced it — the MR tabs are simply
+absent, because a tab whose adapter is not connected is not drawn. The
+**Code host token** row says which source is actually in force (`stored in
+jmux`, `$GITLAB_TOKEN`, or `not stored`), and tells you when a stored token is
+shadowing an environment variable you set.
 
 ---
 
@@ -124,16 +143,18 @@ environment. The `url` field wins if both are present.
 
 ---
 
-## 3. Restart jmux
+## 3. Apply it
 
-**Adapters are the one setting that does not hot-reload.** A live adapter owns
-polling state and in-flight requests, so jmux builds them once at startup and
-the config watcher deliberately leaves them alone. Change the row in settings
-and it reads `linear · restart to apply` until you relaunch — that note is the
-row telling you the value is stored but not yet in force.
+**From the settings rows, immediately.** Changing **Code host**, **Issue
+tracker** or **Code host token** builds the replacement, authenticates it, and
+publishes it only if it works — so a bad token can never displace a connection
+that was already fine. The row then reports what happened: your organization
+when it connected, or why it didn't.
 
-Everything else in `config.json` — sidebar width, colors, panel views, the whole
-workflow pipeline — applies immediately.
+**From a hand-edited `config.json`, on restart.** The config watcher deliberately
+leaves live adapters alone — one owns polling state and in-flight requests — so
+an `adapters` block you edit in the file is picked up next launch. Everything
+else in that file still applies immediately.
 
 ---
 
@@ -157,17 +178,23 @@ For a direct answer, open `Ctrl-Space I` → **Diagnostics**:
 
 ## Troubleshooting
 
-**Authentication is token-presence only.** Neither adapter makes a network call
-at startup — a token that exists is a token jmux uses, deliberately, so a
-transient blip at launch can't permanently disable the integration. The
-consequence: **an expired or wrong-scoped token still reports connected.** It
-shows up as tabs that exist and stay empty, not as an auth error.
+**A token is probed, not merely counted.** Each adapter makes one identity
+request at startup, so a revoked or wrong-scoped token reports `not connected`
+rather than sitting there looking healthy. A *network* failure is kept separate
+from a *rejection* — `unreachable` is retried on the next poll, `failed` is not —
+so a blip at launch can't permanently disable the integration.
+
+The consequence to know: **an adapter that isn't connected contributes no tabs
+at all.** No Issues tab and no MR tabs is what a bad token looks like, not an
+error dialog. The reason is written to `~/.config/jmux/jmux.log` and shown as a
+toast at startup, and the **Integrations** rows in `Ctrl-a I` state it at any
+time.
 
 | What you see | Likely cause |
 |---|---|
-| No Issues tab at all | No `issueTracker` in config; or you set it and haven't restarted; or no `LINEAR_API_KEY` in the environment jmux was launched from |
-| No MR tabs at all | Same three, for `codeHost` and its token |
-| Tabs exist but stay empty | Token found but rejected (expired, wrong scope), or nothing matches the tab's filter — try `F` in the panel to widen it |
+| No Issues tab at all | No `issueTracker` in config, or its token was rejected. `Ctrl-a I` → **Integrations** says which |
+| No MR tabs at all | Same, for `codeHost` — most often a token that is exported in your profile but absent from the environment jmux was actually launched from. Store it in jmux instead (above) |
+| Tabs exist but stay empty | The adapter is connected and nothing matches the tab's filter — try `F` in the panel to widen it |
 | Tabs were there, now they're gone | A 401/403 mid-session disables that adapter until restart |
 | Everything stalls, then recovers | Rate limit (HTTP 429). Active polling drops to 60s, background and global polling pause, and it resumes on its own — see [Polling & rate limits](issue-tracking.md#polling--rate-limits) |
 | MR shows `0 of 0` approvals on GitHub | Token isn't admin on the repo, so branch protection is invisible. Expected; the rest of the MR is fine |
@@ -176,8 +203,8 @@ shows up as tabs that exist and stay empty, not as an auth error.
 | Settings row says `restart to apply` | Exactly what it says: config written, process still running the old adapter |
 
 Auth failures and API errors are logged to `~/.config/jmux/jmux.log`. A startup
-auth failure also writes one line to stderr, which the alt-screen usually
-swallows — the log is the reliable copy.
+auth failure also raises a toast and writes one line to stderr; stderr is
+usually swallowed by the alt-screen, so the log is the reliable copy.
 
 ---
 
